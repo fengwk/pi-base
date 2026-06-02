@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": [
+    "index.ts",
+    "src/read.ts",
+    "src/edit.ts",
+    "src/write.ts",
+    "src/grep.ts",
+    "src/bash-renderer.ts",
+    "src/hashline.ts",
+    "src/edit-diff.ts",
+    "src/binary-detect.ts",
+    "src/path-utils.ts",
+    "src/render.ts",
+    "src/schemas/**/*.ts",
+    "src/tool-prompt.ts",
+    "src/runtime.ts",
+    "src/timeout.ts",
+    "src/config.ts",
+    "src/lsp/discovery.ts",
+    "src/lsp/client.ts",
+    "src/lsp/tools.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": ["node_modules", "scripts"]
+}
