@@ -68,6 +68,18 @@ export function styleWarning(theme: any, text: string): string {
   return paint(theme, "warning", text);
 }
 
+export type CollapsedResultLinesResolver = (cwd: string, toolName: string) => number | undefined;
+
+export function resolveCollapsedResultLines(
+  toolName: string,
+  defaultCollapsedLines: number | undefined,
+  context: { cwd?: string } | undefined,
+  getCollapsedResultLines?: CollapsedResultLinesResolver,
+): number | undefined {
+  const configured = getCollapsedResultLines?.(context?.cwd ?? process.cwd(), toolName);
+  return configured ?? defaultCollapsedLines;
+}
+
 export function renderCallText(textValue: string, lastComponent?: unknown) {
   const text = (lastComponent as Text | undefined) ?? new Text("", 0, 0);
   text.setText(textValue);
@@ -104,6 +116,7 @@ function colorizeResultLine(line: string, theme: any, state: { inDiff: boolean }
   if (line.startsWith("Edit applied to ")) return paint(theme, "success", line);
   if (line.startsWith("Created ") || line.startsWith("Overwrote ")) return paint(theme, "success", line);
   if (line.startsWith("Verify that the result matches the intended change.")) return paint(theme, "warning", line);
+  if (line.startsWith("Review the written file content below.")) return paint(theme, "warning", line);
   if (line.startsWith("Edit failed")) return paint(theme, "error", line);
   if (line.startsWith("Use the refreshed anchors ")) return paint(theme, "warning", line);
   if (line.startsWith("Use these LINE:HASH anchors ")) return paint(theme, "warning", line);
@@ -137,7 +150,7 @@ function colorizeResultBody(text: string, theme: any, isError: boolean): string 
     .join("\n");
 }
 
-export function renderRawResult(result: any, options: { expanded?: boolean } | undefined, theme: any, context: { lastComponent?: unknown; isError?: boolean }) {
+export function renderRawResult(result: any, options: { expanded?: boolean; collapsedLines?: number; isPartial?: boolean } | undefined, theme: any, context: { lastComponent?: unknown; isError?: boolean }) {
   const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
   const parts = Array.isArray(result?.content)
     ? result.content.map((item: any) => {
@@ -148,12 +161,15 @@ export function renderRawResult(result: any, options: { expanded?: boolean } | u
     : [""];
   const body = colorizeResultBody(parts.join("\n\n"), theme, Boolean(context.isError));
   const bodyLines = body ? body.split("\n") : [];
-  if (options?.expanded || bodyLines.length <= DEFAULT_COLLAPSED_RESULT_LINES) {
+  const collapsedLines = typeof options?.collapsedLines === "number" && Number.isFinite(options.collapsedLines) && options.collapsedLines >= 0
+    ? Math.floor(options.collapsedLines)
+    : DEFAULT_COLLAPSED_RESULT_LINES;
+  if (options?.expanded || bodyLines.length <= collapsedLines) {
     text.setText(bodyLines.length ? `\n${bodyLines.join("\n")}` : "");
     return text;
   }
-  const visible = bodyLines.slice(0, DEFAULT_COLLAPSED_RESULT_LINES);
-  const remaining = bodyLines.length - DEFAULT_COLLAPSED_RESULT_LINES;
+  const visible = bodyLines.slice(0, collapsedLines);
+  const remaining = bodyLines.length - collapsedLines;
   const tail = paint(theme, "dim", `... (${remaining} more lines, ctrl+o to expand)`);
   text.setText(`\n${[...visible, tail].join("\n")}`);
   return text;

@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { formatInlineValue, formatOptionalArgs, renderCallText, renderRawResult, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "../render.js";
+import { type CollapsedResultLinesResolver, formatInlineValue, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "../render.js";
 import { lspDiagnosticsSchema, lspGotoDefinitionSchema, lspJavaDecompileSchema, lspWorkspaceSymbolsSchema } from "../schemas/lsp.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
 import { resolveToCwd } from "../path-utils.js";
@@ -159,11 +159,11 @@ function fileUrlForTarget(target: string, cwd: string): string {
 /**
  * Factory that returns a resolver scoped to a given `cwd`. The extension
  * should pass a factory that caches resolvers per cwd so we don't re-read
- * `settings.json` on every tool call.
+ * `pi-base.json` on every tool call.
  */
 export type LspResolverFactory = (cwd: string) => LspDiscoveryResolver;
 
-export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: LspResolverFactory } = {}) {
+export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: LspResolverFactory; getCollapsedResultLines?: CollapsedResultLinesResolver } = {}) {
   const getResolverForPath = (toolPath: string, ctx: any): LspDiscoveryResolver => {
     const factory = options.resolverFactory;
     if (factory) return factory(dirname(resolveFromCwd(toolPath, ctx.cwd)));
@@ -178,21 +178,42 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     renderCall(args: any, _theme: any, context: any) {
       return renderCallText(formatLspDiagnosticsCall(args, _theme), context.lastComponent);
     },
-    renderResult(result: any, options: any, _theme: any, context: any) {
-      return renderRawResult(result, options, _theme, context);
+    renderResult(result: any, renderOptions: any, _theme: any, context: any) {
+      const collapsedLines = resolveCollapsedResultLines("lsp_diagnostics", undefined, context, options.getCollapsedResultLines);
+      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
+      let serverId = "unknown";
       try {
         throwIfAborted(signal);
         const filePath = resolveFromCwd(params.path, ctx.cwd);
         const resolver = getResolverForPath(params.path, ctx);
         const client = await withAbort(lspManager.getClient(filePath, resolver), signal);
+        serverId = client.serverId();
         let items = await client.diagnostics(filePath, signal);
         if (params.severity && params.severity !== "all") {
           items = items.filter((item: any) => ([, "error", "warning", "information", "hint"][item.severity] ?? "") === params.severity);
         }
         return { content: [{ type: "text" as const, text: formatDiagnostics(items) }] };
       } catch (error) {
+        const e = error as Error & { code?: number };
+        // Translate a narrow transient untyped "Internal error" into an
+        // actionable hint without over-classifying real LSP failures.
+        if (e.code == null && e.message === "Internal error") {
+          const displayPath = resolveFromCwd(String(params.path), ctx.cwd);
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Error: LSP server '${serverId}' returned "Internal error" for ${displayPath}. ` +
+                    `This often means the server has not finished opening the file or processing the ` +
+                    `workspace yet (common on the first call or after opening a large project). Retry ` +
+                    `in a few seconds. If the error persists, inspect the server logs or increase the ` +
+                    `configured request timeout for this server in ~/.pi/agent/pi-base.json if it is ` +
+                    `legitimately slow.`,
+            }],
+            isError: true,
+          };
+        }
         return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
       }
     },
@@ -207,8 +228,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     renderCall(args: any, _theme: any, context: any) {
       return renderCallText(formatLspGotoDefinitionCall(args, _theme), context.lastComponent);
     },
-    renderResult(result: any, options: any, _theme: any, context: any) {
-      return renderRawResult(result, options, _theme, context);
+    renderResult(result: any, renderOptions: any, _theme: any, context: any) {
+      const collapsedLines = resolveCollapsedResultLines("lsp_goto_definition", undefined, context, options.getCollapsedResultLines);
+      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {
@@ -239,8 +261,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     renderCall(args: any, _theme: any, context: any) {
       return renderCallText(formatLspWorkspaceSymbolsCall(args, _theme), context.lastComponent);
     },
-    renderResult(result: any, options: any, _theme: any, context: any) {
-      return renderRawResult(result, options, _theme, context);
+    renderResult(result: any, renderOptions: any, _theme: any, context: any) {
+      const collapsedLines = resolveCollapsedResultLines("lsp_workspace_symbols", undefined, context, options.getCollapsedResultLines);
+      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {
@@ -269,8 +292,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     renderCall(args: any, _theme: any, context: any) {
       return renderCallText(formatLspJavaDecompileCall(args, _theme), context.lastComponent);
     },
-    renderResult(result: any, options: any, _theme: any, context: any) {
-      return renderRawResult(result, options, _theme, context);
+    renderResult(result: any, renderOptions: any, _theme: any, context: any) {
+      const collapsedLines = resolveCollapsedResultLines("lsp_java_decompile", undefined, context, options.getCollapsedResultLines);
+      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {

@@ -1,0 +1,310 @@
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { dirname, relative } from "node:path";
+import { loadPiBaseSettings, type LoadedPiBaseSettings, type PermissionAction, type PermissionRuleEntry } from "./config.js";
+import { resolveToCwd } from "./path-utils.js";
+import { syncYoloFooter } from "./yolo-footer.js";
+
+const STATUS_KEY = "pi-base-permission";
+const YOLO_ENTRY_TYPE = "pi-base-permission-yolo";
+const ALLOW_LABEL = "Yes";
+const DENY_LABEL = "No";
+
+interface PermissionState {
+  yolo: boolean;
+  footerInstalled: boolean;
+}
+
+interface TargetDescriptor {
+  candidates: string[];
+  detailLines: string[];
+}
+
+function normalizeSlashes(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function normalizeMatchValue(value: string): string {
+  return normalizeSlashes(value.trim());
+}
+
+function expandHomePattern(pattern: string): string {
+  const home = normalizeSlashes(process.env.HOME ?? process.env.USERPROFILE ?? "");
+  if (!home) return pattern;
+  if (pattern === "~") return home;
+  if (pattern.startsWith("~/")) return home + pattern.slice(1);
+  if (pattern === "$HOME") return home;
+  if (pattern.startsWith("$HOME/")) return home + pattern.slice(5);
+  return pattern;
+}
+
+function escapeRegexCharacter(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+}
+
+function wildcardToRegExp(pattern: string): RegExp {
+  let body = "";
+  for (const char of pattern) {
+    if (char === "*") {
+      body += ".*";
+      continue;
+    }
+    if (char === "?") {
+      body += ".";
+      continue;
+    }
+    body += escapeRegexCharacter(char);
+  }
+  return new RegExp(`^${body}$`);
+}
+
+function wildcardMatches(pattern: string, candidate: string): boolean {
+  const normalizedPattern = normalizeMatchValue(expandHomePattern(pattern));
+  const normalizedCandidate = normalizeMatchValue(candidate);
+  return wildcardToRegExp(normalizedPattern).test(normalizedCandidate);
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!value) continue;
+    const normalized = normalizeSlashes(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function stripAtPrefix(value: string): string {
+  return value.startsWith("@") ? value.slice(1) : value;
+}
+
+function normalizeRelativePath(value: string): string {
+  const normalized = normalizeSlashes(value);
+  return normalized === "" ? "." : normalized;
+}
+
+function projectRootFromSettingsPath(settingsPath: string): string {
+  return dirname(dirname(settingsPath));
+}
+
+function buildPathTargetDescriptor(rawPath: string, cwd: string, loaded: LoadedPiBaseSettings): TargetDescriptor {
+  const normalizedRawPath = normalizeSlashes(stripAtPrefix(rawPath));
+  const absolutePath = resolveToCwd(rawPath, cwd);
+  const normalizedAbsolutePath = normalizeSlashes(absolutePath);
+  const relativeToCwd = normalizeRelativePath(relative(cwd, absolutePath));
+  const projectRoot = projectRootFromSettingsPath(loaded.projectPath);
+  const relativeToProject = normalizeRelativePath(relative(projectRoot, absolutePath));
+  const inProjectRoot = relativeToProject !== ".." && !relativeToProject.startsWith("../");
+  const displayPath = inProjectRoot ? relativeToProject : (normalizedRawPath || normalizedAbsolutePath);
+  return {
+    candidates: uniqueStrings([
+      normalizedRawPath,
+      relativeToCwd,
+      inProjectRoot ? relativeToProject : undefined,
+      normalizedAbsolutePath,
+    ]),
+    detailLines: [`Path: ${displayPath}`],
+  };
+}
+
+function tokenizeCommandSegment(segment: string): string[] {
+  return segment.match(/\S+/g) ?? [];
+}
+
+function buildBashSegmentCandidates(segment: string): string[] {
+  const trimmed = segment.trim();
+  if (!trimmed) return [];
+  const tokens = tokenizeCommandSegment(trimmed);
+  const prefixes: string[] = [];
+  for (let length = 1; length <= tokens.length; length++) {
+    prefixes.push(tokens.slice(0, length).join(" "));
+  }
+  return uniqueStrings([
+    trimmed,
+    ...prefixes,
+    ...prefixes.map((prefix) => `${prefix} *`),
+  ]);
+}
+
+function splitBashCommand(command: string): string[] {
+  return command
+    .split(/&&|\|\||\||;|\n/g)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function buildCommandTargetDescriptor(commandValue: string, workdirValue: unknown, cwd: string): TargetDescriptor {
+  const command = commandValue.trim() || "<missing-command>";
+  const rawWorkdir = typeof workdirValue === "string" && workdirValue.trim().length > 0 ? stripAtPrefix(workdirValue) : cwd;
+  const workdir = normalizeSlashes(resolveToCwd(rawWorkdir, cwd));
+  return {
+    candidates: [command],
+    detailLines: [`Command: ${command}`, `Workdir: ${workdir}`],
+  };
+}
+
+function buildGenericTargetDescriptor(toolName: string): TargetDescriptor {
+  return {
+    candidates: ["*"],
+    detailLines: [`Tool: ${toolName}`],
+  };
+}
+
+function describeTarget(toolName: string, input: Record<string, unknown>, cwd: string, loaded: LoadedPiBaseSettings): TargetDescriptor {
+  if (typeof input.path === "string" && input.path.trim().length > 0) {
+    return buildPathTargetDescriptor(input.path, cwd, loaded);
+  }
+  if (typeof input.command === "string") {
+    return buildCommandTargetDescriptor(input.command, input.workdir, cwd);
+  }
+  return buildGenericTargetDescriptor(toolName);
+}
+
+function evaluateRules(candidates: string[], ...rulesets: Array<PermissionRuleEntry[] | undefined>): PermissionAction {
+  let action: PermissionAction = "allow";
+  for (const ruleset of rulesets) {
+    if (!ruleset) continue;
+    for (const rule of ruleset) {
+      if (candidates.some((candidate) => wildcardMatches(rule.pattern, candidate))) {
+        action = rule.action;
+      }
+    }
+  }
+  return action;
+}
+
+function evaluateBashRules(command: string, ...rulesets: Array<PermissionRuleEntry[] | undefined>): PermissionAction {
+  const segments = splitBashCommand(command);
+  if (segments.length === 0) return evaluateRules([command], ...rulesets);
+  let action: PermissionAction = "allow";
+  for (const segment of segments) {
+    const next = evaluateRules(buildBashSegmentCandidates(segment), ...rulesets);
+    if (next === "deny") return "deny";
+    if (next === "ask") action = "ask";
+  }
+  return action;
+}
+
+function restoreStateFromEntries(state: PermissionState, entries: unknown[]): boolean {
+  let restored = false;
+  state.yolo = false;
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as { type?: string; customType?: string; data?: Record<string, unknown> };
+    if (record.type !== "custom") continue;
+    if (record.customType === YOLO_ENTRY_TYPE && typeof record.data?.enabled === "boolean") {
+      state.yolo = record.data.enabled;
+      restored = true;
+    }
+  }
+  return restored;
+}
+
+function updateFooterStatus(ctx: ExtensionContext, pi: Pick<ExtensionAPI, "getThinkingLevel">, state: PermissionState): void {
+  if (state.yolo) {
+    ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "YOLO"));
+    if (!state.footerInstalled) {
+      state.footerInstalled = syncYoloFooter(ctx, pi, { enabled: true, statusKey: STATUS_KEY });
+    }
+    return;
+  }
+
+  ctx.ui.setStatus(STATUS_KEY, undefined);
+  if (state.footerInstalled) {
+    state.footerInstalled = syncYoloFooter(ctx, pi, { enabled: false, statusKey: STATUS_KEY });
+  }
+}
+
+function buildPrompt(toolName: string, target: TargetDescriptor): string {
+  return [
+    "Permission request",
+    "",
+    `Tool: ${toolName}`,
+    ...target.detailLines,
+    "",
+    "Allow this tool call?",
+  ].join("\n");
+}
+
+function buildSettingsHint(loaded: LoadedPiBaseSettings): string {
+  return `Update ${loaded.projectPath} or ${loaded.globalPath} under \`permission\` to change this behavior.`;
+}
+
+function buildDeniedReason(toolName: string, loaded: LoadedPiBaseSettings): string {
+  return `Permission denied for ${toolName}. ${buildSettingsHint(loaded)}`;
+}
+
+function buildAskWithoutUiReason(toolName: string, loaded: LoadedPiBaseSettings): string {
+  return `Permission approval is required for ${toolName}, but no interactive UI is available. ${buildSettingsHint(loaded)}`;
+}
+
+function buildRejectedReason(toolName: string): string {
+  return `Permission denied by user for ${toolName}.`;
+}
+
+
+function configuredYoloEnabled(loaded: LoadedPiBaseSettings): boolean {
+  return loaded.settings.yolo === "enable";
+}
+
+export function registerPermissionGuard(
+  pi: Pick<ExtensionAPI, "appendEntry" | "on" | "registerCommand" | "getThinkingLevel">,
+  options: { loadSettings?: (cwd: string) => LoadedPiBaseSettings } = {},
+): void {
+  const state: PermissionState = {
+    yolo: false,
+    footerInstalled: false,
+  };
+  const loadSettings = options.loadSettings ?? loadPiBaseSettings;
+
+  pi.registerCommand("yolo", {
+    description: "Toggle yolo mode (bypass permission checks)",
+    handler: async (args: string, ctx) => {
+      if (args.trim().length > 0) {
+        ctx.ui.notify("Usage: /yolo", "warning");
+        return;
+      }
+      state.yolo = !state.yolo;
+      pi.appendEntry(YOLO_ENTRY_TYPE, { enabled: state.yolo });
+      updateFooterStatus(ctx, pi, state);
+    },
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    const loaded = loadSettings(ctx.cwd);
+    const entries = ctx.sessionManager.getEntries();
+    const restored = restoreStateFromEntries(state, Array.isArray(entries) ? entries : []);
+    if (!restored) state.yolo = configuredYoloEnabled(loaded);
+    state.footerInstalled = false;
+    updateFooterStatus(ctx, pi, state);
+  });
+
+  pi.on("tool_call", async (event, ctx) => {
+    updateFooterStatus(ctx, pi, state);
+    if (state.yolo) return undefined;
+
+    const loaded = loadSettings(ctx.cwd);
+    const permission = loaded.settings.permission;
+    if (!permission) return undefined;
+
+    const target = describeTarget(event.toolName, event.input, ctx.cwd, loaded);
+    const action = event.toolName === "bash" && typeof event.input.command === "string"
+      ? evaluateBashRules(event.input.command, permission["*"], permission[event.toolName])
+      : evaluateRules(target.candidates, permission["*"], permission[event.toolName]);
+
+    if (action === "allow") return undefined;
+    if (action === "deny") {
+      return { block: true, reason: buildDeniedReason(event.toolName, loaded) };
+    }
+    if (!ctx.hasUI) {
+      return { block: true, reason: buildAskWithoutUiReason(event.toolName, loaded) };
+    }
+
+    const choice = await ctx.ui.select(buildPrompt(event.toolName, target), [ALLOW_LABEL, DENY_LABEL]);
+    if (choice === ALLOW_LABEL) return undefined;
+    ctx.abort();
+    return { block: true, reason: buildRejectedReason(event.toolName) };
+  });
+}

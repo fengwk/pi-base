@@ -18,6 +18,6 @@ export const lspWorkspaceSymbolsSchema = Type.Object({
 });
 
 export const lspJavaDecompileSchema = Type.Object({
-  target: Type.String({ description: "A raw `jdt://` URI, a workspace symbol output line, or a `file://` / `.class` path." }),
   path: Type.String({ description: "Any local `.java` file in the target workspace. This path is used to infer the workspace root and locate JDTLS." }),
+  target: Type.String({ description: "A raw `jdt://` URI, a workspace symbol output line, or a `file://` / `.class` path." }),
 });

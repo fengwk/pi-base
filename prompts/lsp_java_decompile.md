@@ -9,9 +9,9 @@ Usage:
 - Use this only for Java external definitions; for local source files, prefer `read` or `lsp_goto_definition` directly.
 
 Parameters:
-- `target` (required)
 - `path` (required)
+- `target` (required)
 
 Examples:
-- `lsp_java_decompile({ target: "jdt://contents/java.base/java/lang/String.class?...", path: "src/main/java/com/acme/App.java" })`
-- `lsp_java_decompile({ target: "String (Class) - jdt://contents/java.base/java/lang/String.class?...", path: "src/main/java/com/acme/App.java" })`
+- `lsp_java_decompile({ path: "src/main/java/com/acme/App.java", target: "jdt://contents/java.base/java/lang/String.class?..." })`
+- `lsp_java_decompile({ path: "src/main/java/com/acme/App.java", target: "String (Class) - jdt://contents/java.base/java/lang/String.class?..." })`

@@ -6,7 +6,7 @@ import { normalizeToLF, stripBom } from "./edit-diff.js";
 import { looksLikeBinary } from "./binary-detect.js";
 import { ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay } from "./hashline.js";
 import { resolveToCwd } from "./path-utils.js";
-import { formatInlineValue, formatOptionalArgs, renderCallText, renderRawResult, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
+import { type CollapsedResultLinesResolver, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
 import { grepSchema } from "./schemas/grep.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -17,11 +17,17 @@ const MATCH_LINE_RE = /^(.*):(\d+): (.*)$/;
 const MAX_LINE_CHARS = 2000;
 const BINARY_PROBE_MAX_BYTES = 1024 * 1024;
 const BINARY_PROBE_CHUNK_BYTES = 64 * 1024;
+const RESULT_COLLAPSED_LINES = 15;
 
 type GrepFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any) => Promise<any> };
 
+function formatGrepPattern(value: unknown): string {
+  if (value === undefined || value === null) return "<missing-pattern>";
+  return JSON.stringify(String(value));
+}
+
 function formatGrepCall(args: any, theme: any): string {
-  const pattern = formatInlineValue(String(args?.pattern ?? "<missing-pattern>"));
+  const pattern = formatGrepPattern(args?.pattern);
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const suffix = formatOptionalArgs([
     ["include", args?.include],
@@ -63,7 +69,7 @@ async function readBinaryProbeBuffer(filePath: string, signal?: AbortSignal): Pr
 
 export function registerGrepTool(
   pi: ExtensionAPI,
-  options: { onFileAnchored?: (absolutePath: string, lines?: string[]) => void; createBuiltInGrepTool?: GrepFactory } = {},
+  options: { onFileAnchored?: (absolutePath: string, lines?: string[]) => void; createBuiltInGrepTool?: GrepFactory; getCollapsedResultLines?: CollapsedResultLinesResolver } = {},
 ) {
   const tool = {
     name: "grep",
@@ -74,8 +80,9 @@ export function registerGrepTool(
     renderCall(args: any, _theme: any, context: any) {
       return renderCallText(formatGrepCall(args, _theme), context.lastComponent);
     },
-    renderResult(result: any, options: any, _theme: any, context: any) {
-      return renderRawResult(result, options, _theme, context);
+    renderResult(result: any, renderOptions: any, _theme: any, context: any) {
+      const collapsedLines = resolveCollapsedResultLines("grep", RESULT_COLLAPSED_LINES, context, options.getCollapsedResultLines);
+      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
     },
     async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}) {
       try {
@@ -183,7 +190,7 @@ export function registerGrepTool(
           return {
             content: [{
               type: "text" as const,
-              text: [`pattern: ${pattern}`, `path: ${rawPath}`, ...(params.literal ? ["literal: true"] : []), `totalMatches: ${totalMatches}`, "", ...output].join("\n"),
+              text: [`pattern: ${formatGrepPattern(pattern)}`, `path: ${rawPath}`, ...(params.literal ? ["literal: true"] : []), `totalMatches: ${totalMatches}`, "", ...output].join("\n"),
             }],
             ...(upstreamTextTruncated ? { details: { upstreamTextTruncated: true } } : {}),
           };

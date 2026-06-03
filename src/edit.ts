@@ -6,7 +6,7 @@ import * as Diff from "diff";
 import { detectLineEnding, generateCompactOrFullDiff, normalizeToLF, restoreLineEndings, stripBom } from "./edit-diff.js";
 import { applyHashlineEdits, ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay, HashlineMismatchError, parseLineRef, splitNewTextLines, type HashlineEditItem } from "./hashline.js";
 import { resolveToCwd } from "./path-utils.js";
-import { renderRawResult, styleAccent, styleDiffAdded, styleDiffContext, styleDiffRemoved, styleMuted, styleToolTitle, styleWarning } from "./render.js";
+import { type CollapsedResultLinesResolver, renderRawResult, resolveCollapsedResultLines, styleAccent, styleDiffAdded, styleDiffContext, styleDiffRemoved, styleMuted, styleToolTitle, styleWarning } from "./render.js";
 import { editSchema } from "./schemas/edit.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
@@ -322,7 +322,12 @@ function buildStaleError(path: string, error: HashlineMismatchError): { content:
 
 export function registerEditTool(
   pi: ExtensionAPI,
-  options: { wasReadInSession?: (absolutePath: string) => boolean; getCachedLines?: (absolutePath: string) => string[] | undefined; onSuccessfulEdit?: (absolutePath: string, lines?: string[]) => void } = {},
+  options: {
+    wasReadInSession?: (absolutePath: string) => boolean;
+    getCachedLines?: (absolutePath: string) => string[] | undefined;
+    getCollapsedResultLines?: CollapsedResultLinesResolver;
+    onSuccessfulEdit?: (absolutePath: string, lines?: string[]) => void;
+  } = {},
 ) {
   const callPreviewSnapshots = new Map<string, string[]>();
   const tool = {
@@ -347,8 +352,9 @@ export function registerEditTool(
       text.setText(formatEditCall(args, _theme, previewLines));
       return text;
     },
-    renderResult(result: any, options: any, _theme: any, context: any) {
-      return renderRawResult(result, options, _theme, context);
+    renderResult(result: any, renderOptions: any, _theme: any, context: any) {
+      const collapsedLines = resolveCollapsedResultLines("edit", undefined, context, options.getCollapsedResultLines);
+      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {

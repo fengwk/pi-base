@@ -12,6 +12,23 @@ function extractAnchor(line: string): string {
   return match[1]!;
 }
 
+async function withTempGlobalPiBaseConfig<T>(content: unknown, run: (root: string) => Promise<T> | T): Promise<T> {
+  const previous = process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+  const root = await createTempWorkspace();
+  const globalPath = join(root, "global-pi-base.json");
+  process.env.PI_BASE_GLOBAL_SETTINGS_PATH = globalPath;
+  try {
+    await writeFile(globalPath, JSON.stringify(content), "utf8");
+    return await run(root);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+    } else {
+      process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previous;
+    }
+  }
+}
+
 describe("edit/write flow", () => {
   it("write returns anchors that can be used by edit", async () => {
     const root = await createTempWorkspace();
@@ -20,7 +37,8 @@ describe("edit/write flow", () => {
     const writeResult = await registry.getTool("write").execute("1", { path: "src/new.ts", content: "export const demo = 1;\n" }, undefined, undefined, { cwd: root });
     const writeText = getText(writeResult);
     expect(writeText).toContain("Created src/new.ts.");
-    expect(writeText).toContain("Use these LINE:HASH anchors for follow-up edits.");
+    expect(writeText).toContain("Review the written file content below.");
+    expect(writeText).toContain("LINE:HASH anchors for follow-up edits.");
     expect(writeText).not.toContain("status:");
     expect(writeText).not.toContain("writeState:");
     const anchor = writeText.split("\n").find((line) => line.includes("|export const demo = 1;"))!.split("|")[0]!;
@@ -38,10 +56,59 @@ describe("edit/write flow", () => {
     const overwriteResult = await registry.getTool("write").execute("2", { path: "src/new.ts", content: "export const demo = 3;\n" }, undefined, undefined, { cwd: root });
     const overwriteText = getText(overwriteResult);
     expect(overwriteText).toContain("Overwrote src/new.ts.");
-    expect(overwriteText).toContain("Use these LINE:HASH anchors for follow-up edits.");
+    expect(overwriteText).toContain("Review the written file content below.");
+    expect(overwriteText).toContain("LINE:HASH anchors for follow-up edits.");
     const anchor = overwriteText.split("\n").find((line) => line.includes("|export const demo = 3;"))!.split("|")[0]!;
     const editResult = await registry.getTool("edit").execute("3", { path: "src/new.ts", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "export const demo = 4;" } }] }, undefined, undefined, { cwd: root });
     expect(editResult.isError).not.toBe(true);
+  });
+
+  it("renders full write payload previews even when the tool is collapsed", () => {
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const tool = registry.getTool("write");
+    const component = tool.renderCall(
+      { path: "src/example.ts", content: "line-1\nline-2\nline-3\nline-4\nline-5\nline-6\nline-7\nline-8\nline-9\nline-10\nline-11" },
+      {} as any,
+      { lastComponent: undefined, expanded: false },
+    ) as any;
+    const rendered = component.render(200).join("\n");
+    expect(rendered).toContain("line-11");
+    expect(rendered).not.toContain("... (");
+  });
+
+  it("keeps completed write call previews visible when collapsed", async () => {
+    await withTempGlobalPiBaseConfig({}, async () => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const tool = registry.getTool("write");
+      const component = tool.renderCall(
+        { path: "src/example.ts", content: "alpha\nbeta\ngamma" },
+        {} as any,
+        { lastComponent: undefined, executionStarted: true, argsComplete: true, isPartial: false, expanded: false, isError: false },
+      ) as any;
+      const rendered = component.render(200).join("\n");
+      expect(rendered).toContain("alpha");
+      expect(rendered).toContain("beta");
+      expect(rendered).toContain("gamma");
+      expect(rendered).not.toContain("lines prepared.");
+      expect(rendered).not.toContain("Expand to inspect the original write payload.");
+    });
+  });
+
+  it("keeps the completed write call preview available when the tool is expanded", () => {
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const tool = registry.getTool("write");
+    const component = tool.renderCall(
+      { path: "src/example.ts", content: "alpha\nbeta\ngamma" },
+      {} as any,
+      { lastComponent: undefined, executionStarted: true, argsComplete: true, isPartial: false, expanded: true, isError: false },
+    ) as any;
+    const rendered = component.render(200).join("\n");
+    expect(rendered).toContain("alpha");
+    expect(rendered).toContain("beta");
+    expect(rendered).toContain("gamma");
   });
 
   it("allows follow-up edits using refreshed anchors from a prior edit result", async () => {
@@ -309,6 +376,44 @@ describe("edit/write flow", () => {
     expect(rendered).toContain("+  3 first line");
     expect(rendered).toContain("+  4 second line");
     expect(rendered).not.toContain("| after");
+  });
+
+  it("keeps completed edit call previews visible when collapsed", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
+    const tool = registry.getTool("edit");
+    const component = tool.renderCall(
+      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }] },
+      {} as any,
+      { lastComponent: undefined, cwd: root, executionStarted: true, argsComplete: true, isPartial: false, expanded: false, isError: false },
+    ) as any;
+    const rendered = component.render(200).join("\n");
+    expect(rendered).toContain("+  3 first line");
+    expect(rendered).toContain("+  4 second line");
+    expect(rendered).not.toContain("requested operation.");
+    expect(rendered).not.toContain("Expand to inspect the original request preview.");
+  });
+
+  it("keeps the completed edit call preview available when the tool is expanded", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
+    const tool = registry.getTool("edit");
+    const component = tool.renderCall(
+      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }] },
+      {} as any,
+      { lastComponent: undefined, cwd: root, executionStarted: true, argsComplete: true, isPartial: false, expanded: true, isError: false },
+    ) as any;
+    const rendered = component.render(200).join("\n");
+    expect(rendered).toContain("+  3 first line");
+    expect(rendered).toContain("+  4 second line");
   });
 
   it("freezes edit call previews so post-edit rerenders do not read the live file", async () => {

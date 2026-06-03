@@ -6,7 +6,7 @@
 
 - `read`
 - `grep`
-- `find` (delegated to Pi's built-in)
+- `find`
 - `bash`
 - `edit`
 - `write`
@@ -24,18 +24,21 @@
 - `find` is delegated to Pi's built-in implementation, but `pi-base` makes `path` explicit and required — there is no implicit search root.
 - `bash` requires an explicit `workdir` on every call.
 - On Linux, WSL, and macOS, `bash` prefers the host `bash` or `zsh` shell from `$SHELL` and loads common startup files to better match the terminal environment.
+- `permission` rules can require approval for selected tools such as `edit`, `write`, and `bash`; `/yolo` temporarily bypasses those checks and is reflected in the footer status line.
 - Tool output is wrapped by a global truncation layer (`MAX_LINES=2000`, `MAX_BYTES=50KB`); full output is saved under `os.tmpdir()/pi-base-truncation/` and re-exposed via `details.truncation`.
 - When a tool result indicates a failure (text starts with `Error:` / `Edit failed` / `Command exited with code N`), the global `tool_result` hook repairs the missing `isError` flag so downstream code (session logs, renderers, orchestration) can react correctly.
-- LSP servers are **fully user-defined** in `settings.json` under `lsp.servers`. `pi-base` ships no built-in server table.
+- LSP servers are **fully user-defined** in the unified `pi-base` config under `lsp.servers`. `pi-base` ships no built-in server table.
 
 ## Configuration
 
-`pi-base` loads its own JSON settings files:
+`pi-base` uses a unified config file:
 
-- Global: `~/.pi/agent/pi-base/settings.json`
-- Project: `<repo>/.pi/pi-base/settings.json` (overrides global per field)
+- Global: `~/.pi/agent/pi-base.json`
+- Project: `<repo>/.pi/pi-base.json`
 
-For isolated tests or temporary runs, `PI_BASE_GLOBAL_SETTINGS_PATH` can override the global settings path.
+The same file contains LSP, permission, render preview config, and optional default YOLO mode.
+
+For isolated tests or temporary runs, `PI_BASE_GLOBAL_SETTINGS_PATH` can override the global `pi-base` config path.
 
 Precedence:
 
@@ -43,14 +46,84 @@ Precedence:
 project JSON > global JSON > built-in defaults
 ```
 
+### Example: tool result preview lines
+
+`render.collapsedToolResultLines` accepts either:
+
+- a single non-negative integer, applied to every tool result, or
+- an object keyed by tool name, with optional `"*"` as the fallback default.
+
+- `0` hides a collapsed result body entirely and shows only the expand hint.
+- When omitted, `pi-base` keeps the existing per-tool defaults (`read=10`, `grep=15`, `find=20`, `bash=20`, others use their current renderer defaults).
+- This only affects **tool result** folding, not tool call previews.
+
+```json
+{
+  "render": {
+    "collapsedToolResultLines": {
+      "*": 20,
+      "read": 10,
+      "grep": 15,
+      "write": 10,
+      "bash": 0
+    }
+  }
+}
+```
+
+### Example: permission guard
+
+`permission` follows an OpenCode-style `allow` / `ask` / `deny` model. Put it in the unified `pi-base` config file (`~/.pi/agent/pi-base.json` or `.pi/pi-base.json`). Top-level strings apply to all tools, and per-tool objects can override them with ordered wildcard rules (`*` and `?`, last match wins).
+
+```json
+{
+  "permission": {
+    "edit": "ask",
+    "write": "ask",
+    "bash": {
+      "*": "ask",
+      "git *": "allow"
+    }
+  }
+}
+```
+
+Behavior notes:
+
+- `ask` prompts in interactive mode before the tool runs.
+- The prompt is intentionally minimal: only `Yes` or `No`.
+- Future automatic allowance comes only from config pattern matches; there is no in-session "always allow this file/command" shortcut.
+- For path-based tools (`read`, `edit`, `write`, and similar tools that expose `path`), patterns are matched against the given path, the cwd-relative path, the project-relative path, and the absolute path.
+- For `bash`, patterns are matched against the full command string.
+- In non-interactive mode, `ask` blocks the tool call because there is no UI to confirm it.
+- `/yolo` toggles a bypass mode that disables all permission checks for the current session and shows `YOLO` inline in the footer while it is active. It does not take subcommands; use `/yolo` again to switch back.
+
+### Example: default YOLO mode
+
+Set `yolo` to one of:
+
+- `"enable"`
+- `"disable"`
+
+When omitted, the default is `"disable"`. When present, it seeds the default `/yolo` state for sessions that do not already have a persisted YOLO toggle entry. A session that already persisted a prior `/yolo` toggle keeps its stored state.
+
+```json
+{
+  "yolo": "enable"
+}
+```
+
 ### Example: LSP servers for a Java + Go + TS + Python workspace
+
+`lsp.searchPaths` and path-like `command[0]` entries support `~/...`, `$HOME/...`, and `${HOME}/...` in addition to absolute or project-relative paths.
 
 ```json
 {
   "lsp": {
     "searchPaths": [
-      "/home/you/.local/share/nvim/mason/bin"
+      "~/.local/share/nvim/mason/bin"
     ],
+
     "servers": {
       "jdtls": {
         "command": ["jdtls"],

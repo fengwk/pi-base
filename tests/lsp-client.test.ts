@@ -246,6 +246,26 @@ describe("LspClient internals", () => {
   });
 
   describe("diagnostics fallback", () => {
+    it("returns pull diagnostics items when textDocument/diagnostic succeeds", async () => {
+      const root = await createTempWorkspace();
+      const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");
+      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      const items = [{ message: "from pull diagnostics" }];
+      const openSpy = vi.spyOn(client, "openFile").mockResolvedValue(undefined);
+      const sendSpy = vi.spyOn(client as any, "send").mockResolvedValue({ items });
+      const waitSpy = vi.spyOn(client as any, "waitForPublishedDiagnostics");
+
+      const result = await client.diagnostics(filePath);
+
+      expect(openSpy).toHaveBeenCalledWith(filePath);
+      expect(sendSpy).toHaveBeenCalledWith(
+        "textDocument/diagnostic",
+        { textDocument: { uri: pathToFileURL(filePath).href } },
+        undefined,
+      );
+      expect(waitSpy).not.toHaveBeenCalled();
+      expect(result).toBe(items);
+    });
     it("re-throws when the diagnostic request fails for a non-Method-Not-Found reason", async () => {
       const root = await createTempWorkspace();
       const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");
@@ -253,6 +273,19 @@ describe("LspClient internals", () => {
       const sendSpy = vi.spyOn(client as any, "send").mockRejectedValue(new Error("LSP request timeout (textDocument/diagnostic) after 100ms"));
       await expect(client.diagnostics(filePath)).rejects.toThrow(/LSP request timeout/);
       expect(sendSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-throws JSON-RPC Internal Error (-32603) instead of treating it as a transient startup race", async () => {
+      const root = await createTempWorkspace();
+      const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");
+      const client = new LspClient(root, { id: "mock-lsp", command: ["mock-lsp"], extensions: [".java"] } as any);
+      const internalError = new Error("Internal error") as Error & { code?: number };
+      internalError.code = -32603;
+      const sendSpy = vi.spyOn(client as any, "send").mockRejectedValue(internalError);
+      const waitSpy = vi.spyOn(client as any, "waitForPublishedDiagnostics");
+      await expect(client.diagnostics(filePath)).rejects.toThrow(/^Internal error$/);
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      expect(waitSpy).not.toHaveBeenCalled();
     });
 
     it("falls back to publishDiagnostics when the server reports Method Not Found (-32601)", async () => {
@@ -273,6 +306,25 @@ describe("LspClient internals", () => {
       const result = await client.diagnostics(filePath);
       expect(sendSpy).toHaveBeenCalledTimes(1);
       expect(result).toEqual([{ message: "boom" }]);
+    });
+
+    it("surfaces a generic actionable hint when transient Internal error fallback times out", async () => {
+      vi.useFakeTimers();
+      try {
+        const filePath = "/tmp/demo/src/App.java";
+        const client = new LspClient("/tmp/demo", { id: "mock-lsp", command: ["mock-lsp"], extensions: [".java"], requestTimeoutMs: 100 } as any);
+        vi.spyOn(client, "openFile").mockResolvedValue(undefined);
+        const internalError = new Error("Internal error") as Error & { code?: number };
+        const sendSpy = vi.spyOn(client as any, "send").mockRejectedValue(internalError);
+        const promise = client.diagnostics(filePath);
+        const assertion = expect(promise).rejects.toThrow(/LSP server 'mock-lsp' returned "Internal error"/);
+        await vi.advanceTimersByTimeAsync(120);
+        await assertion;
+        await expect(promise).rejects.toThrow(/requestTimeoutMs/);
+        expect(sendSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

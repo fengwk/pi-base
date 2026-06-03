@@ -6,15 +6,18 @@ import { registerEditTool } from "./src/edit.js";
 import { registerGrepTool } from "./src/grep.js";
 import { registerWriteTool } from "./src/write.js";
 import { registerBashRendererTool } from "./src/bash-renderer.js";
-import { loadPiBaseSettings } from "./src/config.js";
+import { loadPiBaseSettings, type LoadedPiBaseSettings } from "./src/config.js";
+import { registerPermissionGuard } from "./src/permission.js";
 import { lspManager } from "./src/lsp/client.js";
 import { registerLspTools, type LspResolverFactory } from "./src/lsp/tools.js";
 import { LspDiscoveryResolver } from "./src/lsp/discovery.js";
 import { applyUnifiedOutputTruncation } from "./src/tool-output.js";
 import { findSchema } from "./src/schemas/find.js";
 import { inferToolResultIsError } from "./src/tool-result.js";
+import { loadToolDescription, loadToolPromptSnippet } from "./src/tool-prompt.js";
+import { renderRawResult, resolveCollapsedResultLines, type CollapsedResultLinesResolver } from "./src/render.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./src/lsp/discovery.js";
-export { loadPiBaseSettings, type PiBaseSettings } from "./src/config.js";
+export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type YoloMode } from "./src/config.js";
 
 const BASE_TOOL_NAMES = [
   "read",
@@ -33,15 +36,35 @@ function loadBaseToolGuide(): string {
   return readFileSync(new URL("./prompts/base.md", import.meta.url), "utf8").trim();
 }
 
-function createResolverFactory(): LspResolverFactory {
-  const cache = new Map<string, LspDiscoveryResolver>();
+function createSettingsLoader(): (cwd: string) => LoadedPiBaseSettings {
+  const cache = new Map<string, LoadedPiBaseSettings>();
   return (cwd: string) => {
     const cached = cache.get(cwd);
     if (cached) return cached;
     const loaded = loadPiBaseSettings(cwd);
+    cache.set(cwd, loaded);
+    return loaded;
+  };
+}
+
+function createResolverFactory(loadSettings: (cwd: string) => LoadedPiBaseSettings): LspResolverFactory {
+  const cache = new Map<string, LspDiscoveryResolver>();
+  return (cwd: string) => {
+    const cached = cache.get(cwd);
+    if (cached) return cached;
+    const loaded = loadSettings(cwd);
     const resolver = new LspDiscoveryResolver(loaded.settings.lsp ?? {});
     cache.set(cwd, resolver);
     return resolver;
+  };
+}
+
+function createCollapsedResultLinesResolver(loadSettings: (cwd: string) => LoadedPiBaseSettings): CollapsedResultLinesResolver {
+  return (cwd: string, toolName: string) => {
+    const config = loadSettings(cwd).settings.render?.collapsedToolResultLines;
+    if (config === undefined) return undefined;
+    if (typeof config === "number") return config;
+    return config[toolName] ?? config["*"];
   };
 }
 
@@ -61,13 +84,24 @@ type FindToolDefinitionFactory = (cwd: string) => any;
  * `process.cwd()`), so a call from a different session cwd searches the right
  * tree.
  */
-export function registerFindTool(pi: ExtensionAPI, createToolDefinition: FindToolDefinitionFactory = createFindToolDefinition): void {
+export function registerFindTool(
+  pi: ExtensionAPI,
+  createToolDefinition: FindToolDefinitionFactory = createFindToolDefinition,
+  options: { getCollapsedResultLines?: CollapsedResultLinesResolver } = {},
+): void {
   const template = createToolDefinition(process.cwd());
   pi.registerTool({
     ...template,
     parameters: findSchema,
-    description: "Search for files by glob pattern. `path` is required — there is no implicit search root. Use `.` for the current working directory. Respects .gitignore.",
-    promptSnippet: "Find files by glob pattern in an explicit path (`path` required)",
+    description: loadToolDescription("find"),
+    promptSnippet: loadToolPromptSnippet("find"),
+    renderResult(result: any, renderOptions: any, theme: any, context: any) {
+      const collapsedLines = resolveCollapsedResultLines("find", undefined, context, options.getCollapsedResultLines);
+      if (collapsedLines === undefined) {
+        return template.renderResult ? template.renderResult(result, renderOptions, theme, context) : renderRawResult(result, renderOptions, theme, context);
+      }
+      return renderRawResult(result, { ...renderOptions, collapsedLines }, theme, context);
+    },
     async execute(toolCallId: string, params: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any = {}) {
       const rawPath = typeof params?.path === "string" ? params.path.trim() : "";
       if (!rawPath) {
@@ -87,7 +121,9 @@ export function registerFindTool(pi: ExtensionAPI, createToolDefinition: FindToo
 }
 
 export default function piBaseExtension(pi: ExtensionAPI): void {
-  const resolverFactory = createResolverFactory();
+  const loadSettings = createSettingsLoader();
+  const resolverFactory = createResolverFactory(loadSettings);
+  const getCollapsedResultLines = createCollapsedResultLinesResolver(loadSettings);
   const filesWithFreshAnchors = new Set<string>();
   const cachedFileLines = new Map<string, string[]>();
   const noteAnchorsAndSnapshot = (absolutePath: string, lines?: string[]) => {
@@ -100,16 +136,17 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
 
-  registerReadTool(pi, { onSuccessfulRead: noteAnchorsAndSnapshot, createResolver: resolverFactory });
-  registerGrepTool(pi, { onFileAnchored: noteAnchorsAndSnapshot });
+  registerReadTool(pi, { onSuccessfulRead: noteAnchorsAndSnapshot, createResolver: resolverFactory, getCollapsedResultLines });
+  registerGrepTool(pi, { onFileAnchored: noteAnchorsAndSnapshot, getCollapsedResultLines });
   // Delegate `find` to the built-in pi-coding-agent tool, which uses `fd` directly,
   // respects `.gitignore` (rg/fd default), and auto-downloads `fd` if missing.
   // This keeps `pi-base` thin and lets upstream handle fd behavior.
-  registerFindTool(pi);
-  registerBashRendererTool(pi);
-  registerEditTool(pi, { wasReadInSession: hasFreshAnchors, getCachedLines, onSuccessfulEdit: (absolutePath, lines) => { noteAnchorsAndSnapshot(absolutePath, lines); syncLsp(absolutePath); } });
-  registerWriteTool(pi, { onFileAnchored: noteAnchorsAndSnapshot, onSuccessfulWrite: syncLsp });
-  registerLspTools(pi, { resolverFactory });
+  registerFindTool(pi, createFindToolDefinition, { getCollapsedResultLines });
+  registerBashRendererTool(pi, { getCollapsedResultLines });
+  registerEditTool(pi, { wasReadInSession: hasFreshAnchors, getCachedLines, getCollapsedResultLines, onSuccessfulEdit: (absolutePath, lines) => { noteAnchorsAndSnapshot(absolutePath, lines); syncLsp(absolutePath); } });
+  registerWriteTool(pi, { onFileAnchored: noteAnchorsAndSnapshot, onSuccessfulWrite: syncLsp, getCollapsedResultLines });
+  registerLspTools(pi, { resolverFactory, getCollapsedResultLines });
+  registerPermissionGuard(pi, { loadSettings });
 
   // Global output guard: applies to every tool result that flows through Pi, including third-party tools.
   pi.on("tool_result", async (event) => {

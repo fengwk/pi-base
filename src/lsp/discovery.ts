@@ -77,7 +77,7 @@ function windowsExecutableSuffixes(): string[] {
  * resolvers with different configs cannot leak state into each other.
  *
  * The extension creates a resolver per request (keyed by `ctx.cwd` to avoid
- * re-reading `settings.json` on every tool call) and passes it down to
+ * re-reading `pi-base.json` on every tool call) and passes it down to
  * `LspManager.getClient(filePath, resolver)`. This matches the opencode
  * `lsp-tools` plugin: there is no module-level mutable state, and switching
  * projects does not carry over a previous project's servers or search paths.
@@ -229,13 +229,13 @@ export class LspDiscoveryResolver {
       if (config.extensions.includes(ext)) {
         const command = this.resolveCommand(config.command);
         if (!this.isServerInstalled(command)) {
-          const hint = `Hint: Add to .pi/pi-base/settings.json or ~/.pi/agent/pi-base/settings.json:\n${JSON.stringify({ lsp: { servers: { [id]: buildServerEntryExample(id, config.command) } } }, null, 2)}`;
+          const hint = `Hint: Add to .pi/pi-base.json or ~/.pi/agent/pi-base.json:\n${JSON.stringify({ lsp: { servers: { [id]: buildServerEntryExample(id, config.command) } } }, null, 2)}`;
           throw new Error(`LSP server '${id}' is not installed for ${filePath}. Install ${config.command[0]} on PATH${(this.config.searchPaths ?? []).length > 0 ? " (or via lsp.searchPaths)" : ""}, or update lsp.servers.${id} in pi-base settings.\n${hint}`);
         }
         return { id, command, extensions: config.extensions, rootMarkers: config.rootMarkers, firstMatchMarkers: config.firstMatchMarkers, requestTimeoutMs: config.requestTimeoutMs };
       }
     }
-    throw new Error(`No LSP server configured for ${filePath}. Configure it under lsp.servers in pi-base settings.`);
+    throw new Error(`No LSP server configured for ${filePath}.`);
   }
 }
 

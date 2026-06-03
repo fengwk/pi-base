@@ -1,13 +1,180 @@
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export function createToolRegistry() {
-  const tools = new Map<string, any>();
-  const events = new Map<string, Function[]>();
-  let activeTools: string[] = [];
+initTheme("dark", false);
+type MockUiOverrides = Partial<{
+  notify: (message: string, variant: string) => void;
+  setStatus: (key: string, text: string | undefined) => void;
+  select: (title: string, items: string[]) => Promise<string | undefined> | string | undefined;
+  confirm: (title: string, message: string) => Promise<boolean> | boolean;
+}>;
 
-  const applyToolResultHandlers = async (toolName: string, toolCallId: string, input: any, result: any) => {
+function createTheme() {
+  return {
+    fg(_color: string, text: string) {
+      return text;
+    },
+    bold(text: string) {
+      return text;
+    },
+  };
+}
+
+export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?: MockUiOverrides } = {}) {
+  const tools = new Map<string, any>();
+  const commands = new Map<string, any>();
+  const events = new Map<string, Function[]>();
+  const entries: any[] = [];
+  const notifications: Array<{ message: string; variant: string }> = [];
+  const statuses = new Map<string, string | undefined>();
+  let activeTools: string[] = [];
+  let defaultHasUI = options.hasUI ?? true;
+  let defaultCwd = options.cwd ?? process.cwd();
+  let uiOverrides: MockUiOverrides = { ...(options.ui ?? {}) };
+  let thinkingLevel = "off";
+  let footerFactory: ((tui: any, theme: any, footerData: any) => any) | undefined;
+  let footerComponent: any;
+  const theme = createTheme();
+  const tui = {
+    requestRender() {},
+  };
+  const footerData = {
+    getGitBranch() {
+      return null;
+    },
+    getExtensionStatuses() {
+      return new Map(statuses);
+    },
+    getAvailableProviderCount() {
+      return 1;
+    },
+    onBranchChange() {
+      return () => {};
+    },
+  };
+
+  const buildContext = (overrides: any = {}) => {
+    const ui = {
+      theme,
+      notify(message: string, variant: string) {
+        notifications.push({ message, variant });
+        uiOverrides.notify?.(message, variant);
+      },
+      setStatus(key: string, text: string | undefined) {
+        statuses.set(key, text);
+        uiOverrides.setStatus?.(key, text);
+      },
+      async select(title: string, items: string[]) {
+        if (uiOverrides.select) return uiOverrides.select(title, items);
+        return items[0];
+      },
+      async confirm(title: string, message: string) {
+        if (uiOverrides.confirm) return uiOverrides.confirm(title, message);
+        return true;
+      },
+      setWidget() {},
+      setFooter(factory: any) {
+        footerFactory = factory;
+        footerComponent?.dispose?.();
+        footerComponent = undefined;
+      },
+      setTitle() {},
+      setEditorText() {},
+      getEditorText() {
+        return "";
+      },
+      addAutocompleteProvider() {},
+      setWorkingMessage() {},
+      setWorkingVisible() {},
+      setWorkingIndicator() {},
+      setToolsExpanded() {},
+      getToolsExpanded() {
+        return false;
+      },
+      setEditorComponent() {},
+      getEditorComponent() {
+        return undefined;
+      },
+      pasteToEditor() {},
+      getAllThemes() {
+        return [];
+      },
+      getTheme() {
+        return undefined;
+      },
+      setTheme() {
+        return { success: false, error: "unsupported" };
+      },
+    };
+
+    const sessionManager = {
+      getEntries() {
+        return [...entries];
+      },
+      getBranch() {
+        return [...entries];
+      },
+      getLeafId() {
+        return null;
+      },
+      getLabel() {
+        return undefined;
+      },
+      getCwd() {
+        return defaultCwd;
+      },
+      getSessionName() {
+        return undefined;
+      },
+    };
+
+    const resolvedUi = overrides.ui ? { ...ui, ...overrides.ui } : ui;
+    return {
+      hasUI: overrides.hasUI ?? defaultHasUI,
+      cwd: overrides.cwd ?? defaultCwd,
+      sessionManager,
+      modelRegistry: {
+        isUsingOAuth: () => false,
+      } as any,
+      model: undefined,
+      isIdle: () => true,
+      signal: overrides.signal,
+      abort() {},
+      hasPendingMessages: () => false,
+      shutdown() {},
+      getContextUsage: () => undefined,
+      compact() {},
+      getSystemPrompt: () => "",
+      waitForIdle: async () => undefined,
+      reload: async () => undefined,
+      ...overrides,
+      ui: resolvedUi,
+    };
+  };
+
+  const applyToolCallHandlers = async (toolName: string, toolCallId: string, input: any, ctx: any) => {
+    const handlers = events.get("tool_call") ?? [];
+    const current = {
+      type: "tool_call",
+      toolName,
+      toolCallId,
+      input,
+    };
+    for (const handler of handlers) {
+      const result = await handler(current, ctx);
+      if (result?.block) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${result.reason ?? `${toolName} blocked by tool_call handler.`}` }],
+          isError: true,
+        };
+      }
+    }
+    return undefined;
+  };
+
+  const applyToolResultHandlers = async (toolName: string, toolCallId: string, input: any, result: any, ctx: any) => {
     const handlers = events.get("tool_result") ?? [];
     let current = {
       type: "tool_result",
@@ -19,7 +186,7 @@ export function createToolRegistry() {
       isError: Boolean(result.isError),
     };
     for (const handler of handlers) {
-      const next = await handler(current, {} as any);
+      const next = await handler(current, ctx);
       if (!next) continue;
       if (next.content !== undefined) current.content = next.content;
       if (next.details !== undefined) current.details = next.details;
@@ -40,16 +207,28 @@ export function createToolRegistry() {
         tools.set(tool.name, {
           ...tool,
           async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) {
+            const eventContext = buildContext(ctx);
+            const blocked = await applyToolCallHandlers(tool.name, toolCallId, params, eventContext);
+            if (blocked) return blocked;
             const result = await originalExecute(toolCallId, params, signal, onUpdate, ctx);
-            return applyToolResultHandlers(tool.name, toolCallId, params, result);
+            return applyToolResultHandlers(tool.name, toolCallId, params, result, eventContext);
           },
         });
+      },
+      registerCommand(name: string, command: any) {
+        commands.set(name, command);
+      },
+      appendEntry(customType: string, data?: unknown) {
+        entries.push({ type: "custom", customType, data });
       },
       setActiveTools(names: string[]) {
         activeTools = [...names];
       },
       getActiveTools() {
         return activeTools;
+      },
+      getThinkingLevel() {
+        return thinkingLevel;
       },
       on(name: string, handler: Function) {
         const list = events.get(name) ?? [];
@@ -62,14 +241,53 @@ export function createToolRegistry() {
       if (!tool) throw new Error(`Tool not registered: ${name}`);
       return tool;
     },
+    getCommand(name: string) {
+      const command = commands.get(name);
+      if (!command) throw new Error(`Command not registered: ${name}`);
+      return command;
+    },
+    async runCommand(name: string, args = "", ctx: any = {}) {
+      const command = commands.get(name);
+      if (!command) throw new Error(`Command not registered: ${name}`);
+      return command.handler(args, buildContext(ctx));
+    },
     getActiveTools() {
       return activeTools;
     },
-    async emit(name: string, event: any) {
+    getEntries() {
+      return [...entries];
+    },
+    getStatuses() {
+      return new Map(statuses);
+    },
+    getNotifications() {
+      return [...notifications];
+    },
+    setUI(overrides: MockUiOverrides) {
+      uiOverrides = { ...uiOverrides, ...overrides };
+    },
+    setHasUI(next: boolean) {
+      defaultHasUI = next;
+    },
+    setCwd(next: string) {
+      defaultCwd = next;
+    },
+    setThinkingLevel(next: string) {
+      thinkingLevel = next;
+    },
+    renderFooter(width = 120) {
+      if (!footerFactory) return [];
+      if (!footerComponent) {
+        footerComponent = footerFactory(tui, theme, footerData);
+      }
+      return footerComponent.render(width);
+    },
+    async emit(name: string, event: any, ctx: any = {}) {
       const handlers = events.get(name) ?? [];
       let current = undefined;
+      const eventContext = buildContext(ctx);
       for (const handler of handlers) {
-        current = await handler(event, {} as any);
+        current = await handler(event, eventContext);
       }
       return current;
     },

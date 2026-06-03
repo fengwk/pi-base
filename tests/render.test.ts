@@ -24,6 +24,16 @@ describe("render helpers", () => {
     expect(expanded).toContain("line-25");
   });
 
+  it("supports zero-line collapsed previews", () => {
+    const raw = Array.from({ length: 3 }, (_, index) => `line-${index + 1}`).join("\n");
+
+    const collapsed = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: false, collapsedLines: 0 }, {}, { lastComponent: undefined }));
+    expect(collapsed).not.toContain("line-1");
+    expect(collapsed).not.toContain("line-3");
+    expect(collapsed).toContain("3 more lines");
+    expect(collapsed).toContain("ctrl+o to expand");
+  });
+
   it("colorizes structured results and diff sections", () => {
     const raw = [
       "path: /tmp/demo.txt",
@@ -49,14 +59,14 @@ describe("render helpers", () => {
   it("colorizes natural-language write success guidance", () => {
     const raw = [
       "Created src/demo.ts.",
-      "Use these LINE:HASH anchors for follow-up edits.",
+      "Review the written file content below. Lines prefixed with digits carry LINE:HASH anchors for follow-up edits.",
       "",
       "1:abc|hello",
     ].join("\n");
 
     const rendered = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: true }, theme, { lastComponent: undefined }));
     expect(rendered).toContain("<success>Created src/demo.ts.</success>");
-    expect(rendered).toContain("<warning>Use these LINE:HASH anchors for follow-up edits.</warning>");
+    expect(rendered).toContain("<warning>Review the written file content below. Lines prefixed with digits carry LINE:HASH anchors for follow-up edits.</warning>");
     expect(rendered).toContain("<muted>1:abc|</muted><toolOutput>hello</toolOutput>");
   });
 });

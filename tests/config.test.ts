@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { loadPiBaseSettings } from "../src/config.js";
 import { LspDiscoveryResolver } from "../src/lsp/discovery.js";
 import { createTempWorkspace } from "./helpers.js";
@@ -21,12 +22,13 @@ async function withTempGlobalSettings<T>(run: (globalPath: string) => Promise<T>
   }
 }
 
+
 describe("pi-base config", () => {
   it("loads project settings and overrides global lsp fields", async () => {
     const root = await createTempWorkspace();
-    const projectDir = join(root, ".pi", "pi-base");
+    const projectDir = join(root, ".pi");
     await mkdir(projectDir, { recursive: true });
-    const projectPath = join(projectDir, "settings.json");
+    const projectPath = join(projectDir, "pi-base.json");
     const globalServers = { jdtls: { command: ["global-jdtls"], extensions: [".java"] } };
     const projectServers = { jdtls: { command: ["project-jdtls"], extensions: [".java"] }, gopls: { command: ["gopls"], extensions: [".go"] } };
     await withTempGlobalSettings(async (globalPath) => {
@@ -42,27 +44,40 @@ describe("pi-base config", () => {
 
   it("loads project settings from the nearest ancestor settings file", async () => {
     const root = await createTempWorkspace();
-    const projectDir = join(root, ".pi", "pi-base");
+    const projectDir = join(root, ".pi");
     const childDir = join(root, "packages", "app", "src");
     await mkdir(projectDir, { recursive: true });
     await mkdir(childDir, { recursive: true });
     await withTempGlobalSettings(async () => {
-      await writeFile(join(projectDir, "settings.json"), JSON.stringify({ lsp: { searchPaths: ["/repo-root/bin"] } }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ lsp: { searchPaths: ["/repo-root/bin"] } }), "utf8");
       const loaded = loadPiBaseSettings(childDir);
-      expect(loaded.projectPath).toBe(join(projectDir, "settings.json"));
+      expect(loaded.projectPath).toBe(join(projectDir, "pi-base.json"));
       expect(loaded.settings.lsp?.searchPaths).toEqual(["/repo-root/bin"]);
+    });
+  });
+
+  it("loads per-tool render settings from unified pi-base config and merges project overrides", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async (globalPath) => {
+      await mkdir(dirname(globalPath), { recursive: true });
+      await writeFile(globalPath, JSON.stringify({ render: { collapsedToolResultLines: 12 } }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ render: { collapsedToolResultLines: { read: 0, grep: 15 } } }), "utf8");
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.render).toEqual({ collapsedToolResultLines: { "*": 12, read: 0, grep: 15 } });
     });
   });
 
   it("resolves relative project searchPaths and command paths against the settings file directory", async () => {
     const root = await createTempWorkspace();
-    const projectDir = join(root, ".pi", "pi-base");
+    const projectDir = join(root, ".pi");
     const childDir = join(root, "packages", "app");
     await mkdir(projectDir, { recursive: true });
     await mkdir(childDir, { recursive: true });
     await withTempGlobalSettings(async () => {
       await writeFile(
-        join(projectDir, "settings.json"),
+        join(projectDir, "pi-base.json"),
         JSON.stringify({
           lsp: {
             searchPaths: ["./bin"],
@@ -76,6 +91,113 @@ describe("pi-base config", () => {
       const loaded = loadPiBaseSettings(childDir);
       expect(loaded.settings.lsp?.searchPaths).toEqual([join(projectDir, "bin")]);
       expect(loaded.settings.lsp?.servers?.ts?.command).toEqual([join(projectDir, "servers", "mock-ts-lsp"), "--stdio"]);
+    });
+  });
+
+  it("expands ~/ and $HOME in lsp searchPaths and command paths", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(
+        join(projectDir, "pi-base.json"),
+        JSON.stringify({
+          lsp: {
+            searchPaths: ["~/.local/share/nvim/mason/bin", "$HOME/.cache/tools/bin", "${HOME}/opt/lsp/bin"],
+            servers: {
+              ts: { command: ["$HOME/bin/mock-ts-lsp", "--stdio"], extensions: [".ts"] },
+              js: { command: ["${HOME}/bin/mock-js-lsp", "--stdio"], extensions: [".js"] },
+            },
+          },
+        }),
+        "utf8",
+      );
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.lsp?.searchPaths).toEqual([
+        join(homedir(), ".local", "share", "nvim", "mason", "bin"),
+        join(homedir(), ".cache", "tools", "bin"),
+        join(homedir(), "opt", "lsp", "bin"),
+      ]);
+      expect(loaded.settings.lsp?.servers?.ts?.command).toEqual([join(homedir(), "bin", "mock-ts-lsp"), "--stdio"]);
+      expect(loaded.settings.lsp?.servers?.js?.command).toEqual([join(homedir(), "bin", "mock-js-lsp"), "--stdio"]);
+    });
+  });
+
+  it("does not rewrite non-HOME environment placeholders in lsp command paths", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(
+        join(projectDir, "pi-base.json"),
+        JSON.stringify({
+          lsp: {
+            servers: {
+              java: { command: ["$JAVA_HOME/bin/jdtls", "--stdio"], extensions: [".java"] },
+            },
+          },
+        }),
+        "utf8",
+      );
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.lsp?.servers?.java?.command).toEqual(["$JAVA_HOME/bin/jdtls", "--stdio"]);
+    });
+  });
+
+  it("loads permission rules from unified pi-base config and merges global/project entries", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async (globalPath) => {
+      await mkdir(dirname(globalPath), { recursive: true });
+      await writeFile(
+        globalPath,
+        JSON.stringify({
+          permission: {
+            "*": "allow",
+            bash: { "*": "ask", "git *": "allow" },
+            write: "deny",
+          },
+        }),
+        "utf8",
+      );
+      await writeFile(
+        join(projectDir, "pi-base.json"),
+        JSON.stringify({
+          permission: {
+            bash: { "npm *": "allow" },
+            write: "ask",
+          },
+        }),
+        "utf8",
+      );
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.projectPath).toBe(join(projectDir, "pi-base.json"));
+      expect(loaded.settings.permission).toEqual({
+        "*": [{ pattern: "*", action: "allow" }],
+        bash: [
+          { pattern: "*", action: "ask" },
+          { pattern: "git *", action: "allow" },
+          { pattern: "npm *", action: "allow" },
+        ],
+        write: [
+          { pattern: "*", action: "deny" },
+          { pattern: "*", action: "ask" },
+        ],
+      });
+    });
+  });
+
+  it("loads default yolo mode from unified pi-base config and lets project settings override it", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async (globalPath) => {
+      await mkdir(dirname(globalPath), { recursive: true });
+      await writeFile(globalPath, JSON.stringify({ yolo: "enable" }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ yolo: "disable" }), "utf8");
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.yolo).toBe("disable");
     });
   });
 
@@ -124,7 +246,7 @@ describe("pi-base config", () => {
 
   it("shows a concrete settings snippet when an LSP server is missing", () => {
     const resolver = new LspDiscoveryResolver({ servers: { typescript: { command: ["missing-ts-lsp", "--stdio"], extensions: [".ts"] } } });
-    expect(() => resolver.findServerForFile("/tmp/demo.ts")).toThrowError(/\.pi\/pi-base\/settings\.json/);
+    expect(() => resolver.findServerForFile("/tmp/demo.ts")).toThrowError(/\.pi\/pi-base\.json/);
     expect(() => resolver.findServerForFile("/tmp/demo.ts")).toThrowError(/"typescript": \{/);
     expect(() => resolver.findServerForFile("/tmp/demo.ts")).toThrowError(/"\/absolute\/path\/to\/missing-ts-lsp"/);
   });
@@ -132,30 +254,64 @@ describe("pi-base config", () => {
   it("surfaces malformed project settings", async () => {
     await withTempGlobalSettings(async () => {
       const root = await createTempWorkspace();
-      const projectDir = join(root, ".pi", "pi-base");
+      const projectDir = join(root, ".pi");
       await mkdir(projectDir, { recursive: true });
-      await writeFile(join(projectDir, "settings.json"), "{", "utf8");
-      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*settings\.json/);
+      await writeFile(join(projectDir, "pi-base.json"), "{", "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json/);
     });
   });
 
   it("surfaces invalid lsp server entries", async () => {
     await withTempGlobalSettings(async () => {
       const root = await createTempWorkspace();
-      const projectDir = join(root, ".pi", "pi-base");
+      const projectDir = join(root, ".pi");
       await mkdir(projectDir, { recursive: true });
-      await writeFile(join(projectDir, "settings.json"), JSON.stringify({ lsp: { servers: { ts: { command: "ts-lsp", extensions: [".ts"] } } } }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ lsp: { servers: { ts: { command: "ts-lsp", extensions: [".ts"] } } } }), "utf8");
       expect(() => loadPiBaseSettings(root)).toThrowError(/lsp\.servers\.ts\.command must be an array of strings/);
+    });
+  });
+
+  it("surfaces invalid permission rules from unified pi-base config", async () => {
+    await withTempGlobalSettings(async () => {
+      const root = await createTempWorkspace();
+      const projectDir = join(root, ".pi");
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(
+        join(projectDir, "pi-base.json"),
+        JSON.stringify({ permission: { write: { "*": "maybe" } } }),
+        "utf8",
+      );
+      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: permission\.write\.\* must be \"allow\", \"ask\", or \"deny\"/);
+    });
+  });
+
+  it("surfaces invalid yolo blocks", async () => {
+    await withTempGlobalSettings(async () => {
+      const root = await createTempWorkspace();
+      const projectDir = join(root, ".pi");
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ yolo: "maybe" }), "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: yolo must be "enable" or "disable"/);
     });
   });
 
   it("surfaces invalid lsp blocks", async () => {
     await withTempGlobalSettings(async () => {
       const root = await createTempWorkspace();
-      const projectDir = join(root, ".pi", "pi-base");
+      const projectDir = join(root, ".pi");
       await mkdir(projectDir, { recursive: true });
-      await writeFile(join(projectDir, "settings.json"), JSON.stringify({ lsp: [] }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ lsp: [] }), "utf8");
       expect(() => loadPiBaseSettings(root)).toThrowError(/lsp must be an object/);
+    });
+  });
+
+  it("surfaces invalid render blocks", async () => {
+    await withTempGlobalSettings(async () => {
+      const root = await createTempWorkspace();
+      const projectDir = join(root, ".pi");
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ render: { collapsedToolResultLines: -1 } }), "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: render\.collapsedToolResultLines must be a non-negative integer/);
     });
   });
 });

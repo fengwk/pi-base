@@ -67,6 +67,27 @@ describe("lsp tools", () => {
     }
   });
 
+  it("returns a generic actionable hint for transient Internal error diagnostics failures", async () => {
+    const registry = createToolRegistry();
+    registerLspTools(registry.pi as any);
+    const original = lspManager.getClient.bind(lspManager);
+    lspManager.getClient = async () => mockLspClient({
+      serverId: () => "mock-lsp",
+      diagnostics: async () => {
+        throw new Error("Internal error");
+      },
+    });
+    try {
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
+      expect(result.isError).toBe(true);
+      const text = getText(result);
+      expect(text).toContain("LSP server 'mock-lsp' returned \"Internal error\"");
+      expect(text).toContain("configured request timeout");
+    } finally {
+      lspManager.getClient = original;
+    }
+  });
+
   it("surfaces diagnostics client errors", async () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
@@ -78,6 +99,41 @@ describe("lsp tools", () => {
       const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       expect(getText(result)).toContain("no server");
+    } finally {
+      lspManager.getClient = original;
+    }
+  });
+
+  it("surfaces the concise no-server-configured message without extra configuration guidance", async () => {
+    const registry = createToolRegistry();
+    registerLspTools(registry.pi as any);
+    const original = lspManager.getClient.bind(lspManager);
+    lspManager.getClient = async () => {
+      throw new Error("No LSP server configured for /tmp/demo/README.md.");
+    };
+    try {
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "/tmp/demo/README.md", severity: "error" }, undefined, undefined, { cwd: process.cwd() });
+      expect(result.isError).toBe(true);
+      const text = getText(result);
+      expect(text).toContain("No LSP server configured for /tmp/demo/README.md.");
+      expect(text).not.toContain("Configure it under lsp.servers");
+    } finally {
+      lspManager.getClient = original;
+    }
+  });
+
+  it("aborts pending diagnostics client acquisition", async () => {
+    const registry = createToolRegistry();
+    registerLspTools(registry.pi as any);
+    const original = lspManager.getClient.bind(lspManager);
+    const controller = new AbortController();
+    lspManager.getClient = () => new Promise(() => undefined) as any;
+    try {
+      const pending = registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
+      controller.abort();
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(getText(result)).toContain("Operation aborted");
     } finally {
       lspManager.getClient = original;
     }

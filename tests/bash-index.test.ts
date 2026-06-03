@@ -42,6 +42,21 @@ describe("bash tool and index", () => {
     expect(["linux", "wsl", "macos", "windows"]).toContain(detectOsLabel());
   });
 
+  it("falls back to proc files when WSL environment variables are absent", () => {
+    const previousDistro = process.env.WSL_DISTRO_NAME;
+    const previousInterop = process.env.WSL_INTEROP;
+    try {
+      delete process.env.WSL_DISTRO_NAME;
+      delete process.env.WSL_INTEROP;
+      expect(["linux", "wsl", "macos", "windows"]).toContain(detectOsLabel());
+    } finally {
+      if (previousDistro === undefined) delete process.env.WSL_DISTRO_NAME;
+      else process.env.WSL_DISTRO_NAME = previousDistro;
+      if (previousInterop === undefined) delete process.env.WSL_INTEROP;
+      else process.env.WSL_INTEROP = previousInterop;
+    }
+  });
+
   it("describes shell selection and host shell startup options", () => {
     expect(describeShellFor({ platform: "linux", shellPath: "/bin/bash" })).toBe("bash");
     expect(describeShellFor({ platform: "linux", shellPath: "/bin/zsh" })).toBe("zsh");
@@ -124,6 +139,190 @@ describe("bash tool and index", () => {
     expect(outputPath).toBeTruthy();
     const saved = await readFile(outputPath, "utf8");
     expect(saved).toContain("line-2505");
+  });
+
+  it("uses the built-in bash result renderer when available", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+      createBuiltInBashToolDefinition: () => ({
+        renderResult: () => ({
+          render: () => ["builtin bash renderer"],
+          invalidate: () => {},
+        }),
+      }),
+    });
+
+    const tool = registry.getTool("bash");
+    const rendered = tool.renderResult(
+      { content: [{ type: "text", text: "line-1\nline-2" }] },
+      { expanded: false, isPartial: false },
+      {} as any,
+      { lastComponent: undefined, args: { workdir: "." }, cwd: process.cwd(), state: {} },
+    ).render(200).join("\n");
+
+    expect(rendered).toContain("builtin bash renderer");
+  });
+
+  it("uses the pi-base bash result renderer when collapsed result lines are configured", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+      createBuiltInBashToolDefinition: () => ({
+        renderResult: () => ({
+          render: () => ["builtin bash renderer"],
+          invalidate: () => {},
+        }),
+      }),
+      getCollapsedResultLines: () => 0,
+    });
+
+    const tool = registry.getTool("bash");
+    const rendered = tool.renderResult(
+      { content: [{ type: "text", text: "line-1\nline-2\nline-3" }] },
+      { expanded: false, isPartial: false },
+      {} as any,
+      { lastComponent: undefined, args: { workdir: "." }, cwd: process.cwd(), state: {} },
+    ).render(200).join("\n");
+
+    expect(rendered).not.toContain("builtin bash renderer");
+    expect(rendered).not.toContain("line-1");
+    expect(rendered).not.toContain("line-3");
+    expect(rendered).toContain("3 earlier lines");
+  });
+
+  it("tracks bash execution timing state from renderCall", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+
+    const tool = registry.getTool("bash");
+    const state: any = {};
+    tool.renderCall(
+      { command: "pwd", workdir: ".", timeoutSeconds: 5 },
+      {} as any,
+      { lastComponent: undefined, executionStarted: true, state },
+    );
+
+    expect(typeof state.startedAt).toBe("number");
+    expect(state.endedAt).toBeUndefined();
+  });
+
+  it("shows 20 trailing lines in collapsed bash results", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+
+    const tool = registry.getTool("bash");
+    const output = Array.from({ length: 30 }, (_, index) => `line-${index + 1}`).join("\n");
+    const rendered = tool.renderResult(
+      { content: [{ type: "text", text: output }] },
+      { expanded: false, isPartial: false },
+      {} as any,
+      { lastComponent: undefined, args: { workdir: "." }, cwd: process.cwd(), state: { startedAt: Date.now(), endedAt: Date.now() } },
+    ).render(200).join("\n");
+
+    expect(rendered).toContain("line-11");
+    expect(rendered).toContain("line-30");
+    expect(rendered).not.toContain("line-10");
+    expect(rendered).toContain("earlier lines");
+  });
+
+  it("supports zero-line collapsed bash previews when configured", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+      getCollapsedResultLines: () => 0,
+    });
+
+    const tool = registry.getTool("bash");
+    const output = Array.from({ length: 30 }, (_, index) => `line-${index + 1}`).join("\n");
+    const rendered = tool.renderResult(
+      { content: [{ type: "text", text: output }] },
+      { expanded: false, isPartial: false },
+      {} as any,
+      { lastComponent: undefined, args: { workdir: "." }, cwd: process.cwd(), state: { startedAt: Date.now(), endedAt: Date.now() } },
+    ).render(200).join("\n");
+
+    expect(rendered).not.toContain("line-1");
+    expect(rendered).not.toContain("line-30");
+    expect(rendered).toContain("30 earlier lines");
+  });
+
+  it("renders built-in bash truncation metadata without duplicating the upstream footer", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+
+    const tool = registry.getTool("bash");
+    const outputPath = "/tmp/pi-bash-output.log";
+    const rendered = tool.renderResult(
+      {
+        content: [{ type: "text", text: `line-1\n\n[Showing lines 1-1 of 100. Full output: ${outputPath}]` }],
+        details: {
+          fullOutputPath: outputPath,
+          truncation: { truncated: true, truncatedBy: "lines", outputLines: 1, totalLines: 100 },
+        },
+      },
+      { expanded: false, isPartial: false },
+      {} as any,
+      { lastComponent: undefined, args: { workdir: "." }, cwd: process.cwd(), state: {} },
+    ).render(200).join("\n");
+
+    expect(rendered).toContain("line-1");
+    expect(rendered).not.toContain("[Showing lines");
+    expect(rendered).toContain(`Full output: ${outputPath}`);
+    expect(rendered).toContain("Truncated: showing 1 of 100 lines");
+  });
+
+  it("renders byte-limit bash truncation warnings", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+
+    const tool = registry.getTool("bash");
+    const rendered = tool.renderResult(
+      {
+        content: [{ type: "text", text: "line-1\nline-2" }],
+        details: {
+          truncation: { truncated: true, outputLines: 2, totalLines: 100, maxBytes: 1024 },
+        },
+      },
+      { expanded: false, isPartial: false },
+      {} as any,
+      { lastComponent: undefined, args: { workdir: "." }, cwd: process.cwd(), state: {} },
+    ).render(200).join("\n");
+
+    expect(rendered).toContain("Truncated: 2 lines shown");
+    expect(rendered).toContain("limit");
+  });
+
+  it("starts and clears bash elapsed-time refresh intervals", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+
+    const tool = registry.getTool("bash");
+    const state: any = { startedAt: Date.now() };
+    const context: any = {
+      lastComponent: undefined,
+      args: { workdir: "." },
+      cwd: process.cwd(),
+      state,
+      invalidate: () => undefined,
+    };
+
+    tool.renderResult({ content: [{ type: "text", text: "running" }] }, { expanded: false, isPartial: true }, {} as any, context);
+    expect(state.interval).toBeDefined();
+
+    tool.renderResult({ content: [{ type: "text", text: "done" }] }, { expanded: false, isPartial: false }, {} as any, context);
+    expect(state.interval).toBeUndefined();
+    expect(state.endedAt).toBeDefined();
   });
 
   it("repairs lost isError flags in tool_result handlers", async () => {
@@ -209,9 +408,9 @@ describe("bash tool and index", () => {
     await mkdir(binA, { recursive: true });
     const fakeA = join(binA, "fake-a-lsp");
     await writeFile(fakeA, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
-    await mkdir(join(rootA, ".pi", "pi-base"), { recursive: true });
+    await mkdir(join(rootA, ".pi"), { recursive: true });
     await writeFile(
-      join(rootA, ".pi", "pi-base", "settings.json"),
+      join(rootA, ".pi", "pi-base.json"),
       JSON.stringify({ lsp: { searchPaths: [binA], servers: { ts: { command: ["fake-a-lsp"], extensions: [".ts"] } } } }),
       "utf8",
     );
@@ -223,9 +422,9 @@ describe("bash tool and index", () => {
     await mkdir(binB, { recursive: true });
     const fakeB = join(binB, "fake-b-lsp");
     await writeFile(fakeB, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
-    await mkdir(join(rootB, ".pi", "pi-base"), { recursive: true });
+    await mkdir(join(rootB, ".pi"), { recursive: true });
     await writeFile(
-      join(rootB, ".pi", "pi-base", "settings.json"),
+      join(rootB, ".pi", "pi-base.json"),
       JSON.stringify({ lsp: { searchPaths: [binB], servers: { ts: { command: ["fake-b-lsp"], extensions: [".ts"] } } } }),
       "utf8",
     );
@@ -254,7 +453,7 @@ describe("bash tool and index", () => {
       await rm(fakeA);
       // Force a fresh resolver for A by writing new settings.
       await writeFile(
-        join(rootA, ".pi", "pi-base", "settings.json"),
+        join(rootA, ".pi", "pi-base.json"),
         JSON.stringify({ lsp: { searchPaths: [binA], servers: { ts: { command: ["fake-a-lsp"], extensions: [".ts"] } } } }),
         "utf8",
       );

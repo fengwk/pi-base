@@ -115,6 +115,14 @@ function abortError(): Error {
   return new Error("Operation aborted");
 }
 
+function isTransientPullDiagnosticsInternalError(error: (Error & { code?: number }) | null | undefined): boolean {
+  return error?.code == null && error?.message === "Internal error";
+}
+
+function formatTransientDiagnosticsTimeoutError(serverId: string, filePath: string): string {
+  return `LSP server '${serverId}' returned "Internal error" for ${filePath} and did not publish diagnostics before the timeout. This often means the server has not finished opening the file or processing the workspace yet (common on the first call or after opening a large project). Retry in a few seconds. If the error persists, inspect the server logs or increase lsp.servers.${serverId}.requestTimeoutMs in ~/.pi/agent/pi-base.json if this server is legitimately slow.`;
+}
+
 export class LspClient {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private buffer = Buffer.alloc(0);
@@ -301,12 +309,25 @@ export class LspClient {
     } catch (error) {
       // JSON-RPC -32601 = Method Not Found. The server may still push
       // diagnostics via publishDiagnostics even when it does not implement
-      // textDocument/diagnostic. For any other failure (timeout, crash,
-      // connection loss), re-throw so we don't silently double the wait.
+      // textDocument/diagnostic.
+      // Some LSP servers return a transient untyped "Internal error" on the
+      // first pull of a freshly-opened workspace/file but then publish the same
+      // diagnostics within seconds. Fall through to the push-wait only in that
+      // narrow case so we don't fail fast on startup races or mask real
+      // server-side failures such as JSON-RPC -32603 Internal Error.
       firstError = error as Error & { code?: number };
-      if (firstError.code !== -32601) throw firstError;
+      const shouldWaitForPublishedDiagnostics =
+        firstError.code === -32601 || isTransientPullDiagnosticsInternalError(firstError);
+      if (!shouldWaitForPublishedDiagnostics) throw firstError;
     }
-    return this.waitForPublishedDiagnostics(uri, this.requestTimeoutMs, signal);
+    try {
+      return await this.waitForPublishedDiagnostics(uri, this.requestTimeoutMs, signal);
+    } catch (error) {
+      if (isTransientPullDiagnosticsInternalError(firstError) && error instanceof Error && error.message.startsWith("LSP diagnostics timeout after ")) {
+        throw new Error(formatTransientDiagnosticsTimeoutError(this.server.id, absPath));
+      }
+      throw error;
+    }
   }
 
   async definition(filePath: string, line: number, character: number, signal?: AbortSignal): Promise<unknown> {
@@ -444,7 +465,7 @@ export class LspClient {
         this.pending.delete(id);
         settled = true;
         signal?.removeEventListener("abort", onAbort);
-        reject(new Error(`LSP request timeout (${method}) after ${this.requestTimeoutMs}ms. Increase lsp.servers.${this.server.id}.requestTimeoutMs if this.server is legitimately slow.`));
+        reject(new Error(`LSP request timeout (${method}) after ${this.requestTimeoutMs}ms. Increase lsp.servers.${this.server.id}.requestTimeoutMs if this server is legitimately slow.`));
       }, this.requestTimeoutMs);
       this.pending.set(id, {
         resolve: (value) => {

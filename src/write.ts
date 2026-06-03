@@ -3,12 +3,12 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ensureHashInit, formatHashlineDisplay } from "./hashline.js";
 import { resolveToCwd } from "./path-utils.js";
-import { renderCallText, renderRawResult, shortenHomePath, styleAccent, styleToolTitle } from "./render.js";
+import { type CollapsedResultLinesResolver, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { writeSchema } from "./schemas/write.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
-const MAX_PREVIEW_LINES = 20;
+const COLLAPSED_PREVIEW_LINES = 10;
 
 function formatHashlineOutput(content: string): string {
   // Show the file as it is: keep the implicit empty line produced by
@@ -21,24 +21,25 @@ function formatHashlineOutput(content: string): string {
 
 function formatWriteSuccess(rawPath: string, existed: boolean, content: string): string {
   const action = existed ? "Overwrote" : "Created";
-  return `${action} ${rawPath}.\nUse these LINE:HASH anchors for follow-up edits.\n\n${formatHashlineOutput(content)}`;
+  return `${action} ${rawPath}.
+Review the written file content below. Lines prefixed with digits carry LINE:HASH anchors for follow-up edits.
+
+${formatHashlineOutput(content)}`;
 }
 
 function formatWriteCall(args: any, theme: any): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const content = String(args?.content ?? "");
-  // Raw `split("\n")`: the preview is the first N elements of the
-  // file's actual structure (including the implicit trailing empty
-  // when present). We do not silently rewrite structure.
+  // Raw `split("\n")`: the preview is the file's actual structure
+  // (including the implicit trailing empty when present). We do not
+  // silently rewrite structure.
   const lines = content.split("\n");
-  const preview = lines.slice(0, MAX_PREVIEW_LINES).join("\n");
-  const suffix = lines.length > MAX_PREVIEW_LINES ? `\n... (${lines.length - MAX_PREVIEW_LINES} more lines)` : "";
-  return `${styleToolTitle(theme, "write")} ${styleAccent(theme, path)}\n\n${preview}${suffix}`;
+  return `${styleToolTitle(theme, "write")} ${styleAccent(theme, path)}\n\n${lines.join("\n")}`;
 }
 
 export function registerWriteTool(
   pi: ExtensionAPI,
-  options: { onFileAnchored?: (absolutePath: string, lines?: string[]) => void; onSuccessfulWrite?: (absolutePath: string) => void } = {},
+  options: { onFileAnchored?: (absolutePath: string, lines?: string[]) => void; onSuccessfulWrite?: (absolutePath: string) => void; getCollapsedResultLines?: CollapsedResultLinesResolver } = {},
 ) {
   const tool = {
     name: "write",
@@ -49,8 +50,9 @@ export function registerWriteTool(
     renderCall(args: any, _theme: any, context: any) {
       return renderCallText(formatWriteCall(args, _theme), context.lastComponent);
     },
-    renderResult(result: any, options: any, _theme: any, context: any) {
-      return renderRawResult(result, options, _theme, context);
+    renderResult(result: any, renderOptions: any, _theme: any, context: any) {
+      const collapsedLines = resolveCollapsedResultLines("write", COLLAPSED_PREVIEW_LINES, context, options.getCollapsedResultLines);
+      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {

@@ -7,7 +7,7 @@ import { normalizeToLF, stripBom } from "./edit-diff.js";
 import { ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay } from "./hashline.js";
 import { LspDiscoveryResolver, type LspSupportInfo } from "./lsp/discovery.js";
 import { resolveToCwd } from "./path-utils.js";
-import { formatOptionalArgs, renderCallText, renderRawResult, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "./render.js";
+import { type CollapsedResultLinesResolver, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { readSchema } from "./schemas/read.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -16,6 +16,7 @@ const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 2000;
 const MAX_LINE_CHARS = 2000;
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+const RESULT_COLLAPSED_LINES = 10;
 
 function parsePositiveInteger(value: unknown, name: string, defaultValue: number): number {
   if (value === undefined) return defaultValue;
@@ -52,7 +53,7 @@ function formatLspStatus(lsp: LspSupportInfo): string {
 /**
  * Factory that returns a resolver scoped to a given `cwd`. The extension
  * should pass a factory that caches resolvers per cwd so we don't re-read
- * `settings.json` on every read.
+ * `pi-base.json` on every read.
  */
 export type ReadLspResolverFactory = (cwd: string) => LspDiscoveryResolver;
 
@@ -62,6 +63,7 @@ export function registerReadTool(
     onSuccessfulRead?: (absolutePath: string, lines?: string[]) => void;
     createBuiltInReadTool?: ReadFactory;
     createResolver?: ReadLspResolverFactory;
+    getCollapsedResultLines?: CollapsedResultLinesResolver;
   } = {},
 ) {
   const tool = {
@@ -73,8 +75,9 @@ export function registerReadTool(
     renderCall(args: any, _theme: any, context: any) {
       return renderCallText(formatReadCall(args, _theme), context.lastComponent);
     },
-    renderResult(result: any, options: any, _theme: any, context: any) {
-      return renderRawResult(result, options, _theme, context);
+    renderResult(result: any, renderOptions: any, _theme: any, context: any) {
+      const collapsedLines = resolveCollapsedResultLines("read", RESULT_COLLAPSED_LINES, context, options.getCollapsedResultLines);
+      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
     },
     async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}) {
       try {

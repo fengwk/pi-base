@@ -76,6 +76,7 @@ pi-base/
     ├── base.md
     ├── read.md
     ├── grep.md
+    ├── find.md
     ├── bash.md
     ├── edit.md
     ├── write.md
@@ -107,8 +108,8 @@ Pi 原生已支持通过 CLI 和运行时控制工具激活，因此不需要靠
 
 配置文件路径：
 
-- 全局：`~/.pi/agent/pi-base/settings.json`
-- 项目：`<repo>/.pi/pi-base/settings.json`
+- 全局：`~/.pi/agent/pi-base.json`
+- 项目：`<repo>/.pi/pi-base.json`
 
 测试或临时运行可通过 `PI_BASE_GLOBAL_SETTINGS_PATH` 覆盖全局配置文件路径，避免写入真实用户配置。
 
@@ -118,14 +119,17 @@ Pi 原生已支持通过 CLI 和运行时控制工具激活，因此不需要靠
 项目 JSON > 全局 JSON > 内建默认值
 ```
 
-v1 当前仅加载 LSP 发现相关配置：
+v1 当前加载以下配置：
 
 - `lsp.searchPaths`：除 `PATH` 外的额外搜索目录
 - `lsp.servers`：完全用户定义的 server 表（取代 v0 阶段的 `disabledServers` / `serverCommands`）
+- `permission`：按工具与通配路径 / 命令配置 `allow` / `ask` / `deny`
+- `render.collapsedToolResultLines`：配置折叠状态下的工具结果预览行数
+- `yolo`：可选的默认 YOLO 状态
 
 > 注：v0 阶段曾用 `lsp.disabledServers` 和 `lsp.serverCommands` 做"覆盖内置表"的策略，**已被 v0.2 移除**。  
 > 现在 `pi-base` 不再内置任何 server，全部由用户在 `lsp.servers` 里声明。  
-> "禁用"一个 server 直接不写。配置 schema 因此**只有 `searchPaths` + `servers` 两个字段**。
+> "禁用"一个 server 直接不写。LSP 子配置 schema 因此**只有 `searchPaths` + `servers` 两个字段**。
 
 `index.ts` 会在扩展启动时读取配置，并调用 discovery 配置入口生效。
 
@@ -995,13 +999,13 @@ LSP 进入 `pi-base` core，而不是拆成独立扩展。
 
 v0.2 起，**`pi-base` 不再内置任何 LSP server**，也**不内置任何 well-known 路径**。
 
-要使用某个 LSP server，用户必须在 `settings.json` 里写一条 `lsp.servers.<id>`：
+要使用某个 LSP server，用户必须在 `pi-base.json` 里写一条 `lsp.servers.<id>`：
 
 ```json
 {
   "lsp": {
     "searchPaths": [
-      "/home/you/.local/share/nvim/mason/bin"
+      "~/.local/share/nvim/mason/bin"
     ],
     "servers": {
       "jdtls": {
@@ -1240,8 +1244,8 @@ UserServiceClient (Interface) - file:///absolute/path/to/src/main/java/com/acme/
 
 ```ts
 {
-  target: string;         // required, usually jdt://... or definition result line
   path: string;           // required, any local .java file in the same workspace
+  target: string;         // required, usually jdt://... or definition result line
 }
 ```
 
@@ -1258,8 +1262,8 @@ UserServiceClient (Interface) - file:///absolute/path/to/src/main/java/com/acme/
 
 ```text
 lsp_java_decompile({
-  target: "jdt://contents/java.base/java/lang/String.class?...",
-  path: "src/main/java/com/acme/App.java"
+  path: "src/main/java/com/acme/App.java",
+  target: "jdt://contents/java.base/java/lang/String.class?..."
 })
 ```
 

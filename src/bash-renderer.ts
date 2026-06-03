@@ -1,19 +1,101 @@
-import { createBashTool, type BashToolOptions, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createBashTool, type BashToolOptions, type ExtensionAPI, DEFAULT_MAX_BYTES, formatSize } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { resolveToCwd } from "./path-utils.js";
-import { formatOptionalArgs, renderCallText, renderRawResult, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
+import { type CollapsedResultLinesResolver, renderCallText, renderRawResult, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning } from "./render.js";
 import { bashSchema } from "./schemas/bash.js";
 import { loadToolPromptSnippet } from "./tool-prompt.js";
 import { parsePositiveNumber } from "./timeout.js";
 
-type BashFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
+type BashExecutionTool = { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
+type BashRenderDefinition = { renderResult?: (result: any, options: any, theme: any, context: any) => any };
+type BashFactory = (cwd: string) => BashExecutionTool;
+type BashDefinitionFactory = (cwd: string) => BashRenderDefinition;
+
+const BASH_COLLAPSED_PREVIEW_LINES = 20;
 
 function formatBashCall(args: any, theme: any): string {
-  const command = String(args?.command ?? "<missing-command>");
+  const rawCommand = args?.command;
+  const command = typeof rawCommand === "string" ? rawCommand : "<missing-command>";
   const workdir = shortenHomePath(String(args?.workdir ?? "<missing-workdir>"));
-  const suffix = formatOptionalArgs([["timeoutSeconds", args?.timeoutSeconds]]);
-  return `${styleToolTitle(theme, "$")} ${styleOutput(theme, command)} ${styleMuted(theme, "in")} ${styleAccent(theme, workdir)}${styleOutput(theme, suffix)}`;
+  const timeoutSeconds = args?.timeoutSeconds;
+  const timeoutSuffix = timeoutSeconds ? styleMuted(theme, ` (timeout ${timeoutSeconds}s)`) : "";
+  return `${styleToolTitle(theme, `$ ${command}`)}${timeoutSuffix}${styleMuted(theme, " in ")}${styleAccent(theme, workdir)}`;
+}
+
+function formatDuration(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function extractBashText(result: any): string {
+  if (!Array.isArray(result?.content)) return "";
+  return result.content
+    .filter((item: any) => item?.type === "text")
+    .map((item: any) => String(item.text ?? ""))
+    .join("\n\n");
+}
+
+function stripStructuredTruncationFooter(output: string, result: any, options: any): string {
+  const truncation = result?.details?.truncation;
+  const fullOutputPath = result?.details?.fullOutputPath;
+  if (!options?.isPartial && truncation?.truncated && fullOutputPath && output.endsWith("]")) {
+    const footerStart = output.lastIndexOf("\n\n[");
+    if (footerStart !== -1 && output.slice(footerStart).includes(fullOutputPath)) {
+      return output.slice(0, footerStart).trimEnd();
+    }
+  }
+  return output;
+}
+
+function formatBashWarnings(result: any): string[] {
+  const truncation = result?.details?.truncation;
+  const fullOutputPath = result?.details?.fullOutputPath;
+  const warnings: string[] = [];
+  if (fullOutputPath) warnings.push(`Full output: ${fullOutputPath}`);
+  if (truncation?.truncated) {
+    if (truncation.truncatedBy === "lines") {
+      warnings.push(`Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`);
+    } else {
+      warnings.push(`Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)`);
+    }
+  }
+  return warnings;
+}
+
+function formatBashResultText(result: any, options: any, theme: any, context: any, collapsedLines: number): string {
+  const state = context?.state ?? {};
+  let output = extractBashText(result).trim();
+  output = stripStructuredTruncationFooter(output, result, options);
+
+  const styledLines = output
+    ? output.split("\n").map((line) => styleOutput(theme, line))
+    : [];
+  const visibleLines = options?.expanded
+    ? styledLines
+    : collapsedLines === 0
+      ? []
+      : styledLines.slice(-collapsedLines);
+  const hiddenLineCount = styledLines.length - visibleLines.length;
+  const sections: string[] = [];
+
+  if (!options?.expanded && hiddenLineCount > 0) {
+    sections.push(styleMuted(theme, `... (${hiddenLineCount} earlier lines, ctrl+o to expand)`));
+  }
+  if (visibleLines.length > 0) sections.push(...visibleLines);
+
+  const warnings = formatBashWarnings(result);
+  if (warnings.length > 0) {
+    sections.push(styleWarning(theme, `[${warnings.join(". ")}]`));
+  }
+
+  if (state.startedAt !== undefined) {
+    const label = options?.isPartial ? "Elapsed" : "Took";
+    const endTime = state.endedAt ?? Date.now();
+    sections.push(styleMuted(theme, `${label} ${formatDuration(endTime - state.startedAt)}`));
+  }
+
+  return sections.length > 0 ? `\n${sections.join("\n")}` : "";
 }
 
 function hostShellName(shellPath: string | undefined): string | undefined {
@@ -128,16 +210,20 @@ function buildHostShellOptions(): BashToolOptions | undefined {
 
 export function registerBashRendererTool(
   pi: Pick<ExtensionAPI, "registerTool">,
-  options: { createBuiltInBashTool?: BashFactory } = {},
+  options: { createBuiltInBashTool?: BashFactory; createBuiltInBashToolDefinition?: BashDefinitionFactory; getCollapsedResultLines?: CollapsedResultLinesResolver } = {},
 ) {
-  const builtins = new Map<string, any>();
-  const getBuiltIn = (cwd: string) => {
-    let tool = builtins.get(cwd);
-    if (!tool) {
-      tool = options.createBuiltInBashTool ? options.createBuiltInBashTool(cwd) : createBashTool(cwd, buildHostShellOptions());
-      builtins.set(cwd, tool);
+  const shellOptions = buildHostShellOptions();
+  const builtins = new Map<string, { tool: BashExecutionTool; definition: BashRenderDefinition }>();
+  const getBuiltIn = (cwd: string): { tool: BashExecutionTool; definition: BashRenderDefinition } => {
+    let entry = builtins.get(cwd);
+    if (!entry) {
+      entry = {
+        tool: options.createBuiltInBashTool ? options.createBuiltInBashTool(cwd) : createBashTool(cwd, shellOptions),
+        definition: options.createBuiltInBashToolDefinition ? options.createBuiltInBashToolDefinition(cwd) : {},
+      };
+      builtins.set(cwd, entry);
     }
-    return tool;
+    return entry;
   };
 
   const tool = {
@@ -147,10 +233,51 @@ export function registerBashRendererTool(
     promptSnippet: loadToolPromptSnippet("bash", { "${os}": detectOsLabel(), "${shell}": describeShell(), "${osNote}": describeOsNote() }),
     parameters: bashSchema,
     renderCall(args: any, _theme: any, context: any) {
+      const state = context.state ?? {};
+      if (context.executionStarted && state.startedAt === undefined) {
+        state.startedAt = Date.now();
+        state.endedAt = undefined;
+      }
       return renderCallText(formatBashCall(args, _theme), context.lastComponent);
     },
-    renderResult(result: any, options: any, _theme: any, context: any) {
-      return renderRawResult(result, options, _theme, context);
+    renderResult(result: any, renderOptions: any, _theme: any, context: any) {
+      const state = context?.state ?? {};
+      if (state.startedAt !== undefined && renderOptions?.isPartial && !state.interval) {
+        state.interval = setInterval(() => context.invalidate?.(), 1000);
+      }
+      if (!renderOptions?.isPartial || context?.isError) {
+        state.endedAt ??= Date.now();
+        if (state.interval) {
+          clearInterval(state.interval);
+          state.interval = undefined;
+        }
+      }
+
+      const rawWorkdir = String(context?.args?.workdir ?? "").replace(/^@/, "");
+      const cwd = rawWorkdir ? resolveToCwd(rawWorkdir, context.cwd ?? process.cwd()) : (context.cwd ?? process.cwd());
+      const configuredCollapsedLines = options.getCollapsedResultLines?.(context?.cwd ?? process.cwd(), "bash");
+      const collapsedLines = configuredCollapsedLines ?? BASH_COLLAPSED_PREVIEW_LINES;
+      const builtIn = getBuiltIn(cwd);
+      if (configuredCollapsedLines === undefined && options.createBuiltInBashToolDefinition && builtIn.definition.renderResult) {
+        const builtInContext = {
+          ...context,
+          state,
+          invalidate: context?.invalidate ?? (() => undefined),
+        };
+        try {
+          return builtIn.definition.renderResult(result, renderOptions, _theme, builtInContext);
+        } catch {
+          // Fall back when an injected test renderer cannot run.
+        }
+      }
+
+      try {
+        const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+        text.setText(formatBashResultText(result, renderOptions, _theme, { ...context, state }, collapsedLines));
+        return text;
+      } catch {
+        return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
+      }
     },
     async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}) {
       try {
@@ -159,7 +286,7 @@ export function registerBashRendererTool(
         const cwd = resolveToCwd(rawWorkdir, ctx.cwd ?? process.cwd());
         const builtIn = getBuiltIn(cwd);
         const timeoutSeconds = params.timeoutSeconds === undefined ? undefined : parsePositiveNumber(params.timeoutSeconds, "timeoutSeconds", 1);
-        return await builtIn.execute(
+        return await builtIn.tool.execute(
           toolCallId,
           {
             command: params.command,

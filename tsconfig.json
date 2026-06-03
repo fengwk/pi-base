@@ -32,6 +32,7 @@
     "src/runtime.ts",
     "src/timeout.ts",
     "src/config.ts",
+    "src/permission.ts",
     "src/lsp/discovery.ts",
     "src/lsp/client.ts",
     "src/lsp/tools.ts",

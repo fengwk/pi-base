@@ -3,8 +3,28 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LspDiscoveryConfig, LspServerEntry } from "./lsp/discovery.js";
 
+export type PermissionAction = "allow" | "ask" | "deny";
+
+export interface PermissionRuleEntry {
+  pattern: string;
+  action: PermissionAction;
+}
+
+export type PermissionConfig = Record<string, PermissionRuleEntry[]>;
+
+export type CollapsedToolResultLinesConfig = number | Record<string, number>;
+
+export interface RenderConfig {
+  collapsedToolResultLines?: CollapsedToolResultLinesConfig;
+}
+
+export type YoloMode = "enable" | "disable";
+
 export interface PiBaseSettings {
   lsp?: LspDiscoveryConfig;
+  permission?: PermissionConfig;
+  render?: RenderConfig;
+  yolo?: YoloMode;
 }
 
 export interface LoadedPiBaseSettings {
@@ -15,23 +35,20 @@ export interface LoadedPiBaseSettings {
 
 function defaultGlobalSettingsPath(): string {
   if (process.env.PI_BASE_GLOBAL_SETTINGS_PATH) return resolve(process.env.PI_BASE_GLOBAL_SETTINGS_PATH);
-  return join(homedir(), ".pi", "agent", "pi-base", "settings.json");
+  return join(homedir(), ".pi", "agent", "pi-base.json");
 }
 
 function defaultProjectSettingsPath(cwd: string): string {
   const resolvedCwd = resolve(cwd);
-  // Search upward for the nearest project-scoped pi-base settings file so a
-  // call from a repository subdirectory still picks up `<repo>/.pi/pi-base/settings.json`.
-  // If no ancestor provides one, fall back to the literal cwd-local location.
   let dir = resolvedCwd;
-  let prev = "";
-  while (dir !== prev) {
-    const candidate = join(dir, ".pi", "pi-base", "settings.json");
+  let previous = "";
+  while (dir !== previous) {
+    const candidate = join(dir, ".pi", "pi-base.json");
     if (existsSync(candidate)) return candidate;
-    prev = dir;
+    previous = dir;
     dir = dirname(dir);
   }
-  return join(resolvedCwd, ".pi", "pi-base", "settings.json");
+  return join(resolvedCwd, ".pi", "pi-base.json");
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -79,25 +96,161 @@ function sanitizeLspDiscoveryConfig(value: unknown): LspDiscoveryConfig | undefi
   return Object.keys(output).length > 0 ? output : undefined;
 }
 
+function isPermissionAction(value: unknown): value is PermissionAction {
+  return value === "allow" || value === "ask" || value === "deny";
+}
+
+function isYoloMode(value: unknown): value is YoloMode {
+  return value === "enable" || value === "disable";
+}
+
+function sanitizeYoloMode(value: unknown): YoloMode {
+  if (!isYoloMode(value)) throw new Error("yolo must be \"enable\" or \"disable\".");
+  return value;
+}
+
+function sanitizePermissionRule(value: unknown, path: string): PermissionRuleEntry[] {
+  if (isPermissionAction(value)) {
+    return [{ pattern: "*", action: value }];
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${path} must be \"allow\", \"ask\", or \"deny\", or an object keyed by pattern.`);
+  }
+  const entries: PermissionRuleEntry[] = [];
+  for (const [pattern, action] of Object.entries(value as Record<string, unknown>)) {
+    if (!isPermissionAction(action)) {
+      throw new Error(`${path}.${pattern} must be \"allow\", \"ask\", or \"deny\".`);
+    }
+    entries.push({ pattern, action });
+  }
+  return entries;
+}
+
+function sanitizePermissionConfig(value: unknown): PermissionConfig | undefined {
+  if (isPermissionAction(value)) {
+    return { "*": [{ pattern: "*", action: value }] };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("permission must be \"allow\", \"ask\", or \"deny\", or an object keyed by tool name.");
+  }
+  const output: PermissionConfig = {};
+  for (const [toolName, rule] of Object.entries(value as Record<string, unknown>)) {
+    output[toolName] = sanitizePermissionRule(rule, `permission.${toolName}`);
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+function sanitizeCollapsedToolResultLinesConfig(value: unknown, path: string): CollapsedToolResultLinesConfig {
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error(`${path} must be a non-negative integer.`);
+    }
+    return value;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${path} must be a non-negative integer or an object keyed by tool name.`);
+  }
+  const output: Record<string, number> = {};
+  for (const [toolName, lineCount] of Object.entries(value as Record<string, unknown>)) {
+    if (!Number.isInteger(lineCount) || Number(lineCount) < 0) {
+      throw new Error(`${path}.${toolName} must be a non-negative integer.`);
+    }
+    output[toolName] = Number(lineCount);
+  }
+  return output;
+}
+
+function cloneCollapsedToolResultLinesConfig(value: CollapsedToolResultLinesConfig | undefined): CollapsedToolResultLinesConfig | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === "number" ? value : { ...value };
+}
+
+function mergeCollapsedToolResultLinesConfig(
+  base: CollapsedToolResultLinesConfig | undefined,
+  override: CollapsedToolResultLinesConfig | undefined,
+): CollapsedToolResultLinesConfig | undefined {
+  if (override === undefined) return cloneCollapsedToolResultLinesConfig(base);
+  if (base === undefined) return cloneCollapsedToolResultLinesConfig(override);
+  if (typeof override === "number") return override;
+  const baseMap = typeof base === "number" ? { "*": base } : { ...base };
+  return { ...baseMap, ...override };
+}
+
+function sanitizeRenderConfig(value: unknown): RenderConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("render must be an object.");
+  }
+  const input = value as Record<string, unknown>;
+  const output: RenderConfig = {};
+  if (input.collapsedToolResultLines !== undefined) {
+    output.collapsedToolResultLines = sanitizeCollapsedToolResultLinesConfig(input.collapsedToolResultLines, "render.collapsedToolResultLines");
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
 function sanitizeSettings(value: unknown): PiBaseSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("settings must be a JSON object.");
   const input = value as Record<string, unknown>;
   const output: PiBaseSettings = {};
   const lsp = input.lsp === undefined ? undefined : sanitizeLspDiscoveryConfig(input.lsp);
   if (lsp) output.lsp = lsp;
+  const permission = input.permission === undefined ? undefined : sanitizePermissionConfig(input.permission);
+  if (permission) output.permission = permission;
+  const render = input.render === undefined ? undefined : sanitizeRenderConfig(input.render);
+  if (render) output.render = render;
+  const yolo = input.yolo === undefined ? undefined : sanitizeYoloMode(input.yolo);
+  if (yolo) output.yolo = yolo;
   return output;
 }
 
+function expandHomePath(value: string): string {
+  if (value === "~") return homedir();
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return join(homedir(), value.slice(2));
+  }
+  if (value === "$HOME") return homedir();
+  if (value.startsWith("$HOME/") || value.startsWith("$HOME\\")) {
+    return join(homedir(), value.slice(6));
+  }
+  if (value === "${HOME}") return homedir();
+  if (value.startsWith("${HOME}/") || value.startsWith("${HOME}\\")) {
+    return join(homedir(), value.slice(8));
+  }
+  return value;
+}
+
+function isHomeShortcutPath(value: string): boolean {
+  return value === "~"
+    || value.startsWith("~/")
+    || value.startsWith("~\\")
+    || value === "$HOME"
+    || value.startsWith("$HOME/")
+    || value.startsWith("$HOME\\")
+    || value === "${HOME}"
+    || value.startsWith("${HOME}/")
+    || value.startsWith("${HOME}\\");
+}
+
+function shouldNormalizeCommandPath(value: string): boolean {
+  if (isHomeShortcutPath(value)) return true;
+  if (value.startsWith("$")) return false;
+  return (value.includes("/") || value.includes("\\")) && !isAbsolute(value);
+}
+
+function normalizePathLikeEntry(value: string, baseDir: string): string {
+  const expanded = expandHomePath(value);
+  return isAbsolute(expanded) ? expanded : resolve(baseDir, expanded);
+}
 function normalizeLspConfigPaths(config: LspDiscoveryConfig | undefined, baseDir: string): LspDiscoveryConfig | undefined {
   if (!config) return undefined;
   return {
-    ...(config.searchPaths ? { searchPaths: config.searchPaths.map((entry) => isAbsolute(entry) ? entry : resolve(baseDir, entry)) } : {}),
+    ...(config.searchPaths ? { searchPaths: config.searchPaths.map((entry) => normalizePathLikeEntry(entry, baseDir)) } : {}),
     ...(config.servers
       ? {
           servers: Object.fromEntries(Object.entries(config.servers).map(([id, entry]) => {
             const [command0, ...rest] = entry.command;
-            const normalizedCommand = command0 && (command0.includes("/") || command0.includes("\\")) && !isAbsolute(command0)
-              ? [resolve(baseDir, command0), ...rest]
+            const normalizedCommand = command0 && shouldNormalizeCommandPath(command0)
+              ? [normalizePathLikeEntry(command0, baseDir), ...rest]
               : entry.command;
             return [id, { ...entry, command: normalizedCommand }];
           })),
@@ -110,6 +263,9 @@ function normalizeSettingsPaths(settings: PiBaseSettings, settingsFilePath: stri
   const baseDir = dirname(settingsFilePath);
   return {
     ...(settings.lsp ? { lsp: normalizeLspConfigPaths(settings.lsp, baseDir) } : {}),
+    ...(settings.permission ? { permission: settings.permission } : {}),
+    ...(settings.render ? { render: settings.render } : {}),
+    ...(settings.yolo ? { yolo: settings.yolo } : {}),
   };
 }
 
@@ -134,6 +290,29 @@ function mergeLsp(base: LspDiscoveryConfig | undefined, override: LspDiscoveryCo
   };
 }
 
+function mergePermission(base: PermissionConfig | undefined, override: PermissionConfig | undefined): PermissionConfig | undefined {
+  if (!base && !override) return undefined;
+  const output: PermissionConfig = {};
+  for (const [toolName, rules] of Object.entries(base ?? {})) {
+    output[toolName] = [...rules];
+  }
+  for (const [toolName, rules] of Object.entries(override ?? {})) {
+    output[toolName] = [...(output[toolName] ?? []), ...rules];
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+function mergeRender(base: RenderConfig | undefined, override: RenderConfig | undefined): RenderConfig | undefined {
+  if (!base && !override) return undefined;
+  const collapsedToolResultLines = mergeCollapsedToolResultLinesConfig(base?.collapsedToolResultLines, override?.collapsedToolResultLines);
+  if (collapsedToolResultLines === undefined) return undefined;
+  return { collapsedToolResultLines };
+}
+
+function mergeYolo(base: YoloMode | undefined, override: YoloMode | undefined): YoloMode | undefined {
+  return override ?? base;
+}
+
 export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSettings {
   const globalPath = defaultGlobalSettingsPath();
   const projectPath = defaultProjectSettingsPath(cwd);
@@ -144,6 +323,9 @@ export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSet
     projectPath,
     settings: {
       lsp: mergeLsp(globalSettings.lsp, projectSettings.lsp),
+      permission: mergePermission(globalSettings.permission, projectSettings.permission),
+      render: mergeRender(globalSettings.render, projectSettings.render),
+      yolo: mergeYolo(globalSettings.yolo, projectSettings.yolo),
     },
   };
 }
