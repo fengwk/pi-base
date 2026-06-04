@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createFindToolDefinition } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { registerReadTool } from "./src/read.js";
@@ -16,8 +16,10 @@ import { findSchema } from "./src/schemas/find.js";
 import { inferToolResultIsError } from "./src/tool-result.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./src/tool-prompt.js";
 import { renderRawResult, resolveCollapsedResultLines, type CollapsedResultLinesResolver } from "./src/render.js";
+import { applyContextCompressionToMessages } from "./src/context-compression.js";
+import { registerResumeAllCommand } from "./src/resume-all.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./src/lsp/discovery.js";
-export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type YoloMode } from "./src/config.js";
+export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type YoloMode, type ContextCompressionConfig } from "./src/config.js";
 
 const BASE_TOOL_NAMES = [
   "read",
@@ -31,6 +33,7 @@ const BASE_TOOL_NAMES = [
   "lsp_workspace_symbols",
   "lsp_java_decompile",
 ] as const;
+
 
 function loadBaseToolGuide(): string {
   return readFileSync(new URL("./prompts/base.md", import.meta.url), "utf8").trim();
@@ -147,9 +150,17 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
   registerWriteTool(pi, { onFileAnchored: noteAnchorsAndSnapshot, onSuccessfulWrite: syncLsp, getCollapsedResultLines });
   registerLspTools(pi, { resolverFactory, getCollapsedResultLines });
   registerPermissionGuard(pi, { loadSettings });
+  registerResumeAllCommand(pi);
+
+
+  (pi as any).on("context", async (event: any, ctx: ExtensionContext) => {
+    if (!Array.isArray(event.messages)) return undefined;
+    const messages = applyContextCompressionToMessages(event.messages, ctx.cwd, loadSettings(ctx.cwd).settings.contextCompression, { systemPrompt: ctx.getSystemPrompt?.() });
+    return messages === event.messages ? undefined : { messages };
+  });
 
   // Global output guard: applies to every tool result that flows through Pi, including third-party tools.
-  pi.on("tool_result", async (event) => {
+  pi.on("tool_result", async (event, ctx: any = {}) => {
     const original = {
       content: event.content,
       details: event.details,

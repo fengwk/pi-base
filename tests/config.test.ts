@@ -188,16 +188,62 @@ describe("pi-base config", () => {
     });
   });
 
-  it("loads default yolo mode from unified pi-base config and lets project settings override it", async () => {
+  it("loads default yolo flag from unified pi-base config and lets project settings override it", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
     await mkdir(projectDir, { recursive: true });
     await withTempGlobalSettings(async (globalPath) => {
       await mkdir(dirname(globalPath), { recursive: true });
-      await writeFile(globalPath, JSON.stringify({ yolo: "enable" }), "utf8");
-      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ yolo: "disable" }), "utf8");
+      await writeFile(globalPath, JSON.stringify({ yolo: true }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ yolo: false }), "utf8");
       const loaded = loadPiBaseSettings(root);
-      expect(loaded.settings.yolo).toBe("disable");
+      expect(loaded.settings.yolo).toBe(false);
+    });
+  });
+
+  it("rejects the removed top-level contextHygiene switch", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ contextHygiene: true }), "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(/contextHygiene is no longer supported\. Use contextCompression instead/);
+    });
+  });
+
+  it("loads context compression settings and lets project settings override individual tool values", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async (globalPath) => {
+      await mkdir(dirname(globalPath), { recursive: true });
+      await writeFile(globalPath, JSON.stringify({
+        contextCompression: {
+          anchorHygiene: true,
+          tools: {
+            bash: { retainedUserMessageRounds: 4, retainedAssistantTurns: 8 },
+            custom_tool: { enable: false },
+          },
+        },
+      }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        contextCompression: {
+          anchorHygiene: false,
+          tools: {
+            bash: { retainedAssistantTurns: 6 },
+            read: { enable: true },
+          },
+        },
+      }), "utf8");
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.contextCompression).toEqual({
+        anchorHygiene: false,
+        tools: {
+          bash: { retainedUserMessageRounds: 4, retainedAssistantTurns: 6 },
+          custom_tool: { enable: false },
+          read: { enable: true },
+        },
+      });
     });
   });
 
@@ -291,7 +337,7 @@ describe("pi-base config", () => {
       const projectDir = join(root, ".pi");
       await mkdir(projectDir, { recursive: true });
       await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ yolo: "maybe" }), "utf8");
-      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: yolo must be "enable" or "disable"/);
+      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: yolo must be a boolean/);
     });
   });
 
@@ -312,6 +358,27 @@ describe("pi-base config", () => {
       await mkdir(projectDir, { recursive: true });
       await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ render: { collapsedToolResultLines: -1 } }), "utf8");
       expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: render\.collapsedToolResultLines must be a non-negative integer/);
+    });
+  });
+
+  it("rejects legacy contextHygiene blocks", async () => {
+    await withTempGlobalSettings(async () => {
+      const root = await createTempWorkspace();
+      const projectDir = join(root, ".pi");
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ contextHygiene: "yes" }), "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: contextHygiene is no longer supported\. Use contextCompression instead/);
+    });
+  });
+
+
+  it("surfaces invalid context compression blocks", async () => {
+    await withTempGlobalSettings(async () => {
+      const root = await createTempWorkspace();
+      const projectDir = join(root, ".pi");
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ contextCompression: { tools: { read: { retainedUserMessageRounds: 0 } } } }), "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: contextCompression\.tools\.read\.retainedUserMessageRounds must be a positive integer/);
     });
   });
 });

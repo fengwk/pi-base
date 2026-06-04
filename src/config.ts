@@ -18,13 +18,26 @@ export interface RenderConfig {
   collapsedToolResultLines?: CollapsedToolResultLinesConfig;
 }
 
-export type YoloMode = "enable" | "disable";
+
+export interface ContextCompressionToolConfig {
+  enable?: boolean;
+  retainedUserMessageRounds?: number;
+  retainedAssistantTurns?: number;
+}
+
+export interface ContextCompressionConfig {
+  anchorHygiene?: boolean;
+  tools?: Record<string, ContextCompressionToolConfig>;
+}
+
+export type YoloMode = boolean;
 
 export interface PiBaseSettings {
   lsp?: LspDiscoveryConfig;
   permission?: PermissionConfig;
   render?: RenderConfig;
   yolo?: YoloMode;
+  contextCompression?: ContextCompressionConfig;
 }
 
 export interface LoadedPiBaseSettings {
@@ -100,12 +113,8 @@ function isPermissionAction(value: unknown): value is PermissionAction {
   return value === "allow" || value === "ask" || value === "deny";
 }
 
-function isYoloMode(value: unknown): value is YoloMode {
-  return value === "enable" || value === "disable";
-}
-
 function sanitizeYoloMode(value: unknown): YoloMode {
-  if (!isYoloMode(value)) throw new Error("yolo must be \"enable\" or \"disable\".");
+  if (typeof value !== "boolean") throw new Error("yolo must be a boolean.");
   return value;
 }
 
@@ -188,9 +197,63 @@ function sanitizeRenderConfig(value: unknown): RenderConfig | undefined {
   return Object.keys(output).length > 0 ? output : undefined;
 }
 
+function sanitizePositiveInteger(value: unknown, path: string): number {
+  if (!Number.isInteger(value) || Number(value) < 1) {
+    throw new Error(`${path} must be a positive integer.`);
+  }
+  return Number(value);
+}
+
+function sanitizeOptionalBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${path} must be a boolean.`);
+  return value;
+}
+
+function sanitizeContextCompressionToolConfig(value: unknown, path: string): ContextCompressionToolConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${path} must be an object.`);
+  }
+  const input = value as Record<string, unknown>;
+  const output: ContextCompressionToolConfig = {};
+  if (input.enable !== undefined) output.enable = sanitizeOptionalBoolean(input.enable, `${path}.enable`);
+  if (input.retainedUserMessageRounds !== undefined) {
+    output.retainedUserMessageRounds = sanitizePositiveInteger(input.retainedUserMessageRounds, `${path}.retainedUserMessageRounds`);
+  }
+  if (input.retainedAssistantTurns !== undefined) {
+    output.retainedAssistantTurns = sanitizePositiveInteger(input.retainedAssistantTurns, `${path}.retainedAssistantTurns`);
+  }
+  return output;
+}
+
+function sanitizeContextCompressionToolsConfig(value: unknown): Record<string, ContextCompressionToolConfig> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("contextCompression.tools must be an object keyed by tool name.");
+  }
+  const output: Record<string, ContextCompressionToolConfig> = {};
+  for (const [toolName, toolConfig] of Object.entries(value as Record<string, unknown>)) {
+    if (!toolName.trim()) throw new Error("contextCompression.tools contains an empty tool name.");
+    output[toolName] = sanitizeContextCompressionToolConfig(toolConfig, `contextCompression.tools.${toolName}`);
+  }
+  return output;
+}
+function sanitizeContextCompressionConfig(value: unknown): ContextCompressionConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("contextCompression must be an object.");
+  }
+  const input = value as Record<string, unknown>;
+  const output: ContextCompressionConfig = {};
+  if (input.anchorHygiene !== undefined) output.anchorHygiene = sanitizeOptionalBoolean(input.anchorHygiene, "contextCompression.anchorHygiene");
+  if (input.tools !== undefined) output.tools = sanitizeContextCompressionToolsConfig(input.tools);
+  return output;
+}
+
+
 function sanitizeSettings(value: unknown): PiBaseSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("settings must be a JSON object.");
   const input = value as Record<string, unknown>;
+  if (input.contextHygiene !== undefined) {
+    throw new Error("contextHygiene is no longer supported. Use contextCompression instead.");
+  }
   const output: PiBaseSettings = {};
   const lsp = input.lsp === undefined ? undefined : sanitizeLspDiscoveryConfig(input.lsp);
   if (lsp) output.lsp = lsp;
@@ -199,7 +262,9 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
   const render = input.render === undefined ? undefined : sanitizeRenderConfig(input.render);
   if (render) output.render = render;
   const yolo = input.yolo === undefined ? undefined : sanitizeYoloMode(input.yolo);
-  if (yolo) output.yolo = yolo;
+  if (yolo !== undefined) output.yolo = yolo;
+  const contextCompression = input.contextCompression === undefined ? undefined : sanitizeContextCompressionConfig(input.contextCompression);
+  if (contextCompression !== undefined) output.contextCompression = contextCompression;
   return output;
 }
 
@@ -265,7 +330,8 @@ function normalizeSettingsPaths(settings: PiBaseSettings, settingsFilePath: stri
     ...(settings.lsp ? { lsp: normalizeLspConfigPaths(settings.lsp, baseDir) } : {}),
     ...(settings.permission ? { permission: settings.permission } : {}),
     ...(settings.render ? { render: settings.render } : {}),
-    ...(settings.yolo ? { yolo: settings.yolo } : {}),
+    ...(settings.yolo !== undefined ? { yolo: settings.yolo } : {}),
+    ...(settings.contextCompression ? { contextCompression: settings.contextCompression } : {}),
   };
 }
 
@@ -313,6 +379,41 @@ function mergeYolo(base: YoloMode | undefined, override: YoloMode | undefined): 
   return override ?? base;
 }
 
+
+function mergeContextCompressionToolConfig(
+  base: ContextCompressionToolConfig | undefined,
+  override: ContextCompressionToolConfig | undefined,
+): ContextCompressionToolConfig | undefined {
+  if (!base && !override) return undefined;
+  return { ...(base ?? {}), ...(override ?? {}) };
+}
+
+function mergeContextCompressionTools(
+  base: Record<string, ContextCompressionToolConfig> | undefined,
+  override: Record<string, ContextCompressionToolConfig> | undefined,
+): Record<string, ContextCompressionToolConfig> | undefined {
+  if (!base && !override) return undefined;
+  const output: Record<string, ContextCompressionToolConfig> = {};
+  for (const toolName of new Set([...Object.keys(base ?? {}), ...Object.keys(override ?? {})])) {
+    const merged = mergeContextCompressionToolConfig(base?.[toolName], override?.[toolName]);
+    if (merged) output[toolName] = merged;
+  }
+  return output;
+}
+
+function mergeContextCompression(
+  base: ContextCompressionConfig | undefined,
+  override: ContextCompressionConfig | undefined,
+): ContextCompressionConfig | undefined {
+  if (!base && !override) return undefined;
+  const tools = mergeContextCompressionTools(base?.tools, override?.tools);
+  const output: ContextCompressionConfig = {
+    ...(base?.anchorHygiene !== undefined || override?.anchorHygiene !== undefined ? { anchorHygiene: override?.anchorHygiene ?? base?.anchorHygiene } : {}),
+    ...(tools ? { tools } : {}),
+  };
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
 export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSettings {
   const globalPath = defaultGlobalSettingsPath();
   const projectPath = defaultProjectSettingsPath(cwd);
@@ -326,6 +427,7 @@ export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSet
       permission: mergePermission(globalSettings.permission, projectSettings.permission),
       render: mergeRender(globalSettings.render, projectSettings.render),
       yolo: mergeYolo(globalSettings.yolo, projectSettings.yolo),
+      contextCompression: mergeContextCompression(globalSettings.contextCompression, projectSettings.contextCompression),
     },
   };
 }

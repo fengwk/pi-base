@@ -24,6 +24,12 @@ describe("render helpers", () => {
     expect(expanded).toContain("line-25");
   });
 
+  it("does not add a leading blank line to result text", () => {
+    const rendered = render(renderRawResult({ content: [{ type: "text", text: "first\nsecond" }] }, { expanded: true }, {}, { lastComponent: undefined }));
+    expect(rendered.split("\n")[0]).toContain("first");
+    expect(rendered.split("\n")[0]).not.toBe("");
+  });
+
   it("supports zero-line collapsed previews", () => {
     const raw = Array.from({ length: 3 }, (_, index) => `line-${index + 1}`).join("\n");
 
@@ -32,6 +38,13 @@ describe("render helpers", () => {
     expect(collapsed).not.toContain("line-3");
     expect(collapsed).toContain("3 more lines");
     expect(collapsed).toContain("ctrl+o to expand");
+  });
+
+  it("does not add a leading blank line to collapsed result text", () => {
+    const raw = Array.from({ length: 3 }, (_, index) => `line-${index + 1}`).join("\n");
+    const rendered = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: false, collapsedLines: 0 }, {}, { lastComponent: undefined }));
+    expect(rendered.split("\n")[0]).toContain("3 more lines");
+    expect(rendered.split("\n")[0]).not.toBe("");
   });
 
   it("colorizes structured results and diff sections", () => {

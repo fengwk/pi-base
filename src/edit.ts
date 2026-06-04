@@ -80,6 +80,15 @@ function visualizeLeadingWhitespace(text: string): string {
   return `${marker}${text.slice(match[0].length)}`;
 }
 
+function formatCurrentAnchorLine(lineNumber: number, content: string, width: number): string {
+  return formatHashlineDisplay(lineNumber, content, width, escapeControlCharsForDisplay(visualizeLeadingWhitespace(content)));
+}
+
+function formatRemovedLine(lineNumber: number, content: string, width: number): string {
+  const padded = width > 0 ? String(lineNumber).padStart(width, " ") : String(lineNumber);
+  return `${padded}:---|${escapeControlCharsForDisplay(visualizeLeadingWhitespace(content))}`;
+}
+
 /**
  * The `Diff.diffLines` library returns each line as a part whose
  * trailing `\n` is part of the value. Splitting the part by `\n`
@@ -95,7 +104,7 @@ function partLines(partValue: string): string[] {
 }
 
 function buildResultDiff(before: string, after: string, contextLines = RESULT_CONTEXT_LINES): string {
-  if (after === "") return `| ${formatHashlineDisplay(1, "", 1)}`;
+  if (after === "") return `| ${formatCurrentAnchorLine(1, "", 1)}`;
   const beforeLines = before.split("\n");
   const afterLines = after.split("\n");
   const width = String(Math.max(beforeLines.length, afterLines.length, 1)).length;
@@ -121,7 +130,7 @@ function buildResultDiff(before: string, after: string, contextLines = RESULT_CO
   }
 
   const changedIndexes = entries.flatMap((entry, index) => (entry.kind === "context" ? [] : [index]));
-  if (changedIndexes.length === 0) return `| ${formatHashlineDisplay(1, after, width)}`;
+  if (changedIndexes.length === 0) return `| ${formatCurrentAnchorLine(1, after, width)}`;
 
   const windows = changedIndexes.map((index) => ({
     start: Math.max(0, index - contextLines),
@@ -143,14 +152,14 @@ function buildResultDiff(before: string, after: string, contextLines = RESULT_CO
     for (let i = window.start; i <= window.end; i++) {
       const entry = entries[i];
       if (entry.kind === "context") {
-        output.push(`| ${formatHashlineDisplay(entry.line, visualizeLeadingWhitespace(entry.content), width)}`);
+        output.push(`| ${formatCurrentAnchorLine(entry.line, entry.content, width)}`);
         continue;
       }
       if (entry.kind === "added") {
-        output.push(`+ ${formatHashlineDisplay(entry.line, visualizeLeadingWhitespace(entry.content), width)}`);
+        output.push(`+ ${formatCurrentAnchorLine(entry.line, entry.content, width)}`);
         continue;
       }
-      output.push(`- ${formatHashlineDisplay(entry.line, visualizeLeadingWhitespace(entry.content), width)}`);
+      output.push(`- ${formatRemovedLine(entry.line, entry.content, width)}`);
     }
   });
   if (merged[merged.length - 1]!.end < entries.length - 1) output.push("...");
@@ -310,12 +319,50 @@ function safeParseLineRef(ref: string | undefined): { line: number } | undefined
 }
 
 function buildStaleError(path: string, error: HashlineMismatchError): { content: [{ type: "text"; text: string }]; isError: true } {
-  const recent = error.updatedAnchors.slice(0, 12);
-  const anchorBlock = recent.length > 0
-    ? ["Refreshed anchors near the failed region:", "", ...recent.map((line) => `  ${line.display}`)].join("\n")
-    : "Re-read the file to obtain fresh anchors.";
+  const detail = error.detail;
+  const providedAnchor = `${detail.provided.line}:${detail.provided.hash}`;
+  const reason = detail.reason === "line_out_of_range"
+    ? `line ${detail.provided.line} is outside the current file range 1..${detail.lineCount}`
+    : `line ${detail.provided.line} exists, but hash mismatch: provided ${detail.provided.hash}, current ${detail.actual?.hash ?? "<unknown>"}`;
+  const actualLine = detail.actual
+    ? [`Current line at the provided line number:`, `  ${detail.actual.display}`]
+    : [];
+  const lines: string[] = [
+    `Edit failed for ${path}. The anchor no longer matches the current file.`,
+    `Failed anchor: ${providedAnchor}`,
+    `Reason: ${reason}.`,
+    ...actualLine,
+  ];
+  const context = detail.nearby;
+  if (context.length > 0) {
+    const contextOffset = context[0]!.line;
+    const contextEnd = context[context.length - 1]!.line;
+    const contextHasMore = contextEnd < detail.lineCount;
+    lines.push("");
+    if (detail.reason === "hash_mismatch") {
+      lines.push(`Current context in ${path} around line ${detail.provided.line}:`);
+    } else if (detail.provided.line < 1) {
+      lines.push(`Current head context in ${path}:`);
+    } else {
+      lines.push(`Current tail context in ${path}:`);
+    }
+    lines.push("");
+    lines.push(`path: ${path}`);
+    lines.push("kind: file");
+    lines.push("mediaType: text");
+    lines.push(`offset: ${contextOffset}`);
+    lines.push(`limit: ${context.length}`);
+    lines.push(`totalLines: ${detail.lineCount}`);
+    lines.push(`hasMore: ${contextHasMore}`);
+    if (contextHasMore) lines.push(`nextOffset: ${contextEnd + 1}`);
+    lines.push("");
+    for (const entry of context) lines.push(entry.display);
+  } else {
+    lines.push("");
+    lines.push(`The file has ${detail.lineCount} lines. Re-read ${path} if you need more context.`);
+  }
   return {
-    content: [{ type: "text", text: `Edit failed for ${path}. The anchor no longer matches the current file.\nUse the refreshed anchors from the latest read/edit result for this region, or rerun read if you need broader context.\n\n${anchorBlock}` }],
+    content: [{ type: "text", text: lines.join("\n") }],
     isError: true,
   };
 }
@@ -414,7 +461,7 @@ export function registerEditTool(
           const diff = generateCompactOrFullDiff(original, next.content).diff;
 
           return {
-            content: [{ type: "text" as const, text: `Edit applied to ${rawPath}.\nReview the diff below. Lines prefixed with "+" or "|" carry the current LINE:HASH anchors for follow-up edits in this region.\n\n${diffText}` }],
+            content: [{ type: "text" as const, text: `Edit applied to ${rawPath}.\nReview the diff below. Use only LINE:HASH anchors from lines prefixed with \"+\" or \"|\" for follow-up edits in this region; lines prefixed with \"-\" are old/deleted content and intentionally do not carry reusable anchors.\n\n${diffText}` }],
             details: { diff },
           };
         });

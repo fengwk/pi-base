@@ -6,6 +6,7 @@
 - Parallel tool use is an important efficiency mechanism. When tool calls are independent and do not rely on each other, prefer issuing them in parallel. Unrelated reads, searches, and different-file mutations can still proceed concurrently.
 - For multiple changes to the same file, prefer one `edit` call with multiple operations when possible.
 - For existing text files, call `edit` with fresh `LINE:HASH` anchors from `read`, `grep`, or `write`. If `edit` reports a stale anchor, rerun `read` for the relevant region before retrying. Replacement text is plain file content and must not include `LINE:HASH` prefixes.
+- If a prior tool result is replaced with a pi-base context compression placeholder, do not treat the placeholder as original tool output. Re-run the appropriate tool before relying on omitted details, file content, or `LINE:HASH` anchors.
 - When citing line numbers, offsets, counts, or `LINE:HASH` anchors from tool output, copy them verbatim instead of inferring or reformatting them.
 - Prefer `edit` for existing text files. Use `write` only for new files or intentional large whole-file rewrites, and provide complete content without placeholders such as `...` or omitted sections.
 - Prefer explicit file, directory, and search scopes. `grep` has a default `timeoutSeconds`; only set it explicitly when a broader scan is truly necessary. If it times out, narrow the path or pattern first. `find` requires an explicit `path`; use `.` when the intent really is the current working directory.

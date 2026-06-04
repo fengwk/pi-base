@@ -191,6 +191,43 @@ describe("bash tool and index", () => {
     expect(rendered).toContain("3 earlier lines");
   });
 
+  it("does not add a leading blank line to bash result text", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+
+    const tool = registry.getTool("bash");
+    const lines = tool.renderResult(
+      { content: [{ type: "text", text: "line-1\nline-2" }] },
+      { expanded: false, isPartial: false },
+      {} as any,
+      { lastComponent: undefined, args: { workdir: "." }, cwd: process.cwd(), state: {} },
+    ).render(200);
+
+    expect(lines[0]).toContain("line-1");
+    expect(lines[0]).not.toBe("");
+  });
+
+  it("does not add a leading blank line to collapsed bash result text", () => {
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+      getCollapsedResultLines: () => 0,
+    });
+
+    const tool = registry.getTool("bash");
+    const lines = tool.renderResult(
+      { content: [{ type: "text", text: "line-1\nline-2\nline-3" }] },
+      { expanded: false, isPartial: false },
+      {} as any,
+      { lastComponent: undefined, args: { workdir: "." }, cwd: process.cwd(), state: {} },
+    ).render(200);
+
+    expect(lines[0]).toContain("3 earlier lines");
+    expect(lines[0]).not.toBe("");
+  });
+
   it("tracks bash execution timing state from renderCall", () => {
     const registry = createToolRegistry();
     registerBashRendererTool(registry.pi as any, {

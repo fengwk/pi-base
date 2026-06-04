@@ -165,12 +165,12 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
     ? Math.floor(options.collapsedLines)
     : DEFAULT_COLLAPSED_RESULT_LINES;
   if (options?.expanded || bodyLines.length <= collapsedLines) {
-    text.setText(bodyLines.length ? `\n${bodyLines.join("\n")}` : "");
+    text.setText(bodyLines.length ? bodyLines.join("\n") : "");
     return text;
   }
   const visible = bodyLines.slice(0, collapsedLines);
   const remaining = bodyLines.length - collapsedLines;
   const tail = paint(theme, "dim", `... (${remaining} more lines, ctrl+o to expand)`);
-  text.setText(`\n${[...visible, tail].join("\n")}`);
+  text.setText([...visible, tail].join("\n"));
   return text;
 }

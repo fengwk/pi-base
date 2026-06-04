@@ -2,21 +2,19 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { dirname, relative } from "node:path";
 import { loadPiBaseSettings, type LoadedPiBaseSettings, type PermissionAction, type PermissionRuleEntry } from "./config.js";
 import { resolveToCwd } from "./path-utils.js";
-import { syncYoloFooter } from "./yolo-footer.js";
+import { PI_BASE_INLINE_STATUS_KEYS, PI_BASE_PERMISSION_STATUS_KEY, syncYoloFooter } from "./yolo-footer.js";
 
-const STATUS_KEY = "pi-base-permission";
+const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
 const YOLO_ENTRY_TYPE = "pi-base-permission-yolo";
 const ALLOW_LABEL = "Yes";
 const DENY_LABEL = "No";
 
 interface PermissionState {
   yolo: boolean;
-  footerInstalled: boolean;
 }
 
 interface TargetDescriptor {
   candidates: string[];
-  detailLines: string[];
 }
 
 function normalizeSlashes(value: string): string {
@@ -97,7 +95,6 @@ function buildPathTargetDescriptor(rawPath: string, cwd: string, loaded: LoadedP
   const projectRoot = projectRootFromSettingsPath(loaded.projectPath);
   const relativeToProject = normalizeRelativePath(relative(projectRoot, absolutePath));
   const inProjectRoot = relativeToProject !== ".." && !relativeToProject.startsWith("../");
-  const displayPath = inProjectRoot ? relativeToProject : (normalizedRawPath || normalizedAbsolutePath);
   return {
     candidates: uniqueStrings([
       normalizedRawPath,
@@ -105,7 +102,6 @@ function buildPathTargetDescriptor(rawPath: string, cwd: string, loaded: LoadedP
       inProjectRoot ? relativeToProject : undefined,
       normalizedAbsolutePath,
     ]),
-    detailLines: [`Path: ${displayPath}`],
   };
 }
 
@@ -135,20 +131,16 @@ function splitBashCommand(command: string): string[] {
     .filter((part) => part.length > 0);
 }
 
-function buildCommandTargetDescriptor(commandValue: string, workdirValue: unknown, cwd: string): TargetDescriptor {
+function buildCommandTargetDescriptor(commandValue: string): TargetDescriptor {
   const command = commandValue.trim() || "<missing-command>";
-  const rawWorkdir = typeof workdirValue === "string" && workdirValue.trim().length > 0 ? stripAtPrefix(workdirValue) : cwd;
-  const workdir = normalizeSlashes(resolveToCwd(rawWorkdir, cwd));
   return {
     candidates: [command],
-    detailLines: [`Command: ${command}`, `Workdir: ${workdir}`],
   };
 }
 
-function buildGenericTargetDescriptor(toolName: string): TargetDescriptor {
+function buildGenericTargetDescriptor(_toolName: string): TargetDescriptor {
   return {
     candidates: ["*"],
-    detailLines: [`Tool: ${toolName}`],
   };
 }
 
@@ -157,7 +149,7 @@ function describeTarget(toolName: string, input: Record<string, unknown>, cwd: s
     return buildPathTargetDescriptor(input.path, cwd, loaded);
   }
   if (typeof input.command === "string") {
-    return buildCommandTargetDescriptor(input.command, input.workdir, cwd);
+    return buildCommandTargetDescriptor(input.command);
   }
   return buildGenericTargetDescriptor(toolName);
 }
@@ -202,27 +194,22 @@ function restoreStateFromEntries(state: PermissionState, entries: unknown[]): bo
   return restored;
 }
 
-function updateFooterStatus(ctx: ExtensionContext, pi: Pick<ExtensionAPI, "getThinkingLevel">, state: PermissionState): void {
-  if (state.yolo) {
-    ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("warning", "YOLO"));
-    if (!state.footerInstalled) {
-      state.footerInstalled = syncYoloFooter(ctx, pi, { enabled: true, statusKey: STATUS_KEY });
-    }
-    return;
-  }
-
-  ctx.ui.setStatus(STATUS_KEY, undefined);
-  if (state.footerInstalled) {
-    state.footerInstalled = syncYoloFooter(ctx, pi, { enabled: false, statusKey: STATUS_KEY });
-  }
+function updateYoloStatus(ctx: ExtensionContext, state: PermissionState): void {
+  if (!ctx.hasUI) return;
+  ctx.ui.setStatus(STATUS_KEY, state.yolo ? ctx.ui.theme.fg("warning", "YOLO") : undefined);
 }
 
-function buildPrompt(toolName: string, target: TargetDescriptor): string {
+function syncYoloStatusFooter(ctx: ExtensionContext, pi: Pick<ExtensionAPI, "getThinkingLevel">, state: PermissionState): void {
+  updateYoloStatus(ctx, state);
+  if (state.yolo) syncYoloFooter(ctx, pi, { statusKey: STATUS_KEY, extraStatusKeys: PI_BASE_INLINE_STATUS_KEYS });
+}
+
+function buildPrompt(toolName: string): string {
   return [
     "Permission request",
     "",
     `Tool: ${toolName}`,
-    ...target.detailLines,
+    "Details are shown in the tool preview above.",
     "",
     "Allow this tool call?",
   ].join("\n");
@@ -246,7 +233,7 @@ function buildRejectedReason(toolName: string): string {
 
 
 function configuredYoloEnabled(loaded: LoadedPiBaseSettings): boolean {
-  return loaded.settings.yolo === "enable";
+  return loaded.settings.yolo === true;
 }
 
 export function registerPermissionGuard(
@@ -255,7 +242,6 @@ export function registerPermissionGuard(
 ): void {
   const state: PermissionState = {
     yolo: false,
-    footerInstalled: false,
   };
   const loadSettings = options.loadSettings ?? loadPiBaseSettings;
 
@@ -263,12 +249,12 @@ export function registerPermissionGuard(
     description: "Toggle yolo mode (bypass permission checks)",
     handler: async (args: string, ctx) => {
       if (args.trim().length > 0) {
-        ctx.ui.notify("Usage: /yolo", "warning");
+        if (ctx.hasUI) ctx.ui.notify("Usage: /yolo", "warning");
         return;
       }
       state.yolo = !state.yolo;
       pi.appendEntry(YOLO_ENTRY_TYPE, { enabled: state.yolo });
-      updateFooterStatus(ctx, pi, state);
+      syncYoloStatusFooter(ctx, pi, state);
     },
   });
 
@@ -277,12 +263,11 @@ export function registerPermissionGuard(
     const entries = ctx.sessionManager.getEntries();
     const restored = restoreStateFromEntries(state, Array.isArray(entries) ? entries : []);
     if (!restored) state.yolo = configuredYoloEnabled(loaded);
-    state.footerInstalled = false;
-    updateFooterStatus(ctx, pi, state);
+    syncYoloStatusFooter(ctx, pi, state);
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    updateFooterStatus(ctx, pi, state);
+    updateYoloStatus(ctx, state);
     if (state.yolo) return undefined;
 
     const loaded = loadSettings(ctx.cwd);
@@ -302,7 +287,7 @@ export function registerPermissionGuard(
       return { block: true, reason: buildAskWithoutUiReason(event.toolName, loaded) };
     }
 
-    const choice = await ctx.ui.select(buildPrompt(event.toolName, target), [ALLOW_LABEL, DENY_LABEL]);
+    const choice = await ctx.ui.select(buildPrompt(event.toolName), [ALLOW_LABEL, DENY_LABEL]);
     if (choice === ALLOW_LABEL) return undefined;
     ctx.abort();
     return { block: true, reason: buildRejectedReason(event.toolName) };

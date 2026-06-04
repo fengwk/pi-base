@@ -4,6 +4,7 @@ Usage:
 - Use `edit` only with fresh anchors from `read`, `grep`, `write`, or a prior successful `edit` result for the same region.
 - After a successful edit, the result returns a diff for the changed region. Lines prefixed with `+` or `|` carry the current `LINE:HASH` anchors for follow-up edits in that region.
 - If the anchor you need is stale or outside the returned diff, rerun `read` before retrying.
+- If the context shows a pi-base context compression placeholder for prior file output, do not reuse anchors or file content from the omitted output; refresh with `read` or `grep` first.
 - Replacement text is plain file content and must not include `LINE:HASH` prefixes.
 - `edit` has only two top-level parameters: `path` and `edits`.
 - `edits` is an array of operations. Each item must contain exactly one operation: `replace_lines`, `delete_lines`, `insert_before`, or `insert_after`.

@@ -20,11 +20,12 @@
 - Text reads return `LINE:HASH|content` anchors.
 - `edit` works from fresh anchors and fails clearly on stale anchors.
 - `write` returns fresh anchors for follow-up edits.
+- Context hygiene is enabled by default and implemented as stateless context compression: stale file outputs and older tool results are replaced with concise placeholders before model calls, so obsolete `LINE:HASH` anchors and bulky historical output are not fed back to the model.
 - `grep` requires an explicit `path`, defaults to a 15s timeout, and fails fast on single-file binary inputs.
 - `find` is delegated to Pi's built-in implementation, but `pi-base` makes `path` explicit and required — there is no implicit search root.
 - `bash` requires an explicit `workdir` on every call.
 - On Linux, WSL, and macOS, `bash` prefers the host `bash` or `zsh` shell from `$SHELL` and loads common startup files to better match the terminal environment.
-- `permission` rules can require approval for selected tools such as `edit`, `write`, and `bash`; `/yolo` temporarily bypasses those checks and is reflected in the footer status line.
+- `permission` rules can require approval for selected tools such as `edit`, `write`, and `bash`; `/yolo` temporarily bypasses those checks, and `/resume-all` opens a session picker across all known project directories.
 - Tool output is wrapped by a global truncation layer (`MAX_LINES=2000`, `MAX_BYTES=50KB`); full output is saved under `os.tmpdir()/pi-base-truncation/` and re-exposed via `details.truncation`.
 - When a tool result indicates a failure (text starts with `Error:` / `Edit failed` / `Command exited with code N`), the global `tool_result` hook repairs the missing `isError` flag so downstream code (session logs, renderers, orchestration) can react correctly.
 - LSP servers are **fully user-defined** in the unified `pi-base` config under `lsp.servers`. `pi-base` ships no built-in server table.
@@ -36,7 +37,7 @@
 - Global: `~/.pi/agent/pi-base.json`
 - Project: `<repo>/.pi/pi-base.json`
 
-The same file contains LSP, permission, render preview config, and optional default YOLO mode.
+The same file contains LSP, permission, render preview config, context compression config, and optional default YOLO mode.
 
 For isolated tests or temporary runs, `PI_BASE_GLOBAL_SETTINGS_PATH` can override the global `pi-base` config path.
 
@@ -71,6 +72,44 @@ project JSON > global JSON > built-in defaults
 }
 ```
 
+### Example: context compression
+
+`contextCompression` is the only context-pruning config. It is opt-in: when omitted, pi-base does not compress context.
+It is a stateless projection over the current message list. It does not keep a runtime tracker, delete assistant tool calls, modify tool call arguments, or change tool result metadata; only selected `toolResult.content` is replaced.
+
+`anchorHygiene` controls whether earlier file outputs from `read` / `write` / `edit` are omitted after the same file changes later. It defaults to `false`.
+
+Age compression is configured per tool name under `tools`. Tool names are matched directly against `toolCall.name`; tools not listed are not age-compressed. A listed tool defaults to `retainedUserMessageRounds: 2` and `retainedAssistantTurns: 4` unless overridden. Consecutive user messages count as one user-message round.
+
+Skill reads are protected from `tools.read` age compression. pi-base detects reads under currently advertised skill locations and keeps those outputs unless anchor hygiene later proves the same file changed. No separate `readSkill` config key is needed.
+
+```json
+{
+  "contextCompression": {
+    "anchorHygiene": true,
+    "tools": {
+      "bash": {
+        "enable": true,
+        "retainedUserMessageRounds": 2,
+        "retainedAssistantTurns": 4
+      },
+      "custom_tool": {
+        "enable": true
+      }
+    }
+  }
+}
+```
+
+Placeholders are intentionally short and unambiguous:
+
+```text
+[pi-base context compression: earlier file output omitted because the file changed later. Re-run read for current content before using LINE:HASH anchors.]
+[pi-base context compression: older tool output omitted. Re-run the tool if you need those details.]
+```
+
+Context compression does not add session-history messages or a persistent UI marker; the configured behavior is driven entirely by `pi-base.json`.
+
 ### Example: permission guard
 
 `permission` follows an OpenCode-style `allow` / `ask` / `deny` model. Put it in the unified `pi-base` config file (`~/.pi/agent/pi-base.json` or `.pi/pi-base.json`). Top-level strings apply to all tools, and per-tool objects can override them with ordered wildcard rules (`*` and `?`, last match wins).
@@ -100,18 +139,24 @@ Behavior notes:
 
 ### Example: default YOLO mode
 
-Set `yolo` to one of:
-
-- `"enable"`
-- `"disable"`
-
-When omitted, the default is `"disable"`. When present, it seeds the default `/yolo` state for sessions that do not already have a persisted YOLO toggle entry. A session that already persisted a prior `/yolo` toggle keeps its stored state.
+Set `yolo` to a boolean:
 
 ```json
 {
-  "yolo": "enable"
+  "yolo": true
 }
 ```
+
+When omitted, the default is `false`. When present, it seeds the default `/yolo` state for sessions that do not already have a persisted YOLO toggle entry. A session that already persisted a prior `/yolo` toggle keeps its stored state.
+
+## Slash commands
+
+- `/yolo`
+  - Toggles permission bypass for the current session.
+- `/resume-all`
+  - Opens a picker for sessions across all project directories known to Pi, unlike the built-in `/resume` flow that stays focused on the current project/session directory.
+  - In TUI mode it opens directly in the all-project view with recent sorting.
+  - Takes no arguments.
 
 ### Example: LSP servers for a Java + Go + TS + Python workspace
 

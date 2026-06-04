@@ -1,4 +1,4 @@
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, initTheme } from "@earendil-works/pi-coding-agent";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ type MockUiOverrides = Partial<{
   setStatus: (key: string, text: string | undefined) => void;
   select: (title: string, items: string[]) => Promise<string | undefined> | string | undefined;
   confirm: (title: string, message: string) => Promise<boolean> | boolean;
+  custom: (factory: any, options?: any) => Promise<any> | any;
 }>;
 
 function createTheme() {
@@ -20,6 +21,12 @@ function createTheme() {
       return text;
     },
   };
+}
+
+function getDefaultSessionDir(cwd: string): string {
+  const resolvedCwd = join(cwd).replace(/\\/g, "/");
+  const safePath = `--${resolvedCwd.replace(/^\//, "").replace(/[/:]/g, "-")}--`;
+  return join(getAgentDir(), "sessions", safePath);
 }
 
 export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?: MockUiOverrides } = {}) {
@@ -80,6 +87,10 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
         footerComponent?.dispose?.();
         footerComponent = undefined;
       },
+      async custom(factory: any, options?: any) {
+        if (uiOverrides.custom) return uiOverrides.custom(factory, options);
+        return undefined;
+      },
       setTitle() {},
       setEditorText() {},
       getEditorText() {
@@ -107,8 +118,8 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       setTheme() {
         return { success: false, error: "unsupported" };
       },
-    };
 
+    };
     const sessionManager = {
       getEntries() {
         return [...entries];
@@ -125,14 +136,21 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       getCwd() {
         return defaultCwd;
       },
+      getSessionDir() {
+        return getDefaultSessionDir(defaultCwd);
+      },
+      getSessionFile() {
+        return undefined;
+      },
       getSessionName() {
         return undefined;
       },
-    };
 
+    };
     const resolvedUi = overrides.ui ? { ...ui, ...overrides.ui } : ui;
     return {
       hasUI: overrides.hasUI ?? defaultHasUI,
+      mode: overrides.mode ?? "tui",
       cwd: overrides.cwd ?? defaultCwd,
       sessionManager,
       modelRegistry: {

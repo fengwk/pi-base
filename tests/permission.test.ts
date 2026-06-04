@@ -57,7 +57,8 @@ describe("permission guard", () => {
     expect(result.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]!.title).toContain("Tool: write");
-    expect(prompts[0]!.title).toContain("Path: src/allowed.ts");
+    expect(prompts[0]!.title).toContain("Details are shown in the tool preview above.");
+    expect(prompts[0]!.title).not.toContain("Path: src/allowed.ts");
     expect(prompts[0]!.items).toEqual(["Yes", "No"]);
     expect(registry.getStatuses().get("pi-base-permission")).toBeUndefined();
     expect(await readFile(join(root, "src/allowed.ts"), "utf8")).toBe("export const allowed = true;\n");
@@ -125,12 +126,13 @@ describe("permission guard", () => {
     );
     expect(asked.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("Path: notes.txt");
+    expect(prompts[0]).toContain("Tool: write");
+    expect(prompts[0]).not.toContain("Path: notes.txt");
   });
 
   it("toggles yolo mode via /yolo and bypasses permission checks", async () => {
     const root = await createTempWorkspace();
-    await writeProjectSettings(root, { permission: { write: "ask" } });
+    await writeProjectSettings(root, { permission: { write: "ask" }, contextCompression: { anchorHygiene: true } });
     await writeFile(join(root, ".pi", "settings.json"), JSON.stringify({ compaction: { enabled: true } }), "utf8");
 
     const registry = createToolRegistry({ hasUI: true });
@@ -157,7 +159,6 @@ describe("permission guard", () => {
     expect(footerLines).toHaveLength(2);
     expect(footerLines[1]).toContain("YOLO");
     expect(registry.renderFooter(4)).toEqual(["YOLO"]);
-
     registry.setUI({
       select: async () => {
         throw new Error("yolo mode should not prompt");
@@ -176,12 +177,12 @@ describe("permission guard", () => {
 
     await registry.runCommand("yolo", "", { cwd: root });
     expect(registry.getStatuses().get("pi-base-permission")).toBeUndefined();
-    expect(registry.renderFooter(120)).toEqual([]);
+    expect(registry.renderFooter(120).join("\n")).not.toContain("YOLO");
   });
 
   it("applies configured default yolo mode when a session has no prior yolo entry", async () => {
     const root = await createTempWorkspace();
-    await writeProjectSettings(root, { permission: { write: "ask" }, yolo: "enable" });
+    await writeProjectSettings(root, { permission: { write: "ask" }, yolo: true, contextCompression: { anchorHygiene: true } });
     await writeFile(join(root, ".pi", "settings.json"), JSON.stringify({ compaction: { enabled: true } }), "utf8");
 
     const registry = createToolRegistry({ hasUI: true });
@@ -198,7 +199,6 @@ describe("permission guard", () => {
     const footerLines = registry.renderFooter(120);
     expect(footerLines).toHaveLength(2);
     expect(footerLines[1]).toContain("YOLO");
-
     const result = await registry.getTool("write").execute(
       "1",
       { path: "src/default-yolo.ts", content: "export const enabled = true;\n" },
@@ -261,7 +261,7 @@ describe("permission guard", () => {
     expect(npmResult.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Tool: bash");
-    expect(prompts[0]).toContain("Command: npm test");
+    expect(prompts[0]).not.toContain("Command: npm test");
   });
 
   it("asks for composite bash commands even when early segments are allowlisted", async () => {
@@ -305,6 +305,53 @@ describe("permission guard", () => {
 
     expect(result.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("Command: pwd && ls -ld . && touch a.py");
+    expect(prompts[0]).toContain("Tool: bash");
+    expect(prompts[0]).not.toContain("Command: pwd && ls -ld . && touch a.py");
+  });
+
+  it("keeps bash permission prompts short for long commands", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, { permission: { bash: "ask" } });
+
+    const prompts: string[] = [];
+    const registry = createToolRegistry({ hasUI: true });
+    registry.setUI({
+      select: async (title) => {
+        prompts.push(title);
+        return "Yes";
+      },
+    });
+
+    piBaseExtension(registry.pi as any);
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const longCommand = [
+      "cat > /tmp/TestDebug.java << 'EOF'",
+      "public class TestDebug {",
+      "  public static void main(String[] args) {",
+      "    System.out.println(\"debug\");",
+      "  }",
+      "}",
+      "EOF",
+      "javac /tmp/TestDebug.java && java -cp /tmp TestDebug",
+    ].join("\n");
+
+    const result = await registry.getTool("bash").execute(
+      "1",
+      { command: longCommand, workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Tool: bash");
+    expect(prompts[0]).toContain("Details are shown in the tool preview above.");
+    expect(prompts[0]).not.toContain("TestDebug");
+    expect(prompts[0]!.split("\n").length).toBeLessThanOrEqual(6);
   });
 });

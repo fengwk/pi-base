@@ -95,7 +95,7 @@ function formatBashResultText(result: any, options: any, theme: any, context: an
     sections.push(styleMuted(theme, `${label} ${formatDuration(endTime - state.startedAt)}`));
   }
 
-  return sections.length > 0 ? `\n${sections.join("\n")}` : "";
+  return sections.length > 0 ? sections.join("\n") : "";
 }
 
 function hostShellName(shellPath: string | undefined): string | undefined {

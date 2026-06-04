@@ -141,8 +141,19 @@ describe("edit/write flow", () => {
     const secondEdit = await registry.getTool("edit").execute("3", { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: oldAnchor, end_anchor: oldAnchor, new_text: "delta" } }] }, undefined, undefined, { cwd: root });
     expect(secondEdit.isError).toBe(true);
     expect(getText(secondEdit)).toContain("The anchor no longer matches the current file");
-    expect(getText(secondEdit)).toContain("Refreshed anchors near the failed region");
+    expect(getText(secondEdit)).toContain("Current context in src/example.ts around line 2:");
+    expect(getText(secondEdit)).toContain(`Failed anchor: ${oldAnchor}`);
+    expect(getText(secondEdit)).toContain("Reason: line 2 exists, but hash mismatch");
+    expect(getText(secondEdit)).toContain("Current line at the provided line number:");
+    expect(getText(secondEdit)).toContain("|gamma");
+    expect(getText(secondEdit)).toContain("path: src/example.ts");
+    expect(getText(secondEdit)).toContain("kind: file");
+    expect(getText(secondEdit)).toContain("mediaType: text");
+    expect(getText(secondEdit)).toContain("offset: 1");
+    expect(getText(secondEdit)).toContain("totalLines: 3");
+    expect(getText(secondEdit)).toContain("hasMore: false");
   });
+
 
   it("treats whitespace-only changes as stale anchor changes", async () => {
     const root = await createTempWorkspace();
@@ -169,7 +180,7 @@ describe("edit/write flow", () => {
     const text = getText(result);
     // Both removed and added lines should show their leading whitespace
     // as a sequence of `·` to make it visually distinct.
-    expect(text).toMatch(/- +1:[0-9a-f]{3}\|··old/);
+    expect(text).toMatch(/^- 1:---\|··old$/m);
     expect(text).toMatch(/\+ +1:[0-9a-f]{3}\|··new/);
   });
 
@@ -287,6 +298,31 @@ describe("edit/write flow", () => {
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("The anchor no longer matches the current file");
     expect(getText(result)).not.toContain("2:000|");
+    expect(getText(result)).toContain("Failed anchor: 2:000");
+    expect(getText(result)).toContain("Reason: line 2 exists, but hash mismatch");
+    expect(getText(result)).toContain("Current line at the provided line number:");
+  });
+
+  it("explains stale anchors whose line is outside the current file range", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\n");
+    const registry = createToolRegistry();
+    const tool = registerEditTool(registry.pi as any, { wasReadInSession: () => true });
+    const result = await tool.execute("1", { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "99:000", end_anchor: "99:000", new_text: "three" } }] }, undefined, undefined, { cwd: root });
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("Failed anchor: 99:000");
+    expect(getText(result)).toContain("Reason: line 99 is outside the current file range 1..3");
+    expect(getText(result)).toContain("Current tail context in src/example.ts:");
+    expect(getText(result)).toContain("path: src/example.ts");
+    expect(getText(result)).toContain("kind: file");
+    expect(getText(result)).toContain("mediaType: text");
+    expect(getText(result)).toContain("offset: 1");
+    expect(getText(result)).toContain("limit: 3");
+    expect(getText(result)).toContain("totalLines: 3");
+    expect(getText(result)).toContain("hasMore: false");
+    expect(getText(result)).toMatch(/^1:[0-9a-f]{3}\|one$/m);
+    expect(getText(result)).toMatch(/^2:[0-9a-f]{3}\|two$/m);
+    expect(getText(result)).not.toContain("Refreshed anchors in src/example.ts near line 99");
   });
 
   it("reports no-op edits", async () => {
@@ -653,10 +689,12 @@ describe("edit/write flow", () => {
     const text = getText(result);
     expect(text).toContain("Edit applied to src/example.ts.");
     expect(text).toContain("Review the diff below.");
-    expect(text).toContain("Lines prefixed with \"+\" or \"|\" carry the current LINE:HASH anchors");
+    expect(text).toContain("Use only LINE:HASH anchors from lines prefixed with \"+\" or \"|\"");
+    expect(text).toContain("old/deleted content and intentionally do not carry reusable anchors");
     expect(text).toContain("| 1:");
-    expect(text).toContain("- 2:");
+    expect(text).toContain("- 2:---|beta");
     expect(text).toContain("+ 2:");
+    expect(text).not.toMatch(/^-\s*\d+:[0-9a-f]{3}\|/m);
     expect(text).toContain("|alpha");
     expect(text).toContain("|gamma");
     // The diff's `lineNumWidth` is 1.
@@ -707,6 +745,35 @@ describe("edit/write flow", () => {
     expect(text).toContain("|line-10-updated");
     expect(text).toContain("...");
     expect(text).not.toContain("|line-6");
+  });
+
+  it("applies multiple edits against original anchors even when earlier changes shift later lines", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\nthree\nfour\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const lines = getText(readResult).split("\n");
+    const line1 = lines.find((line) => line.includes("|one"))!.split("|")[0]!;
+    const line4 = lines.find((line) => line.includes("|four"))!.split("|")[0]!;
+
+    const result = await registry.getTool("edit").execute(
+      "2",
+      {
+        path: "src/example.ts",
+        edits: [
+          { replace_lines: { start_anchor: line1, end_anchor: line1, new_text: "one\nafter-one" } },
+          { replace_lines: { start_anchor: line4, end_anchor: line4, new_text: "four-updated" } },
+        ],
+      },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).not.toBe(true);
+    const written = await readFile(join(root, "src/example.ts"), "utf8");
+    expect(written).toBe("one\nafter-one\ntwo\nthree\nfour-updated\n");
   });
 
   it("returns an empty-file anchor when edits remove all content", async () => {
@@ -885,7 +952,7 @@ describe("edit/write flow", () => {
     const text = getText(editResult);
     expect(text).toMatch(/^\| 1:[0-9a-f]{3}\|alpha$/m);
     // "beta" is removed from line 2; "gamma" is added at line 2.
-    expect(text).toMatch(/^- 2:[0-9a-f]{3}\|beta$/m);
+    expect(text).toMatch(/^- 2:---\|beta$/m);
     expect(text).toMatch(/^\+ 2:[0-9a-f]{3}\|gamma$/m);
   });
 });

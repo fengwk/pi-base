@@ -15,13 +15,30 @@ export interface HashlineAnchorLine {
   display: string;
 }
 
+export type AnchorMismatchReason = "line_out_of_range" | "hash_mismatch";
+
+export interface AnchorMismatchDetail {
+  /** Original anchor provided by the caller. */
+  provided: { line: number; hash: string };
+  /** Why validation failed for the provided anchor. */
+  reason: AnchorMismatchReason;
+  /** Current line at the failed line number when the line exists. */
+  actual: HashlineAnchorLine | null;
+  /** Current total line count of the target file. */
+  lineCount: number;
+  /** Fresh context anchors from the current target file. */
+  nearby: HashlineAnchorLine[];
+}
+
 export class HashlineMismatchError extends Error {
   readonly updatedAnchors: HashlineAnchorLine[];
+  readonly detail: AnchorMismatchDetail;
 
-  constructor(message: string, updatedAnchors: HashlineAnchorLine[]) {
-    super(message);
+  constructor(detail: AnchorMismatchDetail) {
+    super(`Anchor mismatch at ${detail.provided.line}:${detail.provided.hash} (${detail.reason})`);
     this.name = "HashlineMismatchError";
-    this.updatedAnchors = updatedAnchors;
+    this.updatedAnchors = detail.nearby;
+    this.detail = detail;
   }
 }
 
@@ -94,9 +111,10 @@ export function splitNewTextLines(text: string): string[] {
   return trimmed.split("\n");
 }
 
+const MISMATCH_CONTEXT_RADIUS = 15;
 function buildUpdatedAnchors(lines: string[], lineNumbers: number[]): HashlineAnchorLine[] {
   const unique = [...new Set(lineNumbers)].filter((line) => line >= 1 && line <= lines.length).sort((a, b) => a - b);
-  const width = String(Math.max(...unique, 1)).length;
+  const width = String(Math.max(lines.length, 1)).length;
   return unique.map((line) => {
     const raw = lines[line - 1] ?? "";
     const hash = computeLineHash(line, raw);
@@ -104,15 +122,40 @@ function buildUpdatedAnchors(lines: string[], lineNumbers: number[]): HashlineAn
   });
 }
 
-function buildMismatchError(lines: string[], lineNumbers: number[]): HashlineMismatchError {
-  const updatedAnchors = buildUpdatedAnchors(lines, lineNumbers.flatMap((line) => [line - 2, line - 1, line, line + 1, line + 2]));
-  return new HashlineMismatchError("Anchor mismatch", updatedAnchors);
+function buildContextLineNumbers(lines: string[], line: number, reason: AnchorMismatchReason): number[] {
+  if (lines.length === 0) return [];
+  if (reason === "line_out_of_range") {
+    if (line < 1) {
+      return Array.from({ length: Math.min(lines.length, MISMATCH_CONTEXT_RADIUS * 2 + 1) }, (_, index) => index + 1);
+    }
+    const start = Math.max(1, lines.length - MISMATCH_CONTEXT_RADIUS * 2);
+    return Array.from({ length: lines.length - start + 1 }, (_, index) => start + index);
+  }
+  const start = Math.max(1, line - MISMATCH_CONTEXT_RADIUS);
+  const end = Math.min(lines.length, line + MISMATCH_CONTEXT_RADIUS);
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+}
+
+function buildMismatchError(
+  lines: string[],
+  ref: { line: number; hash: string },
+  reason: AnchorMismatchReason,
+): HashlineMismatchError {
+  const nearby = buildUpdatedAnchors(lines, buildContextLineNumbers(lines, ref.line, reason));
+  const actual = reason === "hash_mismatch" && ref.line >= 1 && ref.line <= lines.length
+    ? (nearby.find((entry) => entry.line === ref.line) ?? null)
+    : null;
+  return new HashlineMismatchError({ provided: ref, reason, actual, nearby, lineCount: lines.length });
 }
 
 function validateAnchor(lines: string[], ref: { line: number; hash: string }): void {
-  if (ref.line > lines.length) throw buildMismatchError(lines, [ref.line]);
+  if (ref.line < 1 || ref.line > lines.length) {
+    throw buildMismatchError(lines, ref, "line_out_of_range");
+  }
   const actual = computeLineHash(ref.line, lines[ref.line - 1] ?? "");
-  if (actual !== ref.hash) throw buildMismatchError(lines, [ref.line]);
+  if (actual !== ref.hash) {
+    throw buildMismatchError(lines, ref, "hash_mismatch");
+  }
 }
 
 export function applyHashlineEdits(

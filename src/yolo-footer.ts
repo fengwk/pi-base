@@ -5,6 +5,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const GLOBAL_PI_SETTINGS_PATH = join(homedir(), ".pi", "agent", "settings.json");
+export const PI_BASE_PERMISSION_STATUS_KEY = "pi-base-permission";
+export const PI_BASE_INLINE_STATUS_KEYS = [PI_BASE_PERMISSION_STATUS_KEY] as const;
 
 interface PiSettingsCacheEntry {
   mtimeMs: number;
@@ -81,14 +83,15 @@ function createFooterSessionAdapter(ctx: ExtensionContext, pi: Pick<ExtensionAPI
   };
 }
 
-function hideStatus(footerData: ReadonlyFooterDataProvider, statusKey: string): ReadonlyFooterDataProvider {
+function hideStatus(footerData: ReadonlyFooterDataProvider, statusKeys: readonly string[]): ReadonlyFooterDataProvider {
+  const keys = new Set(statusKeys);
   return {
     getGitBranch: () => footerData.getGitBranch(),
     getAvailableProviderCount: () => footerData.getAvailableProviderCount(),
     onBranchChange: (callback) => footerData.onBranchChange(callback),
     getExtensionStatuses: () => {
       const statuses = new Map(footerData.getExtensionStatuses());
-      statuses.delete(statusKey);
+      for (const key of keys) statuses.delete(key);
       return statuses;
     },
   };
@@ -103,10 +106,10 @@ function fitStatus(status: string, width: number, theme: Theme): { text: string;
   return { text, width: visibleWidth(text) };
 }
 
-class InlineYoloFooterComponent extends FooterComponent {
+class InlineStatusFooterComponent extends FooterComponent {
   private readonly rawFooterData: ReadonlyFooterDataProvider;
   private readonly theme: Theme;
-  private readonly statusKey: string;
+  private readonly statusKeys: readonly string[];
   private readonly getCwd: () => string;
 
   constructor(
@@ -114,46 +117,62 @@ class InlineYoloFooterComponent extends FooterComponent {
     pi: Pick<ExtensionAPI, "getThinkingLevel">,
     footerData: ReadonlyFooterDataProvider,
     theme: Theme,
-    statusKey: string,
+    statusKeys: readonly string[],
   ) {
     const session = createFooterSessionAdapter(ctx, pi);
-    super(session as unknown as AgentSession, hideStatus(footerData, statusKey));
+    super(session as unknown as AgentSession, hideStatus(footerData, statusKeys));
     this.rawFooterData = footerData;
     this.theme = theme;
-    this.statusKey = statusKey;
+    this.statusKeys = statusKeys;
     this.getCwd = () => session.sessionManager.getCwd();
   }
 
   render(width: number): string[] {
     super.setAutoCompactEnabled(resolveAutoCompactionEnabled(this.getCwd()));
 
-    const status = sanitizeStatusText(this.rawFooterData.getExtensionStatuses().get(this.statusKey) ?? "");
-    if (!status) return super.render(width);
+    const segments: string[] = [];
+    for (const key of this.statusKeys) {
+      const text = sanitizeStatusText(this.rawFooterData.getExtensionStatuses().get(key) ?? "");
+      if (text) segments.push(text);
+    }
+    if (segments.length === 0) return super.render(width);
+    const inlineStatusText = segments.join(" ");
+    const inlineStatus = ` ${inlineStatusText}`;
+    const inlineWidth = visibleWidth(inlineStatus);
+    if (inlineWidth >= width) {
+      const priorityStatus = segments[segments.length - 1] ?? inlineStatusText;
+      return [truncateToWidth(priorityStatus, width, this.theme.fg("dim", "..."))];
+    }
 
-    const inlineStatus = fitStatus(status, width, this.theme);
-    if (!inlineStatus.text) return super.render(width);
-    if (width - inlineStatus.width <= 0) return [inlineStatus.text.trimStart()];
-
-    const lines = super.render(Math.max(0, width - inlineStatus.width));
+    const lines = super.render(Math.max(0, width - inlineWidth));
     const targetLine = lines.length > 1 ? 1 : 0;
-    if (lines.length === 0) return [inlineStatus.text.trimStart()];
+    if (lines.length === 0) return [inlineStatusText];
 
-    return lines.map((line, index) => index === targetLine ? `${line}${inlineStatus.text}` : line);
+    return lines.map((line, index) => index === targetLine ? `${line}${inlineStatus}` : line);
   }
+}
+
+export function syncInlineStatusFooter(
+  ctx: ExtensionContext,
+  pi: Pick<ExtensionAPI, "getThinkingLevel">,
+  options: { enabled?: boolean; statusKeys?: readonly string[] } = {},
+): boolean {
+  if (!ctx.hasUI || options.enabled === false) return false;
+
+  const statusKeys = options.statusKeys ?? PI_BASE_INLINE_STATUS_KEYS;
+  if (statusKeys.length === 0) return false;
+
+  ctx.ui.setFooter((_tui, theme, footerData) => new InlineStatusFooterComponent(ctx, pi, footerData, theme, statusKeys));
+  return true;
 }
 
 export function syncYoloFooter(
   ctx: ExtensionContext,
   pi: Pick<ExtensionAPI, "getThinkingLevel">,
-  options: { enabled: boolean; statusKey: string },
+  options: { enabled?: boolean; statusKey: string; extraStatusKeys?: readonly string[] },
 ): boolean {
-  if (!ctx.hasUI) return false;
-
-  if (!options.enabled) {
-    ctx.ui.setFooter(undefined);
-    return false;
-  }
-
-  ctx.ui.setFooter((_tui, theme, footerData) => new InlineYoloFooterComponent(ctx, pi, footerData, theme, options.statusKey));
-  return true;
+  const statusKeys = options.extraStatusKeys && options.extraStatusKeys.length > 0
+    ? options.extraStatusKeys
+    : [options.statusKey];
+  return syncInlineStatusFooter(ctx, pi, { enabled: options.enabled, statusKeys });
 }
