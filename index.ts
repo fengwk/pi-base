@@ -128,13 +128,10 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
   const resolverFactory = createResolverFactory(loadSettings);
   const getCollapsedResultLines = createCollapsedResultLinesResolver(loadSettings);
   const filesWithFreshAnchors = new Set<string>();
-  const cachedFileLines = new Map<string, string[]>();
-  const noteAnchorsAndSnapshot = (absolutePath: string, lines?: string[]) => {
+  const noteAnchorsAndSnapshot = (absolutePath: string) => {
     filesWithFreshAnchors.add(absolutePath);
-    if (lines) cachedFileLines.set(absolutePath, lines);
   };
   const hasFreshAnchors = (absolutePath: string) => filesWithFreshAnchors.has(absolutePath);
-  const getCachedLines = (absolutePath: string) => cachedFileLines.get(absolutePath);
   const syncLsp = (absolutePath: string) => {
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
@@ -146,7 +143,7 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
   // This keeps `pi-base` thin and lets upstream handle fd behavior.
   registerFindTool(pi, createFindToolDefinition, { getCollapsedResultLines });
   registerBashRendererTool(pi, { getCollapsedResultLines });
-  registerEditTool(pi, { wasReadInSession: hasFreshAnchors, getCachedLines, getCollapsedResultLines, onSuccessfulEdit: (absolutePath, lines) => { noteAnchorsAndSnapshot(absolutePath, lines); syncLsp(absolutePath); } });
+  registerEditTool(pi, { wasReadInSession: hasFreshAnchors, getCollapsedResultLines, onSuccessfulEdit: (absolutePath) => { noteAnchorsAndSnapshot(absolutePath); syncLsp(absolutePath); } });
   registerWriteTool(pi, { onFileAnchored: noteAnchorsAndSnapshot, onSuccessfulWrite: syncLsp, getCollapsedResultLines });
   registerLspTools(pi, { resolverFactory, getCollapsedResultLines });
   registerPermissionGuard(pi, { loadSettings });

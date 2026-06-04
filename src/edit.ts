@@ -1,65 +1,22 @@
 import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { Text } from "@earendil-works/pi-tui";
 import * as Diff from "diff";
 import { detectLineEnding, generateCompactOrFullDiff, normalizeToLF, restoreLineEndings, stripBom } from "./edit-diff.js";
 import { applyHashlineEdits, ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay, HashlineMismatchError, parseLineRef, splitNewTextLines, type HashlineEditItem } from "./hashline.js";
 import { resolveToCwd } from "./path-utils.js";
-import { type CollapsedResultLinesResolver, renderRawResult, resolveCollapsedResultLines, styleAccent, styleDiffAdded, styleDiffContext, styleDiffRemoved, styleMuted, styleToolTitle, styleWarning } from "./render.js";
+import { type CollapsedResultLinesResolver, renderRawResult, resolveCollapsedResultLines, styleAccent, styleDiffAdded, styleDiffContext, styleDiffRemoved, styleToolTitle, styleWarning } from "./render.js";
 import { editSchema } from "./schemas/edit.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 
 const RESULT_CONTEXT_LINES = 2;
-const MAX_EDIT_CALL_PREVIEW_SNAPSHOTS = 100;
-const EDIT_CALL_PREVIEW_STATE = Symbol("piBaseEditCallPreviewState");
-
-type EditCallPreviewState = {
-  signature: string;
-  previewLines: string[] | undefined;
-};
 
 function summarizeInsertedText(text: string): string[] {
   const lines = splitNewTextLines(String(text));
-  const display = lines.slice(0, 5).map((line) => `+ ${escapeControlCharsForDisplay(line)}`);
+  const display = lines.slice(0, 5).map((line) => `+ ${escapeControlCharsForDisplay(visualizeLeadingWhitespace(line))}`);
   if (lines.length > 5) display.push(`+ ... (${lines.length - 5} more lines)`);
   return display;
-}
-
-function loadPreviewLines(absolutePath: string, cachedLines?: string[]): string[] | undefined {
-  try {
-    const raw = readFileSync(absolutePath, "utf8");
-    return normalizeToLF(stripBom(raw).text).split("\n");
-  } catch {
-    return cachedLines;
-  }
-}
-
-function buildEditCallPreviewSignature(absolutePath: string, args: any): string {
-  return JSON.stringify({ path: absolutePath, edits: args?.edits });
-}
-
-function rememberEditCallPreviewSnapshot(snapshots: Map<string, string[]>, signature: string, lines: string[]): void {
-  if (snapshots.has(signature)) snapshots.delete(signature);
-  snapshots.set(signature, [...lines]);
-  while (snapshots.size > MAX_EDIT_CALL_PREVIEW_SNAPSHOTS) {
-    const oldest = snapshots.keys().next().value as string | undefined;
-    if (oldest === undefined) break;
-    snapshots.delete(oldest);
-  }
-}
-
-function getFrozenPreviewLines(text: Text, signature: string, load: () => string[] | undefined): string[] | undefined {
-  const existing = (text as any)[EDIT_CALL_PREVIEW_STATE] as EditCallPreviewState | undefined;
-  if (existing?.signature === signature) return existing.previewLines;
-  const previewLines = load();
-  const state = {
-    signature,
-    previewLines: previewLines ? [...previewLines] : undefined,
-  } satisfies EditCallPreviewState;
-  (text as any)[EDIT_CALL_PREVIEW_STATE] = state;
-  return state.previewLines;
 }
 
 type ResultDiffLine =
@@ -165,116 +122,11 @@ function buildResultDiff(before: string, after: string, contextLines = RESULT_CO
   return output.join("\n");
 }
 
-function formatPreviewLineNumber(lineNumber: number, content: string, width: number): string {
-  const padded = String(lineNumber).padStart(width, " ");
-  return `${padded} ${escapeControlCharsForDisplay(visualizeLeadingWhitespace(content))}`;
-}
-
-function buildPreviewDiff(before: string, after: string, contextLines = RESULT_CONTEXT_LINES): string {
-  if (after === "") return `   ${formatPreviewLineNumber(1, "", 1)}`;
-  const beforeLines = before.split("\n");
-  const afterLines = after.split("\n");
-  const width = String(Math.max(beforeLines.length, afterLines.length, 1)).length;
-  const entries: ResultDiffLine[] = [];
-  let beforeLine = 1;
-  let afterLine = 1;
-
-  for (const part of Diff.diffLines(before, after)) {
-    const lines = partLines(part.value);
-    if (part.added) {
-      for (const content of lines) entries.push({ kind: "added", line: afterLine++, content });
-      continue;
-    }
-    if (part.removed) {
-      for (const content of lines) entries.push({ kind: "removed", line: beforeLine++, content });
-      continue;
-    }
-    for (const content of lines) {
-      entries.push({ kind: "context", line: afterLine, content });
-      beforeLine++;
-      afterLine++;
-    }
-  }
-
-  const changedIndexes = entries.flatMap((entry, index) => (entry.kind === "context" ? [] : [index]));
-  if (changedIndexes.length === 0) return `| ${formatPreviewLineNumber(1, after, width)}`;
-
-  const windows = changedIndexes.map((index) => ({
-    start: Math.max(0, index - contextLines),
-    end: Math.min(entries.length - 1, index + contextLines),
-  }));
-  const merged: Array<{ start: number; end: number }> = [];
-  for (const window of windows) {
-    const previous = merged[merged.length - 1];
-    if (!previous || window.start > previous.end + 1) {
-      merged.push(window);
-      continue;
-    }
-    previous.end = Math.max(previous.end, window.end);
-  }
-
-  const output: string[] = [];
-  merged.forEach((window, index) => {
-    if (index > 0 || window.start > 0) output.push("...");
-    for (let i = window.start; i <= window.end; i++) {
-      const entry = entries[i];
-      const prefix = entry.kind === "context" ? " " : entry.kind === "added" ? "+" : "-";
-      output.push(`${prefix}  ${formatPreviewLineNumber(entry.line, entry.content, width)}`);
-    }
-  });
-  if (merged[merged.length - 1]!.end < entries.length - 1) output.push("...");
-  return output.join("\n");
-}
-
-
-function operationName(entry: any): string {
-  if (entry?.replace_lines) return "replace_lines";
-  if (entry?.delete_lines) return "delete_lines";
-  if (entry?.insert_before) return "insert_before";
-  if (entry?.insert_after) return "insert_after";
-  return "unknown_edit";
-}
-
-function stylePreviewDiffLine(line: string, theme: any): string {
-  if (line.startsWith("+ ")) return styleDiffAdded(theme, line);
-  if (line.startsWith("- ")) return styleDiffRemoved(theme, line);
-  return styleDiffContext(theme, line);
-}
-
-function renderRawOperationPreview(content: string, entry: any, theme: any): string[] {
-  const name = operationName(entry);
-  if (name === "unknown_edit") return [styleWarning(theme, "? unknown_edit")];
-  try {
-    const next = applyHashlineEdits(content, [entry as HashlineEditItem]);
-    return [
-      styleToolTitle(theme, name),
-      ...(next.content === content
-        ? [styleMuted(theme, "(no change)")]
-        : buildPreviewDiff(content, next.content).split("\n").map((line) => stylePreviewDiffLine(line, theme))),
-    ];
-  } catch (error) {
-    if (error instanceof HashlineMismatchError) return [styleToolTitle(theme, name), styleWarning(theme, `? stale anchor in ${name}`)];
-    return [styleToolTitle(theme, name), styleWarning(theme, `? invalid anchor in ${name}: ${(error as Error).message}`)];
-  }
-}
-
-function buildPerOperationPreview(args: any, previewLines: string[] | undefined, theme: any): string | undefined {
-  if (!previewLines || !Array.isArray(args?.edits) || args.edits.length === 0) return undefined;
-  const content = previewLines.join("\n");
-  const blocks = args.edits.map((entry: any) => renderRawOperationPreview(content, entry, theme));
-  return blocks.map((block: string[]) => block.join("\n")).join("\n\n");
-}
-
-function formatEditCall(args: any, theme: any, previewLines?: string[]): string {
+function formatEditCall(args: any, theme: any): string {
   const path = String(args?.path ?? "<missing-path>");
   const edits = Array.isArray(args?.edits) ? args.edits : [];
   const lines = [`${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}`];
   if (edits.length === 0) return `${lines[0]}\n\n(no edits)`;
-  const operationPreview = buildPerOperationPreview(args, previewLines, theme);
-  if (operationPreview) {
-    const note = edits.length > 1 ? `${styleMuted(theme, "Each hunk below is shown against the pre-edit file.")}\n\n` : "";
-    return `${lines[0]}\n\n${note}${operationPreview}`;
-  }
   for (const entry of edits) {
     lines.push("");
     if (entry?.replace_lines) {
@@ -423,12 +275,10 @@ export function registerEditTool(
   pi: ExtensionAPI,
   options: {
     wasReadInSession?: (absolutePath: string) => boolean;
-    getCachedLines?: (absolutePath: string) => string[] | undefined;
     getCollapsedResultLines?: CollapsedResultLinesResolver;
     onSuccessfulEdit?: (absolutePath: string, lines?: string[]) => void;
   } = {},
 ) {
-  const callPreviewSnapshots = new Map<string, string[]>();
   const tool = {
     name: "edit",
     label: "Edit",
@@ -438,17 +288,7 @@ export function registerEditTool(
     renderShell: "default" as const,
     renderCall(args: any, _theme: any, context: any) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      const rawPath = String(args?.path ?? "").replace(/^@/, "");
-      const absolutePath = rawPath ? resolveToCwd(rawPath, context.cwd ?? process.cwd()) : "";
-      const signature = buildEditCallPreviewSignature(absolutePath, args);
-      const previewLines = getFrozenPreviewLines(text, signature, () => {
-        const remembered = callPreviewSnapshots.get(signature);
-        if (remembered) return remembered;
-        const loaded = absolutePath ? loadPreviewLines(absolutePath, options.getCachedLines?.(absolutePath)) : undefined;
-        if (loaded) rememberEditCallPreviewSnapshot(callPreviewSnapshots, signature, loaded);
-        return loaded;
-      });
-      text.setText(formatEditCall(args, _theme, previewLines));
+      text.setText(formatEditCall(args, _theme));
       return text;
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
@@ -470,7 +310,6 @@ export function registerEditTool(
           }
         }
         const absolutePath = resolveToCwd(rawPath, ctx.cwd ?? process.cwd());
-        const previewSignature = buildEditCallPreviewSignature(absolutePath, params);
         if (options.wasReadInSession && !options.wasReadInSession(absolutePath)) {
           return {
             content: [{ type: "text" as const, text: `Edit failed for ${rawPath}. Fresh anchors are required before editing this file. Start with read, write, or a prior edit result for the same region.` }],
@@ -490,7 +329,6 @@ export function registerEditTool(
             };
           }
           const original = normalizeToLF(text);
-          rememberEditCallPreviewSnapshot(callPreviewSnapshots, previewSignature, original.split("\n"));
           let next;
           try {
             next = applyHashlineEdits(original, params.edits as HashlineEditItem[], signal);
