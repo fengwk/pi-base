@@ -4,7 +4,7 @@ src/config.ts
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.2.8-ntes.8",
-  "base_commit_sha": "903cabb298344c4b3c6ce7f16f40b773db21fab6",
+  "base_commit_sha": "9e55675630d8b4dc0163cbabd00125d3a08489c5",
   "prompts": {
     "2a9cda1fab10c7a4": {
       "agent_id": {
@@ -19,26 +19,6 @@ src/config.ts
       "accepted_lines": 36,
       "overriden_lines": 0,
       "per_file_stats": {
-        "prompts/lsp_java_decompile.md": {
-          "additions": 3,
-          "deletions": 3,
-          "accepted_lines": 3
-        },
-        "prompts/base.md": {
-          "additions": 10,
-          "deletions": 10,
-          "accepted_lines": 8
-        },
-        "src/schemas/lsp.ts": {
-          "additions": 1,
-          "deletions": 1,
-          "accepted_lines": 1
-        },
-        "index.ts": {
-          "additions": 3,
-          "deletions": 2,
-          "accepted_lines": 3
-        },
         "DESIGN.md": {
           "additions": 4,
           "deletions": 3,
@@ -50,6 +30,26 @@ src/config.ts
           "accepted_lines": 16
         },
         "prompts/grep.md": {
+          "additions": 1,
+          "deletions": 1,
+          "accepted_lines": 1
+        },
+        "prompts/lsp_java_decompile.md": {
+          "additions": 3,
+          "deletions": 3,
+          "accepted_lines": 3
+        },
+        "prompts/base.md": {
+          "additions": 10,
+          "deletions": 10,
+          "accepted_lines": 8
+        },
+        "index.ts": {
+          "additions": 3,
+          "deletions": 2,
+          "accepted_lines": 3
+        },
+        "src/schemas/lsp.ts": {
           "additions": 1,
           "deletions": 1,
           "accepted_lines": 1
@@ -69,97 +69,185 @@ src/config.ts
       "accepted_lines": 7168,
       "overriden_lines": 0,
       "per_file_stats": {
-        "tests/tool-output.test.ts": {
-          "additions": 123,
-          "accepted_lines": 123
-        },
-        "tests/search-tools.test.ts": {
-          "additions": 197,
-          "accepted_lines": 197
-        },
-        "src/write.ts": {
-          "additions": 87,
-          "accepted_lines": 87
-        },
-        "tests/regressions.test.ts": {
-          "additions": 206,
-          "accepted_lines": 206
-        },
-        "src/schemas/lsp.ts": {
-          "additions": 23,
-          "accepted_lines": 23
-        },
-        "src/schemas/write.ts": {
-          "additions": 6,
-          "accepted_lines": 6
-        },
-        "src/edit.ts": {
-          "additions": 422,
-          "accepted_lines": 422
-        },
-        "src/grep.ts": {
-          "additions": 208,
-          "accepted_lines": 208
-        },
-        "src/tool-result.ts": {
-          "additions": 35,
-          "accepted_lines": 35
-        },
         "prompts/base.md": {
           "additions": 18,
           "accepted_lines": 18
-        },
-        "tests/helpers.ts": {
-          "additions": 93,
-          "accepted_lines": 93
-        },
-        "src/schemas/read.ts": {
-          "additions": 7,
-          "accepted_lines": 7
         },
         "src/lsp/client.ts": {
           "additions": 702,
           "accepted_lines": 702
         },
-        "prompts/write.md": {
-          "additions": 16,
-          "accepted_lines": 16
+        "src/schemas/write.ts": {
+          "additions": 6,
+          "accepted_lines": 6
         },
-        "src/schemas/grep.ts": {
-          "additions": 11,
-          "accepted_lines": 11
+        "tests/helpers.ts": {
+          "additions": 93,
+          "accepted_lines": 93
+        },
+        "prompts/read.md": {
+          "additions": 18,
+          "accepted_lines": 18
+        },
+        "src/tool-result.ts": {
+          "additions": 35,
+          "accepted_lines": 35
+        },
+        "src/bash-renderer.ts": {
+          "additions": 179,
+          "accepted_lines": 179
+        },
+        "src/path-utils.ts": {
+          "additions": 18,
+          "accepted_lines": 18
+        },
+        "prompts/edit.md": {
+          "additions": 28,
+          "accepted_lines": 28
+        },
+        "src/timeout.ts": {
+          "additions": 36,
+          "accepted_lines": 36
+        },
+        "src/hashline.ts": {
+          "additions": 239,
+          "accepted_lines": 239
+        },
+        "src/lsp/discovery.ts": {
+          "additions": 256,
+          "accepted_lines": 256
+        },
+        "tests/tool-output.test.ts": {
+          "additions": 123,
+          "accepted_lines": 123
+        },
+        "src/config.ts": {
+          "additions": 149,
+          "accepted_lines": 149
+        },
+        "tests/regressions.test.ts": {
+          "additions": 206,
+          "accepted_lines": 206
+        },
+        "src/schemas/find.ts": {
+          "additions": 25,
+          "accepted_lines": 25
+        },
+        "src/tool-prompt.ts": {
+          "additions": 20,
+          "accepted_lines": 20
+        },
+        "tests/search-tools.test.ts": {
+          "additions": 197,
+          "accepted_lines": 197
+        },
+        "src/render.ts": {
+          "additions": 160,
+          "accepted_lines": 160
+        },
+        "prompts/lsp_java_decompile.md": {
+          "additions": 17,
+          "accepted_lines": 17
         },
         "tests/lsp-client.test.ts": {
           "additions": 780,
           "accepted_lines": 780
         },
-        "src/read.ts": {
-          "additions": 183,
-          "accepted_lines": 183
+        "tests/tool-renderers.test.ts": {
+          "additions": 71,
+          "accepted_lines": 71
         },
-        "prompts/lsp_diagnostics.md": {
-          "additions": 17,
-          "accepted_lines": 17
-        },
-        "prompts/grep.md": {
-          "additions": 23,
-          "accepted_lines": 23
+        "src/write.ts": {
+          "additions": 87,
+          "accepted_lines": 87
         },
         "src/lsp/tools.ts": {
           "additions": 299,
           "accepted_lines": 299
         },
-        "tests/tool-renderers.test.ts": {
-          "additions": 71,
-          "accepted_lines": 71
+        "prompts/lsp_goto_definition.md": {
+          "additions": 17,
+          "accepted_lines": 17
+        },
+        "tests/read.test.ts": {
+          "additions": 231,
+          "accepted_lines": 231
+        },
+        "tests/render.test.ts": {
+          "additions": 62,
+          "accepted_lines": 62
         },
         "tests/edit-write-index.test.ts": {
           "additions": 786,
           "accepted_lines": 786
         },
-        "src/tool-prompt.ts": {
-          "additions": 20,
-          "accepted_lines": 20
+        "src/schemas/edit.ts": {
+          "additions": 35,
+          "accepted_lines": 35
+        },
+        "src/tool-output.ts": {
+          "additions": 256,
+          "accepted_lines": 256
+        },
+        "prompts/lsp_diagnostics.md": {
+          "additions": 17,
+          "accepted_lines": 17
+        },
+        "prompts/lsp_workspace_symbols.md": {
+          "additions": 17,
+          "accepted_lines": 17
+        },
+        "src/edit-diff.ts": {
+          "additions": 184,
+          "accepted_lines": 184
+        },
+        "prompts/write.md": {
+          "additions": 16,
+          "accepted_lines": 16
+        },
+        "src/edit.ts": {
+          "additions": 422,
+          "accepted_lines": 422
+        },
+        "src/schemas/lsp.ts": {
+          "additions": 23,
+          "accepted_lines": 23
+        },
+        "src/schemas/read.ts": {
+          "additions": 7,
+          "accepted_lines": 7
+        },
+        "src/schemas/grep.ts": {
+          "additions": 11,
+          "accepted_lines": 11
+        },
+        "src/read.ts": {
+          "additions": 183,
+          "accepted_lines": 183
+        },
+        "tests/lsp-tools.test.ts": {
+          "additions": 403,
+          "accepted_lines": 403
+        },
+        "tests/bash-index.test.ts": {
+          "additions": 278,
+          "accepted_lines": 278
+        },
+        "prompts/grep.md": {
+          "additions": 23,
+          "accepted_lines": 23
+        },
+        "prompts/bash.md": {
+          "additions": 28,
+          "accepted_lines": 28
+        },
+        "src/binary-detect.ts": {
+          "additions": 22,
+          "accepted_lines": 22
+        },
+        "src/schemas/bash.ts": {
+          "additions": 7,
+          "accepted_lines": 7
         },
         "src/runtime.ts": {
           "additions": 9,
@@ -169,97 +257,9 @@ src/config.ts
           "additions": 161,
           "accepted_lines": 161
         },
-        "tests/read.test.ts": {
-          "additions": 231,
-          "accepted_lines": 231
-        },
-        "src/bash-renderer.ts": {
-          "additions": 179,
-          "accepted_lines": 179
-        },
-        "prompts/read.md": {
-          "additions": 18,
-          "accepted_lines": 18
-        },
-        "prompts/bash.md": {
-          "additions": 28,
-          "accepted_lines": 28
-        },
-        "src/schemas/edit.ts": {
-          "additions": 35,
-          "accepted_lines": 35
-        },
-        "src/path-utils.ts": {
-          "additions": 18,
-          "accepted_lines": 18
-        },
-        "src/config.ts": {
-          "additions": 149,
-          "accepted_lines": 149
-        },
-        "src/schemas/find.ts": {
-          "additions": 25,
-          "accepted_lines": 25
-        },
-        "src/binary-detect.ts": {
-          "additions": 22,
-          "accepted_lines": 22
-        },
-        "prompts/lsp_java_decompile.md": {
-          "additions": 17,
-          "accepted_lines": 17
-        },
-        "prompts/edit.md": {
-          "additions": 28,
-          "accepted_lines": 28
-        },
-        "tests/lsp-tools.test.ts": {
-          "additions": 403,
-          "accepted_lines": 403
-        },
-        "src/timeout.ts": {
-          "additions": 36,
-          "accepted_lines": 36
-        },
-        "src/render.ts": {
-          "additions": 160,
-          "accepted_lines": 160
-        },
-        "src/schemas/bash.ts": {
-          "additions": 7,
-          "accepted_lines": 7
-        },
-        "prompts/lsp_goto_definition.md": {
-          "additions": 17,
-          "accepted_lines": 17
-        },
-        "src/hashline.ts": {
-          "additions": 239,
-          "accepted_lines": 239
-        },
-        "tests/render.test.ts": {
-          "additions": 62,
-          "accepted_lines": 62
-        },
-        "tests/bash-index.test.ts": {
-          "additions": 278,
-          "accepted_lines": 278
-        },
-        "src/lsp/discovery.ts": {
-          "additions": 256,
-          "accepted_lines": 256
-        },
-        "src/tool-output.ts": {
-          "additions": 256,
-          "accepted_lines": 256
-        },
-        "src/edit-diff.ts": {
-          "additions": 184,
-          "accepted_lines": 184
-        },
-        "prompts/lsp_workspace_symbols.md": {
-          "additions": 17,
-          "accepted_lines": 17
+        "src/grep.ts": {
+          "additions": 208,
+          "accepted_lines": 208
         }
       }
     }
