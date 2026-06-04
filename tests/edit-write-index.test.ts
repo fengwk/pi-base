@@ -196,8 +196,8 @@ describe("edit/write flow", () => {
       {
         path: "src/example.ts",
         edits: [
-          { insert_after: { anchor, new_text: "\none" } },
-          { insert_after: { anchor, new_text: "\ntwo" } },
+          { insert_after: { anchor, new_text: "one" } },
+          { insert_after: { anchor, new_text: "two" } },
         ],
       },
       undefined,
@@ -221,8 +221,8 @@ describe("edit/write flow", () => {
       {
         path: "src/example.ts",
         edits: [
-          { insert_before: { anchor, new_text: "before\n" } },
-          { insert_after: { anchor, new_text: "\nafter" } },
+          { insert_before: { anchor, new_text: "before" } },
+          { insert_after: { anchor, new_text: "after" } },
         ],
       },
       undefined,
@@ -248,8 +248,8 @@ describe("edit/write flow", () => {
       {
         path: "src/example.ts",
         edits: [
-          { insert_after: { anchor: alpha, new_text: "\nafter-alpha" } },
-          { insert_before: { anchor: beta, new_text: "before-beta\n" } },
+          { insert_after: { anchor: alpha, new_text: "after-alpha" } },
+          { insert_before: { anchor: beta, new_text: "before-beta" } },
         ],
       },
       undefined,
@@ -344,13 +344,13 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
-    const result = await registry.getTool("edit").execute("2", { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted\n" } }] }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("edit").execute("2", { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted" } }] }, undefined, undefined, { cwd: root });
     expect(result.isError).not.toBe(true);
     const written = await readFile(join(root, "src/example.ts"), "utf8");
     expect(written).toContain("alpha\ninserted\nbeta\n");
   });
 
-  it("summarizes insert_before calls without reading file content", async () => {
+  it("renders insert_before calls with following file context", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
@@ -359,15 +359,15 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted\n" } }] },
+      { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root },
     ) as any;
     const rendered = component.render(200).join("\n");
     expect(rendered).toContain("insert_before");
-    expect(rendered).toContain(`| before ${anchor}`);
-    expect(rendered).toContain("+ inserted");
     expect(rendered).not.toContain("alpha");
+    expect(rendered).toContain("beta");
+    expect(rendered).toMatch(/\+\s+\d+ inserted/);
   });
 
   it("renders empty new_text in preview using the same semantics as execution", async () => {
@@ -385,11 +385,11 @@ describe("edit/write flow", () => {
     ) as any;
     const rendered = component.render(200).join("\n");
     expect(rendered).toContain("replace_lines");
-    expect(rendered).toContain(`- range ${anchor} .. ${anchor}`);
-    expect(rendered).toMatch(/^\+\s*$/m);
+    expect(rendered).toContain("-  2 beta");
+    expect(rendered).toMatch(/^\+\s+2\s*$/m);
   });
 
-  it("formats edit calls for human review without applying them", async () => {
+  it("formats edit calls for human review with directional file context", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
@@ -400,18 +400,147 @@ describe("edit/write flow", () => {
     const component = tool.renderCall(
       {
         path: "src/example.ts",
-        edits: [{ insert_after: { anchor, new_text: "\nfirst line\nsecond line" } }],
+        edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }],
       },
       {} as any,
       { lastComponent: undefined, cwd: root },
     ) as any;
     const rendered = component.render(200).join("\n");
     expect(rendered).toContain("edit src/example.ts");
-    expect(rendered).toContain(`| after ${anchor}`);
-    expect(rendered).toContain("+ first line");
-    expect(rendered).toContain("+ second line");
-    expect(rendered).not.toContain("alpha");
+    expect(rendered).toContain("beta");
+    expect(rendered).toMatch(/\+\s+\d+ first line/);
+    expect(rendered).toMatch(/\+\s+\d+ second line/);
   });
+
+  it("updates edit call previews on the same component as arguments stream in", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "old\n");
+    const registry = createToolRegistry();
+    const tool = registerEditTool(registry.pi as any, {
+      wasReadInSession: () => true,
+    });
+    const firstComponent = tool.renderCall(
+      { path: "src/example.ts" },
+      {} as any,
+      { lastComponent: undefined, cwd: root },
+    ) as any;
+    expect(firstComponent.render(200).join("\n")).not.toContain("(no edits)");
+
+    const secondComponent = tool.renderCall(
+      {
+        path: "src/example.ts",
+        edits: [{ replace_lines: { start_anchor: "1:abc", end_anchor: "1:abc", new_text: "first streamed line\nsecond streamed line" } }],
+      },
+      {} as any,
+      { lastComponent: firstComponent, cwd: root },
+    ) as any;
+    const rendered = secondComponent.render(200).join("\n");
+
+    expect(secondComponent).toBe(firstComponent);
+    expect(rendered).toContain("replace_lines");
+    expect(rendered).toContain("-  1 old");
+    expect(rendered).toMatch(/\+\s+1 first streamed line/);
+    expect(rendered).toMatch(/\+\s+2 second streamed line/);
+    expect(rendered).not.toContain("Hash not initialized");
+  });
+  it("keeps the last streamed edit preview when partial arguments temporarily regress", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "old\n");
+    const registry = createToolRegistry();
+    const tool = registerEditTool(registry.pi as any, {
+      wasReadInSession: () => true,
+    });
+    const state: any = {};
+    const component = tool.renderCall(
+      {
+        path: "src/example.ts",
+        edits: [{ replace_lines: { start_anchor: "1:abc", end_anchor: "1:abc", new_text: "streamed" } }],
+      },
+      {} as any,
+      { lastComponent: undefined, cwd: root, argsComplete: false, state },
+    ) as any;
+    const firstRendered = component.render(200).join("\n");
+    expect(firstRendered).toContain("+  1 streamed");
+
+    const regressed = tool.renderCall(
+      { path: "src/example.ts" },
+      {} as any,
+      { lastComponent: component, cwd: root, argsComplete: false, state },
+    ) as any;
+    const regressedRendered = regressed.render(200).join("\n");
+
+    expect(regressed).toBe(component);
+    expect(regressedRendered).toContain("+  1 streamed");
+    expect(regressedRendered).not.toContain("(no edits)");
+  });
+
+  it("shows following file context for insert_before previews", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "package demo;\npublic class As {\n}\n");
+    const registry = createToolRegistry();
+    const tool = registerEditTool(registry.pi as any, {
+      wasReadInSession: () => true,
+    });
+
+    const args = {
+      path: "src/example.ts",
+      edits: [{ insert_before: { anchor: "2:abc", new_text: "/**\n * comment" } }],
+    };
+    const partialComponent = tool.renderCall(args, {} as any, { lastComponent: undefined, cwd: root, argsComplete: false }) as any;
+    const partialRendered = partialComponent.render(200).join("\n");
+    expect(partialRendered).not.toContain("package demo;");
+    expect(partialRendered).toContain("+  2 /**");
+    expect(partialRendered).toContain("public class As");
+
+    const completeComponent = tool.renderCall(args, {} as any, { lastComponent: partialComponent, cwd: root, argsComplete: true }) as any;
+    const completeRendered = completeComponent.render(200).join("\n");
+    expect(completeComponent).toBe(partialComponent);
+    expect(completeRendered).toContain("public class As");
+    expect(completeRendered).not.toContain("package demo;");
+  });
+  it("uses operation-specific preview around context", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n");
+    const registry = createToolRegistry();
+    const tool = registerEditTool(registry.pi as any, {
+      wasReadInSession: () => true,
+    });
+
+    const anchor = "5:abc";
+    const replaceRendered = (tool.renderCall(
+      { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "FIVE" } }] },
+      {} as any,
+      { lastComponent: undefined, cwd: root },
+    ) as any).render(200).join("\n");
+    expect(replaceRendered).not.toContain("one");
+    expect(replaceRendered).toContain("  2 two");
+    expect(replaceRendered).toContain("  4 four");
+    expect(replaceRendered).toContain("-  5 five");
+    expect(replaceRendered).toContain("+  5 FIVE");
+    expect(replaceRendered).toContain("  6 six");
+    expect(replaceRendered).toContain("  8 eight");
+
+    const insertBeforeRendered = (tool.renderCall(
+      { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "before-five" } }] },
+      {} as any,
+      { lastComponent: undefined, cwd: root },
+    ) as any).render(200).join("\n");
+    expect(insertBeforeRendered).not.toContain("four");
+    expect(insertBeforeRendered).toContain("+  5 before-five");
+    expect(insertBeforeRendered).toContain("  6 five");
+    expect(insertBeforeRendered).toContain("  8 seven");
+
+    const insertAfterRendered = (tool.renderCall(
+      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "after-five" } }] },
+      {} as any,
+      { lastComponent: undefined, cwd: root },
+    ) as any).render(200).join("\n");
+    expect(insertAfterRendered).toContain("  3 three");
+    expect(insertAfterRendered).toContain("  5 five");
+    expect(insertAfterRendered).toContain("+  6 after-five");
+    expect(insertAfterRendered).not.toContain("six");
+  });
+
   it("renders the full requested new_text in edit call previews", async () => {
     const registry = createToolRegistry();
     const tool = registerEditTool(registry.pi as any, {
@@ -439,13 +568,13 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "\nfirst line\nsecond line" } }] },
+      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root, executionStarted: true, argsComplete: true, isPartial: false, expanded: false, isError: false },
     ) as any;
     const rendered = component.render(200).join("\n");
-    expect(rendered).toContain("+ first line");
-    expect(rendered).toContain("+ second line");
+    expect(rendered).toMatch(/\+\s+\d+ first line/);
+    expect(rendered).toMatch(/\+\s+\d+ second line/);
     expect(rendered).not.toContain("requested operation.");
     expect(rendered).not.toContain("Expand to inspect the original request preview.");
   });
@@ -459,16 +588,16 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "\nfirst line\nsecond line" } }] },
+      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root, executionStarted: true, argsComplete: true, isPartial: false, expanded: true, isError: false },
     ) as any;
     const rendered = component.render(200).join("\n");
-    expect(rendered).toContain("+ first line");
-    expect(rendered).toContain("+ second line");
+    expect(rendered).toMatch(/\+\s+\d+ first line/);
+    expect(rendered).toMatch(/\+\s+\d+ second line/);
   });
 
-  it("renders edit calls without reading the live file", async () => {
+  it("renders edit calls from a frozen file snapshot", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "docs/seedance.md", "sdrama video seedance --file shot.json\n");
     const registry = createToolRegistry();
@@ -483,18 +612,16 @@ describe("edit/write flow", () => {
     const component = tool.renderCall(args, {} as any, { lastComponent: undefined, cwd: root }) as any;
     const firstRender = component.render(200).join("\n");
 
-    expect(firstRender).toContain(`- range ${anchor} .. ${anchor}`);
-    expect(firstRender).toContain("+ sdrama video seedance dsl shot.json");
-    expect(firstRender).not.toContain("--file shot.json");
+    expect(firstRender).toContain("-  1 sdrama video seedance --file shot.json");
+    expect(firstRender).toContain("+  1 sdrama video seedance dsl shot.json");
 
     await writeWorkspaceFile(root, "docs/seedance.md", "sdrama video seedance dsl shot.json\n");
     const rerenderedComponent = tool.renderCall(args, {} as any, { lastComponent: component, cwd: root }) as any;
     const rerender = rerenderedComponent.render(200).join("\n");
 
     expect(rerenderedComponent).toBe(component);
-    expect(rerender).toContain(`- range ${anchor} .. ${anchor}`);
-    expect(rerender).toContain("+ sdrama video seedance dsl shot.json");
-    expect(rerender).not.toContain("--file shot.json");
+    expect(rerender).toContain("-  1 sdrama video seedance --file shot.json");
+    expect(rerender).toContain("+  1 sdrama video seedance dsl shot.json");
   });
 
   it("uses stable summary rendering after completed edits", async () => {
@@ -515,9 +642,8 @@ describe("edit/write flow", () => {
     const component = tool.renderCall(args, {} as any, { lastComponent: undefined, cwd: root }) as any;
     const rendered = component.render(200).join("\n");
 
-    expect(rendered).toContain(`- range ${anchor} .. ${anchor}`);
-    expect(rendered).toContain("+ sdrama video seedance dsl shot.json");
-    expect(rendered).not.toContain("--file shot.json");
+    expect(rendered).toContain("-  1 sdrama video seedance --file shot.json");
+    expect(rendered).toContain("+  1 sdrama video seedance dsl shot.json");
   });
 
   it("uses themed titles in edit call rendering", async () => {
@@ -551,8 +677,8 @@ describe("edit/write flow", () => {
       { lastComponent: undefined, cwd: root },
     ) as any;
     const rendered = component.render(200).join("\n");
-    expect(rendered).not.toContain("··old");
-    expect(rendered).toContain("+ ··new");
+    expect(rendered).toContain("-  1 ··old");
+    expect(rendered).toContain("+  1 ··new");
   });
 
   it("summarizes edit calls without validating anchors", async () => {
@@ -661,12 +787,12 @@ describe("edit/write flow", () => {
       { lastComponent: undefined, cwd: root },
     ) as any;
     const rendered = component.render(200).join("\n");
-    expect(rendered).toContain(`- range ${start} .. ${end}`);
-    expect(rendered).toContain("+ merged");
-    expect(rendered).not.toContain("two");
+    expect(rendered).toContain("-  2 two");
+    expect(rendered).toContain("-  3 three");
+    expect(rendered).toContain("+  2 merged");
   });
 
-  it("summarizes delete_lines calls without reading file content", async () => {
+  it("renders delete_lines calls with surrounding file context", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\nthree\nfour\n");
     const registry = createToolRegistry();
@@ -683,8 +809,10 @@ describe("edit/write flow", () => {
     ) as any;
     const rendered = component.render(200).join("\n");
     expect(rendered).toContain("delete_lines");
-    expect(rendered).toContain(`- range ${start} .. ${end}`);
-    expect(rendered).not.toContain("one");
+    expect(rendered).toContain("  1 one");
+    expect(rendered).toContain("-  2 two");
+    expect(rendered).toContain("-  3 three");
+    expect(rendered).toContain("  2 four");
   });
 
   it("falls back to unknown edit marker for unsupported preview items", async () => {

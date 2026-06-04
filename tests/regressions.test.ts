@@ -16,7 +16,7 @@ function getTotalLines(text: string): number {
   return Number(match[1]);
 }
 
-describe("edit: raw new_text semantics", () => {
+describe("edit: line-oriented insert and raw replace semantics", () => {
   it("replace_lines with new_text \"\" blanks the line in place (does not delete it)", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "alpha\nbeta\ngamma\n", "utf8");
@@ -111,7 +111,7 @@ describe("edit: raw new_text semantics", () => {
     expect(getTotalLines(getText(afterRead))).toBe(2);
   });
 
-  it("insert_after preserves raw newline characters", async () => {
+  it("insert_after inserts complete lines without requiring an explicit leading newline", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "aa", "utf8");
     const registry = createToolRegistry();
@@ -122,7 +122,7 @@ describe("edit: raw new_text semantics", () => {
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ insert_after: { anchor, new_text: "\n" } }] },
+      { path: "f.txt", edits: [{ insert_after: { anchor, new_text: "bb" } }] },
       undefined,
       undefined,
       { cwd: root },
@@ -130,7 +130,7 @@ describe("edit: raw new_text semantics", () => {
     expect(edit.isError).not.toBe(true);
 
     const afterRead = await registry.getTool("read").execute("3", { path: "f.txt" }, undefined, undefined, { cwd: root });
-    expect(getTotalLines(getText(afterRead))).toBe(2);
+    expect(getText(afterRead)).toMatch(/2:[0-9a-f]{3}\|bb/);
   });
 
   it("keeps insert_before and insert_after at replacement boundaries semantic regardless of request order", async () => {
@@ -148,8 +148,8 @@ describe("edit: raw new_text semantics", () => {
         path: "f.txt",
         edits: [
           { replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "BB" } },
-          { insert_before: { anchor, new_text: "before\n" } },
-          { insert_after: { anchor, new_text: "\nafter" } },
+          { insert_before: { anchor, new_text: "before" } },
+          { insert_after: { anchor, new_text: "after" } },
         ],
       },
       undefined,

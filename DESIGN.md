@@ -797,6 +797,7 @@ FAIL src/read.test.ts
 
 - v1 保持和现有 `readmap` 迁移成本低
 - v1 不要求 agent 复述完整旧文本块
+- `replace_lines.new_text` 是原始替换内容；`insert_before.new_text` / `insert_after.new_text` 表示要插入到锚点行前/后的完整行内容，必要的分隔换行由工具补齐
 
 ## 10.4 stale 行为
 

@@ -5,10 +5,10 @@ Usage:
 - After a successful edit, the result returns a diff for the changed region. Lines prefixed with `+` or `|` carry the current `LINE:HASH` anchors for follow-up edits in that region.
 - If the anchor you need is stale or outside the returned diff, rerun `read` before retrying.
 - If the context shows a pi-base context compression placeholder for prior file output, do not reuse anchors or file content from the omitted output; refresh with `read` first.
-- Replacement text is plain file content and must not include `LINE:HASH` prefixes.
+- Replacement text is plain file content only. Use `LINE:HASH` values only in anchor fields; never copy anchor prefixes into `new_text`.
 - `edit` has only two top-level parameters: `path` and `edits`.
 - `edits` is an array of operations. Each item must contain exactly one operation: `replace_lines`, `delete_lines`, `insert_before`, or `insert_after`.
-- `replace_lines`, `insert_before`, and `insert_after` all treat `new_text` as raw file content. Newline characters are preserved; include `\n` explicitly when you want to create line breaks. Use `delete_lines` when the intent is to remove whole lines.
+- `replace_lines` treats `new_text` as raw replacement content. `insert_before` and `insert_after` insert `new_text` as complete line(s) before/after the anchor; the separating newline is added automatically when needed. Use `delete_lines` when the intent is to remove whole lines.
 
 Parameters:
 - `path` (required)

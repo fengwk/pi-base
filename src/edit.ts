@@ -1,19 +1,63 @@
 import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { Text } from "@earendil-works/pi-tui";
 import * as Diff from "diff";
 import { detectLineEnding, generateCompactOrFullDiff, normalizeToLF, restoreLineEndings, stripBom } from "./edit-diff.js";
 import { applyHashlineEdits, ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay, HashlineMismatchError, parseLineRef, splitNewTextLines, type HashlineEditItem } from "./hashline.js";
 import { resolveToCwd } from "./path-utils.js";
-import { type CollapsedResultLinesResolver, renderRawResult, resolveCollapsedResultLines, styleAccent, styleDiffAdded, styleDiffContext, styleDiffRemoved, styleToolTitle, styleWarning } from "./render.js";
+import { type CollapsedResultLinesResolver, renderRawResult, resolveCollapsedResultLines, styleAccent, styleDiffAdded, styleDiffContext, styleDiffRemoved, styleMuted, styleToolTitle, styleWarning } from "./render.js";
 import { editSchema } from "./schemas/edit.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 
 const RESULT_CONTEXT_LINES = 2;
+const MAX_EDIT_CALL_PREVIEW_SNAPSHOTS = 100;
+const EDIT_CALL_PREVIEW_STATE = Symbol("piBaseEditCallPreviewState");
+const PREVIEW_CONTEXT_LINES = 3;
+
+type EditCallPreviewState = {
+  signature: string;
+  previewLines: string[] | undefined;
+};
 
 function renderInsertedText(text: string): string[] {
   return splitNewTextLines(String(text)).map((line) => `+ ${escapeControlCharsForDisplay(visualizeLeadingWhitespace(line))}`);
+}
+
+function loadPreviewLines(absolutePath: string, cachedLines?: string[]): string[] | undefined {
+  try {
+    const raw = readFileSync(absolutePath, "utf8");
+    return normalizeToLF(stripBom(raw).text).split("\n");
+  } catch {
+    return cachedLines;
+  }
+}
+
+function buildEditCallPreviewSignature(absolutePath: string, args: any): string {
+  return JSON.stringify({ path: absolutePath, edits: args?.edits });
+}
+
+function rememberEditCallPreviewSnapshot(snapshots: Map<string, string[]>, signature: string, lines: string[]): void {
+  if (snapshots.has(signature)) snapshots.delete(signature);
+  snapshots.set(signature, [...lines]);
+  while (snapshots.size > MAX_EDIT_CALL_PREVIEW_SNAPSHOTS) {
+    const oldest = snapshots.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    snapshots.delete(oldest);
+  }
+}
+
+function getFrozenPreviewLines(text: Text, signature: string, load: () => string[] | undefined): string[] | undefined {
+  const existing = (text as any)[EDIT_CALL_PREVIEW_STATE] as EditCallPreviewState | undefined;
+  if (existing?.signature === signature) return existing.previewLines;
+  const previewLines = load();
+  const state = {
+    signature,
+    previewLines: previewLines ? [...previewLines] : undefined,
+  } satisfies EditCallPreviewState;
+  (text as any)[EDIT_CALL_PREVIEW_STATE] = state;
+  return state.previewLines;
 }
 
 type ResultDiffLine =
@@ -119,32 +163,134 @@ function buildResultDiff(before: string, after: string, contextLines = RESULT_CO
   return output.join("\n");
 }
 
-function formatEditCall(args: any, theme: any): string {
+function splitPreviewNewLines(text: string): string[] {
+  return splitNewTextLines(String(text ?? ""));
+}
+
+function formatPreviewLine(prefix: " " | "+" | "-", lineNumber: number, content: string, width: number, theme: any): string {
+  const rendered = `${prefix} ${String(lineNumber).padStart(width, " ")} ${escapeControlCharsForDisplay(visualizeLeadingWhitespace(content))}`;
+  if (prefix === "+") return styleDiffAdded(theme, rendered);
+  if (prefix === "-") return styleDiffRemoved(theme, rendered);
+  return styleDiffContext(theme, rendered);
+}
+
+function collectBeforeLines(lines: string[], endLine: number): Array<{ line: number; content: string }> {
+  const start = Math.max(1, endLine - PREVIEW_CONTEXT_LINES + 1);
+  const end = Math.min(lines.length, endLine);
+  const result: Array<{ line: number; content: string }> = [];
+  for (let line = start; line <= end; line++) result.push({ line, content: lines[line - 1] ?? "" });
+  return result;
+}
+
+function collectAfterLines(lines: string[], startLine: number): Array<{ line: number; content: string }> {
+  const start = Math.max(1, startLine);
+  const end = Math.min(lines.length, start + PREVIEW_CONTEXT_LINES - 1);
+  const result: Array<{ line: number; content: string }> = [];
+  for (let line = start; line <= end; line++) result.push({ line, content: lines[line - 1] ?? "" });
+  return result;
+}
+
+function renderReplacePreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const startRef = safeParseLineRef(entry.replace_lines.start_anchor);
+  const endRef = safeParseLineRef(entry.replace_lines.end_anchor);
+  if (!startRef || !endRef) return [styleWarning(theme, "? invalid anchor in replace_lines")];
+  const start = startRef.line;
+  const end = endRef.line;
+  const newLines = splitPreviewNewLines(entry.replace_lines.new_text);
+  const delta = newLines.length - (end - start + 1);
+  return [
+    styleToolTitle(theme, `replace_lines ${entry.replace_lines.start_anchor} .. ${entry.replace_lines.end_anchor}`),
+    ...collectBeforeLines(lines, start - 1).map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
+    ...lines.slice(start - 1, end).map((content, index) => formatPreviewLine("-", start + index, content ?? "", width, theme)),
+    ...newLines.map((content, index) => formatPreviewLine("+", start + index, content, width, theme)),
+    ...collectAfterLines(lines, end + 1).map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
+  ];
+}
+
+function renderDeletePreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const startRef = safeParseLineRef(entry.delete_lines.start_anchor);
+  const endRef = safeParseLineRef(entry.delete_lines.end_anchor);
+  if (!startRef || !endRef) return [styleWarning(theme, "? invalid anchor in delete_lines")];
+  const start = startRef.line;
+  const end = endRef.line;
+  const delta = -(end - start + 1);
+  return [
+    styleToolTitle(theme, `delete_lines ${entry.delete_lines.start_anchor} .. ${entry.delete_lines.end_anchor}`),
+    ...collectBeforeLines(lines, start - 1).map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
+    ...lines.slice(start - 1, end).map((content, index) => formatPreviewLine("-", start + index, content ?? "", width, theme)),
+    ...collectAfterLines(lines, end + 1).map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
+  ];
+}
+
+function renderInsertBeforePreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const anchorRef = safeParseLineRef(entry.insert_before.anchor);
+  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_before")];
+  const anchor = anchorRef.line;
+  const newLines = splitPreviewNewLines(entry.insert_before.new_text);
+  const delta = newLines.length;
+  return [
+    styleToolTitle(theme, `insert_before ${entry.insert_before.anchor}`),
+    ...newLines.map((content, index) => formatPreviewLine("+", anchor + index, content, width, theme)),
+    ...collectAfterLines(lines, anchor).map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
+  ];
+}
+
+function renderInsertAfterPreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const anchorRef = safeParseLineRef(entry.insert_after.anchor);
+  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_after")];
+  const anchor = anchorRef.line;
+  const newLines = splitPreviewNewLines(entry.insert_after.new_text);
+  return [
+    styleToolTitle(theme, `insert_after ${entry.insert_after.anchor}`),
+    ...collectBeforeLines(lines, anchor).map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
+    ...newLines.map((content, index) => formatPreviewLine("+", anchor + 1 + index, content, width, theme)),
+  ];
+}
+
+function buildPerOperationPreview(args: any, previewLines: string[] | undefined, theme: any): string | undefined {
+  if (!previewLines || !Array.isArray(args?.edits) || args.edits.length === 0) return undefined;
+  const width = String(previewLines.length + args.edits.length * 8).length;
+  const blocks = args.edits.map((entry: any) => {
+    if (entry?.replace_lines) return renderReplacePreview(previewLines, entry, width, theme);
+    if (entry?.delete_lines) return renderDeletePreview(previewLines, entry, width, theme);
+    if (entry?.insert_before) return renderInsertBeforePreview(previewLines, entry, width, theme);
+    if (entry?.insert_after) return renderInsertAfterPreview(previewLines, entry, width, theme);
+    return [styleWarning(theme, "? unknown_edit")];
+  });
+  return blocks.map((block: string[]) => block.join("\n")).join("\n\n");
+}
+
+function formatEditCall(args: any, theme: any, previewLines?: string[]): string {
   const path = String(args?.path ?? "<missing-path>");
   const edits = Array.isArray(args?.edits) ? args.edits : [];
   const lines = [`${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}`];
   if (edits.length === 0) return `${lines[0]}\n\n(no edits)`;
+  const operationPreview = buildPerOperationPreview(args, previewLines, theme);
+  if (operationPreview) {
+    const note = edits.length > 1 ? `${styleMuted(theme, "Each hunk below is shown against the pre-edit file.")}\n\n` : "";
+    return `${lines[0]}\n\n${note}${operationPreview}`;
+  }
   for (const entry of edits) {
     lines.push("");
     if (entry?.replace_lines) {
-      lines.push(styleToolTitle(theme, "replace_lines"));
+      lines.push(styleToolTitle(theme, `replace_lines ${entry.replace_lines.start_anchor} .. ${entry.replace_lines.end_anchor}`));
       lines.push(styleDiffRemoved(theme, `- range ${entry.replace_lines.start_anchor} .. ${entry.replace_lines.end_anchor}`));
       lines.push(...renderInsertedText(String(entry.replace_lines.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }
     if (entry?.delete_lines) {
-      lines.push(styleToolTitle(theme, "delete_lines"));
+      lines.push(styleToolTitle(theme, `delete_lines ${entry.delete_lines.start_anchor} .. ${entry.delete_lines.end_anchor}`));
       lines.push(styleDiffRemoved(theme, `- range ${entry.delete_lines.start_anchor} .. ${entry.delete_lines.end_anchor}`));
       continue;
     }
     if (entry?.insert_before) {
-      lines.push(styleToolTitle(theme, "insert_before"));
+      lines.push(styleToolTitle(theme, `insert_before ${entry.insert_before.anchor}`));
       lines.push(styleDiffContext(theme, `| before ${entry.insert_before.anchor}`));
       lines.push(...renderInsertedText(String(entry.insert_before.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }
     if (entry?.insert_after) {
-      lines.push(styleToolTitle(theme, "insert_after"));
+      lines.push(styleToolTitle(theme, `insert_after ${entry.insert_after.anchor}`));
       lines.push(styleDiffContext(theme, `| after ${entry.insert_after.anchor}`));
       lines.push(...renderInsertedText(String(entry.insert_after.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
@@ -273,9 +419,11 @@ export function registerEditTool(
   options: {
     wasReadInSession?: (absolutePath: string) => boolean;
     getCollapsedResultLines?: CollapsedResultLinesResolver;
+    getCachedLines?: (absolutePath: string) => string[] | undefined;
     onSuccessfulEdit?: (absolutePath: string, lines?: string[]) => void;
   } = {},
 ) {
+  const callPreviewSnapshots = new Map<string, string[]>();
   const tool = {
     name: "edit",
     label: "Edit",
@@ -285,7 +433,26 @@ export function registerEditTool(
     renderShell: "default" as const,
     renderCall(args: any, _theme: any, context: any) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatEditCall(args, _theme));
+      const rawPath = String(args?.path ?? "").replace(/^@/, "");
+      const state = context.state ?? ((context.state = {}));
+      const hasCurrentEdits = Array.isArray(args?.edits) && args.edits.length > 0;
+      if (hasCurrentEdits) state.lastEditPreviewArgs = args;
+      const renderArgs = hasCurrentEdits || context.argsComplete ? args : (state.lastEditPreviewArgs ?? args);
+      const hasRenderableEdits = Array.isArray(renderArgs?.edits) && renderArgs.edits.length > 0;
+      if (!hasRenderableEdits && !context.argsComplete) {
+        text.setText(`${styleToolTitle(_theme, "edit")} ${styleAccent(_theme, rawPath || "<missing-path>")}`);
+        return text;
+      }
+      const absolutePath = rawPath ? resolveToCwd(rawPath, context.cwd ?? process.cwd()) : "";
+      const signature = buildEditCallPreviewSignature(absolutePath, renderArgs);
+      const previewLines = getFrozenPreviewLines(text, signature, () => {
+        const remembered = callPreviewSnapshots.get(signature);
+        if (remembered) return remembered;
+        const loaded = absolutePath ? loadPreviewLines(absolutePath, options.getCachedLines?.(absolutePath)) : undefined;
+        if (loaded) rememberEditCallPreviewSnapshot(callPreviewSnapshots, signature, loaded);
+        return loaded;
+      });
+      text.setText(formatEditCall(renderArgs, _theme, previewLines));
       return text;
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
@@ -307,6 +474,7 @@ export function registerEditTool(
           }
         }
         const absolutePath = resolveToCwd(rawPath, ctx.cwd ?? process.cwd());
+        const previewSignature = buildEditCallPreviewSignature(absolutePath, params);
         if (options.wasReadInSession && !options.wasReadInSession(absolutePath)) {
           return {
             content: [{ type: "text" as const, text: `Edit failed for ${rawPath}. Fresh anchors are required before editing this file. Start with read, write, or a prior edit result for the same region.` }],
@@ -326,6 +494,7 @@ export function registerEditTool(
             };
           }
           const original = normalizeToLF(text);
+          rememberEditCallPreviewSnapshot(callPreviewSnapshots, previewSignature, original.split("\n"));
           let next;
           try {
             next = applyHashlineEdits(original, params.edits as HashlineEditItem[], signal);

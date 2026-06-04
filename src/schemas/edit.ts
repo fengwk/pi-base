@@ -8,7 +8,7 @@ export const editSchema = Type.Object({
         replace_lines: Type.Object({
           start_anchor: Type.String({ description: "Fresh `LINE:HASH` anchor for the first line in the replacement range." }),
           end_anchor: Type.String({ description: "Fresh `LINE:HASH` anchor for the last line in the replacement range." }),
-          new_text: Type.String({ description: "Replacement text for the inclusive line range. Plain file content only." }),
+          new_text: Type.String({ description: "Replacement text for the inclusive line range. Plain file content only; anchor prefixes belong only in anchor fields." }),
         }),
       }, { additionalProperties: false }),
       Type.Object({
@@ -20,13 +20,13 @@ export const editSchema = Type.Object({
       Type.Object({
         insert_before: Type.Object({
           anchor: Type.String({ description: "Fresh `LINE:HASH` anchor before which new text will be inserted." }),
-          new_text: Type.String({ description: "Text to insert before the anchored line. Plain file content only." }),
+          new_text: Type.String({ description: "Complete line(s) to insert before the anchored line. The separating newline is added automatically when needed; anchor prefixes belong only in anchor fields." }),
         }),
       }, { additionalProperties: false }),
       Type.Object({
         insert_after: Type.Object({
           anchor: Type.String({ description: "Fresh `LINE:HASH` anchor after which new text will be inserted." }),
-          new_text: Type.String({ description: "Text to insert after the anchored line. Plain file content only." }),
+          new_text: Type.String({ description: "Complete line(s) to insert after the anchored line. The separating newline is added automatically when needed; anchor prefixes belong only in anchor fields." }),
         }),
       }, { additionalProperties: false }),
     ]),

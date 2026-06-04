@@ -104,6 +104,18 @@ export function splitNewTextLines(text: string): string[] {
   return normalizeEditText(text).split("\n");
 }
 
+function normalizeInsertBeforeText(text: string): string {
+  const normalized = normalizeEditText(text);
+  if (normalized.length === 0 || normalized.endsWith("\n")) return normalized;
+  return `${normalized}\n`;
+}
+
+function normalizeInsertAfterText(text: string): string {
+  const normalized = normalizeEditText(text);
+  if (normalized.length === 0 || normalized.startsWith("\n")) return normalized;
+  return `\n${normalized}`;
+}
+
 const MISMATCH_CONTEXT_RADIUS = 15;
 function buildUpdatedAnchors(lines: string[], lineNumbers: number[]): HashlineAnchorLine[] {
   const unique = [...new Set(lineNumbers)].filter((line) => line >= 1 && line <= lines.length).sort((a, b) => a - b);
@@ -241,7 +253,7 @@ export function applyHashlineEdits(
         line: before.line,
         refs: [before],
         offset: lineStart(lineStarts, before.line),
-        replacement: normalizeEditText(edit.insert_before.new_text),
+        replacement: normalizeInsertBeforeText(edit.insert_before.new_text),
       };
     }
     const after = parseLineRef(edit.insert_after.anchor);
@@ -251,7 +263,7 @@ export function applyHashlineEdits(
       line: after.line,
       refs: [after],
       offset: lineEnd(lineStarts, lines, after.line, content.length),
-      replacement: normalizeEditText(edit.insert_after.new_text),
+      replacement: normalizeInsertAfterText(edit.insert_after.new_text),
     };
   });
 
