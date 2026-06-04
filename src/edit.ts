@@ -12,7 +12,6 @@ import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 
 const RESULT_CONTEXT_LINES = 2;
-const CALL_CONTEXT_LINES = 1;
 const MAX_EDIT_CALL_PREVIEW_SNAPSHOTS = 100;
 const EDIT_CALL_PREVIEW_STATE = Symbol("piBaseEditCallPreviewState");
 
@@ -166,106 +165,103 @@ function buildResultDiff(before: string, after: string, contextLines = RESULT_CO
   return output.join("\n");
 }
 
-function splitPreviewNewLines(text: string): string[] {
-  // Preview must use the exact same line-splitting semantics as execution.
-  return splitNewTextLines(String(text));
+function formatPreviewLineNumber(lineNumber: number, content: string, width: number): string {
+  const padded = String(lineNumber).padStart(width, " ");
+  return `${padded} ${escapeControlCharsForDisplay(visualizeLeadingWhitespace(content))}`;
 }
 
-function formatPreviewLine(prefix: " " | "+" | "-", lineNumber: number, content: string, width: number, theme: any): string {
-  const rendered = `${prefix} ${String(lineNumber).padStart(width, " ")} ${escapeControlCharsForDisplay(visualizeLeadingWhitespace(content))}`;
-  if (prefix === "+") return styleDiffAdded(theme, rendered);
-  if (prefix === "-") return styleDiffRemoved(theme, rendered);
-  return styleDiffContext(theme, rendered);
-}
+function buildPreviewDiff(before: string, after: string, contextLines = RESULT_CONTEXT_LINES): string {
+  if (after === "") return `   ${formatPreviewLineNumber(1, "", 1)}`;
+  const beforeLines = before.split("\n");
+  const afterLines = after.split("\n");
+  const width = String(Math.max(beforeLines.length, afterLines.length, 1)).length;
+  const entries: ResultDiffLine[] = [];
+  let beforeLine = 1;
+  let afterLine = 1;
 
-function collectContext(lines: string[], start: number, end: number): { before: Array<{ line: number; content: string }>; after: Array<{ line: number; content: string }> } {
-  const before: Array<{ line: number; content: string }> = [];
-  const after: Array<{ line: number; content: string }> = [];
-  for (let line = Math.max(1, start - CALL_CONTEXT_LINES); line < start; line++) {
-    before.push({ line, content: lines[line - 1] ?? "" });
+  for (const part of Diff.diffLines(before, after)) {
+    const lines = partLines(part.value);
+    if (part.added) {
+      for (const content of lines) entries.push({ kind: "added", line: afterLine++, content });
+      continue;
+    }
+    if (part.removed) {
+      for (const content of lines) entries.push({ kind: "removed", line: beforeLine++, content });
+      continue;
+    }
+    for (const content of lines) {
+      entries.push({ kind: "context", line: afterLine, content });
+      beforeLine++;
+      afterLine++;
+    }
   }
-  for (let line = end + 1; line <= Math.min(lines.length, end + CALL_CONTEXT_LINES); line++) {
-    after.push({ line, content: lines[line - 1] ?? "" });
+
+  const changedIndexes = entries.flatMap((entry, index) => (entry.kind === "context" ? [] : [index]));
+  if (changedIndexes.length === 0) return `| ${formatPreviewLineNumber(1, after, width)}`;
+
+  const windows = changedIndexes.map((index) => ({
+    start: Math.max(0, index - contextLines),
+    end: Math.min(entries.length - 1, index + contextLines),
+  }));
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const window of windows) {
+    const previous = merged[merged.length - 1];
+    if (!previous || window.start > previous.end + 1) {
+      merged.push(window);
+      continue;
+    }
+    previous.end = Math.max(previous.end, window.end);
   }
-  return { before, after };
+
+  const output: string[] = [];
+  merged.forEach((window, index) => {
+    if (index > 0 || window.start > 0) output.push("...");
+    for (let i = window.start; i <= window.end; i++) {
+      const entry = entries[i];
+      const prefix = entry.kind === "context" ? " " : entry.kind === "added" ? "+" : "-";
+      output.push(`${prefix}  ${formatPreviewLineNumber(entry.line, entry.content, width)}`);
+    }
+  });
+  if (merged[merged.length - 1]!.end < entries.length - 1) output.push("...");
+  return output.join("\n");
 }
 
-function renderReplacePreview(lines: string[], entry: any, width: number, theme: any): string[] {
-  const startRef = safeParseLineRef(entry.replace_lines.start_anchor);
-  const endRef = safeParseLineRef(entry.replace_lines.end_anchor);
-  if (!startRef || !endRef) return [styleWarning(theme, "? invalid anchor in replace_lines")];
-  const start = startRef.line;
-  const end = endRef.line;
-  const newLines = splitPreviewNewLines(entry.replace_lines.new_text);
-  const { before, after } = collectContext(lines, start, end);
-  const delta = newLines.length - (end - start + 1);
-  return [
-    styleToolTitle(theme, "replace_lines"),
-    ...before.map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
-    ...lines.slice(start - 1, end).map((content, index) => formatPreviewLine("-", start + index, content ?? "", width, theme)),
-    ...newLines.map((content, index) => formatPreviewLine("+", start + index, content, width, theme)),
-    ...after.map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
-  ];
+
+function operationName(entry: any): string {
+  if (entry?.replace_lines) return "replace_lines";
+  if (entry?.delete_lines) return "delete_lines";
+  if (entry?.insert_before) return "insert_before";
+  if (entry?.insert_after) return "insert_after";
+  return "unknown_edit";
 }
 
-function renderDeletePreview(lines: string[], entry: any, width: number, theme: any): string[] {
-  const startRef = safeParseLineRef(entry.delete_lines.start_anchor);
-  const endRef = safeParseLineRef(entry.delete_lines.end_anchor);
-  if (!startRef || !endRef) return [styleWarning(theme, "? invalid anchor in delete_lines")];
-  const start = startRef.line;
-  const end = endRef.line;
-  const { before, after } = collectContext(lines, start, end);
-  const delta = -(end - start + 1);
-  return [
-    styleToolTitle(theme, "delete_lines"),
-    ...before.map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
-    ...lines.slice(start - 1, end).map((content, index) => formatPreviewLine("-", start + index, content ?? "", width, theme)),
-    ...after.map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
-  ];
+function stylePreviewDiffLine(line: string, theme: any): string {
+  if (line.startsWith("+ ")) return styleDiffAdded(theme, line);
+  if (line.startsWith("- ")) return styleDiffRemoved(theme, line);
+  return styleDiffContext(theme, line);
 }
 
-function renderInsertBeforePreview(lines: string[], entry: any, width: number, theme: any): string[] {
-  const anchorRef = safeParseLineRef(entry.insert_before.anchor);
-  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_before")];
-  const anchor = anchorRef.line;
-  const newLines = splitPreviewNewLines(entry.insert_before.new_text);
-  const { before, after } = collectContext(lines, anchor, anchor);
-  const delta = newLines.length;
-  return [
-    styleToolTitle(theme, "insert_before"),
-    ...before.map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
-    ...newLines.map((content, index) => formatPreviewLine("+", anchor + index, content, width, theme)),
-    formatPreviewLine(" ", anchor + delta, lines[anchor - 1] ?? "", width, theme),
-    ...after.map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
-  ];
-}
-
-function renderInsertAfterPreview(lines: string[], entry: any, width: number, theme: any): string[] {
-  const anchorRef = safeParseLineRef(entry.insert_after.anchor);
-  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_after")];
-  const anchor = anchorRef.line;
-  const newLines = splitPreviewNewLines(entry.insert_after.new_text);
-  const { before, after } = collectContext(lines, anchor, anchor);
-  const delta = newLines.length;
-  return [
-    styleToolTitle(theme, "insert_after"),
-    ...before.map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
-    formatPreviewLine(" ", anchor, lines[anchor - 1] ?? "", width, theme),
-    ...newLines.map((content, index) => formatPreviewLine("+", anchor + 1 + index, content, width, theme)),
-    ...after.map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
-  ];
+function renderRawOperationPreview(content: string, entry: any, theme: any): string[] {
+  const name = operationName(entry);
+  if (name === "unknown_edit") return [styleWarning(theme, "? unknown_edit")];
+  try {
+    const next = applyHashlineEdits(content, [entry as HashlineEditItem]);
+    return [
+      styleToolTitle(theme, name),
+      ...(next.content === content
+        ? [styleMuted(theme, "(no change)")]
+        : buildPreviewDiff(content, next.content).split("\n").map((line) => stylePreviewDiffLine(line, theme))),
+    ];
+  } catch (error) {
+    if (error instanceof HashlineMismatchError) return [styleToolTitle(theme, name), styleWarning(theme, `? stale anchor in ${name}`)];
+    return [styleToolTitle(theme, name), styleWarning(theme, `? invalid anchor in ${name}: ${(error as Error).message}`)];
+  }
 }
 
 function buildPerOperationPreview(args: any, previewLines: string[] | undefined, theme: any): string | undefined {
   if (!previewLines || !Array.isArray(args?.edits) || args.edits.length === 0) return undefined;
-  const width = String(previewLines.length + args.edits.length * 8).length;
-  const blocks = args.edits.map((entry: any) => {
-    if (entry?.replace_lines) return renderReplacePreview(previewLines, entry, width, theme);
-    if (entry?.delete_lines) return renderDeletePreview(previewLines, entry, width, theme);
-    if (entry?.insert_before) return renderInsertBeforePreview(previewLines, entry, width, theme);
-    if (entry?.insert_after) return renderInsertAfterPreview(previewLines, entry, width, theme);
-    return [styleWarning(theme, "? unknown_edit")];
-  });
+  const content = previewLines.join("\n");
+  const blocks = args.edits.map((entry: any) => renderRawOperationPreview(content, entry, theme));
   return blocks.map((block: string[]) => block.join("\n")).join("\n\n");
 }
 
@@ -316,6 +312,62 @@ function safeParseLineRef(ref: string | undefined): { line: number } | undefined
   } catch {
     return undefined;
   }
+}
+
+function collectRequestedEditLines(edits: any[]): number[] {
+  const lines: number[] = [];
+  for (const edit of edits) {
+    if (edit?.replace_lines) {
+      const start = safeParseLineRef(edit.replace_lines.start_anchor)?.line;
+      const end = safeParseLineRef(edit.replace_lines.end_anchor)?.line;
+      if (start !== undefined) lines.push(start);
+      if (end !== undefined) lines.push(end);
+      continue;
+    }
+    if (edit?.delete_lines) {
+      const start = safeParseLineRef(edit.delete_lines.start_anchor)?.line;
+      const end = safeParseLineRef(edit.delete_lines.end_anchor)?.line;
+      if (start !== undefined) lines.push(start);
+      if (end !== undefined) lines.push(end);
+      continue;
+    }
+    if (edit?.insert_before) {
+      const line = safeParseLineRef(edit.insert_before.anchor)?.line;
+      if (line !== undefined) lines.push(line);
+      continue;
+    }
+    if (edit?.insert_after) {
+      const line = safeParseLineRef(edit.insert_after.anchor)?.line;
+      if (line !== undefined) lines.push(line);
+    }
+  }
+  return lines;
+}
+
+function buildNoChangeError(path: string, content: string, edits: any[]): { content: [{ type: "text"; text: string }]; isError: true } {
+  const fileLines = content.split("\n");
+  const requestedLines = collectRequestedEditLines(edits).filter((line) => line >= 1 && line <= fileLines.length);
+  const center = requestedLines.length > 0 ? Math.min(...requestedLines) : 1;
+  const radius = 5;
+  const start = Math.max(1, center - radius);
+  const end = Math.min(fileLines.length, center + radius);
+  const context = fileLines.slice(start - 1, end).map((line, index) => formatHashlineDisplay(start + index, line));
+  const lines: string[] = [
+    `Edit failed for ${path}. The requested edits would not change the file.`,
+    "",
+    `Current context in ${path} around line ${center}:`,
+    "",
+    `path: ${path}`,
+    "kind: file",
+    "mediaType: text",
+    `offset: ${start}`,
+    `limit: ${context.length}`,
+    `totalLines: ${fileLines.length}`,
+    `hasMore: ${end < fileLines.length}`,
+  ];
+  if (end < fileLines.length) lines.push(`nextOffset: ${end + 1}`);
+  lines.push("", ...context);
+  return { content: [{ type: "text", text: lines.join("\n") }], isError: true };
 }
 
 function buildStaleError(path: string, error: HashlineMismatchError): { content: [{ type: "text"; text: string }]; isError: true } {
@@ -421,7 +473,7 @@ export function registerEditTool(
         const previewSignature = buildEditCallPreviewSignature(absolutePath, params);
         if (options.wasReadInSession && !options.wasReadInSession(absolutePath)) {
           return {
-            content: [{ type: "text" as const, text: `Edit failed for ${rawPath}. Fresh anchors are required before editing this file. Start with read, grep, write, or a prior edit result for the same region.` }],
+            content: [{ type: "text" as const, text: `Edit failed for ${rawPath}. Fresh anchors are required before editing this file. Start with read, write, or a prior edit result for the same region.` }],
             isError: true,
           };
         }
@@ -448,7 +500,7 @@ export function registerEditTool(
           }
 
           if (next.content === original) {
-            return { content: [{ type: "text" as const, text: `Edit failed for ${rawPath}. The requested edits would not change the file.` }], isError: true };
+            return buildNoChangeError(rawPath, original, params.edits);
           }
 
           const writeContent = bom + restoreLineEndings(next.content, originalEnding);

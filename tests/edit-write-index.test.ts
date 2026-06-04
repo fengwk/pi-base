@@ -196,8 +196,8 @@ describe("edit/write flow", () => {
       {
         path: "src/example.ts",
         edits: [
-          { insert_after: { anchor, new_text: "one" } },
-          { insert_after: { anchor, new_text: "two" } },
+          { insert_after: { anchor, new_text: "\none" } },
+          { insert_after: { anchor, new_text: "\ntwo" } },
         ],
       },
       undefined,
@@ -221,8 +221,8 @@ describe("edit/write flow", () => {
       {
         path: "src/example.ts",
         edits: [
-          { insert_before: { anchor, new_text: "before" } },
-          { insert_after: { anchor, new_text: "after" } },
+          { insert_before: { anchor, new_text: "before\n" } },
+          { insert_after: { anchor, new_text: "\nafter" } },
         ],
       },
       undefined,
@@ -248,8 +248,8 @@ describe("edit/write flow", () => {
       {
         path: "src/example.ts",
         edits: [
-          { insert_after: { anchor: alpha, new_text: "after-alpha" } },
-          { insert_before: { anchor: beta, new_text: "before-beta" } },
+          { insert_after: { anchor: alpha, new_text: "\nafter-alpha" } },
+          { insert_before: { anchor: beta, new_text: "before-beta\n" } },
         ],
       },
       undefined,
@@ -344,7 +344,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
-    const result = await registry.getTool("edit").execute("2", { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted" } }] }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("edit").execute("2", { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted\n" } }] }, undefined, undefined, { cwd: root });
     expect(result.isError).not.toBe(true);
     const written = await readFile(join(root, "src/example.ts"), "utf8");
     expect(written).toContain("alpha\ninserted\nbeta\n");
@@ -359,7 +359,7 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted" } }] },
+      { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted\n" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root },
     ) as any;
@@ -400,7 +400,7 @@ describe("edit/write flow", () => {
     const component = tool.renderCall(
       {
         path: "src/example.ts",
-        edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }],
+        edits: [{ insert_after: { anchor, new_text: "\nfirst line\nsecond line" } }],
       },
       {} as any,
       { lastComponent: undefined, cwd: root },
@@ -423,7 +423,7 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }] },
+      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "\nfirst line\nsecond line" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root, executionStarted: true, argsComplete: true, isPartial: false, expanded: false, isError: false },
     ) as any;
@@ -443,7 +443,7 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }] },
+      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "\nfirst line\nsecond line" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root, executionStarted: true, argsComplete: true, isPartial: false, expanded: true, isError: false },
     ) as any;

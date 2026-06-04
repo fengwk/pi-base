@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";
@@ -16,7 +16,7 @@ function getTotalLines(text: string): number {
   return Number(match[1]);
 }
 
-describe("edit: empty new_text semantics", () => {
+describe("edit: raw new_text semantics", () => {
   it("replace_lines with new_text \"\" blanks the line in place (does not delete it)", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "alpha\nbeta\ngamma\n", "utf8");
@@ -47,7 +47,7 @@ describe("edit: empty new_text semantics", () => {
     expect(line2!.match(/^.*2:[0-9a-f]{3}\|(\s*)$/)).not.toBeNull();
   });
 
-  it("insert_before with new_text \"\" inserts one empty line before the anchor", async () => {
+  it("insert_before with new_text \"\" is an empty insertion and therefore a no-op", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "aa\nbb\n", "utf8");
     const registry = createToolRegistry();
@@ -63,24 +63,12 @@ describe("edit: empty new_text semantics", () => {
       undefined,
       { cwd: root },
     );
-    expect(edit.isError).not.toBe(true);
-
-    // Original file "aa\nbb\n" splits to 3 lines: ["aa", "bb", ""].
-    // Inserting one empty line before line 1 produces "\naa\nbb\n"
-    // which splits to 4 lines: ["", "aa", "bb", ""].
-    const afterRead = await registry.getTool("read").execute("3", { path: "f.txt" }, undefined, undefined, { cwd: root });
-    const afterText = getText(afterRead);
-    expect(getTotalLines(afterText)).toBe(4);
-    const lines = afterText.split("\n");
-    const line1 = lines.find((l) => /^1:[0-9a-f]{3}\|/.test(l));
-    const line2 = lines.find((l) => /^2:[0-9a-f]{3}\|/.test(l));
-    expect(line1).toBeDefined();
-    expect(line1!.match(/^1:[0-9a-f]{3}\|(\s*)$/)).not.toBeNull();
-    expect(line2).toBeDefined();
-    expect(line2).toMatch(/\|aa$/);
+    expect(edit.isError).toBe(true);
+    expect(getText(edit)).toContain("would not change the file");
+    expect(getText(edit)).toMatch(/1:[0-9a-f]{3}\|aa/);
   });
 
-  it("insert_after with new_text \"\" inserts one empty line after the anchor", async () => {
+  it("insert_after with new_text \"\" is an empty insertion and therefore a no-op", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "aa\nbb\n", "utf8");
     const registry = createToolRegistry();
@@ -96,20 +84,80 @@ describe("edit: empty new_text semantics", () => {
       undefined,
       { cwd: root },
     );
+    expect(edit.isError).toBe(true);
+    expect(getText(edit)).toContain("would not change the file");
+    expect(getText(edit)).toMatch(/1:[0-9a-f]{3}\|aa/);
+  });
+
+  it("preserves trailing newline in replace_lines new_text", async () => {
+    const root = await createTempWorkspace();
+    await writeFile(join(root, "f.txt"), "aa", "utf8");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+
+    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const anchor = getAnchor(getText(initialRead), "aa");
+
+    const edit = await registry.getTool("edit").execute(
+      "2",
+      { path: "f.txt", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "aa\n" } }] },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
     expect(edit.isError).not.toBe(true);
 
-    // Original "aa\nbb\n" -> 3 lines. After insert_after(1, "") -> "aa\n\nbb\n"
-    // -> 4 lines: ["aa", "", "bb", ""].
     const afterRead = await registry.getTool("read").execute("3", { path: "f.txt" }, undefined, undefined, { cwd: root });
-    const afterText = getText(afterRead);
-    expect(getTotalLines(afterText)).toBe(4);
-    const lines = afterText.split("\n");
-    const line1 = lines.find((l) => /^1:[0-9a-f]{3}\|/.test(l));
-    const line2 = lines.find((l) => /^2:[0-9a-f]{3}\|/.test(l));
-    expect(line1).toBeDefined();
-    expect(line1).toMatch(/\|aa$/);
-    expect(line2).toBeDefined();
-    expect(line2!.match(/^2:[0-9a-f]{3}\|(\s*)$/)).not.toBeNull();
+    expect(getTotalLines(getText(afterRead))).toBe(2);
+  });
+
+  it("insert_after preserves raw newline characters", async () => {
+    const root = await createTempWorkspace();
+    await writeFile(join(root, "f.txt"), "aa", "utf8");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+
+    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const anchor = getAnchor(getText(initialRead), "aa");
+
+    const edit = await registry.getTool("edit").execute(
+      "2",
+      { path: "f.txt", edits: [{ insert_after: { anchor, new_text: "\n" } }] },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(edit.isError).not.toBe(true);
+
+    const afterRead = await registry.getTool("read").execute("3", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    expect(getTotalLines(getText(afterRead))).toBe(2);
+  });
+
+  it("keeps insert_before and insert_after at replacement boundaries semantic regardless of request order", async () => {
+    const root = await createTempWorkspace();
+    await writeFile(join(root, "f.txt"), "aa\nbb\n", "utf8");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+
+    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const anchor = getAnchor(getText(initialRead), "bb");
+
+    const edit = await registry.getTool("edit").execute(
+      "2",
+      {
+        path: "f.txt",
+        edits: [
+          { replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "BB" } },
+          { insert_before: { anchor, new_text: "before\n" } },
+          { insert_after: { anchor, new_text: "\nafter" } },
+        ],
+      },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(join(root, "f.txt"), "utf8")).toBe("aa\nbefore\nBB\nafter\n");
   });
 
   it("delete_lines is the only way to remove lines (replace with \"\" does NOT remove)", async () => {

@@ -90,25 +90,18 @@ export function parseLineRef(ref: string): { line: number; hash: string } {
   return { line, hash: match[2].toLowerCase() };
 }
 
+/** Normalize caller-provided edit text to the file's internal LF model. */
+export function normalizeEditText(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
 /**
- * Split raw `new_text` into logical lines the way a text editor would.
- *
- * Rules:
- * - A trailing newline terminates the last line; it does not add an extra
- *   empty line on its own. So `"foo\n"` and `"foo"` both produce `["foo"]`.
- * - An empty `new_text` (`""`) means "one empty line" — it is not the
- *   absence of content. This applies uniformly to `replace_lines`,
- *   `insert_before`, and `insert_after`: a blank line is a line.
- * - To delete lines, use the separate `delete_lines` primitive; that one
- *   has no `new_text` field at all.
- *
- * This helper is shared by execution and preview rendering so the user sees
- * exactly the same `new_text` semantics before and after running an edit.
+ * Split raw edit text for display while preserving trailing newlines as
+ * explicit empty trailing lines. Execution uses raw character spans; this
+ * helper is only for previews and summaries.
  */
 export function splitNewTextLines(text: string): string[] {
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const trimmed = normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized;
-  return trimmed.split("\n");
+  return normalizeEditText(text).split("\n");
 }
 
 const MISMATCH_CONTEXT_RADIUS = 15;
@@ -158,6 +151,25 @@ function validateAnchor(lines: string[], ref: { line: number; hash: string }): v
   }
 }
 
+function buildLineStarts(content: string, lines: string[]): number[] {
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  return starts;
+}
+
+function lineStart(starts: number[], line: number): number {
+  return starts[line - 1] ?? 0;
+}
+
+function lineEnd(starts: number[], lines: string[], line: number, contentLength: number): number {
+  const start = lineStart(starts, line);
+  return Math.min(contentLength, start + (lines[line - 1] ?? "").length);
+}
+
 export function applyHashlineEdits(
   content: string,
   edits: HashlineEditItem[],
@@ -167,6 +179,7 @@ export function applyHashlineEdits(
   if (edits.length === 0) return { content, firstChangedLine: undefined };
 
   const lines = content.split("\n");
+  const lineStarts = buildLineStarts(content, lines);
 
   type RangeOperation = {
     kind: "replace_lines" | "delete_lines";
@@ -174,7 +187,9 @@ export function applyHashlineEdits(
     start: number;
     end: number;
     refs: Array<{ line: number; hash: string }>;
-    newLines: string[];
+    spanStart: number;
+    spanEnd: number;
+    replacement: string;
   };
 
   type PointOperation = {
@@ -182,7 +197,8 @@ export function applyHashlineEdits(
     index: number;
     line: number;
     refs: Array<{ line: number; hash: string }>;
-    newLines: string[];
+    offset: number;
+    replacement: string;
   };
 
   const operations: Array<RangeOperation | PointOperation> = edits.map((edit, index) => {
@@ -190,21 +206,56 @@ export function applyHashlineEdits(
       const start = parseLineRef(edit.replace_lines.start_anchor);
       const end = parseLineRef(edit.replace_lines.end_anchor);
       if (start.line > end.line) throw new Error("replace_lines requires start_anchor line <= end_anchor line.");
-      return { kind: "replace_lines", index, start: start.line, end: end.line, refs: [start, end], newLines: splitNewTextLines(edit.replace_lines.new_text) };
+      return {
+        kind: "replace_lines",
+        index,
+        start: start.line,
+        end: end.line,
+        refs: [start, end],
+        spanStart: lineStart(lineStarts, start.line),
+        spanEnd: lineEnd(lineStarts, lines, end.line, content.length),
+        replacement: normalizeEditText(edit.replace_lines.new_text),
+      };
     }
     if ("delete_lines" in edit) {
       const start = parseLineRef(edit.delete_lines.start_anchor);
       const end = parseLineRef(edit.delete_lines.end_anchor);
       if (start.line > end.line) throw new Error("delete_lines requires start_anchor line <= end_anchor line.");
-      return { kind: "delete_lines", index, start: start.line, end: end.line, refs: [start, end], newLines: [] };
+      let spanStart = lineStart(lineStarts, start.line);
+      let spanEnd: number;
+      if (end.line < lines.length) {
+        spanEnd = lineStart(lineStarts, end.line + 1);
+      } else if (start.line > 1) {
+        spanStart = lineEnd(lineStarts, lines, start.line - 1, content.length);
+        spanEnd = content.length;
+      } else {
+        spanEnd = content.length;
+      }
+      return { kind: "delete_lines", index, start: start.line, end: end.line, refs: [start, end], spanStart, spanEnd, replacement: "" };
     }
     if ("insert_before" in edit) {
       const before = parseLineRef(edit.insert_before.anchor);
-      return { kind: "insert_before", index, line: before.line, refs: [before], newLines: splitNewTextLines(edit.insert_before.new_text) };
+      return {
+        kind: "insert_before",
+        index,
+        line: before.line,
+        refs: [before],
+        offset: lineStart(lineStarts, before.line),
+        replacement: normalizeEditText(edit.insert_before.new_text),
+      };
     }
     const after = parseLineRef(edit.insert_after.anchor);
-    return { kind: "insert_after", index, line: after.line, refs: [after], newLines: splitNewTextLines(edit.insert_after.new_text) };
+    return {
+      kind: "insert_after",
+      index,
+      line: after.line,
+      refs: [after],
+      offset: lineEnd(lineStarts, lines, after.line, content.length),
+      replacement: normalizeEditText(edit.insert_after.new_text),
+    };
   });
+
+  const isRangeOperation = (operation: RangeOperation | PointOperation): operation is RangeOperation => operation.kind === "replace_lines" || operation.kind === "delete_lines";
 
   for (const operation of operations) {
     throwIfAborted(signal);
@@ -212,71 +263,71 @@ export function applyHashlineEdits(
   }
 
   const rangeOperations = operations
-    .filter((operation): operation is RangeOperation => operation.kind === "replace_lines" || operation.kind === "delete_lines")
-    .sort((a, b) => a.start - b.start || a.end - b.end || a.index - b.index);
+    .filter(isRangeOperation)
+    .sort((a, b) => a.spanStart - b.spanStart || a.spanEnd - b.spanEnd || a.index - b.index);
 
   for (let i = 1; i < rangeOperations.length; i++) {
     const previous = rangeOperations[i - 1];
     const current = rangeOperations[i];
-    if (current.start <= previous.end) throw new Error("Overlapping replace_lines/delete_lines edits are not allowed.");
+    if (current.spanStart < previous.spanEnd) throw new Error("Overlapping replace_lines/delete_lines edits are not allowed.");
   }
 
   const rangeContainingLine = (line: number): RangeOperation | undefined => rangeOperations.find((operation) => operation.start <= line && line <= operation.end);
-
-  const boundaryInsertions = new Map<number, string[][]>();
-  const rangeByStart = new Map<number, RangeOperation>();
   let firstChangedLine: number | undefined;
 
   for (const operation of operations) {
     throwIfAborted(signal);
-    if (operation.kind === "replace_lines" || operation.kind === "delete_lines") {
-      rangeByStart.set(operation.start, operation);
+    if (isRangeOperation(operation)) {
       firstChangedLine = firstChangedLine === undefined ? operation.start : Math.min(firstChangedLine, operation.start);
       continue;
     }
 
-    const pointOperation = operation as PointOperation;
-
-    const containingRange = rangeContainingLine(pointOperation.line);
+    const containingRange = rangeContainingLine(operation.line);
     if (containingRange) {
-      if (pointOperation.kind === "insert_before" && pointOperation.line !== containingRange.start) {
+      if (operation.kind === "insert_before" && operation.line !== containingRange.start) {
         throw new Error("insert_before anchor cannot point inside a replace_lines/delete_lines range unless it targets the start line.");
       }
-      if (pointOperation.kind === "insert_after" && pointOperation.line !== containingRange.end) {
+      if (operation.kind === "insert_after" && operation.line !== containingRange.end) {
         throw new Error("insert_after anchor cannot point inside a replace_lines/delete_lines range unless it targets the end line.");
       }
     }
 
-    const boundary = pointOperation.kind === "insert_before" ? pointOperation.line - 1 : pointOperation.line;
-    const list = boundaryInsertions.get(boundary) ?? [];
-    list.push(pointOperation.newLines);
-    boundaryInsertions.set(boundary, list);
-    const changedLine = boundary + 1;
-    firstChangedLine = firstChangedLine === undefined ? changedLine : Math.min(firstChangedLine, changedLine);
+    firstChangedLine = firstChangedLine === undefined ? operation.line : Math.min(firstChangedLine, operation.line);
   }
 
-  const output: string[] = [];
-  const emitBoundary = (boundary: number) => {
-    for (const newLines of boundaryInsertions.get(boundary) ?? []) output.push(...newLines);
-  };
-  let lineNumber = 1;
-  while (lineNumber <= lines.length) {
-    throwIfAborted(signal);
-
-    emitBoundary(lineNumber - 1);
-
-    const rangeOperation = rangeByStart.get(lineNumber);
-    if (rangeOperation) {
-      output.push(...rangeOperation.newLines);
-      lineNumber = rangeOperation.end + 1;
-      continue;
+  type TextEdit = { start: number; end: number; index: number; placement: "before" | "replace" | "after"; replacement: string };
+  const textEdits: TextEdit[] = operations.map((operation) => {
+    if (isRangeOperation(operation)) {
+      return { start: operation.spanStart, end: operation.spanEnd, index: operation.index, placement: "replace", replacement: operation.replacement };
     }
+    return { start: operation.offset, end: operation.offset, index: operation.index, placement: operation.kind === "insert_before" ? "before" : "after", replacement: operation.replacement };
+  });
 
-    output.push(lines[lineNumber - 1] ?? "");
-    lineNumber++;
+  const byStart = new Map<number, TextEdit[]>();
+  for (const textEdit of textEdits) {
+    const list = byStart.get(textEdit.start) ?? [];
+    list.push(textEdit);
+    byStart.set(textEdit.start, list);
+  }
+  for (const list of byStart.values()) {
+    const replacing = list.filter((textEdit) => textEdit.end > textEdit.start);
+    if (replacing.length > 1) throw new Error("Overlapping replace_lines/delete_lines edits are not allowed.");
   }
 
-  emitBoundary(lineNumber - 1);
+  const orderedStarts = [...byStart.keys()].sort((a, b) => b - a);
+  let output = content;
+  for (const start of orderedStarts) {
+    throwIfAborted(signal);
+    const list = byStart.get(start)!.sort((a, b) => a.index - b.index);
+    const replacing = list.find((textEdit) => textEdit.end > textEdit.start);
+    const before = list.filter((textEdit) => textEdit.end === textEdit.start && textEdit.placement === "before").sort((a, b) => a.index - b.index);
+    const after = list.filter((textEdit) => textEdit.end === textEdit.start && textEdit.placement === "after").sort((a, b) => a.index - b.index);
+    const end = replacing?.end ?? start;
+    const replacement = replacing
+      ? `${before.map((textEdit) => textEdit.replacement).join("")}${replacing.replacement}${after.map((textEdit) => textEdit.replacement).join("")}`
+      : list.sort((a, b) => a.index - b.index).map((textEdit) => textEdit.replacement).join("");
+    output = `${output.slice(0, start)}${replacement}${output.slice(end)}`;
+  }
 
-  return { content: output.join("\n"), firstChangedLine };
+  return { content: output, firstChangedLine };
 }

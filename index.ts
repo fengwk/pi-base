@@ -140,7 +140,7 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
   };
 
   registerReadTool(pi, { onSuccessfulRead: noteAnchorsAndSnapshot, createResolver: resolverFactory, getCollapsedResultLines });
-  registerGrepTool(pi, { onFileAnchored: noteAnchorsAndSnapshot, getCollapsedResultLines });
+  registerGrepTool(pi, { getCollapsedResultLines });
   // Delegate `find` to the built-in pi-coding-agent tool, which uses `fd` directly,
   // respects `.gitignore` (rg/fd default), and auto-downloads `fd` if missing.
   // This keeps `pi-base` thin and lets upstream handle fd behavior.

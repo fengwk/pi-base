@@ -579,7 +579,7 @@ message: Image returned as attachment. Hashline anchors are not available for im
 
 ## 7.1 作用
 
-`grep` 用于在文件内容中搜索模式，并返回可直接喂给 `edit` 的 anchored matches。
+`grep` 用于在文件内容中搜索模式，并返回匹配位置；它不返回可直接用于 `edit` 的 LINE:HASH anchors。需要修改时应先用 `read` 读取目标区域，获取足够上下文和 fresh anchors。
 
 ## 7.2 参数
 
@@ -599,7 +599,7 @@ message: Image returned as attachment. Hashline anchors are not available for im
 
 - `path` 必传，要求 agent 显式说明搜索范围
 - `include` 用于限制文件类型，如 `*.ts`
-- v1 不提供 `context` 参数；需要上下文时，agent 应继续调用 `read`
+- v1 不提供 `context` 参数；需要上下文或准备编辑时，agent 应继续调用 `read`
 
 ## 7.3 实现方向
 
@@ -626,33 +626,21 @@ grep({ pattern: "TODO", path: ".", include: "**/*.ts", timeoutSeconds: 30 })
 ## 7.6 mock 输出
 
 ```text
-pattern: createDemoDirectory
-path: tests/fixtures
-literal: true
-totalMatches: 2
-
-tests/fixtures/small.ts
-45:4bf|export function createDemoDirectory(): UserDirectory {
-46:91a|  const users: User[] = [];
-
-tests/fixtures/other.ts
-12:8c2|const createDemoDirectory = () => {
+tests/fixtures/small.ts:45: export function createDemoDirectory(): UserDirectory {
+tests/fixtures/other.ts:12: const createDemoDirectory = () => {
 ```
 
 ### 单行超长命中
 
 ```text
-pattern: sourceMappingURL
-path: dist/
-totalMatches: 1
+dist/bundle.min.js:1: (()=>{var e="...very long content..."... (line truncated to 500 chars)
 
-dist/bundle.min.js
-1:8af|(()=>{var e="...very long content..."... (line truncated to 2000 chars)
+[Some lines truncated to 500 chars. Use read tool to see full lines]
 ```
 
 ## 7.7 与其它工具配合
 
-- `grep -> edit`
+- `grep -> read -> edit`
 - `grep -> read`
 
 ---
@@ -930,7 +918,7 @@ Use the refreshed anchors from the latest read/edit result for this region, or r
 ## 10.7 与其它工具配合
 
 - `read -> edit`
-- `grep -> edit`
+- `grep -> read -> edit`
 - `write -> edit`
 
 ---

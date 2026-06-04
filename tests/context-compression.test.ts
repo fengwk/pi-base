@@ -213,7 +213,7 @@ describe("context compression", () => {
     expect(getText(transformed.messages[4])).toContain("older tool output omitted");
   });
 
-  it("does not path-stale grep directory results after later edits", async () => {
+  it("does not treat grep output as editable file context", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
     await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
@@ -224,18 +224,14 @@ describe("context compression", () => {
 
     const grepArgs = { pattern: "alpha", path: "src", literal: true };
     const grepResult = await registry.getTool("grep").execute("grep-tree-1", grepArgs, undefined, undefined, { cwd: root });
-    const alphaAnchor = anchorFor(getText(grepResult), "alpha");
+    expect(getText(grepResult)).toContain("example.txt:1: alpha");
+    expect(getText(grepResult)).not.toMatch(/\d+:[0-9a-f]{3}\|/);
 
-    const editArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
+    const editArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: "1:abc", end_anchor: "1:abc", new_text: "alpha v1" } }] };
     const editResult = await registry.getTool("edit").execute("edit-after-grep-tree", editArgs, undefined, undefined, { cwd: root });
-
-    const messages = [
-      ...toolExchange("grep", "grep-tree-1", grepArgs, grepResult),
-      ...toolExchange("edit", "edit-after-grep-tree", editArgs, editResult),
-    ];
-    const transformed = await registry.emit("context", { messages }, { cwd: root });
-
-    expect(transformed).toBeUndefined();
+    expect(editResult.isError).toBe(true);
+    expect(getText(editResult)).toContain("Fresh anchors are required");
+    expect(getText(editResult)).not.toContain("grep");
   });
 
   it("masks stale edit error context after a later successful edit", async () => {

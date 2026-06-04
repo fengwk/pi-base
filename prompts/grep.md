@@ -1,10 +1,10 @@
-Search file contents and return edit-ready anchors.
+Search file contents and return matching lines.
 
 Usage:
 - Use `grep` for repository content search.
 - Always pass an explicit `path`.
 - Prefer narrowing the path or pattern before increasing `timeoutSeconds`. The default timeout is usually sufficient, and explicitly setting a timeout is not recommended unless a broader scan is truly necessary.
-- Use `read` if you need more surrounding context.
+- Treat `grep` as a candidate locator, not editing context. After `grep`, use `read` with targeted `offset`/`limit` to inspect enough surrounding code before editing.
 - The content search respects `.gitignore`.
 - When `path` is a single binary file, `grep` fails fast with a clear binary-file error instead of delegating to ripgrep.
 

@@ -20,8 +20,8 @@
 - Text reads return `LINE:HASH|content` anchors.
 - `edit` works from fresh anchors and fails clearly on stale anchors.
 - `write` returns fresh anchors for follow-up edits.
-- Context hygiene is enabled by default and implemented as stateless context compression: stale file outputs and older tool results are replaced with concise placeholders before model calls, so obsolete `LINE:HASH` anchors and bulky historical output are not fed back to the model.
-- `grep` requires an explicit `path`, defaults to a 15s timeout, and fails fast on single-file binary inputs.
+- Context compression can be enabled to prune stale file outputs and bulky historical tool results; when `anchorHygiene` is enabled, obsolete `LINE:HASH` anchors from `read` / `write` / `edit` are replaced with concise placeholders before model calls.
+- `grep` requires an explicit `path`, defaults to a 15s timeout, fails fast on single-file binary inputs, and returns candidate locations rather than edit anchors; use `read` after `grep` before editing.
 - `find` is delegated to Pi's built-in implementation, but `pi-base` makes `path` explicit and required — there is no implicit search root.
 - `bash` requires an explicit `workdir` on every call.
 - On Linux, WSL, and macOS, `bash` prefers the host `bash` or `zsh` shell from `$SHELL` and loads common startup files to better match the terminal environment.

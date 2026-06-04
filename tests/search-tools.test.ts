@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import piBaseExtension, { registerFindTool } from "../index.js";
 import { registerGrepTool } from "../src/grep.js";
-import { computeLineHash } from "../src/hashline.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 describe("grep", () => {
-  it("returns anchored matches from builtin output", async () => {
+  it("returns matching lines from builtin output without adding anchors", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
@@ -21,6 +20,7 @@ describe("grep", () => {
     expect(text).toContain("example.ts");
     expect(text).toContain("2:");
     expect(text).toContain("beta");
+    expect(text).not.toMatch(/\d+:[0-9a-f]{3}\|/);
   });
 
   it("reports timeout guidance", async () => {
@@ -113,18 +113,21 @@ describe("grep", () => {
     expect(getText(result)).toContain("[summary]");
   });
 
-  it("truncates huge single-line matches but keeps hashes from raw content", async () => {
-    const root = await createTempWorkspace();
-    const longLine = `prefix ${"x".repeat(2500)}`;
-    await writeWorkspaceFile(root, "src/huge.txt", `${longLine}\n`);
+  it("preserves builtin truncation text and details", async () => {
     const registry = createToolRegistry();
     registerGrepTool(registry.pi as any, {
-      createBuiltInGrepTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "huge.txt:1: prefix" }] }) }),
+      createBuiltInGrepTool: () => ({
+        execute: async () => ({
+          content: [{ type: "text", text: "huge.txt:1: prefix...\n\n[Some lines truncated to 500 chars. Use read tool to see full lines]" }],
+          details: { linesTruncated: true },
+        }),
+      }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "prefix", path: "src" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("grep").execute("1", { pattern: "prefix", path: "src" }, undefined, undefined, { cwd: process.cwd() });
     const text = getText(result);
-    expect(text).toContain(`1:${computeLineHash(1, longLine)}|`);
-    expect(text).toContain("line truncated to 2000 chars");
+    expect(text).toContain("huge.txt:1: prefix");
+    expect(text).toContain("Some lines truncated to 500 chars");
+    expect((result as any).details?.linesTruncated).toBe(true);
   });
 
   it("surfaces non-timeout builtin errors", async () => {
@@ -147,24 +150,20 @@ describe("grep", () => {
     expect(getText(result)).toContain("path is required");
   });
 
-  it("passes raw-split lines to onFileAnchored (3 lines for alpha\\nbeta\\n, including the empty after the trailing \\n)", async () => {
-    const root = await createTempWorkspace();
-    // `alpha\nbeta\n` is the file as it actually is: 3 lines,
-    // because the trailing newline creates an implicit empty line
-    // at the end of the split. `grep` shows the file as-is.
-    await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
+  it("passes include to builtin grep as glob", async () => {
     const registry = createToolRegistry();
-    const anchored: Array<{ path: string; lines: string[] | undefined }> = [];
+    let seenParams: any;
     registerGrepTool(registry.pi as any, {
-      onFileAnchored: (absolutePath, lines) => anchored.push({ path: absolutePath, lines }),
       createBuiltInGrepTool: () => ({
-        execute: async () => ({ content: [{ type: "text", text: "example.ts:2: beta" }] }),
+        execute: async (_id: string, params: any) => {
+          seenParams = params;
+          return { content: [{ type: "text", text: "example.ts:2: beta" }] };
+        },
       }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "beta", path: "src" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("grep").execute("1", { pattern: "beta", path: "src", include: "**/*.ts" }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).not.toBe(true);
-    expect(anchored).toHaveLength(1);
-    expect(anchored[0].lines).toEqual(["alpha", "beta", ""]);
+    expect(seenParams.glob).toBe("**/*.ts");
   });
 });
 
