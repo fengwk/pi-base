@@ -17,6 +17,7 @@ import { inferToolResultIsError } from "./src/tool-result.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./src/tool-prompt.js";
 import { renderRawResult, resolveCollapsedResultLines, type CollapsedResultLinesResolver } from "./src/render.js";
 import { applyContextCompressionToMessages } from "./src/context-compression.js";
+import { applyAnthropicCompressionBoundaryCacheMarker } from "./src/anthropic-cache-boundary.js";
 import { registerResumeAllCommand } from "./src/resume-all.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./src/lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type YoloMode, type ContextCompressionConfig } from "./src/config.js";
@@ -154,6 +155,10 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
     if (!Array.isArray(event.messages)) return undefined;
     const messages = applyContextCompressionToMessages(event.messages, ctx.cwd, loadSettings(ctx.cwd).settings.contextCompression, { systemPrompt: ctx.getSystemPrompt?.() });
     return messages === event.messages ? undefined : { messages };
+  });
+  (pi as any).on("before_provider_payload", async (event: any) => {
+    if (!applyAnthropicCompressionBoundaryCacheMarker(event.payload)) return undefined;
+    return { payload: event.payload };
   });
 
   // Global output guard: applies to every tool result that flows through Pi, including third-party tools.

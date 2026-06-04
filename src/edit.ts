@@ -12,11 +12,8 @@ import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 
 const RESULT_CONTEXT_LINES = 2;
 
-function summarizeInsertedText(text: string): string[] {
-  const lines = splitNewTextLines(String(text));
-  const display = lines.slice(0, 5).map((line) => `+ ${escapeControlCharsForDisplay(visualizeLeadingWhitespace(line))}`);
-  if (lines.length > 5) display.push(`+ ... (${lines.length - 5} more lines)`);
-  return display;
+function renderInsertedText(text: string): string[] {
+  return splitNewTextLines(String(text)).map((line) => `+ ${escapeControlCharsForDisplay(visualizeLeadingWhitespace(line))}`);
 }
 
 type ResultDiffLine =
@@ -132,7 +129,7 @@ function formatEditCall(args: any, theme: any): string {
     if (entry?.replace_lines) {
       lines.push(styleToolTitle(theme, "replace_lines"));
       lines.push(styleDiffRemoved(theme, `- range ${entry.replace_lines.start_anchor} .. ${entry.replace_lines.end_anchor}`));
-      lines.push(...summarizeInsertedText(String(entry.replace_lines.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
+      lines.push(...renderInsertedText(String(entry.replace_lines.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }
     if (entry?.delete_lines) {
@@ -143,13 +140,13 @@ function formatEditCall(args: any, theme: any): string {
     if (entry?.insert_before) {
       lines.push(styleToolTitle(theme, "insert_before"));
       lines.push(styleDiffContext(theme, `| before ${entry.insert_before.anchor}`));
-      lines.push(...summarizeInsertedText(String(entry.insert_before.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
+      lines.push(...renderInsertedText(String(entry.insert_before.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }
     if (entry?.insert_after) {
       lines.push(styleToolTitle(theme, "insert_after"));
       lines.push(styleDiffContext(theme, `| after ${entry.insert_after.anchor}`));
-      lines.push(...summarizeInsertedText(String(entry.insert_after.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
+      lines.push(...renderInsertedText(String(entry.insert_after.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }
     lines.push(styleWarning(theme, "? unknown_edit"));

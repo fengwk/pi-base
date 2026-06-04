@@ -412,6 +412,23 @@ describe("edit/write flow", () => {
     expect(rendered).toContain("+ second line");
     expect(rendered).not.toContain("alpha");
   });
+  it("renders the full requested new_text in edit call previews", async () => {
+    const registry = createToolRegistry();
+    const tool = registerEditTool(registry.pi as any, {
+      wasReadInSession: () => true,
+    });
+    const newText = Array.from({ length: 8 }, (_, index) => `line-${index + 1}`).join("\n");
+    const component = tool.renderCall(
+      { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "2:abc", end_anchor: "2:abc", new_text: newText } }] },
+      {} as any,
+      { lastComponent: undefined },
+    ) as any;
+    const rendered = component.render(200).join("\n");
+
+    expect(rendered).toContain("+ line-1");
+    expect(rendered).toContain("+ line-8");
+    expect(rendered).not.toContain("more lines");
+  });
 
   it("keeps completed edit call previews visible when collapsed", async () => {
     const root = await createTempWorkspace();
