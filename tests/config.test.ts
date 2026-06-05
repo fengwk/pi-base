@@ -24,7 +24,7 @@ async function withTempGlobalSettings<T>(run: (globalPath: string) => Promise<T>
 
 
 describe("pi-base config", () => {
-  it("loads project settings and overrides global lsp fields", async () => {
+  it("loads project settings and overrides global lsp server entries", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
     await mkdir(projectDir, { recursive: true });
@@ -33,10 +33,9 @@ describe("pi-base config", () => {
     const projectServers = { jdtls: { command: ["project-jdtls"], extensions: [".java"] }, gopls: { command: ["gopls"], extensions: [".go"] } };
     await withTempGlobalSettings(async (globalPath) => {
       await mkdir(dirname(globalPath), { recursive: true });
-      await writeFile(globalPath, JSON.stringify({ lsp: { searchPaths: ["/global/bin"], servers: globalServers } }), "utf8");
-      await writeFile(projectPath, JSON.stringify({ lsp: { searchPaths: ["/project/bin"], servers: projectServers } }), "utf8");
+      await writeFile(globalPath, JSON.stringify({ lsp: { servers: globalServers } }), "utf8");
+      await writeFile(projectPath, JSON.stringify({ lsp: { servers: projectServers } }), "utf8");
       const loaded = loadPiBaseSettings(root);
-      expect(loaded.settings.lsp?.searchPaths).toEqual(["/project/bin"]);
       expect(loaded.settings.lsp?.servers?.jdtls?.command).toEqual(["project-jdtls"]);
       expect(loaded.settings.lsp?.servers?.gopls?.command).toEqual(["gopls"]);
     });
@@ -49,10 +48,10 @@ describe("pi-base config", () => {
     await mkdir(projectDir, { recursive: true });
     await mkdir(childDir, { recursive: true });
     await withTempGlobalSettings(async () => {
-      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ lsp: { searchPaths: ["/repo-root/bin"] } }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ lsp: { servers: { ts: { command: ["ts-lsp"], extensions: [".ts"] } } } }), "utf8");
       const loaded = loadPiBaseSettings(childDir);
       expect(loaded.projectPath).toBe(join(projectDir, "pi-base.json"));
-      expect(loaded.settings.lsp?.searchPaths).toEqual(["/repo-root/bin"]);
+      expect(loaded.settings.lsp?.servers?.ts?.command).toEqual(["ts-lsp"]);
     });
   });
 
@@ -69,32 +68,22 @@ describe("pi-base config", () => {
     });
   });
 
-  it("resolves relative project searchPaths and command paths against the settings file directory", async () => {
+
+  it("rejects relative lsp command paths", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
-    const childDir = join(root, "packages", "app");
     await mkdir(projectDir, { recursive: true });
-    await mkdir(childDir, { recursive: true });
     await withTempGlobalSettings(async () => {
       await writeFile(
         join(projectDir, "pi-base.json"),
-        JSON.stringify({
-          lsp: {
-            searchPaths: ["./bin"],
-            servers: {
-              ts: { command: ["./servers/mock-ts-lsp", "--stdio"], extensions: [".ts"] },
-            },
-          },
-        }),
+        JSON.stringify({ lsp: { servers: { ts: { command: ["./servers/mock-ts-lsp", "--stdio"], extensions: [".ts"] } } } }),
         "utf8",
       );
-      const loaded = loadPiBaseSettings(childDir);
-      expect(loaded.settings.lsp?.searchPaths).toEqual([join(projectDir, "bin")]);
-      expect(loaded.settings.lsp?.servers?.ts?.command).toEqual([join(projectDir, "servers", "mock-ts-lsp"), "--stdio"]);
+      expect(() => loadPiBaseSettings(root)).toThrowError(/command\[0\] must be a command on PATH or an absolute executable path/);
     });
   });
 
-  it("expands ~/ and $HOME in lsp searchPaths and command paths", async () => {
+  it("expands ~/ and $HOME in lsp command paths", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
     await mkdir(projectDir, { recursive: true });
@@ -103,44 +92,33 @@ describe("pi-base config", () => {
         join(projectDir, "pi-base.json"),
         JSON.stringify({
           lsp: {
-            searchPaths: ["~/.local/share/nvim/mason/bin", "$HOME/.cache/tools/bin", "${HOME}/opt/lsp/bin"],
             servers: {
               ts: { command: ["$HOME/bin/mock-ts-lsp", "--stdio"], extensions: [".ts"] },
               js: { command: ["${HOME}/bin/mock-js-lsp", "--stdio"], extensions: [".js"] },
+              py: { command: ["~/bin/mock-py-lsp", "--stdio"], extensions: [".py"] },
             },
           },
         }),
         "utf8",
       );
       const loaded = loadPiBaseSettings(root);
-      expect(loaded.settings.lsp?.searchPaths).toEqual([
-        join(homedir(), ".local", "share", "nvim", "mason", "bin"),
-        join(homedir(), ".cache", "tools", "bin"),
-        join(homedir(), "opt", "lsp", "bin"),
-      ]);
       expect(loaded.settings.lsp?.servers?.ts?.command).toEqual([join(homedir(), "bin", "mock-ts-lsp"), "--stdio"]);
       expect(loaded.settings.lsp?.servers?.js?.command).toEqual([join(homedir(), "bin", "mock-js-lsp"), "--stdio"]);
+      expect(loaded.settings.lsp?.servers?.py?.command).toEqual([join(homedir(), "bin", "mock-py-lsp"), "--stdio"]);
     });
   });
 
-  it("does not rewrite non-HOME environment placeholders in lsp command paths", async () => {
+  it("rejects non-HOME environment placeholders in lsp command paths", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
     await mkdir(projectDir, { recursive: true });
     await withTempGlobalSettings(async () => {
       await writeFile(
         join(projectDir, "pi-base.json"),
-        JSON.stringify({
-          lsp: {
-            servers: {
-              java: { command: ["$JAVA_HOME/bin/jdtls", "--stdio"], extensions: [".java"] },
-            },
-          },
-        }),
+        JSON.stringify({ lsp: { servers: { java: { command: ["$JAVA_HOME/bin/jdtls", "--stdio"], extensions: [".java"] } } } }),
         "utf8",
       );
-      const loaded = loadPiBaseSettings(root);
-      expect(loaded.settings.lsp?.servers?.java?.command).toEqual(["$JAVA_HOME/bin/jdtls", "--stdio"]);
+      expect(() => loadPiBaseSettings(root)).toThrowError(/command\[0\] must be a command on PATH or an absolute executable path/);
     });
   });
 
@@ -201,15 +179,6 @@ describe("pi-base config", () => {
     });
   });
 
-  it("rejects the removed top-level contextHygiene switch", async () => {
-    const root = await createTempWorkspace();
-    const projectDir = join(root, ".pi");
-    await mkdir(projectDir, { recursive: true });
-    await withTempGlobalSettings(async () => {
-      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ contextHygiene: true }), "utf8");
-      expect(() => loadPiBaseSettings(root)).toThrowError(/contextHygiene is no longer supported\. Use contextCompression instead/);
-    });
-  });
 
   it("loads context compression settings and lets project settings override individual tool values", async () => {
     const root = await createTempWorkspace();
@@ -247,14 +216,14 @@ describe("pi-base config", () => {
     });
   });
 
-  it("applies configured search paths to a resolver", async () => {
+  it("resolves explicit executable paths", async () => {
     const root = await createTempWorkspace();
     const binDir = join(root, "bin");
     await mkdir(binDir, { recursive: true });
     const fake = join(binDir, "fake-lsp");
     await writeFile(fake, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
-    const resolver = new LspDiscoveryResolver({ searchPaths: [binDir] });
-    expect(resolver.findCommandPath("fake-lsp")).toBe(fake);
+    const resolver = new LspDiscoveryResolver({});
+    expect(resolver.findCommandPath(fake)).toBe(fake);
   });
 
   it("caches LSP availability per resolver instance", async () => {
@@ -264,8 +233,8 @@ describe("pi-base config", () => {
     const fake = join(binDir, "fake-ts-lsp");
     await writeFile(fake, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
 
-    const entry = { typescript: { command: ["fake-ts-lsp", "--stdio"], extensions: [".ts"] } };
-    const installed = new LspDiscoveryResolver({ searchPaths: [binDir], servers: entry });
+    const entry = { typescript: { command: [fake, "--stdio"], extensions: [".ts"] } };
+    const installed = new LspDiscoveryResolver({ servers: entry });
     expect(installed.supportsLsp(join(root, "src", "example.ts"))).toEqual({ supported: true, language: "typescript", available: true });
 
     await rm(fake);
@@ -273,7 +242,7 @@ describe("pi-base config", () => {
     expect(installed.supportsLsp(join(root, "src", "example.ts"))).toEqual({ supported: true, language: "typescript", available: true });
 
     // A freshly built resolver sees the missing binary.
-    const afterRemoval = new LspDiscoveryResolver({ searchPaths: [binDir], servers: entry });
+    const afterRemoval = new LspDiscoveryResolver({ servers: entry });
     expect(afterRemoval.supportsLsp(join(root, "src", "example.ts"))).toEqual({ supported: true, language: "typescript", available: false, reason: "not-installed" });
   });
 
@@ -284,8 +253,7 @@ describe("pi-base config", () => {
     const fake = join(binDir, "fake-ts-lsp");
     await writeFile(fake, "#!/bin/sh\n", { encoding: "utf8", mode: 0o644 });
     const resolver = new LspDiscoveryResolver({
-      searchPaths: [binDir],
-      servers: { typescript: { command: ["fake-ts-lsp", "--stdio"], extensions: [".ts"] } },
+      servers: { typescript: { command: [fake, "--stdio"], extensions: [".ts"] } },
     });
     expect(resolver.supportsLsp(join(root, "src", "example.ts"))).toEqual({ supported: true, language: "typescript", available: false, reason: "not-installed" });
   });
@@ -361,15 +329,6 @@ describe("pi-base config", () => {
     });
   });
 
-  it("rejects legacy contextHygiene blocks", async () => {
-    await withTempGlobalSettings(async () => {
-      const root = await createTempWorkspace();
-      const projectDir = join(root, ".pi");
-      await mkdir(projectDir, { recursive: true });
-      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ contextHygiene: "yes" }), "utf8");
-      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: contextHygiene is no longer supported\. Use contextCompression instead/);
-    });
-  });
 
 
   it("surfaces invalid context compression blocks", async () => {

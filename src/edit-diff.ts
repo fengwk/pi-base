@@ -110,8 +110,8 @@ export function generateDiffString(
 /**
  * Generate a compact diff for single-line edits, or fall back to the full diff.
  *
- * - Single-line replacement: `LINE:HASH|old → LINE:HASH|new`
- * - Single-line deletion: `LINE:HASH|old → [deleted]`
+ * - Single-line replacement: `LINE#HASH|old → LINE#HASH|new`
+ * - Single-line deletion: `LINE#HASH|old → [deleted]`
  * - Multi-line changes: full output from generateDiffString()
  */
 export function generateCompactOrFullDiff(

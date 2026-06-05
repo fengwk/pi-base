@@ -140,7 +140,7 @@ export function registerReadTool(
         // empty element produced by a trailing newline. This is the
         // raw file structure — `read` is a fact-display tool, not an
         // editor that hides structural details. An agent (or human)
-        // seeing `2:def|` learns that the file ends with a newline;
+        // seeing `2#def0|` learns that the file ends with a newline;
         // dropping that information would hide a fact.
         const lines = normalizeToLF(text).split("\n");
         const resolverBaseDir = st.isDirectory() ? absolutePath : dirname(absolutePath);

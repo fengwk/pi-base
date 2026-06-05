@@ -17,12 +17,12 @@ Usage:
 Parameters:
 - `command` (required)
 - `workdir` (required)
-- `timeoutSeconds` (optional, no default)
+- `timeout_seconds` (optional, no default)
 
-Examples:
-- `bash({ command: "npm test", workdir: "." })`
-- `bash({ command: "mvn -q test", workdir: ".", timeoutSeconds: 120 })`
-- `bash({ command: "git status --short", workdir: "." })`
-- `bash({ command: "mkdir -p build && cp \"source file.txt\" build/", workdir: "." })`
-- `bash({ command: "mv src/old.ts src/legacy/old.ts", workdir: "." })`
-- `bash({ command: "cp \"source file.txt\" \"target file.txt\"", workdir: "/tmp/anydir" })`
+Examples show the arguments passed to the tool:
+- `{"command":"npm test","workdir":"."}`
+- `{"command":"mvn -q test","workdir":".","timeout_seconds":120}`
+- `{"command":"git status --short","workdir":"."}`
+- `{"command":"mkdir -p build && cp \"source file.txt\" build/","workdir":"."}`
+- `{"command":"mv src/old.ts src/archive/old.ts","workdir":"."}`
+- `{"command":"cp \"source file.txt\" \"target file.txt\"","workdir":"/tmp/anydir"}`

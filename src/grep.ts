@@ -29,7 +29,7 @@ function formatGrepCall(args: any, theme: any): string {
     ["ignoreCase", args?.ignoreCase === true ? true : undefined],
     ["literal", args?.literal === true ? true : undefined],
     ["limit", args?.limit],
-    ["timeoutSeconds", args?.timeoutSeconds],
+    ["timeout_seconds", args?.timeout_seconds],
   ]);
   return `${styleToolTitle(theme, "grep")} ${styleOutput(theme, pattern)} ${styleMuted(theme, "in")} ${styleAccent(theme, path)}${styleOutput(theme, suffix)}`;
 }
@@ -78,7 +78,7 @@ export function registerGrepTool(
         if (!rawPath) throw new Error("path is required.");
         const cwd = ctx.cwd ?? process.cwd();
         const absolutePath = resolveToCwd(rawPath, cwd);
-        const timeoutSeconds = parsePositiveNumber(params.timeoutSeconds, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS);
+        const timeoutSeconds = parsePositiveNumber(params.timeout_seconds, "timeout_seconds", DEFAULT_TIMEOUT_SECONDS);
         const limit = parsePositiveNumber(params.limit, "limit", DEFAULT_LIMIT);
 
         const timeout = createTimeoutSignal(signal, timeoutSeconds);
@@ -125,7 +125,7 @@ export function registerGrepTool(
           } catch (error) {
             if (timeout.didTimeout()) {
               return {
-                content: [{ type: "text" as const, text: `Error: Search timed out after ${timeoutSeconds}s.\nHint: Large-scale scans are discouraged. Narrow the path or pattern first. If a broad scan is truly necessary, rerun grep with an explicit timeoutSeconds value.` }],
+                content: [{ type: "text" as const, text: `Error: Search timed out after ${timeoutSeconds}s.\nHint: Large-scale scans are discouraged. Narrow the path or pattern first. If a broad scan is truly necessary, rerun grep with an explicit timeout_seconds value.` }],
                 isError: true,
               };
             }

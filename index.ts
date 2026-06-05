@@ -19,6 +19,7 @@ import { renderRawResult, resolveCollapsedResultLines, type CollapsedResultLines
 import { applyContextCompressionToMessages } from "./src/context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./src/anthropic-cache-boundary.js";
 import { registerResumeAllCommand } from "./src/resume-all.js";
+import { createTimeoutSignal, parsePositiveNumber } from "./src/timeout.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./src/lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type YoloMode, type ContextCompressionConfig } from "./src/config.js";
 
@@ -119,7 +120,27 @@ export function registerFindTool(
       }
       const cwd = ctx.cwd ?? process.cwd();
       const scopedTool = createToolDefinition(cwd);
-      return scopedTool.execute(toolCallId, { ...params, path: rawPath }, signal, onUpdate, ctx);
+      const timeoutSeconds = params.timeout_seconds === undefined ? undefined : parsePositiveNumber(params.timeout_seconds, "timeout_seconds", 1);
+      const scopedParams = { ...params, path: rawPath };
+      delete scopedParams.timeout_seconds;
+      if (timeoutSeconds === undefined) return scopedTool.execute(toolCallId, scopedParams, signal, onUpdate, ctx);
+      const timeout = createTimeoutSignal(signal, timeoutSeconds);
+      try {
+        return await scopedTool.execute(toolCallId, scopedParams, timeout.signal, onUpdate, ctx);
+      } catch (error) {
+        if (timeout.didTimeout()) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Error: find timed out after ${timeoutSeconds}s.\nHint: Narrow the path or pattern first. If a broad scan is truly necessary, rerun find with a larger timeout_seconds value.`,
+            }],
+            isError: true,
+          };
+        }
+        throw error;
+      } finally {
+        timeout.cleanup();
+      }
     },
   } as any);
 }

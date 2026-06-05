@@ -28,7 +28,7 @@ const EXT_TO_LANG: Record<string, string> = {
 
 const MAX_INIT_RETRIES = 3;
 const INIT_RETRY_DELAY_MS = 500;
-const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const NOOP = () => undefined;
 

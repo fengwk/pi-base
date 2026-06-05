@@ -20,7 +20,7 @@ describe("grep", () => {
     expect(text).toContain("example.ts");
     expect(text).toContain("2:");
     expect(text).toContain("beta");
-    expect(text).not.toMatch(/\d+:[0-9a-f]{3}\|/);
+    expect(text).not.toMatch(/\d+#[0-9a-f]{4}\|/);
   });
 
   it("reports timeout guidance", async () => {
@@ -37,7 +37,7 @@ describe("grep", () => {
           }),
       }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "x", path: ".", timeoutSeconds: 0.01 }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("grep").execute("1", { pattern: "x", path: ".", timeout_seconds: 0.01 }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("Search timed out");
   });
@@ -57,7 +57,7 @@ describe("grep", () => {
       }),
     });
     const controller = new AbortController();
-    const pending = registry.getTool("grep").execute("1", { pattern: "x", path: ".", timeoutSeconds: 30 }, controller.signal, undefined, { cwd: process.cwd() });
+    const pending = registry.getTool("grep").execute("1", { pattern: "x", path: ".", timeout_seconds: 30 }, controller.signal, undefined, { cwd: process.cwd() });
     controller.abort();
     const result = await pending;
     expect(result.isError).toBe(true);
@@ -82,6 +82,17 @@ describe("grep", () => {
     expect(builtInCalled).toBe(false);
     expect(getText(result)).toContain("binary file");
     expect(getText(result)).toContain("grep only supports searching text files");
+  });
+  it("falls through to upstream grep when the search path is missing", async () => {
+    const registry = createToolRegistry();
+    registerGrepTool(registry.pi as any, {
+      createBuiltInGrepTool: () => ({ execute: async () => ({ content: [{ type: "text" as const, text: "missing-path fallback" }] }) }),
+    });
+
+    const result = await registry.getTool("grep").execute("1", { pattern: "x", path: "missing.txt", timeout_seconds: 5 }, undefined, undefined, { cwd: process.cwd() });
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("missing-path fallback");
   });
 
   it("preserves no-match output", async () => {
@@ -192,5 +203,59 @@ describe("find (delegated to built-in pi-coding-agent)", () => {
     const resultB = await registry.getTool("find").execute("2", { pattern: "*", path: "." }, undefined, undefined, { cwd: rootB });
     expect(getText(resultA)).toBe(rootA);
     expect(getText(resultB)).toBe(rootB);
+  });
+  it("applies timeout_seconds without passing it to the built-in find", async () => {
+    const registry = createToolRegistry();
+    let seenParams: any;
+    registerFindTool(registry.pi as any, () => ({
+      name: "find",
+      label: "Find",
+      description: "test find",
+      parameters: {},
+      execute: async (_id: string, params: any, signal?: AbortSignal) => {
+        seenParams = params;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      },
+    }));
+
+    const result = await registry.getTool("find").execute("1", { pattern: "*", path: ".", timeout_seconds: 0.01 }, undefined, undefined, { cwd: process.cwd() });
+
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("find timed out");
+    expect(seenParams).toEqual({ pattern: "*", path: "." });
+  });
+  it("rethrows non-timeout find errors", async () => {
+    const registry = createToolRegistry();
+    registerFindTool(registry.pi as any, () => ({
+      name: "find",
+      label: "Find",
+      description: "test find",
+      parameters: {},
+      execute: async () => {
+        throw new Error("find boom");
+      },
+    }));
+
+    await expect(registry.getTool("find").execute("1", { pattern: "*", path: ".", timeout_seconds: 30 }, undefined, undefined, { cwd: process.cwd() })).rejects.toThrow("find boom");
+  });
+
+  it("delegates find renderResult when collapsed result lines are not configured", () => {
+    const registry = createToolRegistry();
+    registerFindTool(
+      registry.pi as any,
+      () => ({
+        name: "find",
+        label: "Find",
+        description: "test find",
+        parameters: {},
+        execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+        renderResult: () => "delegated-render",
+      }),
+      { getCollapsedResultLines: () => undefined },
+    );
+
+    expect(registry.getTool("find").renderResult({ content: [{ type: "text", text: "ok" }] }, {}, {}, { cwd: process.cwd() })).toBe("delegated-render");
   });
 });

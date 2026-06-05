@@ -20,8 +20,7 @@
   "files": [
     "index.ts",
     "src/",
-    "prompts/",
-    "DESIGN.md"
+    "prompts/"
   ],
   "scripts": {
     "test": "vitest run",

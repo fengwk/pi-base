@@ -22,7 +22,7 @@ function formatHashlineOutput(content: string): string {
 function formatWriteSuccess(rawPath: string, existed: boolean, content: string): string {
   const action = existed ? "Overwrote" : "Created";
   return `${action} ${rawPath}.
-Review the written file content below. Lines prefixed with digits carry LINE:HASH anchors for follow-up edits.
+Review the written file content below. Lines prefixed with digits carry LINE#HASH anchors for follow-up edits.
 
 ${formatHashlineOutput(content)}`;
 }

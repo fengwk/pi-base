@@ -57,7 +57,7 @@ describe("lsp tools", () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
     const original = lspManager.getClient.bind(lspManager);
-    lspManager.getClient = async () => mockLspClient({ diagnostics: async () => { throw new Error("LSP diagnostics timeout after 15000ms"); } });
+    lspManager.getClient = async () => mockLspClient({ diagnostics: async () => { throw new Error("LSP diagnostics timeout after 60000ms"); } });
     try {
       const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);

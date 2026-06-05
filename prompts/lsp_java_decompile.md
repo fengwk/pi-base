@@ -12,6 +12,6 @@ Parameters:
 - `path` (required)
 - `target` (required)
 
-Examples:
-- `lsp_java_decompile({ path: "src/main/java/com/acme/App.java", target: "jdt://contents/java.base/java/lang/String.class?..." })`
-- `lsp_java_decompile({ path: "src/main/java/com/acme/App.java", target: "String (Class) - jdt://contents/java.base/java/lang/String.class?..." })`
+Examples show the arguments passed to the tool:
+- `{"path":"src/main/java/com/acme/App.java","target":"jdt://contents/java.base/java/lang/String.class?..."}`
+- `{"path":"src/main/java/com/acme/App.java","target":"String (Class) - jdt://contents/java.base/java/lang/String.class?..."}`

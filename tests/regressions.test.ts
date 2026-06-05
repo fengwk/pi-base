@@ -41,13 +41,13 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     const afterText = getText(afterRead);
     expect(getTotalLines(afterText)).toBe(4);
     const lines = afterText.split("\n");
-    const line2 = lines.find((line) => /^ 2:[0-9a-f]{3}\|/.test(line) || /^2:[0-9a-f]{3}\|/.test(line));
+    const line2 = lines.find((line) => /^ 2#[0-9a-f]{4}\|/.test(line) || /^2#[0-9a-f]{4}\|/.test(line));
     expect(line2).toBeDefined();
     // The body of line 2 must be empty: anchor followed by `|` and nothing else.
-    expect(line2!.match(/^.*2:[0-9a-f]{3}\|(\s*)$/)).not.toBeNull();
+    expect(line2!.match(/^.*2#[0-9a-f]{4}\|(\s*)$/)).not.toBeNull();
   });
 
-  it("insert_before with new_text \"\" is an empty insertion and therefore a no-op", async () => {
+  it("insert_before_lines with new_text \"\" inserts one empty line before the anchor", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "aa\nbb\n", "utf8");
     const registry = createToolRegistry();
@@ -58,17 +58,17 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ insert_before: { anchor, new_text: "" } }] },
+      { path: "f.txt", edits: [{ insert_before_lines: { anchor, new_text: "" } }] },
       undefined,
       undefined,
       { cwd: root },
     );
-    expect(edit.isError).toBe(true);
-    expect(getText(edit)).toContain("would not change the file");
-    expect(getText(edit)).toMatch(/1:[0-9a-f]{3}\|aa/);
+
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(join(root, "f.txt"), "utf8")).toBe("\naa\nbb\n");
   });
 
-  it("insert_after with new_text \"\" is an empty insertion and therefore a no-op", async () => {
+  it("insert_after_lines with new_text \"\" inserts one empty line after the anchor", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "aa\nbb\n", "utf8");
     const registry = createToolRegistry();
@@ -79,14 +79,35 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ insert_after: { anchor, new_text: "" } }] },
+      { path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "" } }] },
       undefined,
       undefined,
       { cwd: root },
     );
-    expect(edit.isError).toBe(true);
-    expect(getText(edit)).toContain("would not change the file");
-    expect(getText(edit)).toMatch(/1:[0-9a-f]{3}\|aa/);
+
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(join(root, "f.txt"), "utf8")).toBe("aa\n\nbb\n");
+  });
+
+  it("insert_after_lines with new_text \"\" can add a missing EOF newline", async () => {
+    const root = await createTempWorkspace();
+    await writeFile(join(root, "f.txt"), "aa", "utf8");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+
+    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const anchor = getAnchor(getText(initialRead), "aa");
+
+    const edit = await registry.getTool("edit").execute(
+      "2",
+      { path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "" } }] },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(join(root, "f.txt"), "utf8")).toBe("aa\n");
   });
 
   it("preserves trailing newline in replace_lines new_text", async () => {
@@ -111,7 +132,7 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     expect(getTotalLines(getText(afterRead))).toBe(2);
   });
 
-  it("insert_after inserts complete lines without requiring an explicit leading newline", async () => {
+  it("insert_after_lines inserts complete lines without requiring an explicit leading newline", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "aa", "utf8");
     const registry = createToolRegistry();
@@ -122,7 +143,7 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ insert_after: { anchor, new_text: "bb" } }] },
+      { path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "bb" } }] },
       undefined,
       undefined,
       { cwd: root },
@@ -130,10 +151,10 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     expect(edit.isError).not.toBe(true);
 
     const afterRead = await registry.getTool("read").execute("3", { path: "f.txt" }, undefined, undefined, { cwd: root });
-    expect(getText(afterRead)).toMatch(/2:[0-9a-f]{3}\|bb/);
+    expect(getText(afterRead)).toMatch(/2#[0-9a-f]{4}\|bb/);
   });
 
-  it("keeps insert_before and insert_after at replacement boundaries semantic regardless of request order", async () => {
+  it("keeps insert_before_lines and insert_after_lines at replacement boundaries semantic regardless of request order", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "aa\nbb\n", "utf8");
     const registry = createToolRegistry();
@@ -148,8 +169,8 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
         path: "f.txt",
         edits: [
           { replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "BB" } },
-          { insert_before: { anchor, new_text: "before" } },
-          { insert_after: { anchor, new_text: "after" } },
+          { insert_before_lines: { anchor, new_text: "before" } },
+          { insert_after_lines: { anchor, new_text: "after" } },
         ],
       },
       undefined,
@@ -245,7 +266,7 @@ describe("grep: binary files are rejected before upstream runs", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const start = Date.now();
-    const result = await registry.getTool("grep").execute("1", { pattern: "a", path: "definitely.bin", timeoutSeconds: 5 }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("grep").execute("1", { pattern: "a", path: "definitely.bin", timeout_seconds: 5 }, undefined, undefined, { cwd: root });
     const elapsed = Date.now() - start;
     expect(result.isError).toBe(true);
     // The check is in-process and synchronous-ish; it must NOT take the full timeout.

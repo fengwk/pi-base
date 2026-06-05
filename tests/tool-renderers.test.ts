@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
-import { createTempWorkspace, createToolRegistry } from "./helpers.js";
+import { createTempWorkspace, createToolRegistry, writeWorkspaceFile } from "./helpers.js";
 
 function render(component: any): string {
   return component.render(200).join("\n");
@@ -37,16 +37,16 @@ describe("tool renderers", () => {
       const cases = [
         { name: "read", args: { path: "src/example.ts", offset: 2, limit: 5 } },
         { name: "grep", args: { pattern: "demo", path: "src", include: "*.ts" } },
-        { name: "bash", args: { command: "pwd", workdir: ".", timeoutSeconds: 5 } },
+        { name: "bash", args: { command: "pwd", workdir: ".", timeout_seconds: 5 } },
         {
           name: "edit",
           args: {
             path: "src/example.ts",
             edits: [
-              { replace_lines: { start_anchor: "1:abc", end_anchor: "1:abc", new_text: "const a = 1;" } },
-              { delete_lines: { start_anchor: "2:def", end_anchor: "3:ghi" } },
-              { insert_before: { anchor: "4:jkl", new_text: "before" } },
-              { insert_after: { anchor: "5:mno", new_text: "after" } },
+              { replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: "const a = 1;" } },
+              { delete_lines: { start_anchor: "2#def0", end_anchor: "3#0123" } },
+              { insert_before_lines: { anchor: "4#4567", new_text: "before" } },
+              { insert_after_lines: { anchor: "5#89ab", new_text: "after" } },
               { unexpected: true },
             ],
           },
@@ -66,6 +66,43 @@ describe("tool renderers", () => {
         expect(result).toContain("line-1");
       }
     });
+  });
+  it("evicts old edit call preview snapshots after the cache cap", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const tool = registry.getTool("edit");
+
+    for (let index = 0; index < 102; index++) {
+      const rendered = render(tool.renderCall(
+        {
+          path: "src/example.ts",
+          edits: [{ replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: `alpha-${index}` } }],
+        },
+        {} as any,
+        { lastComponent: undefined, cwd: root, argsComplete: true, state: {} },
+      ));
+      expect(rendered).toContain(`alpha-${index}`);
+    }
+  });
+  it("renders invalid anchor warnings when a file preview is available", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const tool = registry.getTool("edit");
+
+    const rendered = render(tool.renderCall(
+      {
+        path: "src/example.ts",
+        edits: [{ delete_lines: { start_anchor: "bad", end_anchor: "bad" } }],
+      },
+      {} as any,
+      { lastComponent: undefined, cwd: root, argsComplete: true, state: {} },
+    ));
+
+    expect(rendered).toContain("invalid anchor in delete_lines");
   });
 
   it("honors per-tool collapsed result line overrides from pi-base.json", async () => {
@@ -149,7 +186,7 @@ describe("tool renderers", () => {
     const expectations = [
       { name: "read", args: { path: "/home/fengwk/proj/pi-base/src/edit.ts", offset: 150, limit: 110 }, expected: "Read ~/proj/pi-base/src/edit.ts [offset=150, limit=110]" },
       { name: "grep", args: { pattern: "demo", path: "src", include: "*.ts" }, expected: "grep \"demo\" in src [include=*.ts]" },
-      { name: "bash", args: { command: "npm test", workdir: ".", timeoutSeconds: 5 }, expected: "$ npm test (timeout 5s) in ." },
+      { name: "bash", args: { command: "npm test", workdir: ".", timeout_seconds: 5 }, expected: "$ npm test (timeout 5s) in ." },
       { name: "write", args: { path: "src/example.ts", content: "export const x = 1;" }, expected: "write src/example.ts" },
       { name: "lsp_diagnostics", args: { path: "src/example.ts", severity: "error" }, expected: "lsp_diagnostics src/example.ts [severity=error]" },
       { name: "lsp_goto_definition", args: { path: "src/example.ts", line: 2 }, expected: "lsp_goto_definition src/example.ts [line=2, character=0]" },

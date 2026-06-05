@@ -31,15 +31,15 @@ interface ContextCompressionProjectionOptions {
   systemPrompt?: string;
 }
 
-const HASHLINE_RE = /(?:^|\n)(?:[+|]\s*)?\s*\d+:[0-9a-f]{3}\|/;
+const HASHLINE_RE = /(?:^|\n)(?:[+|]\s*)?\s*\d+#[0-9a-f]{4}\|/;
 
 export const DEFAULT_CONTEXT_COMPRESSION_TOOL_OPTIONS: ToolCompressionOptions = {
   retainedUserMessageRounds: 2,
   retainedAssistantTurns: 4,
 };
 
-const FILE_CHANGED_PLACEHOLDER = "[pi-base context compression: earlier file output omitted because the file changed later. Re-run read for current content before using LINE:HASH anchors.]";
-const OLDER_TOOL_OUTPUT_PLACEHOLDER = "[pi-base context compression: older tool output omitted. Re-run the tool if you need those details.]";
+const FILE_CHANGED_PLACEHOLDER = "[context compression: earlier file output omitted because the file changed later. Re-run read for current content before using LINE#HASH anchors.]";
+const OLDER_TOOL_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. Re-run the tool if you need those details.]";
 export function isContextCompressionPlaceholderText(text: string): boolean {
   return text === FILE_CHANGED_PLACEHOLDER || text === OLDER_TOOL_OUTPUT_PLACEHOLDER;
 }

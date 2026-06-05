@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 
 function extractAnchor(line: string): string {
-  const match = line.match(/(?:\+|\||-)\s+(\d+:[0-9a-f]{3})\|/i) ?? line.match(/^(\d+:[0-9a-f]{3})\|/i);
+  const match = line.match(/(?:\+|\||-)\s+(\d+#[0-9a-f]{4})\|/i) ?? line.match(/^(\d+#[0-9a-f]{4})\|/i);
   if (!match) throw new Error(`No anchor found in line: ${line}`);
   return match[1]!;
 }
@@ -38,7 +38,7 @@ describe("edit/write flow", () => {
     const writeText = getText(writeResult);
     expect(writeText).toContain("Created src/new.ts.");
     expect(writeText).toContain("Review the written file content below.");
-    expect(writeText).toContain("LINE:HASH anchors for follow-up edits.");
+    expect(writeText).toContain("LINE#HASH anchors for follow-up edits.");
     expect(writeText).not.toContain("status:");
     expect(writeText).not.toContain("writeState:");
     const anchor = writeText.split("\n").find((line) => line.includes("|export const demo = 1;"))!.split("|")[0]!;
@@ -57,7 +57,7 @@ describe("edit/write flow", () => {
     const overwriteText = getText(overwriteResult);
     expect(overwriteText).toContain("Overwrote src/new.ts.");
     expect(overwriteText).toContain("Review the written file content below.");
-    expect(overwriteText).toContain("LINE:HASH anchors for follow-up edits.");
+    expect(overwriteText).toContain("LINE#HASH anchors for follow-up edits.");
     const anchor = overwriteText.split("\n").find((line) => line.includes("|export const demo = 3;"))!.split("|")[0]!;
     const editResult = await registry.getTool("edit").execute("3", { path: "src/new.ts", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "export const demo = 4;" } }] }, undefined, undefined, { cwd: root });
     expect(editResult.isError).not.toBe(true);
@@ -180,11 +180,11 @@ describe("edit/write flow", () => {
     const text = getText(result);
     // Both removed and added lines should show their leading whitespace
     // as a sequence of `·` to make it visually distinct.
-    expect(text).toMatch(/^- 1:---\|··old$/m);
-    expect(text).toMatch(/\+ +1:[0-9a-f]{3}\|··new/);
+    expect(text).toMatch(/^- 1#----\|··old$/m);
+    expect(text).toMatch(/\+ +1#[0-9a-f]{4}\|··new/);
   });
 
-  it("preserves request order for multiple insert_after operations on the same anchor", async () => {
+  it("preserves request order for multiple insert_after_lines operations on the same anchor", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
@@ -196,8 +196,8 @@ describe("edit/write flow", () => {
       {
         path: "src/example.ts",
         edits: [
-          { insert_after: { anchor, new_text: "one" } },
-          { insert_after: { anchor, new_text: "two" } },
+          { insert_after_lines: { anchor, new_text: "one" } },
+          { insert_after_lines: { anchor, new_text: "two" } },
         ],
       },
       undefined,
@@ -209,7 +209,7 @@ describe("edit/write flow", () => {
     expect(written).toBe("alpha\none\ntwo\nbeta\n");
   });
 
-  it("keeps insert_before before the anchor and insert_after after the anchor", async () => {
+  it("keeps insert_before_lines before the anchor and insert_after_lines after the anchor", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
@@ -221,8 +221,8 @@ describe("edit/write flow", () => {
       {
         path: "src/example.ts",
         edits: [
-          { insert_before: { anchor, new_text: "before" } },
-          { insert_after: { anchor, new_text: "after" } },
+          { insert_before_lines: { anchor, new_text: "before" } },
+          { insert_after_lines: { anchor, new_text: "after" } },
         ],
       },
       undefined,
@@ -248,8 +248,8 @@ describe("edit/write flow", () => {
       {
         path: "src/example.ts",
         edits: [
-          { insert_after: { anchor: alpha, new_text: "after-alpha" } },
-          { insert_before: { anchor: beta, new_text: "before-beta" } },
+          { insert_after_lines: { anchor: alpha, new_text: "after-alpha" } },
+          { insert_before_lines: { anchor: beta, new_text: "before-beta" } },
         ],
       },
       undefined,
@@ -293,12 +293,12 @@ describe("edit/write flow", () => {
     await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\n");
     const registry = createToolRegistry();
     const tool = registerEditTool(registry.pi as any, { wasReadInSession: () => true });
-    const staleAnchor = "2:000";
+    const staleAnchor = "2#0000";
     const result = await tool.execute("1", { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: staleAnchor, end_anchor: staleAnchor, new_text: "three" } }] }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("The anchor no longer matches the current file");
-    expect(getText(result)).not.toContain("2:000|");
-    expect(getText(result)).toContain("Failed anchor: 2:000");
+    expect(getText(result)).not.toContain("2#0000|");
+    expect(getText(result)).toContain("Failed anchor: 2#0000");
     expect(getText(result)).toContain("Reason: line 2 exists, but hash mismatch");
     expect(getText(result)).toContain("Current line at the provided line number:");
   });
@@ -308,9 +308,9 @@ describe("edit/write flow", () => {
     await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\n");
     const registry = createToolRegistry();
     const tool = registerEditTool(registry.pi as any, { wasReadInSession: () => true });
-    const result = await tool.execute("1", { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "99:000", end_anchor: "99:000", new_text: "three" } }] }, undefined, undefined, { cwd: root });
+    const result = await tool.execute("1", { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "99#0000", end_anchor: "99#0000", new_text: "three" } }] }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("Failed anchor: 99:000");
+    expect(getText(result)).toContain("Failed anchor: 99#0000");
     expect(getText(result)).toContain("Reason: line 99 is outside the current file range 1..3");
     expect(getText(result)).toContain("Current tail context in src/example.ts:");
     expect(getText(result)).toContain("path: src/example.ts");
@@ -320,8 +320,8 @@ describe("edit/write flow", () => {
     expect(getText(result)).toContain("limit: 3");
     expect(getText(result)).toContain("totalLines: 3");
     expect(getText(result)).toContain("hasMore: false");
-    expect(getText(result)).toMatch(/^1:[0-9a-f]{3}\|one$/m);
-    expect(getText(result)).toMatch(/^2:[0-9a-f]{3}\|two$/m);
+    expect(getText(result)).toMatch(/^1#[0-9a-f]{4}\|one$/m);
+    expect(getText(result)).toMatch(/^2#[0-9a-f]{4}\|two$/m);
     expect(getText(result)).not.toContain("Refreshed anchors in src/example.ts near line 99");
   });
 
@@ -337,20 +337,20 @@ describe("edit/write flow", () => {
     expect(getText(result)).toContain("would not change the file");
   });
 
-  it("supports insert_before", async () => {
+  it("supports insert_before_lines", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
-    const result = await registry.getTool("edit").execute("2", { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted" } }] }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("edit").execute("2", { path: "src/example.ts", edits: [{ insert_before_lines: { anchor, new_text: "inserted" } }] }, undefined, undefined, { cwd: root });
     expect(result.isError).not.toBe(true);
     const written = await readFile(join(root, "src/example.ts"), "utf8");
     expect(written).toContain("alpha\ninserted\nbeta\n");
   });
 
-  it("renders insert_before calls with following file context", async () => {
+  it("renders insert_before_lines calls with following file context", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
@@ -359,12 +359,12 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "inserted" } }] },
+      { path: "src/example.ts", edits: [{ insert_before_lines: { anchor, new_text: "inserted" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root },
     ) as any;
     const rendered = component.render(200).join("\n");
-    expect(rendered).toContain("insert_before");
+    expect(rendered).toContain("insert_before_lines");
     expect(rendered).not.toContain("alpha");
     expect(rendered).toContain("beta");
     expect(rendered).toMatch(/\+\s+\d+ inserted/);
@@ -400,7 +400,7 @@ describe("edit/write flow", () => {
     const component = tool.renderCall(
       {
         path: "src/example.ts",
-        edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }],
+        edits: [{ insert_after_lines: { anchor, new_text: "first line\nsecond line" } }],
       },
       {} as any,
       { lastComponent: undefined, cwd: root },
@@ -429,7 +429,7 @@ describe("edit/write flow", () => {
     const secondComponent = tool.renderCall(
       {
         path: "src/example.ts",
-        edits: [{ replace_lines: { start_anchor: "1:abc", end_anchor: "1:abc", new_text: "first streamed line\nsecond streamed line" } }],
+        edits: [{ replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: "first streamed line\nsecond streamed line" } }],
       },
       {} as any,
       { lastComponent: firstComponent, cwd: root },
@@ -454,7 +454,7 @@ describe("edit/write flow", () => {
     const component = tool.renderCall(
       {
         path: "src/example.ts",
-        edits: [{ replace_lines: { start_anchor: "1:abc", end_anchor: "1:abc", new_text: "streamed" } }],
+        edits: [{ replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: "streamed" } }],
       },
       {} as any,
       { lastComponent: undefined, cwd: root, argsComplete: false, state },
@@ -474,7 +474,7 @@ describe("edit/write flow", () => {
     expect(regressedRendered).not.toContain("(no edits)");
   });
 
-  it("shows following file context for insert_before previews", async () => {
+  it("shows following file context for insert_before_lines previews", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "package demo;\npublic class As {\n}\n");
     const registry = createToolRegistry();
@@ -484,7 +484,7 @@ describe("edit/write flow", () => {
 
     const args = {
       path: "src/example.ts",
-      edits: [{ insert_before: { anchor: "2:abc", new_text: "/**\n * comment" } }],
+      edits: [{ insert_before_lines: { anchor: "2#abcd", new_text: "/**\n * comment" } }],
     };
     const partialComponent = tool.renderCall(args, {} as any, { lastComponent: undefined, cwd: root, argsComplete: false }) as any;
     const partialRendered = partialComponent.render(200).join("\n");
@@ -506,7 +506,7 @@ describe("edit/write flow", () => {
       wasReadInSession: () => true,
     });
 
-    const anchor = "5:abc";
+    const anchor = "5#abcd";
     const replaceRendered = (tool.renderCall(
       { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "FIVE" } }] },
       {} as any,
@@ -521,7 +521,7 @@ describe("edit/write flow", () => {
     expect(replaceRendered).toContain("  8 eight");
 
     const insertBeforeRendered = (tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_before: { anchor, new_text: "before-five" } }] },
+      { path: "src/example.ts", edits: [{ insert_before_lines: { anchor, new_text: "before-five" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root },
     ) as any).render(200).join("\n");
@@ -531,7 +531,7 @@ describe("edit/write flow", () => {
     expect(insertBeforeRendered).toContain("  8 seven");
 
     const insertAfterRendered = (tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "after-five" } }] },
+      { path: "src/example.ts", edits: [{ insert_after_lines: { anchor, new_text: "after-five" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root },
     ) as any).render(200).join("\n");
@@ -548,7 +548,7 @@ describe("edit/write flow", () => {
     });
     const newText = Array.from({ length: 8 }, (_, index) => `line-${index + 1}`).join("\n");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "2:abc", end_anchor: "2:abc", new_text: newText } }] },
+      { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "2#abcd", end_anchor: "2#abcd", new_text: newText } }] },
       {} as any,
       { lastComponent: undefined },
     ) as any;
@@ -568,7 +568,7 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }] },
+      { path: "src/example.ts", edits: [{ insert_after_lines: { anchor, new_text: "first line\nsecond line" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root, executionStarted: true, argsComplete: true, isPartial: false, expanded: false, isError: false },
     ) as any;
@@ -588,7 +588,7 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "first line\nsecond line" } }] },
+      { path: "src/example.ts", edits: [{ insert_after_lines: { anchor, new_text: "first line\nsecond line" } }] },
       {} as any,
       { lastComponent: undefined, cwd: root, executionStarted: true, argsComplete: true, isPartial: false, expanded: true, isError: false },
     ) as any;
@@ -655,7 +655,7 @@ describe("edit/write flow", () => {
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|beta"))!.split("|")[0]!;
     const tool = registry.getTool("edit");
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ insert_after: { anchor, new_text: "first line" } }] },
+      { path: "src/example.ts", edits: [{ insert_after_lines: { anchor, new_text: "first line" } }] },
       { fg: (_color: string, text: string) => `<${text}>`, bold: (text: string) => `**${text}**` } as any,
       { lastComponent: undefined, cwd: root },
     ) as any;
@@ -704,7 +704,7 @@ describe("edit/write flow", () => {
       wasReadInSession: () => true,
     });
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ delete_lines: { start_anchor: "1:abc", end_anchor: "1:abc" } }] },
+      { path: "src/example.ts", edits: [{ delete_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd" } }] },
       {} as any,
       { lastComponent: undefined },
     ) as any;
@@ -719,7 +719,7 @@ describe("edit/write flow", () => {
       wasReadInSession: () => true,
     });
     const component = tool.renderCall(
-      { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "2:abc", end_anchor: "2:abc", new_text: "" } }] },
+      { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "2#abcd", end_anchor: "2#abcd", new_text: "" } }] },
       {} as any,
       { lastComponent: undefined },
     ) as any;
@@ -844,12 +844,12 @@ describe("edit/write flow", () => {
     const text = getText(result);
     expect(text).toContain("Edit applied to src/example.ts.");
     expect(text).toContain("Review the diff below.");
-    expect(text).toContain("Use only LINE:HASH anchors from lines prefixed with \"+\" or \"|\"");
+    expect(text).toContain("Use only LINE#HASH anchors from lines prefixed with \"+\" or \"|\"");
     expect(text).toContain("old/deleted content and intentionally do not carry reusable anchors");
-    expect(text).toContain("| 1:");
-    expect(text).toContain("- 2:---|beta");
-    expect(text).toContain("+ 2:");
-    expect(text).not.toMatch(/^-\s*\d+:[0-9a-f]{3}\|/m);
+    expect(text).toContain("| 1#");
+    expect(text).toContain("- 2#----|beta");
+    expect(text).toContain("+ 2#");
+    expect(text).not.toMatch(/^-\s*\d+#[0-9a-f]{4}\|/m);
     expect(text).toContain("|alpha");
     expect(text).toContain("|gamma");
     // The diff's `lineNumWidth` is 1.
@@ -939,7 +939,7 @@ describe("edit/write flow", () => {
     const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const anchor = getText(readResult).split("\n").find((line) => line.includes("|alpha"))!.split("|")[0]!;
     const deleteResult = await registry.getTool("edit").execute("2", { path: "src/example.ts", edits: [{ delete_lines: { start_anchor: anchor, end_anchor: anchor } }] }, undefined, undefined, { cwd: root });
-    const emptyAnchorLine = getText(deleteResult).split("\n").find((line) => /(?:\||\+)\s*1:[0-9a-f]{3}\|$/.test(line));
+    const emptyAnchorLine = getText(deleteResult).split("\n").find((line) => /(?:\||\+)\s*1#[0-9a-f]{4}\|$/.test(line));
     const emptyAnchor = emptyAnchorLine ? extractAnchor(emptyAnchorLine) : undefined;
     expect(emptyAnchor).toBeTruthy();
 
@@ -960,7 +960,7 @@ describe("edit/write flow", () => {
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
     const tool = registerEditTool(registry.pi as any, { wasReadInSession: () => false });
-    const result = await tool.execute("1", { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "2:abc", end_anchor: "2:abc", new_text: "gamma" } }] }, undefined, undefined, { cwd: root });
+    const result = await tool.execute("1", { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "2#abcd", end_anchor: "2#abcd", new_text: "gamma" } }] }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("Fresh anchors are required");
   });
@@ -1016,7 +1016,7 @@ describe("edit/write flow", () => {
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
     const tool = registerEditTool(registry.pi as any, { wasReadInSession: () => true });
-    const result = await tool.execute("1", { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "2:000", end_anchor: "1:000", new_text: "x" } }] }, undefined, undefined, { cwd: root });
+    const result = await tool.execute("1", { path: "src/example.ts", edits: [{ replace_lines: { start_anchor: "2#0000", end_anchor: "1#0000", new_text: "x" } }] }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("replace_lines requires start_anchor line <= end_anchor line");
   });
@@ -1058,7 +1058,7 @@ describe("edit/write flow", () => {
     const outputPath = result.details?.truncation?.outputPath;
     expect(outputPath).toBeTruthy();
     const saved = await readFile(outputPath, "utf8");
-    expect(saved).toContain("2504:");
+    expect(saved).toContain("2504#");
   });
 
   it("write truncates oversized text output by bytes", async () => {
@@ -1082,11 +1082,11 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const writeResult = await registry.getTool("write").execute("1", { path: "src/trailing.ts", content: "alpha\nbeta\n" }, undefined, undefined, { cwd: root });
     const writeText = getText(writeResult);
-    expect(writeText).toMatch(/^1:[0-9a-f]{3}\|alpha$/m);
-    expect(writeText).toMatch(/^2:[0-9a-f]{3}\|beta$/m);
-    // The implicit empty line is shown as `3:hash|` so the agent
+    expect(writeText).toMatch(/^1#[0-9a-f]{4}\|alpha$/m);
+    expect(writeText).toMatch(/^2#[0-9a-f]{4}\|beta$/m);
+    // The implicit empty line is shown as `3#hash|` so the agent
     // and human both know the file ends with a newline.
-    expect(writeText).toMatch(/^3:[0-9a-f]{3}\|$/m);
+    expect(writeText).toMatch(/^3#[0-9a-f]{4}\|$/m);
     const readResult = await registry.getTool("read").execute("2", { path: "src/trailing.ts" }, undefined, undefined, { cwd: root });
     expect(getText(readResult)).toContain("totalLines: 3");
   });
@@ -1105,9 +1105,29 @@ describe("edit/write flow", () => {
     const editResult = await registry.getTool("edit").execute("3", { path: "src/edit-trailing.ts", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "gamma" } }] }, undefined, undefined, { cwd: root });
     expect(editResult.isError).not.toBe(true);
     const text = getText(editResult);
-    expect(text).toMatch(/^\| 1:[0-9a-f]{3}\|alpha$/m);
+    expect(text).toMatch(/^\| 1#[0-9a-f]{4}\|alpha$/m);
     // "beta" is removed from line 2; "gamma" is added at line 2.
-    expect(text).toMatch(/^- 2:---\|beta$/m);
-    expect(text).toMatch(/^\+ 2:[0-9a-f]{3}\|gamma$/m);
+    expect(text).toMatch(/^- 2#----\|beta$/m);
+    expect(text).toMatch(/^\+ 2#[0-9a-f]{4}\|gamma$/m);
+  });
+  it("reports no-change context when deleting the sole empty line from an empty file", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/empty.txt", "");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { path: "src/empty.txt" }, undefined, undefined, { cwd: root });
+    const anchor = getText(readResult).split("\n").find((line) => /^1#[0-9a-f]{4}\|$/.test(line))!.split("|")[0]!;
+
+    const result = await registry.getTool("edit").execute(
+      "2",
+      { path: "src/empty.txt", edits: [{ delete_lines: { start_anchor: anchor, end_anchor: anchor } }] },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("would not change the file");
+    expect(getText(result)).toContain("Current context in src/empty.txt around line 1");
   });
 });

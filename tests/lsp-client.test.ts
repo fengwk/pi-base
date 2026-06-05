@@ -146,9 +146,9 @@ describe("LspClient internals", () => {
   });
 
   describe("requestTimeoutMs", () => {
-    it("defaults to 15000ms when not configured", () => {
+    it("defaults to 60000ms when not configured", () => {
       const c = new LspClient("/tmp/demo", { id: "x", command: ["x"], extensions: [".x"] } as any);
-      expect((c as any).requestTimeoutMs).toBe(15000);
+      expect((c as any).requestTimeoutMs).toBe(60000);
     });
     it("honors a configured timeout", () => {
       const c = new LspClient("/tmp/demo", { id: "x", command: ["x"], extensions: [".x"], requestTimeoutMs: 90000 } as any);
@@ -215,10 +215,9 @@ describe("LspClient internals", () => {
       await writeFile(fakeServer, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
       const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");
       const resolver = new LspDiscoveryResolver({
-        searchPaths: [binDir],
         servers: {
           typescript: {
-            command: ["fake-lsp"],
+            command: [fakeServer],
             extensions: [".ts"],
           },
         },
@@ -389,13 +388,11 @@ describe("LspClient internals", () => {
       expect(() => projectB.findServerForFile("/tmp/A.java")).toThrowError(/No LSP server configured/);
     });
 
-    it("does not leak searchPaths from one resolver to another", () => {
-      const projectA = new LspDiscoveryResolver({ searchPaths: ["/a/bin"] });
-      const projectB = new LspDiscoveryResolver({ searchPaths: ["/b/bin"] });
-      // Both should resolve independently. We can't easily assert "no leak" without
-      // a real binary, but we can assert the config snapshots are independent.
-      expect(projectA.getConfig().searchPaths).toEqual(["/a/bin"]);
-      expect(projectB.getConfig().searchPaths).toEqual(["/b/bin"]);
+    it("does not treat resolver instances as shared global config", () => {
+      const projectA = new LspDiscoveryResolver({ servers: { ts: { command: ["ts-lsp"], extensions: [".ts"] } } });
+      const projectB = new LspDiscoveryResolver({});
+      expect(projectA.getConfig().servers?.ts?.command).toEqual(["ts-lsp"]);
+      expect(projectB.getConfig().servers).toBeUndefined();
     });
 
     it("uses the resolver passed to getClient, not a shared global config", async () => {
@@ -439,8 +436,7 @@ describe("LspClient internals", () => {
         await writeFile(join(binDir, "fake-lsp"), "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
         const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
         const resolver = new LspDiscoveryResolver({
-          searchPaths: [binDir],
-          servers: { typescript: { command: ["fake-lsp"], extensions: [".ts"] } },
+          servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
         });
         const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
           (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
@@ -473,8 +469,7 @@ describe("LspClient internals", () => {
         await writeFile(join(binDir, "fake-lsp"), "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
         const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
         const resolver = new LspDiscoveryResolver({
-          searchPaths: [binDir],
-          servers: { typescript: { command: ["fake-lsp"], extensions: [".ts"] } },
+          servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
         });
         const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
           (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
@@ -517,8 +512,7 @@ describe("LspClient internals", () => {
         await writeFile(join(binDir, "fake-lsp"), "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
         const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
         const resolver = new LspDiscoveryResolver({
-          searchPaths: [binDir],
-          servers: { typescript: { command: ["fake-lsp"], extensions: [".ts"] } },
+          servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
         });
         // Make `start` block on a manually-controlled promise so the boot
         // is in flight when the timer fires.
@@ -570,8 +564,7 @@ describe("LspClient internals", () => {
         await writeFile(join(binDir, "fake-lsp"), "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
         const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
         const resolver = new LspDiscoveryResolver({
-          searchPaths: [binDir],
-          servers: { typescript: { command: ["fake-lsp"], extensions: [".ts"] } },
+          servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
         });
         const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
           (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
@@ -614,8 +607,7 @@ describe("LspClient internals", () => {
         await writeFile(join(binDir, "fake-lsp"), "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
         const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
         const resolver = new LspDiscoveryResolver({
-          searchPaths: [binDir],
-          servers: { typescript: { command: ["fake-lsp"], extensions: [".ts"] } },
+          servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
         });
         const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
           (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
@@ -658,8 +650,7 @@ describe("LspClient internals", () => {
         const fileA = await writeWorkspaceFile(rootA, "src/a.ts", "a\n");
         const fileB = await writeWorkspaceFile(rootB, "src/b.ts", "b\n");
         const resolver = new LspDiscoveryResolver({
-          searchPaths: [binDir],
-          servers: { typescript: { command: ["fake-lsp"], extensions: [".ts"] } },
+          servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
         });
         const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
           (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
@@ -702,8 +693,7 @@ describe("LspClient internals", () => {
         await writeFile(join(binDir, "fake-lsp"), "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
         const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
         const resolver = new LspDiscoveryResolver({
-          searchPaths: [binDir],
-          servers: { typescript: { command: ["fake-lsp"], extensions: [".ts"] } },
+          servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
         });
         const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
           (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
@@ -736,8 +726,7 @@ describe("LspClient internals", () => {
       await writeFile(join(binDir, "fake-lsp"), "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
       const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
       const resolver = new LspDiscoveryResolver({
-        searchPaths: [binDir],
-        servers: { typescript: { command: ["fake-lsp"], extensions: [".ts"] } },
+        servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
       });
       // First boot: success. Second boot: failure. Third+ boot: success.
       const startSpy = vi.spyOn(LspClient.prototype, "start")
@@ -789,8 +778,7 @@ describe("LspClient internals", () => {
         await writeFile(join(binDir, "fake-lsp"), "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
         const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
         const resolver = new LspDiscoveryResolver({
-          searchPaths: [binDir],
-          servers: { typescript: { command: ["fake-lsp"], extensions: [".ts"] } },
+          servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
         });
         const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
           (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };

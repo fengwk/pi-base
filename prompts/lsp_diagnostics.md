@@ -12,6 +12,6 @@ Parameters:
 - `path` (required)
 - `severity` (optional, one of `error`, `warning`, `information`, `hint`, `all`; default `all`)
 
-Examples:
-- `lsp_diagnostics({ path: "src/main/java/com/acme/App.java", severity: "error" })`
-- `lsp_diagnostics({ path: "src/example.ts" })`
+Examples show the arguments passed to the tool:
+- `{"path":"src/main/java/com/acme/App.java","severity":"error"}`
+- `{"path":"src/example.ts"}`

@@ -104,7 +104,6 @@ function sanitizeLspDiscoveryConfig(value: unknown): LspDiscoveryConfig | undefi
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("lsp must be an object.");
   const input = value as Record<string, unknown>;
   const output: LspDiscoveryConfig = {};
-  if (input.searchPaths !== undefined) output.searchPaths = requireStringArray(input.searchPaths, "lsp.searchPaths");
   if (input.servers !== undefined) output.servers = sanitizeLspServersRecord(input.servers, "lsp.servers");
   return Object.keys(output).length > 0 ? output : undefined;
 }
@@ -251,9 +250,6 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
 function sanitizeSettings(value: unknown): PiBaseSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("settings must be a JSON object.");
   const input = value as Record<string, unknown>;
-  if (input.contextHygiene !== undefined) {
-    throw new Error("contextHygiene is no longer supported. Use contextCompression instead.");
-  }
   const output: PiBaseSettings = {};
   const lsp = input.lsp === undefined ? undefined : sanitizeLspDiscoveryConfig(input.lsp);
   if (lsp) output.lsp = lsp;
@@ -296,38 +292,34 @@ function isHomeShortcutPath(value: string): boolean {
     || value.startsWith("${HOME}\\");
 }
 
-function shouldNormalizeCommandPath(value: string): boolean {
-  if (isHomeShortcutPath(value)) return true;
-  if (value.startsWith("$")) return false;
-  return (value.includes("/") || value.includes("\\")) && !isAbsolute(value);
+function normalizeCommandExecutable(value: string, path: string): string {
+  const expanded = expandHomePath(value);
+  if (isHomeShortcutPath(value)) return expanded;
+  if (value.includes("/") || value.includes("\\")) {
+    if (!isAbsolute(expanded)) {
+      throw new Error(`${path}.command[0] must be a command on PATH or an absolute executable path. ~/..., $HOME/..., and \${HOME}/... are supported.`);
+    }
+    return expanded;
+  }
+  return value;
 }
 
-function normalizePathLikeEntry(value: string, baseDir: string): string {
-  const expanded = expandHomePath(value);
-  return isAbsolute(expanded) ? expanded : resolve(baseDir, expanded);
-}
-function normalizeLspConfigPaths(config: LspDiscoveryConfig | undefined, baseDir: string): LspDiscoveryConfig | undefined {
-  if (!config) return undefined;
+function normalizeLspConfigPaths(config: LspDiscoveryConfig | undefined): LspDiscoveryConfig | undefined {
+  if (!config?.servers) return config;
   return {
-    ...(config.searchPaths ? { searchPaths: config.searchPaths.map((entry) => normalizePathLikeEntry(entry, baseDir)) } : {}),
-    ...(config.servers
-      ? {
-          servers: Object.fromEntries(Object.entries(config.servers).map(([id, entry]) => {
-            const [command0, ...rest] = entry.command;
-            const normalizedCommand = command0 && shouldNormalizeCommandPath(command0)
-              ? [normalizePathLikeEntry(command0, baseDir), ...rest]
-              : entry.command;
-            return [id, { ...entry, command: normalizedCommand }];
-          })),
-        }
-      : {}),
+    servers: Object.fromEntries(Object.entries(config.servers).map(([id, entry]) => {
+      const [command0, ...rest] = entry.command;
+      const normalizedCommand = command0
+        ? [normalizeCommandExecutable(command0, `lsp.servers.${id}`), ...rest]
+        : entry.command;
+      return [id, { ...entry, command: normalizedCommand }];
+    })),
   };
 }
 
-function normalizeSettingsPaths(settings: PiBaseSettings, settingsFilePath: string): PiBaseSettings {
-  const baseDir = dirname(settingsFilePath);
+function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
   return {
-    ...(settings.lsp ? { lsp: normalizeLspConfigPaths(settings.lsp, baseDir) } : {}),
+    ...(settings.lsp ? { lsp: normalizeLspConfigPaths(settings.lsp) } : {}),
     ...(settings.permission ? { permission: settings.permission } : {}),
     ...(settings.render ? { render: settings.render } : {}),
     ...(settings.yolo !== undefined ? { yolo: settings.yolo } : {}),
@@ -339,7 +331,7 @@ function readSettingsFile(filePath: string): PiBaseSettings {
   if (!existsSync(filePath)) return {};
   try {
     const settings = sanitizeSettings(JSON.parse(readFileSync(filePath, "utf8")));
-    return normalizeSettingsPaths(settings, filePath);
+    return normalizeSettingsPaths(settings);
   } catch (error) {
     throw new Error(`Invalid pi-base settings at ${filePath}: ${(error as Error).message}`);
   }
@@ -347,13 +339,9 @@ function readSettingsFile(filePath: string): PiBaseSettings {
 
 function mergeLsp(base: LspDiscoveryConfig | undefined, override: LspDiscoveryConfig | undefined): LspDiscoveryConfig | undefined {
   if (!base && !override) return undefined;
-  const searchPaths = override?.searchPaths ?? base?.searchPaths;
   const servers = override?.servers ?? base?.servers;
-  if (!searchPaths && !servers) return undefined;
-  return {
-    ...(searchPaths ? { searchPaths } : {}),
-    ...(servers ? { servers } : {}),
-  };
+  if (!servers) return undefined;
+  return { servers };
 }
 
 function mergePermission(base: PermissionConfig | undefined, override: PermissionConfig | undefined): PermissionConfig | undefined {

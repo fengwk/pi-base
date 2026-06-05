@@ -12,6 +12,6 @@ Parameters:
 - `line` (required, 1-based)
 - `character` (optional, 0-based, default: 0)
 
-Examples:
-- `lsp_goto_definition({ path: "src/example.ts", line: 45, character: 15 })`
-- `lsp_goto_definition({ path: "src/example.ts", line: 45 })`
+Examples show the arguments passed to the tool:
+- `{"path":"src/example.ts","line":45,"character":15}`
+- `{"path":"src/example.ts","line":45}`

@@ -27,7 +27,7 @@ function escapeRegex(value: string): string {
 }
 
 function anchorFor(text: string, lineContent: string): string {
-  const match = text.match(new RegExp(`(?:^|\\n)(?:[+|]\\s*)?\\s*(\\d+:[0-9a-f]{3})\\|${escapeRegex(lineContent)}`));
+  const match = text.match(new RegExp(`(?:^|\\n)(?:[+|]\\s*)?\\s*(\\d+#[0-9a-f]{4})\\|${escapeRegex(lineContent)}`));
   if (!match?.[1]) throw new Error(`No anchor found for ${JSON.stringify(lineContent)} in:\n${text}`);
   return match[1];
 }
@@ -117,6 +117,8 @@ describe("context compression", () => {
 
     const transformed = await registry.emit("context", { messages }, { cwd: root });
     expect(getText(transformed.messages[1])).toContain("earlier file output omitted because the file changed later");
+    expect(getText(transformed.messages[1])).toContain("LINE#HASH anchors");
+    expect(getText(transformed.messages[1])).not.toContain(`LINE${":"}HASH anchors`);
   });
 
   it("masks stale read and edit outputs after later edits to the same file without modifying tool calls", async () => {
@@ -225,9 +227,9 @@ describe("context compression", () => {
     const grepArgs = { pattern: "alpha", path: "src", literal: true };
     const grepResult = await registry.getTool("grep").execute("grep-tree-1", grepArgs, undefined, undefined, { cwd: root });
     expect(getText(grepResult)).toContain("example.txt:1: alpha");
-    expect(getText(grepResult)).not.toMatch(/\d+:[0-9a-f]{3}\|/);
+    expect(getText(grepResult)).not.toMatch(/\d+#[0-9a-f]{4}\|/);
 
-    const editArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: "1:abc", end_anchor: "1:abc", new_text: "alpha v1" } }] };
+    const editArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: "alpha v1" } }] };
     const editResult = await registry.getTool("edit").execute("edit-after-grep-tree", editArgs, undefined, undefined, { cwd: root });
     expect(editResult.isError).toBe(true);
     expect(getText(editResult)).toContain("Fresh anchors are required");
@@ -246,7 +248,7 @@ describe("context compression", () => {
     const readArgs = { path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-for-error-context", readArgs, undefined, undefined, { cwd: root });
     const alphaAnchor = anchorFor(getText(readResult), "alpha");
-    const badAlphaAnchor = alphaAnchor.replace(/:[0-9a-f]{3}$/, (value) => value === ":fff" ? ":000" : ":fff");
+    const badAlphaAnchor = alphaAnchor.replace(/#[0-9a-f]{4}$/, (value) => value.endsWith("ffff") ? "#0000" : "#ffff");
 
     const failedEditArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: badAlphaAnchor, end_anchor: badAlphaAnchor, new_text: "alpha bad" } }] };
     const failedEdit = await registry.getTool("edit").execute("edit-error-context", failedEditArgs, undefined, undefined, { cwd: root });
@@ -436,7 +438,7 @@ describe("context compression", () => {
     ];
 
     const transformed = await registry.emit("context", { messages }, { cwd: root });
-    expect(getText(transformed.messages[2])).toBe("[pi-base context compression: older tool output omitted. Re-run the tool if you need those details.]");
+    expect(getText(transformed.messages[2])).toBe("[context compression: older tool output omitted. Re-run the tool if you need those details.]");
   });
 
   it("does not age-compress when only one retention dimension is exceeded", async () => {

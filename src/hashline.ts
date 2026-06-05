@@ -4,8 +4,8 @@ import { throwIfAborted } from "./runtime.js";
 export type HashlineEditItem =
   | { replace_lines: { start_anchor: string; end_anchor: string; new_text: string } }
   | { delete_lines: { start_anchor: string; end_anchor: string } }
-  | { insert_before: { anchor: string; new_text: string } }
-  | { insert_after: { anchor: string; new_text: string } };
+  | { insert_before_lines: { anchor: string; new_text: string } }
+  | { insert_after_lines: { anchor: string; new_text: string } };
 
 export interface HashlineAnchorLine {
   line: number;
@@ -35,14 +35,14 @@ export class HashlineMismatchError extends Error {
   readonly detail: AnchorMismatchDetail;
 
   constructor(detail: AnchorMismatchDetail) {
-    super(`Anchor mismatch at ${detail.provided.line}:${detail.provided.hash} (${detail.reason})`);
+    super(`Anchor mismatch at ${detail.provided.line}#${detail.provided.hash} (${detail.reason})`);
     this.name = "HashlineMismatchError";
     this.updatedAnchors = detail.nearby;
     this.detail = detail;
   }
 }
 
-const HASH_LEN = 3;
+const HASH_LEN = 4;
 const RADIX = 16;
 const HASH_MOD = RADIX ** HASH_LEN;
 const DICT = Array.from({ length: HASH_MOD }, (_, i) => i.toString(RADIX).padStart(HASH_LEN, "0"));
@@ -78,13 +78,13 @@ export function escapeControlCharsForDisplay(text: string): string {
 
 export function formatHashlineDisplay(lineNumber: number, content: string, width = 0, displayOverride?: string): string {
   const padded = width > 0 ? String(lineNumber).padStart(width, " ") : String(lineNumber);
-  return `${padded}:${computeLineHash(lineNumber, content)}|${displayOverride ?? escapeControlCharsForDisplay(content)}`;
+  return `${padded}#${computeLineHash(lineNumber, content)}|${displayOverride ?? escapeControlCharsForDisplay(content)}`;
 }
 
 export function parseLineRef(ref: string): { line: number; hash: string } {
   const normalized = String(ref).replace(/\|.*$/, "").trim();
-  const match = normalized.match(new RegExp(`^(\\d+):([0-9a-fA-F]{${HASH_LEN}})$`));
-  if (!match) throw new Error(`Invalid anchor ${JSON.stringify(ref)}. Expected LINE:HASH.`);
+  const match = normalized.match(new RegExp(`^(\\d+)#([0-9a-fA-F]{${HASH_LEN}})$`));
+  if (!match) throw new Error(`Invalid anchor ${JSON.stringify(ref)}. Expected LINE#HASH.`);
   const line = Number.parseInt(match[1], 10);
   if (line < 1) throw new Error(`Invalid anchor ${JSON.stringify(ref)}. Line must be >= 1.`);
   return { line, hash: match[2].toLowerCase() };
@@ -104,15 +104,17 @@ export function splitNewTextLines(text: string): string[] {
   return normalizeEditText(text).split("\n");
 }
 
-function normalizeInsertBeforeText(text: string): string {
+function normalizeInsertBeforeLinesText(text: string): string {
   const normalized = normalizeEditText(text);
-  if (normalized.length === 0 || normalized.endsWith("\n")) return normalized;
+  if (normalized.length === 0) return "\n";
+  if (normalized.endsWith("\n")) return normalized;
   return `${normalized}\n`;
 }
 
-function normalizeInsertAfterText(text: string): string {
+function normalizeInsertAfterLinesText(text: string): string {
   const normalized = normalizeEditText(text);
-  if (normalized.length === 0 || normalized.startsWith("\n")) return normalized;
+  if (normalized.length === 0) return "\n";
+  if (normalized.startsWith("\n")) return normalized;
   return `\n${normalized}`;
 }
 
@@ -123,7 +125,7 @@ function buildUpdatedAnchors(lines: string[], lineNumbers: number[]): HashlineAn
   return unique.map((line) => {
     const raw = lines[line - 1] ?? "";
     const hash = computeLineHash(line, raw);
-    return { line, hash, anchor: `${line}:${hash}`, raw, display: formatHashlineDisplay(line, raw, width) };
+    return { line, hash, anchor: `${line}#${hash}`, raw, display: formatHashlineDisplay(line, raw, width) };
   });
 }
 
@@ -203,9 +205,8 @@ export function applyHashlineEdits(
     spanEnd: number;
     replacement: string;
   };
-
   type PointOperation = {
-    kind: "insert_before" | "insert_after";
+    kind: "insert_before_lines" | "insert_after_lines";
     index: number;
     line: number;
     refs: Array<{ line: number; hash: string }>;
@@ -245,25 +246,25 @@ export function applyHashlineEdits(
       }
       return { kind: "delete_lines", index, start: start.line, end: end.line, refs: [start, end], spanStart, spanEnd, replacement: "" };
     }
-    if ("insert_before" in edit) {
-      const before = parseLineRef(edit.insert_before.anchor);
+    if ("insert_before_lines" in edit) {
+      const before = parseLineRef(edit.insert_before_lines.anchor);
       return {
-        kind: "insert_before",
+        kind: "insert_before_lines",
         index,
         line: before.line,
         refs: [before],
         offset: lineStart(lineStarts, before.line),
-        replacement: normalizeInsertBeforeText(edit.insert_before.new_text),
+        replacement: normalizeInsertBeforeLinesText(edit.insert_before_lines.new_text),
       };
     }
-    const after = parseLineRef(edit.insert_after.anchor);
+    const after = parseLineRef(edit.insert_after_lines.anchor);
     return {
-      kind: "insert_after",
+      kind: "insert_after_lines",
       index,
       line: after.line,
       refs: [after],
       offset: lineEnd(lineStarts, lines, after.line, content.length),
-      replacement: normalizeInsertAfterText(edit.insert_after.new_text),
+      replacement: normalizeInsertAfterLinesText(edit.insert_after_lines.new_text),
     };
   });
 
@@ -296,11 +297,11 @@ export function applyHashlineEdits(
 
     const containingRange = rangeContainingLine(operation.line);
     if (containingRange) {
-      if (operation.kind === "insert_before" && operation.line !== containingRange.start) {
-        throw new Error("insert_before anchor cannot point inside a replace_lines/delete_lines range unless it targets the start line.");
+      if (operation.kind === "insert_before_lines" && operation.line !== containingRange.start) {
+        throw new Error("insert_before_lines anchor cannot point inside a replace_lines/delete_lines range unless it targets the start line.");
       }
-      if (operation.kind === "insert_after" && operation.line !== containingRange.end) {
-        throw new Error("insert_after anchor cannot point inside a replace_lines/delete_lines range unless it targets the end line.");
+      if (operation.kind === "insert_after_lines" && operation.line !== containingRange.end) {
+        throw new Error("insert_after_lines anchor cannot point inside a replace_lines/delete_lines range unless it targets the end line.");
       }
     }
 
@@ -312,7 +313,7 @@ export function applyHashlineEdits(
     if (isRangeOperation(operation)) {
       return { start: operation.spanStart, end: operation.spanEnd, index: operation.index, placement: "replace", replacement: operation.replacement };
     }
-    return { start: operation.offset, end: operation.offset, index: operation.index, placement: operation.kind === "insert_before" ? "before" : "after", replacement: operation.replacement };
+    return { start: operation.offset, end: operation.offset, index: operation.index, placement: operation.kind === "insert_before_lines" ? "before" : "after", replacement: operation.replacement };
   });
 
   const byStart = new Map<number, TextEdit[]>();

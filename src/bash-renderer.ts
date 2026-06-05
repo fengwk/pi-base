@@ -19,7 +19,7 @@ function formatBashCall(args: any, theme: any): string {
   const rawCommand = args?.command;
   const command = typeof rawCommand === "string" ? rawCommand : "<missing-command>";
   const workdir = shortenHomePath(String(args?.workdir ?? "<missing-workdir>"));
-  const timeoutSeconds = args?.timeoutSeconds;
+  const timeoutSeconds = args?.timeout_seconds;
   const timeoutSuffix = timeoutSeconds ? styleMuted(theme, ` (timeout ${timeoutSeconds}s)`) : "";
   return `${styleToolTitle(theme, `$ ${command}`)}${timeoutSuffix}${styleMuted(theme, " in ")}${styleAccent(theme, workdir)}`;
 }
@@ -285,7 +285,7 @@ export function registerBashRendererTool(
         if (!rawWorkdir) throw new Error("workdir is required.");
         const cwd = resolveToCwd(rawWorkdir, ctx.cwd ?? process.cwd());
         const builtIn = getBuiltIn(cwd);
-        const timeoutSeconds = params.timeoutSeconds === undefined ? undefined : parsePositiveNumber(params.timeoutSeconds, "timeoutSeconds", 1);
+        const timeoutSeconds = params.timeout_seconds === undefined ? undefined : parsePositiveNumber(params.timeout_seconds, "timeout_seconds", 1);
         return await builtIn.tool.execute(
           toolCallId,
           {

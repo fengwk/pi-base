@@ -3,7 +3,7 @@ import piBaseExtension from "../index.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "../src/anthropic-cache-boundary.js";
 import { createToolRegistry } from "./helpers.js";
 
-const PLACEHOLDER = "[pi-base context compression: older tool output omitted. Re-run the tool if you need those details.]";
+const PLACEHOLDER = "[context compression: older tool output omitted. Re-run the tool if you need those details.]";
 
 function basePayload() {
   return {

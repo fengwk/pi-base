@@ -17,10 +17,10 @@
 
 ## Core ideas
 
-- Text reads return `LINE:HASH|content` anchors.
+- Text reads prefix each displayed line with a `LINE#HASH|` anchor prefix, for example `1#7936|export const value = 1;`; use only the `LINE#HASH` part as an edit anchor.
 - `edit` works from fresh anchors and fails clearly on stale anchors.
 - `write` returns fresh anchors for follow-up edits.
-- Context compression can be enabled to prune stale file outputs and bulky historical tool results; when `anchorHygiene` is enabled, obsolete `LINE:HASH` anchors from `read` / `write` / `edit` are replaced with concise placeholders before model calls.
+- Context compression can be enabled to prune stale file outputs and bulky historical tool results; when `anchorHygiene` is enabled, obsolete `LINE#HASH` anchors from `read` / `write` / `edit` are replaced with concise placeholders before model calls.
 - `grep` requires an explicit `path`, defaults to a 15s timeout, fails fast on single-file binary inputs, and returns candidate locations rather than edit anchors; use `read` after `grep` before editing.
 - `find` is delegated to Pi's built-in implementation, but `pi-base` makes `path` explicit and required — there is no implicit search root.
 - `bash` requires an explicit `workdir` on every call.
@@ -104,8 +104,8 @@ Skill reads are protected from `tools.read` age compression. pi-base detects rea
 Placeholders are intentionally short and unambiguous:
 
 ```text
-[pi-base context compression: earlier file output omitted because the file changed later. Re-run read for current content before using LINE:HASH anchors.]
-[pi-base context compression: older tool output omitted. Re-run the tool if you need those details.]
+[context compression: earlier file output omitted because the file changed later. Re-run read for current content before using LINE#HASH anchors.]
+[context compression: older tool output omitted. Re-run the tool if you need those details.]
 ```
 
 Context compression does not add session-history messages or a persistent UI marker; the configured behavior is driven entirely by `pi-base.json`.
@@ -160,18 +160,14 @@ When omitted, the default is `false`. When present, it seeds the default `/yolo`
 
 ### Example: LSP servers for a Java + Go + TS + Python workspace
 
-`lsp.searchPaths` and path-like `command[0]` entries support `~/...`, `$HOME/...`, and `${HOME}/...` in addition to absolute or project-relative paths.
+`command[0]` is either a bare executable resolved from `PATH`, or an explicit executable path. Path-like entries must be absolute; `~/...`, `$HOME/...`, and `${HOME}/...` are expanded before launch.
 
 ```json
 {
   "lsp": {
-    "searchPaths": [
-      "~/.local/share/nvim/mason/bin"
-    ],
-
     "servers": {
       "jdtls": {
-        "command": ["jdtls"],
+        "command": ["$HOME/.local/share/nvim/mason/bin/jdtls"],
         "extensions": [".java"],
         "rootMarkers": ["pom.xml", "build.gradle", "settings.gradle"],
         "firstMatchMarkers": [".git"]
@@ -201,11 +197,11 @@ When omitted, the default is `false`. When present, it seeds the default `/yolo`
 
 | Field | Required | Description |
 |---|---|---|
-| `command` | yes | Executable + args. The first element is searched in `PATH` then `lsp.searchPaths`. |
+| `command` | yes | Executable + args. `command[0]` must be either a command available on `PATH` or an absolute executable path; `~/...`, `$HOME/...`, and `${HOME}/...` are supported. |
 | `extensions` | yes | File extensions this server handles, e.g. `[".ts", ".tsx"]`. |
 | `rootMarkers` | no | Workspace root markers for multi-module projects (topmost wins). |
 | `firstMatchMarkers` | no | Alternative workspace root markers (first match wins). |
-| `requestTimeoutMs` | no | Per-request timeout. Defaults to `15000`. Increase for slow servers like `gopls`. |
+| `requestTimeoutMs` | no | Per-request timeout. Defaults to `60000`. Increase further for very slow servers like `gopls` on large workspaces. |
 
 To "disable" a server, omit it from the map. There is no `disabledServers` list.
 
@@ -271,5 +267,3 @@ When invoking `pi -p` from a shell, quote the prompt or pass it through a heredo
 ## Coverage status
 
 Coverage is intentionally kept high, but the exact numbers change as tests evolve. Check the latest `npm test` / `npm run test:coverage` output for current counts.
-
-See `DESIGN.md` for the full v1 design and protocol details.

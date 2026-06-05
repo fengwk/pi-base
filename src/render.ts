@@ -2,7 +2,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 
 const DEFAULT_COLLAPSED_RESULT_LINES = 20;
-const HASHLINE_RE = /^(\s*\d+:[0-9a-fA-F]+\|)(.*)$/;
+const HASHLINE_RE = /^(\s*\d+#[0-9a-fA-F]{4}\|)(.*)$/;
 const KEY_VALUE_RE = /^([A-Za-z][A-Za-z0-9]*):(?!\/\/)(?:\s*(.*))?$/;
 const SECTION_HEADER_RE = /^([A-Za-z][A-Za-z0-9 ]*):$/;
 
@@ -119,7 +119,7 @@ function colorizeResultLine(line: string, theme: any, state: { inDiff: boolean }
   if (line.startsWith("Review the written file content below.")) return paint(theme, "warning", line);
   if (line.startsWith("Edit failed")) return paint(theme, "error", line);
   if (line.startsWith("Use the refreshed anchors ")) return paint(theme, "warning", line);
-  if (line.startsWith("Use these LINE:HASH anchors ")) return paint(theme, "warning", line);
+  if (line.startsWith("Use these LINE#HASH anchors ")) return paint(theme, "warning", line);
   if (isError && line.startsWith("Validation failed")) return paint(theme, "error", line);
 
   const hashlineMatch = line.match(HASHLINE_RE);

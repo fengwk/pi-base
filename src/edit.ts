@@ -83,7 +83,7 @@ function formatCurrentAnchorLine(lineNumber: number, content: string, width: num
 
 function formatRemovedLine(lineNumber: number, content: string, width: number): string {
   const padded = width > 0 ? String(lineNumber).padStart(width, " ") : String(lineNumber);
-  return `${padded}:---|${escapeControlCharsForDisplay(visualizeLeadingWhitespace(content))}`;
+  return `${padded}#----|${escapeControlCharsForDisplay(visualizeLeadingWhitespace(content))}`;
 }
 
 /**
@@ -222,26 +222,26 @@ function renderDeletePreview(lines: string[], entry: any, width: number, theme: 
   ];
 }
 
-function renderInsertBeforePreview(lines: string[], entry: any, width: number, theme: any): string[] {
-  const anchorRef = safeParseLineRef(entry.insert_before.anchor);
-  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_before")];
+function renderInsertBeforeLinesPreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const anchorRef = safeParseLineRef(entry.insert_before_lines.anchor);
+  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_before_lines")];
   const anchor = anchorRef.line;
-  const newLines = splitPreviewNewLines(entry.insert_before.new_text);
+  const newLines = splitPreviewNewLines(entry.insert_before_lines.new_text);
   const delta = newLines.length;
   return [
-    styleToolTitle(theme, `insert_before ${entry.insert_before.anchor}`),
+    styleToolTitle(theme, `insert_before_lines ${entry.insert_before_lines.anchor}`),
     ...newLines.map((content, index) => formatPreviewLine("+", anchor + index, content, width, theme)),
     ...collectAfterLines(lines, anchor).map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
   ];
 }
 
-function renderInsertAfterPreview(lines: string[], entry: any, width: number, theme: any): string[] {
-  const anchorRef = safeParseLineRef(entry.insert_after.anchor);
-  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_after")];
+function renderInsertAfterLinesPreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const anchorRef = safeParseLineRef(entry.insert_after_lines.anchor);
+  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_after_lines")];
   const anchor = anchorRef.line;
-  const newLines = splitPreviewNewLines(entry.insert_after.new_text);
+  const newLines = splitPreviewNewLines(entry.insert_after_lines.new_text);
   return [
-    styleToolTitle(theme, `insert_after ${entry.insert_after.anchor}`),
+    styleToolTitle(theme, `insert_after_lines ${entry.insert_after_lines.anchor}`),
     ...collectBeforeLines(lines, anchor).map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
     ...newLines.map((content, index) => formatPreviewLine("+", anchor + 1 + index, content, width, theme)),
   ];
@@ -253,8 +253,8 @@ function buildPerOperationPreview(args: any, previewLines: string[] | undefined,
   const blocks = args.edits.map((entry: any) => {
     if (entry?.replace_lines) return renderReplacePreview(previewLines, entry, width, theme);
     if (entry?.delete_lines) return renderDeletePreview(previewLines, entry, width, theme);
-    if (entry?.insert_before) return renderInsertBeforePreview(previewLines, entry, width, theme);
-    if (entry?.insert_after) return renderInsertAfterPreview(previewLines, entry, width, theme);
+    if (entry?.insert_before_lines) return renderInsertBeforeLinesPreview(previewLines, entry, width, theme);
+    if (entry?.insert_after_lines) return renderInsertAfterLinesPreview(previewLines, entry, width, theme);
     return [styleWarning(theme, "? unknown_edit")];
   });
   return blocks.map((block: string[]) => block.join("\n")).join("\n\n");
@@ -283,16 +283,16 @@ function formatEditCall(args: any, theme: any, previewLines?: string[]): string 
       lines.push(styleDiffRemoved(theme, `- range ${entry.delete_lines.start_anchor} .. ${entry.delete_lines.end_anchor}`));
       continue;
     }
-    if (entry?.insert_before) {
-      lines.push(styleToolTitle(theme, `insert_before ${entry.insert_before.anchor}`));
-      lines.push(styleDiffContext(theme, `| before ${entry.insert_before.anchor}`));
-      lines.push(...renderInsertedText(String(entry.insert_before.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
+    if (entry?.insert_before_lines) {
+      lines.push(styleToolTitle(theme, `insert_before_lines ${entry.insert_before_lines.anchor}`));
+      lines.push(styleDiffContext(theme, `| before ${entry.insert_before_lines.anchor}`));
+      lines.push(...renderInsertedText(String(entry.insert_before_lines.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }
-    if (entry?.insert_after) {
-      lines.push(styleToolTitle(theme, `insert_after ${entry.insert_after.anchor}`));
-      lines.push(styleDiffContext(theme, `| after ${entry.insert_after.anchor}`));
-      lines.push(...renderInsertedText(String(entry.insert_after.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
+    if (entry?.insert_after_lines) {
+      lines.push(styleToolTitle(theme, `insert_after_lines ${entry.insert_after_lines.anchor}`));
+      lines.push(styleDiffContext(theme, `| after ${entry.insert_after_lines.anchor}`));
+      lines.push(...renderInsertedText(String(entry.insert_after_lines.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }
     lines.push(styleWarning(theme, "? unknown_edit"));
@@ -326,15 +326,6 @@ function collectRequestedEditLines(edits: any[]): number[] {
       if (end !== undefined) lines.push(end);
       continue;
     }
-    if (edit?.insert_before) {
-      const line = safeParseLineRef(edit.insert_before.anchor)?.line;
-      if (line !== undefined) lines.push(line);
-      continue;
-    }
-    if (edit?.insert_after) {
-      const line = safeParseLineRef(edit.insert_after.anchor)?.line;
-      if (line !== undefined) lines.push(line);
-    }
   }
   return lines;
 }
@@ -367,7 +358,7 @@ function buildNoChangeError(path: string, content: string, edits: any[]): { cont
 
 function buildStaleError(path: string, error: HashlineMismatchError): { content: [{ type: "text"; text: string }]; isError: true } {
   const detail = error.detail;
-  const providedAnchor = `${detail.provided.line}:${detail.provided.hash}`;
+  const providedAnchor = `${detail.provided.line}#${detail.provided.hash}`;
   const reason = detail.reason === "line_out_of_range"
     ? `line ${detail.provided.line} is outside the current file range 1..${detail.lineCount}`
     : `line ${detail.provided.line} exists, but hash mismatch: provided ${detail.provided.hash}, current ${detail.actual?.hash ?? "<unknown>"}`;
@@ -466,11 +457,11 @@ export function registerEditTool(
         const rawPath = String(params.path ?? "").replace(/^@/, "");
         if (!rawPath) throw new Error("path is required.");
         if (!Array.isArray(params.edits) || params.edits.length === 0) throw new Error("edits must be a non-empty array.");
-        const operationKeys = ["replace_lines", "delete_lines", "insert_before", "insert_after"] as const;
+        const operationKeys = ["replace_lines", "delete_lines", "insert_before_lines", "insert_after_lines"] as const;
         for (const item of params.edits) {
           const present = operationKeys.filter((key) => item && Object.prototype.hasOwnProperty.call(item, key));
           if (present.length !== 1) {
-            throw new Error("Each edit item must contain exactly one operation: `replace_lines`, `delete_lines`, `insert_before`, or `insert_after`.");
+            throw new Error("Each edit item must contain exactly one operation: `replace_lines`, `delete_lines`, `insert_before_lines`, or `insert_after_lines`.");
           }
         }
         const absolutePath = resolveToCwd(rawPath, ctx.cwd ?? process.cwd());
@@ -517,7 +508,7 @@ export function registerEditTool(
           const diff = generateCompactOrFullDiff(original, next.content).diff;
 
           return {
-            content: [{ type: "text" as const, text: `Edit applied to ${rawPath}.\nReview the diff below. Use only LINE:HASH anchors from lines prefixed with \"+\" or \"|\" for follow-up edits in this region; lines prefixed with \"-\" are old/deleted content and intentionally do not carry reusable anchors.\n\n${diffText}` }],
+            content: [{ type: "text" as const, text: `Edit applied to ${rawPath}.\nReview the diff below. Use only LINE#HASH anchors from lines prefixed with \"+\" or \"|\" for follow-up edits in this region; lines prefixed with \"-\" are old/deleted content and intentionally do not carry reusable anchors.\n\n${diffText}` }],
             details: { diff },
           };
         });

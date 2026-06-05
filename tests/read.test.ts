@@ -25,9 +25,9 @@ describe("read tool", () => {
     expect(text).toContain("path: src/example.ts");
     expect(text).toContain("offset: 2");
     expect(text).toContain("lsp: file type supported, but server not installed (typescript)");
-    expect(text).toContain("2:");
+    expect(text).toContain("2#");
     expect(text).toContain("two");
-    expect(text).toContain("3:");
+    expect(text).toContain("3#");
     expect(text).toContain("three");
   });
 
@@ -111,7 +111,7 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { path: "dist/bundle.txt", limit: 1 }, undefined, undefined, { cwd: root });
     const expectedHash = computeLineHash(1, longLine);
-    expect(getText(result)).toContain(`1:${expectedHash}|`);
+    expect(getText(result)).toContain(`1#${expectedHash}|`);
     expect(getText(result)).toContain("line truncated to 2000 chars");
   });
 
@@ -122,8 +122,8 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { path: "src/example.txt", offset: 9, limit: 3 }, undefined, undefined, { cwd: root });
     const lines = getText(result).split("\n");
-    expect(lines.find((line) => line.includes("|line-9"))?.startsWith(" 9:")).toBe(true);
-    expect(lines.find((line) => line.includes("|line-10"))?.startsWith("10:")).toBe(true);
+    expect(lines.find((line) => line.includes("|line-9"))?.startsWith(" 9#")).toBe(true);
+    expect(lines.find((line) => line.includes("|line-10"))?.startsWith("10#")).toBe(true);
   });
 
   it("delegates supported images to the built-in read tool", async () => {
@@ -202,8 +202,8 @@ describe("read tool", () => {
     const result = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).toContain("totalLines: 4");
-    expect(text).toMatch(/\b3:[0-9a-f]{3}\|three/);
-    expect(text).toMatch(/\b4:[0-9a-f]{3}\|$/);
+    expect(text).toMatch(/\b3#[0-9a-f]{4}\|three/);
+    expect(text).toMatch(/\b4#[0-9a-f]{4}\|$/);
   });
 
   it("reports totalLines: 1 for an empty file (one empty line)", async () => {
@@ -226,6 +226,6 @@ describe("read tool", () => {
     const result = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).toContain("totalLines: 2");
-    expect(text).toMatch(/\b2:[0-9a-f]{3}\|two/);
+    expect(text).toMatch(/\b2#[0-9a-f]{4}\|two/);
   });
 });

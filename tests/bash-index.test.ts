@@ -75,7 +75,7 @@ describe("bash tool and index", () => {
     expect(buildHostShellOptionsFor({ platform: "linux", shellPath: "/bin/fish" })).toBeUndefined();
   });
 
-  it("maps timeoutSeconds to builtin bash timeout", async () => {
+  it("maps timeout_seconds to builtin bash timeout", async () => {
     const registry = createToolRegistry();
     let seenParams: any;
     registerBashRendererTool(registry.pi as any, {
@@ -87,7 +87,7 @@ describe("bash tool and index", () => {
       }),
     });
 
-    const result = await registry.getTool("bash").execute("1", { command: "npm test", workdir: ".", timeoutSeconds: 30 }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("bash").execute("1", { command: "npm test", workdir: ".", timeout_seconds: 30 }, undefined, undefined, { cwd: process.cwd() });
     expect(getText(result)).toBe("ok");
     expect(seenParams).toEqual({ command: "npm test", timeout: 30 });
   });
@@ -237,7 +237,7 @@ describe("bash tool and index", () => {
     const tool = registry.getTool("bash");
     const state: any = {};
     tool.renderCall(
-      { command: "pwd", workdir: ".", timeoutSeconds: 5 },
+      { command: "pwd", workdir: ".", timeout_seconds: 5 },
       {} as any,
       { lastComponent: undefined, executionStarted: true, state },
     );
@@ -448,7 +448,7 @@ describe("bash tool and index", () => {
     await mkdir(join(rootA, ".pi"), { recursive: true });
     await writeFile(
       join(rootA, ".pi", "pi-base.json"),
-      JSON.stringify({ lsp: { searchPaths: [binA], servers: { ts: { command: ["fake-a-lsp"], extensions: [".ts"] } } } }),
+      JSON.stringify({ lsp: { servers: { ts: { command: [fakeA], extensions: [".ts"] } } } }),
       "utf8",
     );
     await writeWorkspaceFile(rootA, "src/example.ts", "export const x = 1;\n");
@@ -462,7 +462,7 @@ describe("bash tool and index", () => {
     await mkdir(join(rootB, ".pi"), { recursive: true });
     await writeFile(
       join(rootB, ".pi", "pi-base.json"),
-      JSON.stringify({ lsp: { searchPaths: [binB], servers: { ts: { command: ["fake-b-lsp"], extensions: [".ts"] } } } }),
+      JSON.stringify({ lsp: { servers: { ts: { command: [fakeB], extensions: [".ts"] } } } }),
       "utf8",
     );
     await writeWorkspaceFile(rootB, "src/example.ts", "export const y = 2;\n");
@@ -491,7 +491,7 @@ describe("bash tool and index", () => {
       // Force a fresh resolver for A by writing new settings.
       await writeFile(
         join(rootA, ".pi", "pi-base.json"),
-        JSON.stringify({ lsp: { searchPaths: [binA], servers: { ts: { command: ["fake-a-lsp"], extensions: [".ts"] } } } }),
+        JSON.stringify({ lsp: { servers: { ts: { command: [fakeA], extensions: [".ts"] } } } }),
         "utf8",
       );
       // Create a NEW extension instance (simulating a fresh session) and check A.

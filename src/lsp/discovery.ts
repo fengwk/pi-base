@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants as fsConstants, existsSync, statSync } from "node:fs";
-import { dirname, extname, join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 export interface LspServerConfig {
   id: string;
@@ -16,7 +17,7 @@ export interface LspServerConfig {
  * server table; the only source of truth is the user's `lsp.servers` map.
  */
 export interface LspServerEntry {
-  /** Executable + args. The first element is searched in `PATH` then `lsp.searchPaths`. Use this for server-specific flags such as `jdtls --jvm-arg=...`. */
+  /** Executable + args. The first element must be available on PATH or be an absolute executable path; `~/...`, `$HOME/...`, and `${HOME}/...` are expanded. */
   command: string[];
   /** File extensions this server handles, e.g. `[".ts", ".tsx"]`. */
   extensions: string[];
@@ -26,15 +27,13 @@ export interface LspServerEntry {
   firstMatchMarkers?: string[];
   /**
    * Optional per-request timeout in milliseconds. Applies to every JSON-RPC
-   * request sent to the server and to the diagnostics wait. Defaults to 15000.
+   * request sent to the server and to the diagnostics wait. Defaults to 60000.
    * Increase for slow servers like `gopls` on large workspaces.
    */
   requestTimeoutMs?: number;
 }
 
 export interface LspDiscoveryConfig {
-  /** Extra directories searched (in addition to `PATH`) for server executables. */
-  searchPaths?: string[];
   /** All LSP servers that `pi-base` may launch. To "disable" a server, omit it. */
   servers?: Record<string, LspServerEntry>;
 }
@@ -70,6 +69,31 @@ function windowsExecutableSuffixes(): string[] {
     .filter(Boolean);
   return ["", ...fromEnv];
 }
+function expandHomeCommandPath(value: string): string {
+  if (value === "~") return homedir();
+  if (value.startsWith("~/") || value.startsWith("~\\")) return join(homedir(), value.slice(2));
+  if (value === "$HOME") return homedir();
+  if (value.startsWith("$HOME/") || value.startsWith("$HOME\\")) return join(homedir(), value.slice(6));
+  if (value === "${HOME}") return homedir();
+  if (value.startsWith("${HOME}/") || value.startsWith("${HOME}\\")) return join(homedir(), value.slice(8));
+  return value;
+}
+
+function isHomeShortcutCommandPath(value: string): boolean {
+  return value === "~"
+    || value.startsWith("~/")
+    || value.startsWith("~\\")
+    || value === "$HOME"
+    || value.startsWith("$HOME/")
+    || value.startsWith("$HOME\\")
+    || value === "${HOME}"
+    || value.startsWith("${HOME}/")
+    || value.startsWith("${HOME}\\");
+}
+
+function isPathLikeCommand(value: string): boolean {
+  return isHomeShortcutCommandPath(value) || value.includes("/") || value.includes("\\");
+}
 
 /**
  * Resolves LSP server configuration and command paths for a specific
@@ -80,7 +104,7 @@ function windowsExecutableSuffixes(): string[] {
  * re-reading `pi-base.json` on every tool call) and passes it down to
  * `LspManager.getClient(filePath, resolver)`. This matches the opencode
  * `lsp-tools` plugin: there is no module-level mutable state, and switching
- * projects does not carry over a previous project's servers or search paths.
+ * projects does not carry over a previous project's servers.
  */
 export class LspDiscoveryResolver {
   private commandPathCache = new Map<string, string | null>();
@@ -99,7 +123,6 @@ export class LspDiscoveryResolver {
       platform: process.platform,
       cmd,
       path: process.env.PATH ?? "",
-      searchPaths: this.config.searchPaths ?? [],
     });
   }
 
@@ -108,19 +131,18 @@ export class LspDiscoveryResolver {
       platform: process.platform,
       command,
       path: process.env.PATH ?? "",
-      searchPaths: this.config.searchPaths ?? [],
     });
   }
 
   /**
    * Probe command resolution order:
-   *   1. absolute / relative path passed in -> existsSync check
-   *   2. PATH (with executable extension on win32)
-   *   3. searchPaths from discovery config
+   *   1. path-like command -> expanded absolute executable check
+   *   2. bare command name -> PATH lookup (with executable extension on win32)
    */
   findCommandPath(cmd: string): string | null {
-    if (cmd.includes("/") || cmd.includes("\\")) {
-      return isRunnableCommandFile(cmd) ? cmd : null;
+    if (isPathLikeCommand(cmd)) {
+      const expanded = expandHomeCommandPath(cmd);
+      return isAbsolute(expanded) && isRunnableCommandFile(expanded) ? expanded : null;
     }
     const cacheKey = this.discoveryCacheKey(cmd);
     if (this.commandPathCache.has(cacheKey)) return this.commandPathCache.get(cacheKey) ?? null;
@@ -129,10 +151,6 @@ export class LspDiscoveryResolver {
     const suffixes = windowsExecutableSuffixes();
     const candidates: string[] = [];
     for (const base of pathEnv.split(pathSep)) {
-      if (!base) continue;
-      for (const suffix of suffixes) candidates.push(`${join(base, cmd)}${suffix}`);
-    }
-    for (const base of this.config.searchPaths ?? []) {
       if (!base) continue;
       for (const suffix of suffixes) candidates.push(`${join(base, cmd)}${suffix}`);
     }
@@ -171,17 +189,20 @@ export class LspDiscoveryResolver {
     if (command.length === 0) return false;
     const cacheKey = this.serverInstallCacheKey(command);
     if (this.serverInstalledCache.has(cacheKey)) return this.serverInstalledCache.get(cacheKey) ?? false;
-    const installed = command[0].includes("/") || command[0].includes("\\")
-      ? isRunnableCommandFile(command[0])
-      : this.resolveOnPath(command[0]) !== null;
+    const command0 = command[0];
+    const expanded = expandHomeCommandPath(command0);
+    const installed = isPathLikeCommand(command0)
+      ? isAbsolute(expanded) && isRunnableCommandFile(expanded)
+      : this.resolveOnPath(command0) !== null;
     this.serverInstalledCache.set(cacheKey, installed);
     return installed;
   }
 
   private resolveCommand(command: string[]): string[] {
     if (command.length === 0) return command;
-    if (command[0].includes("/") || command[0].includes("\\")) {
-      return isRunnableCommandFile(command[0]) ? [command[0], ...command.slice(1)] : command;
+    if (isPathLikeCommand(command[0])) {
+      const expanded = expandHomeCommandPath(command[0]);
+      return [expanded, ...command.slice(1)];
     }
     const resolved = this.resolveOnPath(command[0]);
     return resolved ? [resolved, ...command.slice(1)] : command;
@@ -230,7 +251,7 @@ export class LspDiscoveryResolver {
         const command = this.resolveCommand(config.command);
         if (!this.isServerInstalled(command)) {
           const hint = `Hint: Add to .pi/pi-base.json or ~/.pi/agent/pi-base.json:\n${JSON.stringify({ lsp: { servers: { [id]: buildServerEntryExample(id, config.command) } } }, null, 2)}`;
-          throw new Error(`LSP server '${id}' is not installed for ${filePath}. Install ${config.command[0]} on PATH${(this.config.searchPaths ?? []).length > 0 ? " (or via lsp.searchPaths)" : ""}, or update lsp.servers.${id} in pi-base settings.\n${hint}`);
+          throw new Error(`LSP server '${id}' is not installed for ${filePath}. Command '${config.command[0]}' must be available on PATH or be an absolute executable path (~/..., $HOME/..., and \${HOME}/... are supported). Update lsp.servers.${id} in pi-base settings.\n${hint}`);
         }
         return { id, command, extensions: config.extensions, rootMarkers: config.rootMarkers, firstMatchMarkers: config.firstMatchMarkers, requestTimeoutMs: config.requestTimeoutMs };
       }
