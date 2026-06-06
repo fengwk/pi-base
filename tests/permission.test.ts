@@ -260,6 +260,48 @@ describe("permission guard", () => {
     expect(result.isError).not.toBe(true);
     expect(await readFile(join(root, "src/default-yolo.ts"), "utf8")).toBe("export const enabled = true;\n");
   });
+  it("refreshes cached settings only after session_start reload", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, { permission: { write: "deny" } });
+
+    const registry = createToolRegistry({ hasUI: false });
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const deniedBeforeChange = await registry.getTool("write").execute(
+      "1",
+      { workdir: ".", path: "src/reload.ts", content: "export const value = 1;\n" },
+      undefined,
+      undefined,
+      { cwd: root, hasUI: false },
+    );
+    expect(deniedBeforeChange.isError).toBe(true);
+    expect(getText(deniedBeforeChange)).toContain("Permission denied for write");
+    expect(getText(deniedBeforeChange)).toContain("run /reload or start a new session");
+
+    await writeProjectSettings(root, { permission: { write: "allow" } });
+
+    const deniedBeforeReload = await registry.getTool("write").execute(
+      "2",
+      { workdir: ".", path: "src/reload.ts", content: "export const value = 2;\n" },
+      undefined,
+      undefined,
+      { cwd: root, hasUI: false },
+    );
+    expect(deniedBeforeReload.isError).toBe(true);
+
+    await registry.emit("session_start", { reason: "reload" }, { cwd: root });
+
+    const allowedAfterReload = await registry.getTool("write").execute(
+      "3",
+      { workdir: ".", path: "src/reload.ts", content: "export const value = 3;\n" },
+      undefined,
+      undefined,
+      { cwd: root, hasUI: false },
+    );
+    expect(allowedAfterReload.isError).not.toBe(true);
+    expect(await readFile(join(root, "src/reload.ts"), "utf8")).toBe("export const value = 3;\n");
+  });
 
   it("respects configured bash patterns and still asks for unmatched commands", async () => {
     const root = await createTempWorkspace();
@@ -362,6 +404,250 @@ describe("permission guard", () => {
     expect(prompts[0]).toContain("Workdir: .");
     expect(prompts[0]).toContain("Arguments: ");
     expect(prompts[0]).toContain("pwd && ls -ld . && touch a.py");
+  });
+  it("uses quote-aware bash segments for static surface permission matching", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: {
+        bash: {
+          "*": "ask",
+          "echo *": "allow",
+          "grep *": "allow",
+        },
+      },
+    });
+
+    const prompts: string[] = [];
+    const registry = createToolRegistry({ hasUI: true });
+    registry.setUI({
+      select: async (title) => {
+        prompts.push(title);
+        return "Yes";
+      },
+    });
+    piBaseExtension(registry.pi as any);
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const result = await registry.getTool("bash").execute(
+      "1",
+      { command: "echo 'a && b; c | d' && echo a\\;b | grep a", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(prompts).toHaveLength(0);
+  });
+
+  it("matches bash executable candidates after environment assignment prefixes", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: {
+        bash: {
+          "*": "ask",
+          "npm *": "allow",
+        },
+      },
+    });
+
+    const prompts: string[] = [];
+    const registry = createToolRegistry({ hasUI: true });
+    registry.setUI({
+      select: async (title) => {
+        prompts.push(title);
+        return "Yes";
+      },
+    });
+    piBaseExtension(registry.pi as any);
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const result = await registry.getTool("bash").execute(
+      "1",
+      { command: "NODE_ENV=test DEBUG=pi-base npm test", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(prompts).toHaveLength(0);
+  });
+  it("applies bash permission rules to commands after background separators", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: {
+        bash: {
+          "*": "ask",
+          "sleep *": "allow",
+          "rm *": "deny",
+        },
+      },
+    });
+
+    const registry = createToolRegistry({ hasUI: true });
+    piBaseExtension(registry.pi as any);
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "should not run" }] }) }),
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const result = await registry.getTool("bash").execute(
+      "1",
+      { command: "sleep 1 & rm -rf tmp", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("Permission denied for bash");
+  });
+
+  it("does not inspect runtime bash content inside static shell wrappers", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: {
+        bash: {
+          "*": "ask",
+          "rm *": "deny",
+          "bash *": "allow",
+          "echo *": "allow",
+        },
+      },
+    });
+
+    const prompts: string[] = [];
+    const registry = createToolRegistry({ hasUI: true });
+    registry.setUI({
+      select: async (title) => {
+        prompts.push(title);
+        return "Yes";
+      },
+    });
+    piBaseExtension(registry.pi as any);
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async (_toolCallId: string, params: any) => ({ content: [{ type: "text", text: `ran ${params.command}` }] }) }),
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const wrapped = await registry.getTool("bash").execute(
+      "1",
+      { command: "bash -c \"$REAL_BASH\"", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(wrapped.isError).not.toBe(true);
+
+    const substitution = await registry.getTool("bash").execute(
+      "2",
+      { command: "echo \"$(rm -rf tmp)\"", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(substitution.isError).not.toBe(true);
+    expect(prompts).toHaveLength(0);
+  });
+  it("does not treat heredoc body text as separate bash permission commands", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: {
+        bash: {
+          "*": "ask",
+          "rm *": "deny",
+          "cat *": "allow",
+        },
+      },
+    });
+
+    const prompts: string[] = [];
+    const registry = createToolRegistry({ hasUI: true });
+    registry.setUI({
+      select: async (title) => {
+        prompts.push(title);
+        return "Yes";
+      },
+    });
+    piBaseExtension(registry.pi as any);
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async (_toolCallId: string, params: any) => ({ content: [{ type: "text", text: `ran ${params.command}` }] }) }),
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const result = await registry.getTool("bash").execute(
+      "1",
+      { command: "cat <<'EOF'\nrm -rf tmp\nEOF", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(prompts).toHaveLength(0);
+  });
+
+  it("asks instead of guessing when bash surface syntax is malformed", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: {
+        bash: {
+          "*": "ask",
+          "echo *": "allow",
+        },
+      },
+    });
+
+    const prompts: string[] = [];
+    const registry = createToolRegistry({ hasUI: true });
+    registry.setUI({
+      select: async (title) => {
+        prompts.push(title);
+        return "Yes";
+      },
+    });
+    piBaseExtension(registry.pi as any);
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const result = await registry.getTool("bash").execute(
+      "1",
+      { command: "echo 'unterminated", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    const deniedRoot = await createTempWorkspace();
+    await writeProjectSettings(deniedRoot, { permission: { bash: { "*": "deny" } } });
+    const deniedRegistry = createToolRegistry({ hasUI: true });
+    deniedRegistry.setUI({ select: async () => "Yes" });
+    piBaseExtension(deniedRegistry.pi as any);
+    registerBashRendererTool(deniedRegistry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "should not run" }] }) }),
+    });
+    await deniedRegistry.emit("session_start", { reason: "startup" }, { cwd: deniedRoot });
+    const denied = await deniedRegistry.getTool("bash").execute(
+      "2",
+      { command: "echo 'unterminated", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: deniedRoot },
+    );
+    expect(denied.isError).toBe(true);
+    expect(getText(denied)).toContain("Permission denied for bash");
+    expect(result.isError).not.toBe(true);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("echo 'unterminated");
   });
 
   it("keeps bash permission argument previews single-line and truncated for long commands", async () => {

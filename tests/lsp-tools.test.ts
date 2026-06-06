@@ -52,6 +52,19 @@ describe("lsp tools", () => {
       lspManager.getClient = original;
     }
   });
+  it("handles a non-aborted diagnostics signal", async () => {
+    const registry = createToolRegistry();
+    registerLspTools(registry.pi as any);
+    const original = lspManager.getClient.bind(lspManager);
+    const controller = new AbortController();
+    lspManager.getClient = async () => mockLspClient({ diagnostics: async () => [] });
+    try {
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
+      expect(getText(result)).toBe("No diagnostics found");
+    } finally {
+      lspManager.getClient = original;
+    }
+  });
 
   it("surfaces diagnostics timeouts instead of returning an empty success result", async () => {
     const registry = createToolRegistry();

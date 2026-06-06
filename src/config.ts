@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LspDiscoveryConfig, LspServerEntry } from "./lsp/discovery.js";
+import { expandHomePath, isHomeShortcutPath } from "./path-utils.js";
 
 export type PermissionAction = "allow" | "ask" | "deny";
 
@@ -264,33 +265,6 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
   return output;
 }
 
-function expandHomePath(value: string): string {
-  if (value === "~") return homedir();
-  if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return join(homedir(), value.slice(2));
-  }
-  if (value === "$HOME") return homedir();
-  if (value.startsWith("$HOME/") || value.startsWith("$HOME\\")) {
-    return join(homedir(), value.slice(6));
-  }
-  if (value === "${HOME}") return homedir();
-  if (value.startsWith("${HOME}/") || value.startsWith("${HOME}\\")) {
-    return join(homedir(), value.slice(8));
-  }
-  return value;
-}
-
-function isHomeShortcutPath(value: string): boolean {
-  return value === "~"
-    || value.startsWith("~/")
-    || value.startsWith("~\\")
-    || value === "$HOME"
-    || value.startsWith("$HOME/")
-    || value.startsWith("$HOME\\")
-    || value === "${HOME}"
-    || value.startsWith("${HOME}/")
-    || value.startsWith("${HOME}\\");
-}
 
 function normalizeCommandExecutable(value: string, path: string): string {
   const expanded = expandHomePath(value);

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants as fsConstants, existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { expandHomePath, isHomeShortcutPath } from "../path-utils.js";
 
 export interface LspServerConfig {
   id: string;
@@ -69,30 +69,9 @@ function windowsExecutableSuffixes(): string[] {
     .filter(Boolean);
   return ["", ...fromEnv];
 }
-function expandHomeCommandPath(value: string): string {
-  if (value === "~") return homedir();
-  if (value.startsWith("~/") || value.startsWith("~\\")) return join(homedir(), value.slice(2));
-  if (value === "$HOME") return homedir();
-  if (value.startsWith("$HOME/") || value.startsWith("$HOME\\")) return join(homedir(), value.slice(6));
-  if (value === "${HOME}") return homedir();
-  if (value.startsWith("${HOME}/") || value.startsWith("${HOME}\\")) return join(homedir(), value.slice(8));
-  return value;
-}
-
-function isHomeShortcutCommandPath(value: string): boolean {
-  return value === "~"
-    || value.startsWith("~/")
-    || value.startsWith("~\\")
-    || value === "$HOME"
-    || value.startsWith("$HOME/")
-    || value.startsWith("$HOME\\")
-    || value === "${HOME}"
-    || value.startsWith("${HOME}/")
-    || value.startsWith("${HOME}\\");
-}
 
 function isPathLikeCommand(value: string): boolean {
-  return isHomeShortcutCommandPath(value) || value.includes("/") || value.includes("\\");
+  return isHomeShortcutPath(value) || value.includes("/") || value.includes("\\");
 }
 
 /**
@@ -141,7 +120,7 @@ export class LspDiscoveryResolver {
    */
   findCommandPath(cmd: string): string | null {
     if (isPathLikeCommand(cmd)) {
-      const expanded = expandHomeCommandPath(cmd);
+      const expanded = expandHomePath(cmd);
       return isAbsolute(expanded) && isRunnableCommandFile(expanded) ? expanded : null;
     }
     const cacheKey = this.discoveryCacheKey(cmd);
@@ -190,7 +169,7 @@ export class LspDiscoveryResolver {
     const cacheKey = this.serverInstallCacheKey(command);
     if (this.serverInstalledCache.has(cacheKey)) return this.serverInstalledCache.get(cacheKey) ?? false;
     const command0 = command[0];
-    const expanded = expandHomeCommandPath(command0);
+    const expanded = expandHomePath(command0);
     const installed = isPathLikeCommand(command0)
       ? isAbsolute(expanded) && isRunnableCommandFile(expanded)
       : this.resolveOnPath(command0) !== null;
@@ -201,7 +180,7 @@ export class LspDiscoveryResolver {
   private resolveCommand(command: string[]): string[] {
     if (command.length === 0) return command;
     if (isPathLikeCommand(command[0])) {
-      const expanded = expandHomeCommandPath(command[0]);
+      const expanded = expandHomePath(command[0]);
       return [expanded, ...command.slice(1)];
     }
     const resolved = this.resolveOnPath(command[0]);

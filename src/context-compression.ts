@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative } from "node:path";
-import { resolveToCwd } from "./path-utils.js";
+import { normalizeSlashes, resolveToCwd, stripAtPrefix } from "./path-utils.js";
 import type { ContextCompressionConfig, ContextCompressionToolConfig } from "./config.js";
 
 type AnchorHygieneToolName = "read" | "write" | "edit";
@@ -52,19 +52,12 @@ function isAnchorHygieneToolName(value: unknown): value is AnchorHygieneToolName
   return value === "read" || value === "write" || value === "edit";
 }
 
-function stripAtPrefix(path: string): string {
-  return path.startsWith("@") ? path.slice(1) : path;
-}
-
-function normalizePath(path: string): string {
-  return path.replace(/\\+/g, "/");
-}
 
 function canonicalizePath(path: string): string {
-  const normalized = normalizePath(path);
+  const normalized = normalizeSlashes(path);
   if (!existsSync(normalized)) return normalized;
   try {
-    return normalizePath(realpathSync(normalized));
+    return normalizeSlashes(realpathSync(normalized));
   } catch {
     return normalized;
   }

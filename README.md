@@ -41,6 +41,8 @@ The same file contains LSP, permission, render preview config, context compressi
 
 For isolated tests or temporary runs, `PI_BASE_GLOBAL_SETTINGS_PATH` can override the global `pi-base` config path.
 
+Config is loaded for the current session and refreshed when a new session starts. If you edit either config file while pi is running, run `/reload` (or start a new session) for the change to take effect.
+
 Precedence:
 
 ```text
@@ -134,7 +136,7 @@ Behavior notes:
 - The only choices are `Yes` or `No`.
 - Future automatic allowance comes only from config pattern matches; there is no in-session "always allow this file/command" shortcut.
 - For path-based tools (`read`, `edit`, `write`, and similar tools that expose `path`), patterns are matched against the given path, the workdir-relative path, the project-relative path, and the absolute path.
-- For `bash`, patterns are matched against the full command string.
+- For `bash`, patterns are matched against static surface command segments. The matcher is quote/escape-aware for top-level `&&`, `||`, `|`, `|&`, `;`, and newline separators, but it does not expand variables, read scripts, or recursively inspect runtime content inside `bash -c`, command substitutions, `eval`, `source`, functions, or aliases.
 - In non-interactive mode, `ask` blocks the tool call because there is no UI to confirm it.
 - `/yolo` toggles a bypass mode that disables all permission checks for the current session and shows `YOLO` inline in the footer while it is active. It does not take subcommands; use `/yolo` again to switch back.
 

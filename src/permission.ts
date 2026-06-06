@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { analyzeBashSurfaceCommand, buildBashSurfaceCandidates } from "./bash-command-analyzer.js";
 import { dirname, relative } from "node:path";
 import { loadPiBaseSettings, type LoadedPiBaseSettings, type PermissionAction, type PermissionRuleEntry } from "./config.js";
-import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
+import { expandHomePath, normalizeSlashes, resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
 import { PI_BASE_INLINE_STATUS_KEYS, PI_BASE_PERMISSION_STATUS_KEY, syncYoloFooter } from "./yolo-footer.js";
 
 const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
@@ -18,23 +19,11 @@ interface TargetDescriptor {
   candidates: string[];
 }
 
-function normalizeSlashes(value: string): string {
-  return value.replace(/\\/g, "/");
-}
 
 function normalizeMatchValue(value: string): string {
   return normalizeSlashes(value.trim());
 }
 
-function expandHomePattern(pattern: string): string {
-  const home = normalizeSlashes(process.env.HOME ?? process.env.USERPROFILE ?? "");
-  if (!home) return pattern;
-  if (pattern === "~") return home;
-  if (pattern.startsWith("~/")) return home + pattern.slice(1);
-  if (pattern === "$HOME") return home;
-  if (pattern.startsWith("$HOME/")) return home + pattern.slice(5);
-  return pattern;
-}
 
 function escapeRegexCharacter(value: string): string {
   return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
@@ -57,7 +46,7 @@ function wildcardToRegExp(pattern: string): RegExp {
 }
 
 function wildcardMatches(pattern: string, candidate: string): boolean {
-  const normalizedPattern = normalizeMatchValue(expandHomePattern(pattern));
+  const normalizedPattern = normalizeMatchValue(expandHomePath(pattern));
   const normalizedCandidate = normalizeMatchValue(candidate);
   return wildcardToRegExp(normalizedPattern).test(normalizedCandidate);
 }
@@ -75,9 +64,6 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
   return result;
 }
 
-function stripAtPrefix(value: string): string {
-  return value.startsWith("@") ? value.slice(1) : value;
-}
 
 function normalizeRelativePath(value: string): string {
   const normalized = normalizeSlashes(value);
@@ -106,31 +92,6 @@ function buildPathTargetDescriptor(rawPath: string, cwd: string, loaded: LoadedP
   };
 }
 
-function tokenizeCommandSegment(segment: string): string[] {
-  return segment.match(/\S+/g) ?? [];
-}
-
-function buildBashSegmentCandidates(segment: string): string[] {
-  const trimmed = segment.trim();
-  if (!trimmed) return [];
-  const tokens = tokenizeCommandSegment(trimmed);
-  const prefixes: string[] = [];
-  for (let length = 1; length <= tokens.length; length++) {
-    prefixes.push(tokens.slice(0, length).join(" "));
-  }
-  return uniqueStrings([
-    trimmed,
-    ...prefixes,
-    ...prefixes.map((prefix) => `${prefix} *`),
-  ]);
-}
-
-function splitBashCommand(command: string): string[] {
-  return command
-    .split(/&&|\|\||\||;|\n/g)
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-}
 
 function buildCommandTargetDescriptor(commandValue: string): TargetDescriptor {
   const command = commandValue.trim() || "<missing-command>";
@@ -173,11 +134,16 @@ function evaluateRules(candidates: string[], ...rulesets: Array<PermissionRuleEn
 }
 
 function evaluateBashRules(command: string, ...rulesets: Array<PermissionRuleEntry[] | undefined>): PermissionAction {
-  const segments = splitBashCommand(command);
-  if (segments.length === 0) return evaluateRules([command], ...rulesets);
+  const analysis = analyzeBashSurfaceCommand(command);
+  if (analysis.kind === "unsupported") {
+    const staticAction = evaluateRules([command], ...rulesets);
+    return staticAction === "deny" ? "deny" : "ask";
+  }
+  if (analysis.segments.length === 0) return evaluateRules([command], ...rulesets);
+
   let action: PermissionAction = "allow";
-  for (const segment of segments) {
-    const next = evaluateRules(buildBashSegmentCandidates(segment), ...rulesets);
+  for (const segment of analysis.segments) {
+    const next = evaluateRules(buildBashSurfaceCandidates(segment), ...rulesets);
     if (next === "deny") return "deny";
     if (next === "ask") action = "ask";
   }
@@ -256,7 +222,7 @@ function buildPrompt(toolName: string, input: unknown): string {
 }
 
 function buildSettingsHint(loaded: LoadedPiBaseSettings): string {
-  return `Update ${loaded.projectPath} or ${loaded.globalPath} under \`permission\` to change this behavior.`;
+  return `Update ${loaded.projectPath} or ${loaded.globalPath} under \`permission\`, then run /reload or start a new session for the change to take effect.`;
 }
 
 function buildDeniedReason(toolName: string, loaded: LoadedPiBaseSettings): string {

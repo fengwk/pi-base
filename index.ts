@@ -42,27 +42,35 @@ function loadBaseToolGuide(): string {
   return readFileSync(new URL("./prompts/base.md", import.meta.url), "utf8").trim();
 }
 
-function createSettingsLoader(): (cwd: string) => LoadedPiBaseSettings {
+type CachedSettingsLoader = ((cwd: string) => LoadedPiBaseSettings) & { clear: () => void };
+
+type CachedLspResolverFactory = LspResolverFactory & { clear: () => void };
+
+function createSettingsLoader(): CachedSettingsLoader {
   const cache = new Map<string, LoadedPiBaseSettings>();
-  return (cwd: string) => {
+  const load = ((cwd: string) => {
     const cached = cache.get(cwd);
     if (cached) return cached;
     const loaded = loadPiBaseSettings(cwd);
     cache.set(cwd, loaded);
     return loaded;
-  };
+  }) as CachedSettingsLoader;
+  load.clear = () => cache.clear();
+  return load;
 }
 
-function createResolverFactory(loadSettings: (cwd: string) => LoadedPiBaseSettings): LspResolverFactory {
+function createResolverFactory(loadSettings: (cwd: string) => LoadedPiBaseSettings): CachedLspResolverFactory {
   const cache = new Map<string, LspDiscoveryResolver>();
-  return (cwd: string) => {
+  const create = ((cwd: string) => {
     const cached = cache.get(cwd);
     if (cached) return cached;
     const loaded = loadSettings(cwd);
     const resolver = new LspDiscoveryResolver(loaded.settings.lsp ?? {});
     cache.set(cwd, resolver);
     return resolver;
-  };
+  }) as CachedLspResolverFactory;
+  create.clear = () => cache.clear();
+  return create;
 }
 
 function createCollapsedResultLinesResolver(loadSettings: (cwd: string) => LoadedPiBaseSettings): CollapsedResultLinesResolver {
@@ -178,6 +186,11 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
   const syncLsp = (absolutePath: string) => {
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
+  pi.on("session_start", async () => {
+    loadSettings.clear();
+    resolverFactory.clear();
+    await lspManager.shutdownAll();
+  });
 
   registerReadTool(pi, { onSuccessfulRead: noteAnchorsAndSnapshot, createResolver: resolverFactory, getCollapsedResultLines });
   registerGrepTool(pi, { getCollapsedResultLines });

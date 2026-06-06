@@ -120,7 +120,7 @@ function isTransientPullDiagnosticsInternalError(error: (Error & { code?: number
 }
 
 function formatTransientDiagnosticsTimeoutError(serverId: string, filePath: string): string {
-  return `LSP server '${serverId}' returned "Internal error" for ${filePath} and did not publish diagnostics before the timeout. This often means the server has not finished opening the file or processing the workspace yet (common on the first call or after opening a large project). Retry in a few seconds. If the error persists, inspect the server logs or increase lsp.servers.${serverId}.requestTimeoutMs in ~/.pi/agent/pi-base.json if this server is legitimately slow.`;
+  return `LSP server '${serverId}' returned "Internal error" for ${filePath} and did not publish diagnostics before the timeout. This often means the server has not finished opening the file or processing the workspace yet (common on the first call or after opening a large project). Retry in a few seconds. If the error persists, inspect the server logs or increase lsp.servers.${serverId}.requestTimeoutMs in ~/.pi/agent/pi-base.json, then run /reload or start a new session.`;
 }
 
 export class LspClient {
@@ -430,7 +430,7 @@ export class LspClient {
           resolve(this.diagnosticsStore.get(uri) ?? []);
           return;
         }
-        reject(new Error(`LSP diagnostics timeout after ${timeoutMs}ms. The server did not return diagnostics for this file. Increase lsp.servers.${this.server.id}.requestTimeoutMs if this server is legitimately slow.`));
+        reject(new Error(`LSP diagnostics timeout after ${timeoutMs}ms. The server did not return diagnostics for this file. Increase lsp.servers.${this.server.id}.requestTimeoutMs if this server is legitimately slow, then run /reload or start a new session.`));
       }, timeoutMs);
     });
   }
@@ -465,7 +465,7 @@ export class LspClient {
         this.pending.delete(id);
         settled = true;
         signal?.removeEventListener("abort", onAbort);
-        reject(new Error(`LSP request timeout (${method}) after ${this.requestTimeoutMs}ms. Increase lsp.servers.${this.server.id}.requestTimeoutMs if this server is legitimately slow.`));
+        reject(new Error(`LSP request timeout (${method}) after ${this.requestTimeoutMs}ms. Increase lsp.servers.${this.server.id}.requestTimeoutMs if this server is legitimately slow, then run /reload or start a new session.`));
       }, this.requestTimeoutMs);
       this.pending.set(id, {
         resolve: (value) => {
