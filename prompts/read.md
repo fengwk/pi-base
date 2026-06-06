@@ -8,11 +8,12 @@ Usage:
 
 Parameters:
 - `path` (required)
+- `workdir` (required)
 - `offset` (optional, default: 1)
 - `limit` (optional, default: 200, max: 2000)
 
 Examples show the arguments passed to the tool:
-- `{"path":"src/example.ts"}`
-- `{"path":"src/example.ts","offset":120,"limit":40}`
-- `{"path":"src/"}`
-- `{"path":"screenshot.png"}`
+- `{"path":"src/example.ts","workdir":"packages/web"}`
+- `{"path":"src/example.ts","workdir":"services/api","offset":120,"limit":40}`
+- `{"path":"src/","workdir":"."}`
+- `{"path":"screenshot.png","workdir":"/tmp/agent-artifacts"}`

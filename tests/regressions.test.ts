@@ -23,21 +23,21 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
 
-    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     const initialText = getText(initialRead);
     expect(getTotalLines(initialText)).toBe(4);
 
     const anchor = getAnchor(initialText, "beta");
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "" } }] },
+      { workdir: ".", path: "f.txt", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "" } }] },
       undefined,
       undefined,
       { cwd: root },
     );
     expect(edit.isError).not.toBe(true);
 
-    const afterRead = await registry.getTool("read").execute("3", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const afterRead = await registry.getTool("read").execute("3", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     const afterText = getText(afterRead);
     expect(getTotalLines(afterText)).toBe(4);
     const lines = afterText.split("\n");
@@ -53,12 +53,12 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
 
-    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     const anchor = getAnchor(getText(initialRead), "aa");
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ insert_before_lines: { anchor, new_text: "" } }] },
+      { workdir: ".", path: "f.txt", edits: [{ insert_before_lines: { anchor, new_text: "" } }] },
       undefined,
       undefined,
       { cwd: root },
@@ -74,12 +74,12 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
 
-    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     const anchor = getAnchor(getText(initialRead), "aa");
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "" } }] },
+      { workdir: ".", path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "" } }] },
       undefined,
       undefined,
       { cwd: root },
@@ -95,12 +95,12 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
 
-    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     const anchor = getAnchor(getText(initialRead), "aa");
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "" } }] },
+      { workdir: ".", path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "" } }] },
       undefined,
       undefined,
       { cwd: root },
@@ -116,19 +116,19 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
 
-    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     const anchor = getAnchor(getText(initialRead), "aa");
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "aa\n" } }] },
+      { workdir: ".", path: "f.txt", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "aa\n" } }] },
       undefined,
       undefined,
       { cwd: root },
     );
     expect(edit.isError).not.toBe(true);
 
-    const afterRead = await registry.getTool("read").execute("3", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const afterRead = await registry.getTool("read").execute("3", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     expect(getTotalLines(getText(afterRead))).toBe(2);
   });
 
@@ -138,19 +138,19 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
 
-    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     const anchor = getAnchor(getText(initialRead), "aa");
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "bb" } }] },
+      { workdir: ".", path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "bb" } }] },
       undefined,
       undefined,
       { cwd: root },
     );
     expect(edit.isError).not.toBe(true);
 
-    const afterRead = await registry.getTool("read").execute("3", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const afterRead = await registry.getTool("read").execute("3", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     expect(getText(afterRead)).toMatch(/2#[0-9a-f]{4}\|bb/);
   });
 
@@ -160,12 +160,13 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
 
-    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     const anchor = getAnchor(getText(initialRead), "bb");
 
     const edit = await registry.getTool("edit").execute(
       "2",
       {
+        workdir: ".",
         path: "f.txt",
         edits: [
           { replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "BB" } },
@@ -187,19 +188,19 @@ describe("edit: line-oriented insert and raw replace semantics", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
 
-    const initialRead = await registry.getTool("read").execute("1", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     const anchor = getAnchor(getText(initialRead), "beta");
 
     const edit = await registry.getTool("edit").execute(
       "2",
-      { path: "f.txt", edits: [{ delete_lines: { start_anchor: anchor, end_anchor: anchor } }] },
+      { workdir: ".", path: "f.txt", edits: [{ delete_lines: { start_anchor: anchor, end_anchor: anchor } }] },
       undefined,
       undefined,
       { cwd: root },
     );
     expect(edit.isError).not.toBe(true);
 
-    const afterRead = await registry.getTool("read").execute("3", { path: "f.txt" }, undefined, undefined, { cwd: root });
+    const afterRead = await registry.getTool("read").execute("3", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
     expect(getTotalLines(getText(afterRead))).toBe(3);
   });
 });
@@ -209,7 +210,7 @@ describe("find: path is required", () => {
     const root = await createTempWorkspace();
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
-    const result = await registry.getTool("find").execute("1", { pattern: "*.ts" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("find").execute("1", { workdir: ".", pattern: "*.ts" }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toMatch(/find requires an explicit `path`/);
   });
@@ -218,7 +219,7 @@ describe("find: path is required", () => {
     const root = await createTempWorkspace();
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
-    const result = await registry.getTool("find").execute("1", { pattern: "*.ts", path: "" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("find").execute("1", { workdir: ".", pattern: "*.ts", path: "" }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toMatch(/find requires an explicit `path`/);
   });
@@ -227,7 +228,7 @@ describe("find: path is required", () => {
     const root = await createTempWorkspace();
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
-    const result = await registry.getTool("find").execute("1", { pattern: "*.ts", path: "   " }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("find").execute("1", { workdir: ".", pattern: "*.ts", path: "   " }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toMatch(/find requires an explicit `path`/);
   });
@@ -239,7 +240,7 @@ describe("find: path is required", () => {
     // We only assert that the call does not produce the "requires path" error;
     // whether matches are returned depends on upstream fd, which is irrelevant
     // for this test of the required-path contract.
-    const result = await registry.getTool("find").execute("1", { pattern: "*.ts", path: "." }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("find").execute("1", { workdir: ".", pattern: "*.ts", path: "." }, undefined, undefined, { cwd: root });
     expect(result.isError).not.toBe(true);
     const text = getText(result);
     expect(text).not.toMatch(/find requires an explicit `path`/);
@@ -254,7 +255,7 @@ describe("grep: binary files are rejected before upstream runs", () => {
     await fs.writeFile(join(root, "definitely.bin"), Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
-    const result = await registry.getTool("grep").execute("1", { pattern: "a", path: "definitely.bin" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "a", path: "definitely.bin" }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toMatch(/binary file/);
   });
@@ -266,7 +267,7 @@ describe("grep: binary files are rejected before upstream runs", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const start = Date.now();
-    const result = await registry.getTool("grep").execute("1", { pattern: "a", path: "definitely.bin", timeout_seconds: 5 }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "a", path: "definitely.bin", timeout_seconds: 5 }, undefined, undefined, { cwd: root });
     const elapsed = Date.now() - start;
     expect(result.isError).toBe(true);
     // The check is in-process and synchronous-ish; it must NOT take the full timeout.

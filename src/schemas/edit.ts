@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 
 export const editSchema = Type.Object({
   path: Type.String({ description: "Existing text file to edit." }),
+  workdir: Type.String({ description: "Working directory for resolving relative paths. Required. Use '.' for the current working directory." }),
   edits: Type.Array(
     Type.Union([
       Type.Object({

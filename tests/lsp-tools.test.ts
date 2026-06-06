@@ -31,7 +31,7 @@ describe("lsp tools", () => {
       ],
     });
     try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts", severity: "error" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts", severity: "error" }, undefined, undefined, { cwd: process.cwd() });
       const text = getText(result);
       expect(text).toContain("type error");
       expect(text).not.toContain("warning");
@@ -46,7 +46,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ diagnostics: async () => [] });
     try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
       expect(getText(result)).toBe("No diagnostics found");
     } finally {
       lspManager.getClient = original;
@@ -59,7 +59,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ diagnostics: async () => { throw new Error("LSP diagnostics timeout after 60000ms"); } });
     try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       expect(getText(result)).toContain("LSP diagnostics timeout");
     } finally {
@@ -78,7 +78,7 @@ describe("lsp tools", () => {
       },
     });
     try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       const text = getText(result);
       expect(text).toContain("LSP server 'mock-lsp' returned \"Internal error\"");
@@ -96,7 +96,7 @@ describe("lsp tools", () => {
       throw new Error("no server");
     };
     try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       expect(getText(result)).toContain("no server");
     } finally {
@@ -112,7 +112,7 @@ describe("lsp tools", () => {
       throw new Error("No LSP server configured for /tmp/demo/README.md.");
     };
     try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "/tmp/demo/README.md", severity: "error" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "/tmp/demo/README.md", severity: "error" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       const text = getText(result);
       expect(text).toContain("No LSP server configured for /tmp/demo/README.md.");
@@ -129,7 +129,7 @@ describe("lsp tools", () => {
     const controller = new AbortController();
     lspManager.getClient = () => new Promise(() => undefined) as any;
     try {
-      const pending = registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
+      const pending = registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
       controller.abort();
       const result = await pending;
       expect(result.isError).toBe(true);
@@ -145,7 +145,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ definition: async () => ({ uri: "file:///tmp/def.ts", range: { start: { line: 0, character: 1 } } }) });
     try {
-      const result = await registry.getTool("lsp_goto_definition").execute("1", { path: "src/example.ts", line: 2, character: 3 }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_goto_definition").execute("1", { workdir: ".", path: "src/example.ts", line: 2, character: 3 }, undefined, undefined, { cwd: process.cwd() });
       expect(getText(result)).toContain("/tmp/def.ts:1:1");
     } finally {
       lspManager.getClient = original;
@@ -155,7 +155,7 @@ describe("lsp tools", () => {
   it("rejects non-positive goto_definition lines", async () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
-    const result = await registry.getTool("lsp_goto_definition").execute("1", { path: "src/example.ts", line: 0 }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("lsp_goto_definition").execute("1", { workdir: ".", path: "src/example.ts", line: 0 }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("line must be a positive integer");
   });
@@ -167,7 +167,7 @@ describe("lsp tools", () => {
     let seenCharacter: number | undefined;
     lspManager.getClient = async () => mockLspClient({ definition: async (_path: string, _line: number, character: number) => { seenCharacter = character; return []; } });
     try {
-      const result = await registry.getTool("lsp_goto_definition").execute("1", { path: "src/example.ts", line: 2 }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_goto_definition").execute("1", { workdir: ".", path: "src/example.ts", line: 2 }, undefined, undefined, { cwd: process.cwd() });
       expect(getText(result)).toBe("No results found");
       expect(seenCharacter).toBe(0);
     } finally {
@@ -181,7 +181,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ definition: async () => [] }, ["textDocument/definition"]);
     try {
-      const result = await registry.getTool("lsp_goto_definition").execute("1", { path: "src/example.ts", line: 1, character: 0 }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_goto_definition").execute("1", { workdir: ".", path: "src/example.ts", line: 1, character: 0 }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       const text = getText(result);
       expect(text).toContain("does not advertise go-to-definition");
@@ -194,7 +194,7 @@ describe("lsp tools", () => {
   it("requires line for goto_definition", async () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
-    const result = await registry.getTool("lsp_goto_definition").execute("1", { path: "src/example.ts", character: 0 }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("lsp_goto_definition").execute("1", { workdir: ".", path: "src/example.ts", character: 0 }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("line is required");
   });
@@ -205,7 +205,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ definition: async () => [] });
     try {
-      const result = await registry.getTool("lsp_goto_definition").execute("1", { path: "src/example.ts", line: 1, character: 0 }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_goto_definition").execute("1", { workdir: ".", path: "src/example.ts", line: 1, character: 0 }, undefined, undefined, { cwd: process.cwd() });
       expect(getText(result)).toBe("No results found");
     } finally {
       lspManager.getClient = original;
@@ -225,7 +225,7 @@ describe("lsp tools", () => {
     };
     try {
       const fileUri = pathToFileURL(join(root, "src/example.ts")).href;
-      const result = await registry.getTool("lsp_goto_definition").execute("1", { path: fileUri, line: 1 }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_goto_definition").execute("1", { workdir: ".", path: fileUri, line: 1 }, undefined, undefined, { cwd: process.cwd() });
       expect(getText(result)).toBe("No results found");
       expect(seenPath).toBe(join(root, "src/example.ts"));
     } finally {
@@ -239,7 +239,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ definition: async () => ({ uri: "jdt://contents/java.base/java/lang/String.class?123", range: { start: { line: 0, character: 0 } } }) });
     try {
-      const result = await registry.getTool("lsp_goto_definition").execute("1", { path: "src/App.java", line: 1 }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_goto_definition").execute("1", { workdir: ".", path: "src/App.java", line: 1 }, undefined, undefined, { cwd: process.cwd() });
       expect(getText(result)).toBe("jdt://contents/java.base/java/lang/String.class?123");
     } finally {
       lspManager.getClient = original;
@@ -256,7 +256,7 @@ describe("lsp tools", () => {
       ],
     });
     try {
-      const result = await registry.getTool("lsp_workspace_symbols").execute("1", { path: "src/App.java", query: "UserService" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_workspace_symbols").execute("1", { workdir: ".", path: "src/App.java", query: "UserService" }, undefined, undefined, { cwd: process.cwd() });
       expect(getText(result)).toContain("UserService");
       expect(getText(result)).toContain("(Class)");
       expect(getText(result)).toContain("file:///tmp/UserService.java");
@@ -268,7 +268,7 @@ describe("lsp tools", () => {
   it("rejects negative workspace symbol limits", async () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
-    const result = await registry.getTool("lsp_workspace_symbols").execute("1", { path: "src/App.java", query: "X", limit: -1 }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("lsp_workspace_symbols").execute("1", { workdir: ".", path: "src/App.java", query: "X", limit: -1 }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("limit must be a non-negative integer");
   });
@@ -279,7 +279,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ workspaceSymbols: async () => { throw new Error("symbol failure"); } });
     try {
-      const result = await registry.getTool("lsp_workspace_symbols").execute("1", { path: "src/App.java", query: "UserService" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_workspace_symbols").execute("1", { workdir: ".", path: "src/App.java", query: "UserService" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       expect(getText(result)).toContain("symbol failure");
     } finally {
@@ -293,7 +293,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ workspaceSymbols: async () => [] });
     try {
-      const result = await registry.getTool("lsp_workspace_symbols").execute("1", { path: "src/App.java", query: "Missing" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_workspace_symbols").execute("1", { workdir: ".", path: "src/App.java", query: "Missing" }, undefined, undefined, { cwd: process.cwd() });
       expect(getText(result)).toBe("No symbols found");
     } finally {
       lspManager.getClient = original;
@@ -306,7 +306,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ workspaceSymbols: async () => [] }, ["workspace/symbol"]);
     try {
-      const result = await registry.getTool("lsp_workspace_symbols").execute("1", { path: "src/App.java", query: "App" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_workspace_symbols").execute("1", { workdir: ".", path: "src/App.java", query: "App" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       const text = getText(result);
       expect(text).toContain("does not advertise workspace/symbol support");
@@ -331,7 +331,7 @@ describe("lsp tools", () => {
     try {
       const result = await registry.getTool("lsp_java_decompile").execute(
         "1",
-        { target: "String (Class) - jdt://contents/java.base/java/lang/String.class?123", path: "src/App.java" },
+        { workdir: ".", target: "String (Class) - jdt://contents/java.base/java/lang/String.class?123", path: "src/App.java" },
         undefined,
         undefined,
         { cwd: process.cwd() },
@@ -352,7 +352,7 @@ describe("lsp tools", () => {
       decompileClass: async () => null,
     });
     try {
-      const result = await registry.getTool("lsp_java_decompile").execute("1", { path: "src/App.java", target: "build/X.class" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_java_decompile").execute("1", { workdir: ".", path: "src/App.java", target: "build/X.class" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       const text = getText(result);
       expect(text.includes("Could not load Java class file contents.") || text.includes("Could not decompile class.")).toBe(true);
@@ -374,7 +374,7 @@ describe("lsp tools", () => {
       },
     });
     try {
-      const result = await registry.getTool("lsp_java_decompile").execute("1", { target: "file:///tmp/X.class", path: "src/App.java" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_java_decompile").execute("1", { workdir: ".", target: "file:///tmp/X.class", path: "src/App.java" }, undefined, undefined, { cwd: process.cwd() });
       expect(seenTarget).toBe("file:///tmp/X.class");
       expect(getText(result)).toContain("class X {}");
     } finally {
@@ -395,7 +395,7 @@ describe("lsp tools", () => {
       },
     });
     try {
-      const result = await registry.getTool("lsp_java_decompile").execute("1", { target: "/tmp/Y.class", path: "src/App.java" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_java_decompile").execute("1", { workdir: ".", target: "/tmp/Y.class", path: "src/App.java" }, undefined, undefined, { cwd: process.cwd() });
       expect(seenTarget?.startsWith("file://")).toBe(true);
       expect(getText(result)).toContain("class Y {}");
     } finally {
@@ -417,7 +417,7 @@ describe("lsp tools", () => {
       },
     });
     try {
-      const result = await registry.getTool("lsp_java_decompile").execute("1", { target: "build/Z.class", path: "src/App.java" }, undefined, undefined, { cwd: root });
+      const result = await registry.getTool("lsp_java_decompile").execute("1", { workdir: ".", target: "build/Z.class", path: "src/App.java" }, undefined, undefined, { cwd: root });
       expect(seenTarget).toBe(pathToFileURL(join(root, "build/Z.class")).href);
       expect(getText(result)).toContain("class Z {}");
     } finally {
@@ -431,7 +431,7 @@ describe("lsp tools", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockLspClient({ classFileContents: async () => null, decompileClass: async () => null }, ["java/classFileContents"]);
     try {
-      const result = await registry.getTool("lsp_java_decompile").execute("1", { target: "jdt://x", path: "src/App.java" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_java_decompile").execute("1", { workdir: ".", target: "jdt://x", path: "src/App.java" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       const text = getText(result);
       expect(text).toContain("lsp_java_decompile is only supported by jdtls");
@@ -449,7 +449,7 @@ describe("lsp tools", () => {
       throw new Error("jdtls missing");
     };
     try {
-      const result = await registry.getTool("lsp_java_decompile").execute("1", { target: "jdt://x", path: "src/App.java" }, undefined, undefined, { cwd: process.cwd() });
+      const result = await registry.getTool("lsp_java_decompile").execute("1", { workdir: ".", target: "jdt://x", path: "src/App.java" }, undefined, undefined, { cwd: process.cwd() });
       expect(result.isError).toBe(true);
       expect(getText(result)).toContain("jdtls missing");
     } finally {

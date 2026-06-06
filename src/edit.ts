@@ -5,7 +5,7 @@ import { Text } from "@earendil-works/pi-tui";
 import * as Diff from "diff";
 import { detectLineEnding, generateCompactOrFullDiff, normalizeToLF, restoreLineEndings, stripBom } from "./edit-diff.js";
 import { applyHashlineEdits, ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay, HashlineMismatchError, parseLineRef, splitNewTextLines, type HashlineEditItem } from "./hashline.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { type CollapsedResultLinesResolver, renderRawResult, resolveCollapsedResultLines, styleAccent, styleDiffAdded, styleDiffContext, styleDiffRemoved, styleMuted, styleToolTitle, styleWarning } from "./render.js";
 import { editSchema } from "./schemas/edit.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -262,8 +262,9 @@ function buildPerOperationPreview(args: any, previewLines: string[] | undefined,
 
 function formatEditCall(args: any, theme: any, previewLines?: string[]): string {
   const path = String(args?.path ?? "<missing-path>");
+  const workdir = `${styleMuted(theme, " in ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : String(args.workdir))}`;
   const edits = Array.isArray(args?.edits) ? args.edits : [];
-  const lines = [`${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}`];
+  const lines = [`${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}`];
   if (edits.length === 0) return `${lines[0]}\n\n(no edits)`;
   const operationPreview = buildPerOperationPreview(args, previewLines, theme);
   if (operationPreview) {
@@ -434,7 +435,12 @@ export function registerEditTool(
         text.setText(`${styleToolTitle(_theme, "edit")} ${styleAccent(_theme, rawPath || "<missing-path>")}`);
         return text;
       }
-      const absolutePath = rawPath ? resolveToCwd(rawPath, context.cwd ?? process.cwd()) : "";
+      if (renderArgs?.workdir === undefined) {
+        text.setText(formatEditCall(renderArgs, _theme));
+        return text;
+      }
+      const { cwd: previewCwd } = resolveToolWorkdir(renderArgs.workdir, context.cwd ?? process.cwd());
+      const absolutePath = rawPath ? resolveToCwd(rawPath, previewCwd) : "";
       const signature = buildEditCallPreviewSignature(absolutePath, renderArgs);
       const previewLines = getFrozenPreviewLines(text, signature, () => {
         const remembered = callPreviewSnapshots.get(signature);
@@ -464,7 +470,8 @@ export function registerEditTool(
             throw new Error("Each edit item must contain exactly one operation: `replace_lines`, `delete_lines`, `insert_before_lines`, or `insert_after_lines`.");
           }
         }
-        const absolutePath = resolveToCwd(rawPath, ctx.cwd ?? process.cwd());
+        const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
+        const absolutePath = resolveToCwd(rawPath, cwd);
         const previewSignature = buildEditCallPreviewSignature(absolutePath, params);
         if (options.wasReadInSession && !options.wasReadInSession(absolutePath)) {
           return {

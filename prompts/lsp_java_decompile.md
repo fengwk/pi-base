@@ -10,8 +10,9 @@ Usage:
 
 Parameters:
 - `path` (required)
+- `workdir` (required)
 - `target` (required)
 
 Examples show the arguments passed to the tool:
-- `{"path":"src/main/java/com/acme/App.java","target":"jdt://contents/java.base/java/lang/String.class?..."}`
-- `{"path":"src/main/java/com/acme/App.java","target":"String (Class) - jdt://contents/java.base/java/lang/String.class?..."}`
+- `{"path":"src/main/java/com/acme/App.java","workdir":"services/java","target":"jdt://contents/java.base/java/lang/String.class?..."}`
+- `{"path":"src/main/java/com/acme/App.java","workdir":"services/java","target":"String (Class) - jdt://contents/java.base/java/lang/String.class?..."}`

@@ -342,7 +342,7 @@ describe("LspClient internals", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => mockToolLspClient({ diagnostics: async () => [] });
     try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { path: absoluteFile }, undefined, undefined, { cwd: rootA });
+      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: absoluteFile }, undefined, undefined, { cwd: rootA });
       expect(getText(result)).toBe("No diagnostics found");
       expect(seenBaseDir).toBe(join(rootB, "src"));
     } finally {
@@ -355,7 +355,7 @@ describe("LspClient internals", () => {
     registerLspTools(registry.pi as any);
     const controller = new AbortController();
     controller.abort();
-    const result = await registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("Operation aborted");
   });
@@ -366,7 +366,7 @@ describe("LspClient internals", () => {
     const original = lspManager.getClient.bind(lspManager);
     lspManager.getClient = async () => new Promise(() => undefined) as any;
     const controller = new AbortController();
-    const pending = registry.getTool("lsp_diagnostics").execute("1", { path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
+    const pending = registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
     controller.abort();
     try {
       const result = await pending;

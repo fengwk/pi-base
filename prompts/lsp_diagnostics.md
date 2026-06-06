@@ -10,8 +10,9 @@ Usage:
 
 Parameters:
 - `path` (required)
+- `workdir` (required)
 - `severity` (optional, one of `error`, `warning`, `information`, `hint`, `all`; default `all`)
 
 Examples show the arguments passed to the tool:
-- `{"path":"src/main/java/com/acme/App.java","severity":"error"}`
-- `{"path":"src/example.ts"}`
+- `{"path":"src/main/java/com/acme/App.java","workdir":"services/java","severity":"error"}`
+- `{"path":"src/example.ts","workdir":"packages/web"}`

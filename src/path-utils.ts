@@ -16,3 +16,10 @@ export function resolveToCwd(filePath: string, cwd: string): string {
 	const expanded = expandPath(filePath);
 	return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
+
+export function resolveToolWorkdir(workdir: unknown, cwd: string): { rawWorkdir: string; cwd: string } {
+	if (workdir === undefined || workdir === null) throw new Error("workdir is required.");
+	const rawWorkdir = String(workdir).replace(/^@/, "");
+	if (rawWorkdir.trim().length === 0) throw new Error("workdir is required.");
+	return { rawWorkdir, cwd: resolveToCwd(rawWorkdir, cwd) };
+}

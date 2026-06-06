@@ -10,10 +10,11 @@ Usage:
 Parameters:
 - `pattern` (required)
 - `path` (required)
+- `workdir` (required)
 - `limit` (optional, default: 1000)
 - `timeout_seconds` (optional, no default)
 
 Examples show the arguments passed to the tool:
-- `{"pattern":"*.ts","path":"src"}`
-- `{"pattern":"*.java","path":".","limit":200}`
-- `{"pattern":"*.md","path":".","timeout_seconds":30}`
+- `{"pattern":"*.ts","path":"src","workdir":"packages/web"}`
+- `{"pattern":"*.java","path":".","workdir":"services/java","limit":200}`
+- `{"pattern":"*.md","path":".","workdir":".","timeout_seconds":30}`

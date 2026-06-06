@@ -15,11 +15,12 @@ import { applyUnifiedOutputTruncation } from "./src/tool-output.js";
 import { findSchema } from "./src/schemas/find.js";
 import { inferToolResultIsError } from "./src/tool-result.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./src/tool-prompt.js";
-import { renderRawResult, resolveCollapsedResultLines, type CollapsedResultLinesResolver } from "./src/render.js";
+import { formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver } from "./src/render.js";
 import { applyContextCompressionToMessages } from "./src/context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./src/anthropic-cache-boundary.js";
 import { registerResumeAllCommand } from "./src/resume-all.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./src/timeout.js";
+import { resolveToolWorkdir } from "./src/path-utils.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./src/lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type YoloMode, type ContextCompressionConfig } from "./src/config.js";
 
@@ -74,6 +75,16 @@ function createCollapsedResultLinesResolver(loadSettings: (cwd: string) => Loade
 }
 
 type FindToolDefinitionFactory = (cwd: string) => any;
+function formatFindCall(args: any, theme: any): string {
+  const pattern = String(args?.pattern ?? "<missing-pattern>");
+  const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
+  const workdir = `${styleMuted(theme, " from ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : shortenHomePath(String(args.workdir)))}`;
+  const suffix = formatOptionalArgs([
+    ["limit", args?.limit],
+    ["timeout_seconds", args?.timeout_seconds],
+  ]);
+  return `${styleToolTitle(theme, "find")} ${styleOutput(theme, pattern)} ${styleMuted(theme, "in")} ${styleAccent(theme, path)}${workdir}${styleOutput(theme, suffix)}`;
+}
 
 /**
  * Wrap upstream's `find` so that `path` is required.
@@ -85,9 +96,8 @@ type FindToolDefinitionFactory = (cwd: string) => any;
  *    if it is missing or empty. The schema is the contract; the runtime check
  *    is defense in depth in case the model bypasses schema validation.
  *
- * `path` resolution still uses `ctx.cwd` per execution (not the extension's
- * `process.cwd()`), so a call from a different session cwd searches the right
- * tree.
+ * `path` resolution uses the explicit `workdir` argument. There is no implicit
+ * `ctx.cwd` fallback for missing `workdir`; callers must always pass it.
  */
 export function registerFindTool(
   pi: ExtensionAPI,
@@ -100,6 +110,9 @@ export function registerFindTool(
     parameters: findSchema,
     description: loadToolDescription("find"),
     promptSnippet: loadToolPromptSnippet("find"),
+    renderCall(args: any, theme: any, context: any) {
+      return renderCallText(formatFindCall(args, theme), context.lastComponent);
+    },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("find", undefined, context, options.getCollapsedResultLines);
       if (collapsedLines === undefined) {
@@ -118,28 +131,33 @@ export function registerFindTool(
           isError: true,
         };
       }
-      const cwd = ctx.cwd ?? process.cwd();
-      const scopedTool = createToolDefinition(cwd);
-      const timeoutSeconds = params.timeout_seconds === undefined ? undefined : parsePositiveNumber(params.timeout_seconds, "timeout_seconds", 1);
-      const scopedParams = { ...params, path: rawPath };
-      delete scopedParams.timeout_seconds;
-      if (timeoutSeconds === undefined) return scopedTool.execute(toolCallId, scopedParams, signal, onUpdate, ctx);
-      const timeout = createTimeoutSignal(signal, timeoutSeconds);
       try {
-        return await scopedTool.execute(toolCallId, scopedParams, timeout.signal, onUpdate, ctx);
-      } catch (error) {
-        if (timeout.didTimeout()) {
-          return {
-            content: [{
-              type: "text" as const,
-              text: `Error: find timed out after ${timeoutSeconds}s.\nHint: Narrow the path or pattern first. If a broad scan is truly necessary, rerun find with a larger timeout_seconds value.`,
-            }],
-            isError: true,
-          };
+        const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
+        const scopedTool = createToolDefinition(cwd);
+        const timeoutSeconds = params.timeout_seconds === undefined ? undefined : parsePositiveNumber(params.timeout_seconds, "timeout_seconds", 1);
+        const scopedParams = { ...params, path: rawPath };
+        delete scopedParams.workdir;
+        delete scopedParams.timeout_seconds;
+        if (timeoutSeconds === undefined) return scopedTool.execute(toolCallId, scopedParams, signal, onUpdate, ctx);
+        const timeout = createTimeoutSignal(signal, timeoutSeconds);
+        try {
+          return await scopedTool.execute(toolCallId, scopedParams, timeout.signal, onUpdate, ctx);
+        } catch (error) {
+          if (timeout.didTimeout()) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Error: find timed out after ${timeoutSeconds}s.\nHint: Narrow the path or pattern first. If a broad scan is truly necessary, rerun find with a larger timeout_seconds value.`,
+              }],
+              isError: true,
+            };
+          }
+          throw error;
+        } finally {
+          timeout.cleanup();
         }
-        throw error;
-      } finally {
-        timeout.cleanup();
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
       }
     },
   } as any);

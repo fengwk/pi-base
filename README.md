@@ -21,9 +21,9 @@
 - `edit` works from fresh anchors and fails clearly on stale anchors.
 - `write` returns fresh anchors for follow-up edits.
 - Context compression can be enabled to prune stale file outputs and bulky historical tool results; when `anchorHygiene` is enabled, obsolete `LINE#HASH` anchors from `read` / `write` / `edit` are replaced with concise placeholders before model calls.
-- `grep` requires an explicit `path`, defaults to a 15s timeout, fails fast on single-file binary inputs, and returns candidate locations rather than edit anchors; use `read` after `grep` before editing.
-- `find` is delegated to Pi's built-in implementation, but `pi-base` makes `path` explicit and required — there is no implicit search root.
-- `bash` requires an explicit `workdir` on every call.
+- `grep` requires explicit `path` and `workdir`, defaults to a 15s timeout, fails fast on single-file binary inputs, and returns candidate locations rather than edit anchors; use `read` after `grep` before editing.
+- `find` is delegated to Pi's built-in implementation, but `pi-base` makes `path` and `workdir` explicit and required — there is no implicit search root or hidden cwd.
+- `bash` requires an explicit `workdir` on every call; `read`, `edit`, `write`, `grep`, `find`, and `lsp_*` also require explicit `workdir`. Missing `workdir` is an error, and relative paths are resolved against the given `workdir`.
 - On Linux, WSL, and macOS, `bash` prefers the host `bash` or `zsh` shell from `$SHELL` and loads common startup files to better match the terminal environment.
 - `permission` rules can require approval for selected tools such as `edit`, `write`, and `bash`; `/yolo` temporarily bypasses those checks, and `/resume-all` opens a session picker across all known project directories.
 - Tool output is wrapped by a global truncation layer (`MAX_LINES=2000`, `MAX_BYTES=50KB`); full output is saved under `os.tmpdir()/pi-base-truncation/` and re-exposed via `details.truncation`.
@@ -130,10 +130,10 @@ Context compression does not add session-history messages or a persistent UI mar
 Behavior notes:
 
 - `ask` prompts in interactive mode before the tool runs.
-- The prompt shows the tool name plus a compact one-line `Arguments: ...` preview; long previews are truncated with `...`.
+- The prompt shows the tool name, explicit `Workdir: ...`, and a compact one-line `Arguments: ...` preview; long previews are truncated with `...`.
 - The only choices are `Yes` or `No`.
 - Future automatic allowance comes only from config pattern matches; there is no in-session "always allow this file/command" shortcut.
-- For path-based tools (`read`, `edit`, `write`, and similar tools that expose `path`), patterns are matched against the given path, the cwd-relative path, the project-relative path, and the absolute path.
+- For path-based tools (`read`, `edit`, `write`, and similar tools that expose `path`), patterns are matched against the given path, the workdir-relative path, the project-relative path, and the absolute path.
 - For `bash`, patterns are matched against the full command string.
 - In non-interactive mode, `ask` blocks the tool call because there is no UI to confirm it.
 - `/yolo` toggles a bypass mode that disables all permission checks for the current session and shows `YOLO` inline in the footer while it is active. It does not take subcommands; use `/yolo` again to switch back.

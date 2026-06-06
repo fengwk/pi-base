@@ -2,8 +2,8 @@ import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-cod
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ensureHashInit, formatHashlineDisplay } from "./hashline.js";
-import { resolveToCwd } from "./path-utils.js";
-import { type CollapsedResultLinesResolver, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleToolTitle } from "./render.js";
+import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
+import { type CollapsedResultLinesResolver, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleMuted, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { writeSchema } from "./schemas/write.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -29,12 +29,13 @@ ${formatHashlineOutput(content)}`;
 
 function formatWriteCall(args: any, theme: any): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
+  const workdir = `${styleMuted(theme, " in ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : shortenHomePath(String(args.workdir)))}`;
   const content = String(args?.content ?? "");
   // Raw `split("\n")`: the preview is the file's actual structure
   // (including the implicit trailing empty when present). We do not
   // silently rewrite structure.
   const lines = content.split("\n");
-  return `${styleToolTitle(theme, "write")} ${styleAccent(theme, path)}\n\n${lines.join("\n")}`;
+  return `${styleToolTitle(theme, "write")} ${styleAccent(theme, path)}${workdir}\n\n${lines.join("\n")}`;
 }
 
 export function registerWriteTool(
@@ -61,7 +62,8 @@ export function registerWriteTool(
         const rawPath = String(params.path ?? "").replace(/^@/, "");
         if (!rawPath) throw new Error("path is required.");
         const content = String(params.content ?? "");
-        const absolutePath = resolveToCwd(rawPath, ctx.cwd ?? process.cwd());
+        const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
+        const absolutePath = resolveToCwd(rawPath, cwd);
         return withFileMutationQueue(absolutePath, async () => {
           throwIfAborted(signal);
           let existed = true;

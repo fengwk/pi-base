@@ -20,7 +20,7 @@ describe("read tool", () => {
       },
     });
     registerReadTool(registry.pi as any, { createResolver: () => resolver });
-    const result = await registry.getTool("read").execute("1", { path: "src/example.ts", offset: 2, limit: 2 }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts", offset: 2, limit: 2 }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).toContain("path: src/example.ts");
     expect(text).toContain("offset: 2");
@@ -44,7 +44,7 @@ describe("read tool", () => {
       },
     });
     const absoluteFile = join(rootB, "src", "example.ts");
-    const result = await registry.getTool("read").execute("1", { path: absoluteFile }, undefined, undefined, { cwd: rootA });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: absoluteFile }, undefined, undefined, { cwd: rootA });
     expect(result.isError).not.toBe(true);
     expect(seenBaseDir).toBe(join(rootB, "src"));
   });
@@ -55,7 +55,7 @@ describe("read tool", () => {
     await writeFile(join(root, "src/a.ts"), "a\n", "utf8");
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "src" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).toContain("kind: directory");
     expect(text).toContain("a.ts");
@@ -67,7 +67,7 @@ describe("read tool", () => {
     await writeWorkspaceFile(root, "src/hello　world.ts", "alpha\n");
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "src/hello　world.ts" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/hello　world.ts" }, undefined, undefined, { cwd: root });
     expect(result.isError).not.toBe(true);
     expect(getText(result)).toContain("path: src/hello　world.ts");
     expect(getText(result)).toContain("|alpha");
@@ -80,7 +80,7 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const controller = new AbortController();
     controller.abort();
-    const result = await registry.getTool("read").execute("1", { path: "src/example.ts" }, controller.signal, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, controller.signal, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("Operation aborted");
   });
@@ -88,9 +88,9 @@ describe("read tool", () => {
   it("formats read calls in opencode style", async () => {
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const component = registry.getTool("read").renderCall({ path: "/home/fengwk/proj/pi-base/src/edit.ts", offset: 150, limit: 110 }, {} as any, { lastComponent: undefined }) as any;
+    const component = registry.getTool("read").renderCall({ workdir: ".", path: "/home/fengwk/proj/pi-base/src/edit.ts", offset: 150, limit: 110 }, {} as any, { lastComponent: undefined }) as any;
     const rendered = component.render(200).join("\n");
-    expect(rendered).toContain("Read ~/proj/pi-base/src/edit.ts [offset=150, limit=110]");
+    expect(rendered).toContain("Read ~/proj/pi-base/src/edit.ts in . [offset=150, limit=110]");
   });
 
   it("truncates very long lines", async () => {
@@ -98,7 +98,7 @@ describe("read tool", () => {
     await writeWorkspaceFile(root, "dist/bundle.txt", `${"x".repeat(2500)}\n`);
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "dist/bundle.txt", limit: 1 }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "dist/bundle.txt", limit: 1 }, undefined, undefined, { cwd: root });
     expect(getText(result)).toContain("line truncated to 2000 chars");
     expect(getText(result)).toContain("lsp: unsupported");
   });
@@ -109,7 +109,7 @@ describe("read tool", () => {
     await writeWorkspaceFile(root, "dist/bundle.txt", longLine);
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "dist/bundle.txt", limit: 1 }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "dist/bundle.txt", limit: 1 }, undefined, undefined, { cwd: root });
     const expectedHash = computeLineHash(1, longLine);
     expect(getText(result)).toContain(`1#${expectedHash}|`);
     expect(getText(result)).toContain("line truncated to 2000 chars");
@@ -120,7 +120,7 @@ describe("read tool", () => {
     await writeWorkspaceFile(root, "src/example.txt", Array.from({ length: 11 }, (_, index) => `line-${index + 1}`).join("\n"));
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "src/example.txt", offset: 9, limit: 3 }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.txt", offset: 9, limit: 3 }, undefined, undefined, { cwd: root });
     const lines = getText(result).split("\n");
     expect(lines.find((line) => line.includes("|line-9"))?.startsWith(" 9#")).toBe(true);
     expect(lines.find((line) => line.includes("|line-10"))?.startsWith("10#")).toBe(true);
@@ -139,7 +139,7 @@ describe("read tool", () => {
         },
       }),
     });
-    const result = await registry.getTool("read").execute("1", { path: "@image.png" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "@image.png" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).toContain("path: image.png");
     expect(text).toContain("mediaType: image");
@@ -159,9 +159,9 @@ describe("read tool", () => {
       createBuiltInReadTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "image delegated" }] }) }),
     });
 
-    await registry.getTool("read").execute("1", { path: "src/dir" }, undefined, undefined, { cwd: root });
-    await registry.getTool("read").execute("2", { path: "image.png" }, undefined, undefined, { cwd: root });
-    await registry.getTool("read").execute("3", { path: "src/file.ts" }, undefined, undefined, { cwd: root });
+    await registry.getTool("read").execute("1", { workdir: ".", path: "src/dir" }, undefined, undefined, { cwd: root });
+    await registry.getTool("read").execute("2", { workdir: ".", path: "image.png" }, undefined, undefined, { cwd: root });
+    await registry.getTool("read").execute("3", { workdir: ".", path: "src/file.ts" }, undefined, undefined, { cwd: root });
 
     expect(anchored).toHaveLength(1);
     expect(anchored[0]?.path.endsWith("src/file.ts")).toBe(true);
@@ -173,7 +173,7 @@ describe("read tool", () => {
     await writeFile(join(root, "data.bin"), Buffer.from([0, 1, 2, 3]));
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "data.bin" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "data.bin" }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("appears to be a binary file");
   });
@@ -183,7 +183,7 @@ describe("read tool", () => {
     await writeWorkspaceFile(root, "src/example.ts", "one\n");
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "src/example.ts", limit: 5000 }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts", limit: 5000 }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("limit must be <= 2000");
   });
@@ -199,7 +199,7 @@ describe("read tool", () => {
     await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\nthree\n");
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).toContain("totalLines: 4");
     expect(text).toMatch(/\b3#[0-9a-f]{4}\|three/);
@@ -213,7 +213,7 @@ describe("read tool", () => {
     await writeWorkspaceFile(root, "src/empty.ts", "");
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "src/empty.ts" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/empty.ts" }, undefined, undefined, { cwd: root });
     expect(result.isError).not.toBe(true);
     expect(getText(result)).toContain("totalLines: 1");
   });
@@ -223,7 +223,7 @@ describe("read tool", () => {
     await writeWorkspaceFile(root, "src/example.ts", "one\ntwo");
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).toContain("totalLines: 2");
     expect(text).toMatch(/\b2#[0-9a-f]{4}\|two/);

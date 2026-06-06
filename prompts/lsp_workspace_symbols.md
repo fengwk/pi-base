@@ -9,9 +9,10 @@ Usage:
 
 Parameters:
 - `path` (required)
+- `workdir` (required)
 - `query` (required)
 - `limit` (optional output limit, default: 50)
 
 Examples show the arguments passed to the tool:
-- `{"path":"src/main/java/com/acme/App.java","query":"UserService","limit":20}`
-- `{"path":"src/example.ts","query":"createDemoDirectory"}`
+- `{"path":"src/main/java/com/acme/App.java","workdir":"services/java","query":"UserService","limit":20}`
+- `{"path":"src/example.ts","workdir":"packages/web","query":"createDemoDirectory"}`

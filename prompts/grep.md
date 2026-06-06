@@ -11,6 +11,7 @@ Usage:
 Parameters:
 - `pattern` (required)
 - `path` (required)
+- `workdir` (required)
 - `include` (optional)
 - `ignoreCase` (optional, default: false)
 - `literal` (optional, default: false)
@@ -18,6 +19,6 @@ Parameters:
 - `timeout_seconds` (optional, default: 15)
 
 Examples show the arguments passed to the tool:
-- `{"pattern":"createDemoDirectory","path":"src","literal":true}`
-- `{"pattern":"create.*Directory","path":"src","ignoreCase":true}`
-- `{"pattern":"TODO","path":".","include":"**/*.ts","timeout_seconds":30}`
+- `{"pattern":"createDemoDirectory","path":"src","workdir":"packages/web","literal":true}`
+- `{"pattern":"create.*Directory","path":"src","workdir":"services/api","ignoreCase":true}`
+- `{"pattern":"TODO","path":".","workdir":".","include":"**/*.ts","timeout_seconds":30}`

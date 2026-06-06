@@ -105,10 +105,10 @@ describe("context compression", () => {
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { type: "session_start" }, { cwd: root });
 
-    const readArgs = { path: "src/example.txt" };
+    const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-anchor-1", readArgs, undefined, undefined, { cwd: root });
     const alphaAnchor = anchorFor(getText(readResult), "alpha");
-    const editArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
+    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
     const editResult = await registry.getTool("edit").execute("edit-anchor-1", editArgs, undefined, undefined, { cwd: root });
     const messages = [
       ...toolExchange("read", "read-anchor-1", readArgs, readResult),
@@ -130,15 +130,15 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const readArgs = { path: "src/example.txt" };
+    const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-1", readArgs, undefined, undefined, { cwd: root });
     const alphaAnchor = anchorFor(getText(readResult), "alpha");
 
-    const edit1Args = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
+    const edit1Args = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
     const edit1 = await registry.getTool("edit").execute("edit-1", edit1Args, undefined, undefined, { cwd: root });
     const alphaV1Anchor = anchorFor(getText(edit1), "alpha v1");
 
-    const edit2Args = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaV1Anchor, end_anchor: alphaV1Anchor, new_text: "alpha v2" } }] };
+    const edit2Args = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaV1Anchor, end_anchor: alphaV1Anchor, new_text: "alpha v2" } }] };
     const edit2 = await registry.getTool("edit").execute("edit-2", edit2Args, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -166,11 +166,11 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const writeArgs = { path: "src/example.txt", content: "alpha\nbeta\n" };
+    const writeArgs = { workdir: ".", path: "src/example.txt", content: "alpha\nbeta\n" };
     const writeResult = await registry.getTool("write").execute("write-1", writeArgs, undefined, undefined, { cwd: root });
     const alphaAnchor = anchorFor(getText(writeResult), "alpha");
 
-    const editArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
+    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
     const editResult = await registry.getTool("edit").execute("edit-after-write", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -193,10 +193,10 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const readArgs = { path: "src/example.txt" };
+    const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-anchor-hygiene-off", readArgs, undefined, undefined, { cwd: root });
     const alphaAnchor = anchorFor(getText(readResult), "alpha");
-    const editArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
+    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
     const editResult = await registry.getTool("edit").execute("edit-anchor-hygiene-off", editArgs, undefined, undefined, { cwd: root });
     const bashArgs = { command: "echo old", workdir: "." };
     const bashResult = { content: [{ type: "text", text: "old bash output" }] };
@@ -224,12 +224,12 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const grepArgs = { pattern: "alpha", path: "src", literal: true };
+    const grepArgs = { workdir: ".", pattern: "alpha", path: "src", literal: true };
     const grepResult = await registry.getTool("grep").execute("grep-tree-1", grepArgs, undefined, undefined, { cwd: root });
     expect(getText(grepResult)).toContain("example.txt:1: alpha");
     expect(getText(grepResult)).not.toMatch(/\d+#[0-9a-f]{4}\|/);
 
-    const editArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: "alpha v1" } }] };
+    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: "alpha v1" } }] };
     const editResult = await registry.getTool("edit").execute("edit-after-grep-tree", editArgs, undefined, undefined, { cwd: root });
     expect(editResult.isError).toBe(true);
     expect(getText(editResult)).toContain("Fresh anchors are required");
@@ -245,18 +245,18 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const readArgs = { path: "src/example.txt" };
+    const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-for-error-context", readArgs, undefined, undefined, { cwd: root });
     const alphaAnchor = anchorFor(getText(readResult), "alpha");
     const badAlphaAnchor = alphaAnchor.replace(/#[0-9a-f]{4}$/, (value) => value.endsWith("ffff") ? "#0000" : "#ffff");
 
-    const failedEditArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: badAlphaAnchor, end_anchor: badAlphaAnchor, new_text: "alpha bad" } }] };
+    const failedEditArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: badAlphaAnchor, end_anchor: badAlphaAnchor, new_text: "alpha bad" } }] };
     const failedEdit = await registry.getTool("edit").execute("edit-error-context", failedEditArgs, undefined, undefined, { cwd: root });
     expect(failedEdit.isError).toBe(true);
     expect(getText(failedEdit)).toContain("Current context");
     expect(getText(failedEdit)).toContain("alpha");
 
-    const goodEditArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
+    const goodEditArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
     const goodEdit = await registry.getTool("edit").execute("edit-after-error-context", goodEditArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -304,9 +304,9 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const normalArgs = { path: "normal.txt" };
+    const normalArgs = { workdir: ".", path: "normal.txt" };
     const normalResult = await registry.getTool("read").execute("read-normal-old", normalArgs, undefined, undefined, { cwd: root });
-    const skillArgs = { path: "skills/demo/reference.md" };
+    const skillArgs = { workdir: ".", path: "skills/demo/reference.md" };
     const skillResult = await registry.getTool("read").execute("read-skill-old", skillArgs, undefined, undefined, { cwd: root });
     const messages = [
       userMessage("round 1"),
@@ -336,7 +336,7 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const args = { path: "not-advertised/reference.md" };
+    const args = { workdir: ".", path: "not-advertised/reference.md" };
     const result = await registry.getTool("read").execute("read-fake-skill", args, undefined, undefined, { cwd: root });
     const messages = [
       userMessage(`<skill name=\"fake\" location=\"${join(root, "not-advertised/SKILL.md")}\">`),
@@ -360,10 +360,10 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const skillArgs = { path: "skills/demo/reference.md" };
+    const skillArgs = { workdir: ".", path: "skills/demo/reference.md" };
     const skillResult = await registry.getTool("read").execute("read-skill-stale", skillArgs, undefined, undefined, { cwd: root });
     const skillAnchor = anchorFor(getText(skillResult), "skill reference");
-    const editArgs = { path: "skills/demo/reference.md", edits: [{ replace_lines: { start_anchor: skillAnchor, end_anchor: skillAnchor, new_text: "skill reference updated" } }] };
+    const editArgs = { workdir: ".", path: "skills/demo/reference.md", edits: [{ replace_lines: { start_anchor: skillAnchor, end_anchor: skillAnchor, new_text: "skill reference updated" } }] };
     const editResult = await registry.getTool("edit").execute("edit-skill-stale", editArgs, undefined, undefined, { cwd: root });
     const messages = [
       userMessage("round 1"),
@@ -398,7 +398,7 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const skillArgs = { path: "real-skills/demo/reference.md" };
+    const skillArgs = { workdir: ".", path: "real-skills/demo/reference.md" };
     const skillResult = await registry.getTool("read").execute("read-skill-link", skillArgs, undefined, undefined, { cwd: root });
     const messages = [
       userMessage("round 1"),
@@ -546,10 +546,10 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const readArgs = { path: "src/example.txt" };
+    const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-default", readArgs, undefined, undefined, { cwd: root });
     const alphaAnchor = anchorFor(getText(readResult), "alpha");
-    const editArgs = { path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
+    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
     await registry.getTool("edit").execute("edit-default", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [

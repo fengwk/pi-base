@@ -15,7 +15,7 @@ describe("grep", () => {
         execute: async () => ({ content: [{ type: "text", text: "example.ts:2: beta" }] }),
       }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "beta", path: "src" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "beta", path: "src" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).toContain("example.ts");
     expect(text).toContain("2:");
@@ -37,7 +37,7 @@ describe("grep", () => {
           }),
       }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "x", path: ".", timeout_seconds: 0.01 }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "x", path: ".", timeout_seconds: 0.01 }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("Search timed out");
   });
@@ -57,7 +57,7 @@ describe("grep", () => {
       }),
     });
     const controller = new AbortController();
-    const pending = registry.getTool("grep").execute("1", { pattern: "x", path: ".", timeout_seconds: 30 }, controller.signal, undefined, { cwd: process.cwd() });
+    const pending = registry.getTool("grep").execute("1", { workdir: ".", pattern: "x", path: ".", timeout_seconds: 30 }, controller.signal, undefined, { cwd: process.cwd() });
     controller.abort();
     const result = await pending;
     expect(result.isError).toBe(true);
@@ -78,7 +78,7 @@ describe("grep", () => {
       }),
     });
     await writeFile(join(root, "binary.bin"), Buffer.from([0, 1, 2, 3]));
-    const result = await registry.getTool("grep").execute("1", { pattern: "x", path: "binary.bin" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "x", path: "binary.bin" }, undefined, undefined, { cwd: root });
     expect(builtInCalled).toBe(false);
     expect(getText(result)).toContain("binary file");
     expect(getText(result)).toContain("grep only supports searching text files");
@@ -89,7 +89,7 @@ describe("grep", () => {
       createBuiltInGrepTool: () => ({ execute: async () => ({ content: [{ type: "text" as const, text: "missing-path fallback" }] }) }),
     });
 
-    const result = await registry.getTool("grep").execute("1", { pattern: "x", path: "missing.txt", timeout_seconds: 5 }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "x", path: "missing.txt", timeout_seconds: 5 }, undefined, undefined, { cwd: process.cwd() });
 
     expect(result.isError).not.toBe(true);
     expect(getText(result)).toContain("missing-path fallback");
@@ -100,7 +100,7 @@ describe("grep", () => {
     registerGrepTool(registry.pi as any, {
       createBuiltInGrepTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "No matches found" }] }) }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "x", path: "." }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "x", path: "." }, undefined, undefined, { cwd: process.cwd() });
     expect(getText(result)).toContain("No matches found");
   });
 
@@ -109,7 +109,7 @@ describe("grep", () => {
     registerGrepTool(registry.pi as any, {
       createBuiltInGrepTool: () => ({ execute: async () => ({ content: [{ type: "image", data: "x", mimeType: "image/png" }] }) }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "x", path: "." }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "x", path: "." }, undefined, undefined, { cwd: process.cwd() });
     expect(result.content[0].type).toBe("image");
   });
 
@@ -120,7 +120,7 @@ describe("grep", () => {
     registerGrepTool(registry.pi as any, {
       createBuiltInGrepTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "[summary]\nexample.ts:2: beta" }] }) }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "beta", path: "src" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "beta", path: "src" }, undefined, undefined, { cwd: root });
     expect(getText(result)).toContain("[summary]");
   });
 
@@ -134,7 +134,7 @@ describe("grep", () => {
         }),
       }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "prefix", path: "src" }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "prefix", path: "src" }, undefined, undefined, { cwd: process.cwd() });
     const text = getText(result);
     expect(text).toContain("huge.txt:1: prefix");
     expect(text).toContain("Some lines truncated to 500 chars");
@@ -146,7 +146,7 @@ describe("grep", () => {
     registerGrepTool(registry.pi as any, {
       createBuiltInGrepTool: () => ({ execute: async () => { throw new Error("grep failed"); } }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "x", path: "." }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "x", path: "." }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("grep failed");
   });
@@ -156,7 +156,7 @@ describe("grep", () => {
     registerGrepTool(registry.pi as any, {
       createBuiltInGrepTool: () => ({ execute: async () => ({ content: [] }) }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "x" }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "x" }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("path is required");
   });
@@ -172,7 +172,7 @@ describe("grep", () => {
         },
       }),
     });
-    const result = await registry.getTool("grep").execute("1", { pattern: "beta", path: "src", include: "**/*.ts" }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "beta", path: "src", include: "**/*.ts" }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).not.toBe(true);
     expect(seenParams.glob).toBe("**/*.ts");
   });
@@ -199,8 +199,8 @@ describe("find (delegated to built-in pi-coding-agent)", () => {
 
     // `path` is required; pass it explicitly. The wrapper still resolves
     // it against the per-execution `ctx.cwd`, which is the contract under test.
-    const resultA = await registry.getTool("find").execute("1", { pattern: "*", path: "." }, undefined, undefined, { cwd: rootA });
-    const resultB = await registry.getTool("find").execute("2", { pattern: "*", path: "." }, undefined, undefined, { cwd: rootB });
+    const resultA = await registry.getTool("find").execute("1", { workdir: ".", pattern: "*", path: "." }, undefined, undefined, { cwd: rootA });
+    const resultB = await registry.getTool("find").execute("2", { workdir: ".", pattern: "*", path: "." }, undefined, undefined, { cwd: rootB });
     expect(getText(resultA)).toBe(rootA);
     expect(getText(resultB)).toBe(rootB);
   });
@@ -220,7 +220,7 @@ describe("find (delegated to built-in pi-coding-agent)", () => {
       },
     }));
 
-    const result = await registry.getTool("find").execute("1", { pattern: "*", path: ".", timeout_seconds: 0.01 }, undefined, undefined, { cwd: process.cwd() });
+    const result = await registry.getTool("find").execute("1", { workdir: ".", pattern: "*", path: ".", timeout_seconds: 0.01 }, undefined, undefined, { cwd: process.cwd() });
 
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("find timed out");
@@ -238,7 +238,9 @@ describe("find (delegated to built-in pi-coding-agent)", () => {
       },
     }));
 
-    await expect(registry.getTool("find").execute("1", { pattern: "*", path: ".", timeout_seconds: 30 }, undefined, undefined, { cwd: process.cwd() })).rejects.toThrow("find boom");
+    const result = await registry.getTool("find").execute("1", { workdir: ".", pattern: "*", path: ".", timeout_seconds: 30 }, undefined, undefined, { cwd: process.cwd() });
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("find boom");
   });
 
   it("delegates find renderResult when collapsed result lines are not configured", () => {

@@ -48,7 +48,7 @@ describe("permission guard", () => {
 
     const result = await registry.getTool("write").execute(
       "1",
-      { path: "src/allowed.ts", content: "export const allowed = true;\n" },
+      { workdir: ".", path: "src/allowed.ts", content: "export const allowed = true;\n" },
       undefined,
       undefined,
       { cwd: root },
@@ -57,6 +57,7 @@ describe("permission guard", () => {
     expect(result.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]!.title).toContain("Tool: write");
+    expect(prompts[0]!.title).toContain("Workdir: ");
     expect(prompts[0]!.title).toContain("Arguments: ");
     expect(prompts[0]!.title).toContain("\"path\":\"src/allowed.ts\"");
     expect(prompts[0]!.title).toContain("\"content\":\"export const allowed = true;\\n\"");
@@ -74,7 +75,7 @@ describe("permission guard", () => {
 
     const result = await registry.getTool("write").execute(
       "1",
-      { path: "src/blocked.ts", content: "export const blocked = true;\n" },
+      { workdir: ".", path: "src/blocked.ts", content: "export const blocked = true;\n" },
       undefined,
       undefined,
       { cwd: root, hasUI: false },
@@ -110,7 +111,7 @@ describe("permission guard", () => {
 
     const allowed = await registry.getTool("write").execute(
       "1",
-      { path: "src/matched.ts", content: "export const matched = true;\n" },
+      { workdir: ".", path: "src/matched.ts", content: "export const matched = true;\n" },
       undefined,
       undefined,
       { cwd: root },
@@ -120,7 +121,7 @@ describe("permission guard", () => {
 
     const asked = await registry.getTool("write").execute(
       "2",
-      { path: "notes.txt", content: "hello\n" },
+      { workdir: ".", path: "notes.txt", content: "hello\n" },
       undefined,
       undefined,
       { cwd: root },
@@ -128,8 +129,55 @@ describe("permission guard", () => {
     expect(asked.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Tool: write");
+    expect(prompts[0]).toContain("Workdir: ");
     expect(prompts[0]).toContain("Arguments: ");
     expect(prompts[0]).toContain("\"path\":\"notes.txt\"");
+  });
+  it("matches path permission rules relative to the explicit workdir", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: {
+        write: {
+          "*": "ask",
+          "repo/src/*.ts": "allow",
+        },
+      },
+    });
+
+    const prompts: string[] = [];
+    const registry = createToolRegistry({ hasUI: true });
+    registry.setUI({
+      select: async (title) => {
+        prompts.push(title);
+        return "Yes";
+      },
+    });
+
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const allowed = await registry.getTool("write").execute(
+      "1",
+      { path: "src/matched.ts", workdir: "repo", content: "export const matched = true;\n" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(allowed.isError).not.toBe(true);
+    expect(prompts).toHaveLength(0);
+    expect(await readFile(join(root, "repo/src/matched.ts"), "utf8")).toBe("export const matched = true;\n");
+
+    const asked = await registry.getTool("write").execute(
+      "2",
+      { path: "notes.txt", workdir: "repo", content: "hello\n" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(asked.isError).not.toBe(true);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Workdir: repo");
+    expect(prompts[0]).toContain("\"workdir\":\"repo\"");
   });
 
   it("toggles yolo mode via /yolo and bypasses permission checks", async () => {
@@ -147,7 +195,7 @@ describe("permission guard", () => {
 
     const blocked = await registry.getTool("write").execute(
       "1",
-      { path: "src/yolo.ts", content: "export const yolo = false;\n" },
+      { workdir: ".", path: "src/yolo.ts", content: "export const yolo = false;\n" },
       undefined,
       undefined,
       { cwd: root },
@@ -169,7 +217,7 @@ describe("permission guard", () => {
 
     const allowed = await registry.getTool("write").execute(
       "2",
-      { path: "src/yolo.ts", content: "export const yolo = true;\n" },
+      { workdir: ".", path: "src/yolo.ts", content: "export const yolo = true;\n" },
       undefined,
       undefined,
       { cwd: root },
@@ -203,7 +251,7 @@ describe("permission guard", () => {
     expect(footerLines[1]).toContain("YOLO");
     const result = await registry.getTool("write").execute(
       "1",
-      { path: "src/default-yolo.ts", content: "export const enabled = true;\n" },
+      { workdir: ".", path: "src/default-yolo.ts", content: "export const enabled = true;\n" },
       undefined,
       undefined,
       { cwd: root },
@@ -263,6 +311,7 @@ describe("permission guard", () => {
     expect(npmResult.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Tool: bash");
+    expect(prompts[0]).toContain("Workdir: .");
     expect(prompts[0]).toContain("Arguments: ");
     expect(prompts[0]).toContain("\"command\":\"npm test\"");
     expect(prompts[0]).toContain("\"workdir\":\".\"");
@@ -310,6 +359,7 @@ describe("permission guard", () => {
     expect(result.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Tool: bash");
+    expect(prompts[0]).toContain("Workdir: .");
     expect(prompts[0]).toContain("Arguments: ");
     expect(prompts[0]).toContain("pwd && ls -ld . && touch a.py");
   });
@@ -360,6 +410,6 @@ describe("permission guard", () => {
     expect(argumentLines).toHaveLength(1);
     expect(argumentLines[0]).toContain("TestDebug");
     expect(argumentLines[0]).toContain("...");
-    expect(promptLines.length).toBeLessThanOrEqual(6);
+    expect(promptLines.length).toBeLessThanOrEqual(7);
   });
 });

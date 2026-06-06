@@ -31,17 +31,17 @@ describe("tool renderers", () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
 
-      // `find` is delegated to the built-in pi-coding-agent tool, so its renderer
-      // is owned upstream and not asserted here. The remaining tools are wrapped
-      // by pi-base and need consistent opencode-style call rendering.
+      // pi-base wraps call/result previews for these tools to keep a consistent
+      // opencode-style display, including explicit workdir for cwd-scoped tools.
       const cases = [
-        { name: "read", args: { path: "src/example.ts", offset: 2, limit: 5 } },
-        { name: "grep", args: { pattern: "demo", path: "src", include: "*.ts" } },
-        { name: "bash", args: { command: "pwd", workdir: ".", timeout_seconds: 5 } },
+        { name: "read", args: { path: "src/example.ts", workdir: "packages/web", offset: 2, limit: 5 } },
+        { name: "grep", args: { pattern: "demo", path: "src", workdir: "services/api", include: "*.ts" } },
+        { name: "bash", args: { command: "pwd", workdir: "services/api", timeout_seconds: 5 } },
         {
           name: "edit",
           args: {
             path: "src/example.ts",
+            workdir: "packages/app",
             edits: [
               { replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: "const a = 1;" } },
               { delete_lines: { start_anchor: "2#def0", end_anchor: "3#0123" } },
@@ -51,11 +51,11 @@ describe("tool renderers", () => {
             ],
           },
         },
-        { name: "write", args: { path: "src/example.ts", content: "export const x = 1;" } },
-        { name: "lsp_diagnostics", args: { path: "src/example.ts", severity: "error" } },
-        { name: "lsp_goto_definition", args: { path: "src/example.ts", line: 2, character: 0 } },
-        { name: "lsp_workspace_symbols", args: { path: "src/example.ts", query: "Example", limit: 10 } },
-        { name: "lsp_java_decompile", args: { path: "src/App.java", target: "jdt://demo" } },
+        { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" } },
+        { name: "lsp_diagnostics", args: { path: "src/example.ts", workdir: "packages/web", severity: "error" } },
+        { name: "lsp_goto_definition", args: { path: "src/example.ts", workdir: "services/api", line: 2, character: 0 } },
+        { name: "lsp_workspace_symbols", args: { path: "src/example.ts", workdir: "packages/web", query: "Example", limit: 10 } },
+        { name: "lsp_java_decompile", args: { path: "src/App.java", workdir: "services/java", target: "jdt://demo" } },
       ];
 
       for (const testCase of cases) {
@@ -78,6 +78,7 @@ describe("tool renderers", () => {
       const rendered = render(tool.renderCall(
         {
           path: "src/example.ts",
+          workdir: ".",
           edits: [{ replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: `alpha-${index}` } }],
         },
         {} as any,
@@ -95,6 +96,7 @@ describe("tool renderers", () => {
 
     const rendered = render(tool.renderCall(
       {
+        workdir: ".",
         path: "src/example.ts",
         edits: [{ delete_lines: { start_anchor: "bad", end_anchor: "bad" } }],
       },
@@ -168,7 +170,7 @@ describe("tool renderers", () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const rendered = render(registry.getTool("write").renderCall(
-        { path: "src/example.ts", content: "alpha" },
+        { workdir: ".", path: "src/example.ts", content: "alpha" },
         {} as any,
         { lastComponent: undefined, executionStarted: true, argsComplete: true, isPartial: false, expanded: false, isError: false, cwd: root },
       ));
@@ -184,14 +186,15 @@ describe("tool renderers", () => {
     piBaseExtension(registry.pi as any);
 
     const expectations = [
-      { name: "read", args: { path: "/home/fengwk/proj/pi-base/src/edit.ts", offset: 150, limit: 110 }, expected: "Read ~/proj/pi-base/src/edit.ts [offset=150, limit=110]" },
-      { name: "grep", args: { pattern: "demo", path: "src", include: "*.ts" }, expected: "grep \"demo\" in src [include=*.ts]" },
-      { name: "bash", args: { command: "npm test", workdir: ".", timeout_seconds: 5 }, expected: "$ npm test (timeout 5s) in ." },
-      { name: "write", args: { path: "src/example.ts", content: "export const x = 1;" }, expected: "write src/example.ts" },
-      { name: "lsp_diagnostics", args: { path: "src/example.ts", severity: "error" }, expected: "lsp_diagnostics src/example.ts [severity=error]" },
-      { name: "lsp_goto_definition", args: { path: "src/example.ts", line: 2 }, expected: "lsp_goto_definition src/example.ts [line=2, character=0]" },
-      { name: "lsp_workspace_symbols", args: { path: "src/example.ts", query: "Example", limit: 10 }, expected: "lsp_workspace_symbols src/example.ts Example [limit=10]" },
-      { name: "lsp_java_decompile", args: { path: "src/App.java", target: "jdt://demo" }, expected: "lsp_java_decompile src/App.java jdt://demo" },
+      { name: "read", args: { path: "/home/fengwk/proj/pi-base/src/edit.ts", workdir: ".", offset: 150, limit: 110 }, expected: "Read ~/proj/pi-base/src/edit.ts in . [offset=150, limit=110]" },
+      { name: "grep", args: { pattern: "demo", path: "src", workdir: "packages/web", include: "*.ts" }, expected: "grep \"demo\" in src from packages/web [include=*.ts]" },
+      { name: "find", args: { pattern: "*.ts", path: "src", workdir: "packages/web" }, expected: "find *.ts in src from packages/web" },
+      { name: "bash", args: { command: "npm test", workdir: "packages/web", timeout_seconds: 5 }, expected: "$ npm test (timeout 5s) in packages/web" },
+      { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" }, expected: "write src/example.ts in services/api" },
+      { name: "lsp_diagnostics", args: { path: "src/example.ts", workdir: "packages/web", severity: "error" }, expected: "lsp_diagnostics src/example.ts in packages/web [severity=error]" },
+      { name: "lsp_goto_definition", args: { path: "src/example.ts", workdir: "services/api", line: 2 }, expected: "lsp_goto_definition src/example.ts in services/api [line=2, character=0]" },
+      { name: "lsp_workspace_symbols", args: { path: "src/example.ts", workdir: "packages/web", query: "Example", limit: 10 }, expected: "lsp_workspace_symbols src/example.ts in packages/web Example [limit=10]" },
+      { name: "lsp_java_decompile", args: { path: "src/App.java", workdir: "services/java", target: "jdt://demo" }, expected: "lsp_java_decompile src/App.java in services/java jdt://demo" },
     ];
 
     for (const testCase of expectations) {

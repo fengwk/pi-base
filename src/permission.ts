@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dirname, relative } from "node:path";
 import { loadPiBaseSettings, type LoadedPiBaseSettings, type PermissionAction, type PermissionRuleEntry } from "./config.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { PI_BASE_INLINE_STATUS_KEYS, PI_BASE_PERMISSION_STATUS_KEY, syncYoloFooter } from "./yolo-footer.js";
 
 const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
@@ -147,7 +147,11 @@ function buildGenericTargetDescriptor(_toolName: string): TargetDescriptor {
 
 function describeTarget(toolName: string, input: Record<string, unknown>, cwd: string, loaded: LoadedPiBaseSettings): TargetDescriptor {
   if (typeof input.path === "string" && input.path.trim().length > 0) {
-    return buildPathTargetDescriptor(input.path, cwd, loaded);
+    if (typeof input.workdir === "string" && input.workdir.trim().length > 0) {
+      const { cwd: targetCwd } = resolveToolWorkdir(input.workdir, cwd);
+      return buildPathTargetDescriptor(input.path, targetCwd, loaded);
+    }
+    return { candidates: [normalizeSlashes(stripAtPrefix(input.path))] };
   }
   if (typeof input.command === "string") {
     return buildCommandTargetDescriptor(input.command);
@@ -230,12 +234,21 @@ function truncateSingleLine(value: string, maxChars = PROMPT_ARGUMENTS_MAX_CHARS
   return `${singleLine.slice(0, sliceLength)}...`;
 }
 
+function getPromptWorkdir(input: unknown): string {
+  if (input && typeof input === "object") {
+    const workdir = (input as Record<string, unknown>).workdir;
+    if (workdir !== undefined && workdir !== null) return truncateSingleLine(String(workdir));
+  }
+  return "<missing-workdir>";
+}
+
 function buildPrompt(toolName: string, input: unknown): string {
   const argumentsPreview = truncateSingleLine(stringifyPromptArguments(input)) || "{}";
   return [
     "Permission request",
     "",
     `Tool: ${toolName}`,
+    `Workdir: ${getPromptWorkdir(input)}`,
     `Arguments: ${argumentsPreview}`,
     "",
     "Allow this tool call?",

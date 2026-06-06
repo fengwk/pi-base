@@ -6,7 +6,7 @@ import { looksLikeBinary } from "./binary-detect.js";
 import { normalizeToLF, stripBom } from "./edit-diff.js";
 import { ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay } from "./hashline.js";
 import { LspDiscoveryResolver, type LspSupportInfo } from "./lsp/discovery.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { type CollapsedResultLinesResolver, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { readSchema } from "./schemas/read.js";
@@ -41,7 +41,8 @@ type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any,
 function formatReadCall(args: any, theme: any): string {
   const rawPath = String(args?.path ?? "<missing-path>");
   const path = shortenHomePath(rawPath);
-  return `${styleToolTitle(theme, "Read")} ${styleAccent(theme, path)}${styleOutput(theme, formatOptionalArgs([["offset", args?.offset], ["limit", args?.limit]]))}`;
+  const workdir = `${styleOutput(theme, " in ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : shortenHomePath(String(args.workdir)))}`;
+  return `${styleToolTitle(theme, "Read")} ${styleAccent(theme, path)}${workdir}${styleOutput(theme, formatOptionalArgs([["offset", args?.offset], ["limit", args?.limit]]))}`;
 }
 
 function formatLspStatus(lsp: LspSupportInfo): string {
@@ -85,7 +86,7 @@ export function registerReadTool(
         throwIfAborted(signal);
         const rawPath = String(params.path ?? "").replace(/^@/, "");
         if (!rawPath) throw new Error("path is required.");
-        const cwd = ctx.cwd ?? process.cwd();
+        const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const absolutePath = resolveToCwd(rawPath, cwd);
         const st = await throwIfAbortedAfter(stat(absolutePath), signal);
 
@@ -99,7 +100,9 @@ export function registerReadTool(
 
         if (IMAGE_EXTENSIONS.has(extname(rawPath).toLowerCase())) {
           const builtIn = (options.createBuiltInReadTool ?? createReadTool)(cwd);
-          const result = await builtIn.execute(toolCallId, { ...params, path: rawPath }, signal, onUpdate);
+          const builtInParams = { ...params, path: rawPath };
+          delete builtInParams.workdir;
+          const result = await builtIn.execute(toolCallId, builtInParams, signal, onUpdate);
           const note = (result.content ?? [])
             .filter((item: any) => item.type === "text" && typeof item.text === "string")
             .map((item: any) => item.text)

@@ -431,7 +431,7 @@ describe("bash tool and index", () => {
       synced = filePath;
     };
     try {
-      await registry.getTool("write").execute("1", { path: "sync-test.ts", content: "export const x = 1;\n" }, undefined, undefined, { cwd: root });
+      await registry.getTool("write").execute("1", { workdir: ".", path: "sync-test.ts", content: "export const x = 1;\n" }, undefined, undefined, { cwd: root });
       expect(synced).toBe(join(root, "sync-test.ts"));
     } finally {
       lspManager.syncFileIfOpen = original;
@@ -475,12 +475,12 @@ describe("bash tool and index", () => {
       piBaseExtension(registry.pi as any);
 
       // Read from project A -> should see the LSP support header.
-      const readA = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: rootA });
+      const readA = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: rootA });
       const textA = getText(readA);
       expect(textA).toContain("lsp: supported (ts)");
 
       // Read from project B -> should see the LSP support header for B's server.
-      const readB = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: rootB });
+      const readB = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: rootB });
       const textB = getText(readB);
       expect(textB).toContain("lsp: supported (ts)");
 
@@ -497,11 +497,11 @@ describe("bash tool and index", () => {
       // Create a NEW extension instance (simulating a fresh session) and check A.
       const registry2 = createToolRegistry();
       piBaseExtension(registry2.pi as any);
-      const readAAfter = await registry2.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: rootA });
+      const readAAfter = await registry2.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: rootA });
       expect(getText(readAAfter)).toContain("not installed");
 
       // Project B should be unaffected: its own binary still exists.
-      const readBAfter = await registry2.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: rootB });
+      const readBAfter = await registry2.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: rootB });
       expect(getText(readBAfter)).toContain("lsp: supported (ts)");
     } finally {
       if (previousGlobalSettingsPath === undefined) {

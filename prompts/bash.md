@@ -20,9 +20,9 @@ Parameters:
 - `timeout_seconds` (optional, no default)
 
 Examples show the arguments passed to the tool:
-- `{"command":"npm test","workdir":"."}`
-- `{"command":"mvn -q test","workdir":".","timeout_seconds":120}`
+- `{"command":"npm test","workdir":"packages/web"}`
+- `{"command":"mvn -q test","workdir":"services/java","timeout_seconds":120}`
 - `{"command":"git status --short","workdir":"."}`
-- `{"command":"mkdir -p build && cp \"source file.txt\" build/","workdir":"."}`
-- `{"command":"mv src/old.ts src/archive/old.ts","workdir":"."}`
+- `{"command":"mkdir -p build && cp \"source file.txt\" build/","workdir":"packages/app"}`
+- `{"command":"mv src/old.ts src/archive/old.ts","workdir":"services/api"}`
 - `{"command":"cp \"source file.txt\" \"target file.txt\"","workdir":"/tmp/anydir"}`

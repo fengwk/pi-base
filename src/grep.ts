@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createGrepTool } from "@earendil-works/pi-coding-agent";
 import { open, stat } from "node:fs/promises";
 import { looksLikeBinary } from "./binary-detect.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { type CollapsedResultLinesResolver, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
 import { grepSchema } from "./schemas/grep.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
@@ -24,6 +24,7 @@ function formatGrepPattern(value: unknown): string {
 function formatGrepCall(args: any, theme: any): string {
   const pattern = formatGrepPattern(args?.pattern);
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
+  const workdir = `${styleMuted(theme, " from ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : shortenHomePath(String(args.workdir)))}`;
   const suffix = formatOptionalArgs([
     ["include", args?.include],
     ["ignoreCase", args?.ignoreCase === true ? true : undefined],
@@ -31,7 +32,7 @@ function formatGrepCall(args: any, theme: any): string {
     ["limit", args?.limit],
     ["timeout_seconds", args?.timeout_seconds],
   ]);
-  return `${styleToolTitle(theme, "grep")} ${styleOutput(theme, pattern)} ${styleMuted(theme, "in")} ${styleAccent(theme, path)}${styleOutput(theme, suffix)}`;
+  return `${styleToolTitle(theme, "grep")} ${styleOutput(theme, pattern)} ${styleMuted(theme, "in")} ${styleAccent(theme, path)}${workdir}${styleOutput(theme, suffix)}`;
 }
 
 async function readBinaryProbeBuffer(filePath: string, signal?: AbortSignal): Promise<Buffer> {
@@ -76,7 +77,7 @@ export function registerGrepTool(
         const rawPath = String(params.path ?? "").replace(/^@/, "");
         if (!pattern) throw new Error("pattern is required.");
         if (!rawPath) throw new Error("path is required.");
-        const cwd = ctx.cwd ?? process.cwd();
+        const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const absolutePath = resolveToCwd(rawPath, cwd);
         const timeoutSeconds = parsePositiveNumber(params.timeout_seconds, "timeout_seconds", DEFAULT_TIMEOUT_SECONDS);
         const limit = parsePositiveNumber(params.limit, "limit", DEFAULT_LIMIT);

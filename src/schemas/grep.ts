@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 export const grepSchema = Type.Object({
   pattern: Type.String({ description: "Pattern to search for." }),
   path: Type.String({ description: "Directory or file path to search." }),
+  workdir: Type.String({ description: "Working directory for resolving relative paths. Required. Use '.' for the current working directory." }),
   include: Type.Optional(Type.String({ description: "Optional file filter glob such as `**/*.ts`." })),
   ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive search. Default: false." })),
   literal: Type.Optional(Type.Boolean({ description: "Treat the pattern literally instead of as a regular expression. Default: false." })),

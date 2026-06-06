@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { type CollapsedResultLinesResolver, formatInlineValue, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "../render.js";
 import { lspDiagnosticsSchema, lspGotoDefinitionSchema, lspJavaDecompileSchema, lspWorkspaceSymbolsSchema } from "../schemas/lsp.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
-import { resolveToCwd } from "../path-utils.js";
+import { resolveToCwd, resolveToolWorkdir } from "../path-utils.js";
 import { LspDiscoveryResolver } from "./discovery.js";
 import { lspManager } from "./client.js";
 
@@ -39,14 +39,14 @@ const SYMBOL_KIND_NAMES: Record<number, string> = {
 
 /**
  * Resolve a possibly `file://` or `jdt://` URI to a local absolute path when
- * appropriate, otherwise fall back to CWD-relative resolution. LSP tools
- * accept file URIs so users can pipe results from `lsp_java_decompile`
+ * appropriate; otherwise resolve non-URI paths against the provided cwd. LSP
+ * tools accept file URIs so users can pipe results from `lsp_java_decompile`
  * (which returns `jdt://` URIs) without manual unwrapping.
  */
-function resolveFromCwd(filePath: string, cwd?: string): string {
+function resolveFromCwd(filePath: string, cwd: string): string {
   if (filePath.startsWith("jdt://")) return filePath;
   if (filePath.startsWith("file://")) return fileURLToPath(filePath);
-  return resolveToCwd(filePath, cwd ?? process.cwd());
+  return resolveToCwd(filePath, cwd);
 }
 
 /** Extract the first `jdt://` URI from a free-form string, or the whole string if none. */
@@ -128,27 +128,32 @@ function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   });
 }
 
+function formatWorkdirSuffix(args: any, theme: any): string {
+  if (args?.workdir === undefined) return `${styleOutput(theme, " in ")}${styleAccent(theme, "<missing-workdir>")}`;
+  return `${styleOutput(theme, " in ")}${styleAccent(theme, shortenHomePath(String(args.workdir)))}`;
+}
+
 function formatLspDiagnosticsCall(args: any, theme: any): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
-  return `${styleToolTitle(theme, "lsp_diagnostics")} ${styleAccent(theme, path)}${styleOutput(theme, formatOptionalArgs([["severity", args?.severity]]))}`;
+  return `${styleToolTitle(theme, "lsp_diagnostics")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme)}${styleOutput(theme, formatOptionalArgs([["severity", args?.severity]]))}`;
 }
 
 function formatLspGotoDefinitionCall(args: any, theme: any): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const suffix = formatOptionalArgs([["line", args?.line], ["character", args?.character ?? 0]]);
-  return `${styleToolTitle(theme, "lsp_goto_definition")} ${styleAccent(theme, path)}${styleOutput(theme, suffix)}`;
+  return `${styleToolTitle(theme, "lsp_goto_definition")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme)}${styleOutput(theme, suffix)}`;
 }
 
 function formatLspWorkspaceSymbolsCall(args: any, theme: any): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const query = formatInlineValue(String(args?.query ?? "<missing-query>"));
-  return `${styleToolTitle(theme, "lsp_workspace_symbols")} ${styleAccent(theme, path)} ${styleOutput(theme, query)}${styleOutput(theme, formatOptionalArgs([["limit", args?.limit]]))}`;
+  return `${styleToolTitle(theme, "lsp_workspace_symbols")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme)} ${styleOutput(theme, query)}${styleOutput(theme, formatOptionalArgs([["limit", args?.limit]]))}`;
 }
 
 function formatLspJavaDecompileCall(args: any, theme: any): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const target = formatInlineValue(String(args?.target ?? "<missing-target>"));
-  return `${styleToolTitle(theme, "lsp_java_decompile")} ${styleAccent(theme, path)} ${styleOutput(theme, target)}`;
+  return `${styleToolTitle(theme, "lsp_java_decompile")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme)} ${styleOutput(theme, target)}`;
 }
 
 function fileUrlForTarget(target: string, cwd: string): string {
@@ -164,9 +169,10 @@ function fileUrlForTarget(target: string, cwd: string): string {
 export type LspResolverFactory = (cwd: string) => LspDiscoveryResolver;
 
 export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: LspResolverFactory; getCollapsedResultLines?: CollapsedResultLinesResolver } = {}) {
-  const getResolverForPath = (toolPath: string, ctx: any): LspDiscoveryResolver => {
+  const getToolCwd = (params: any, ctx: any): string => resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd()).cwd;
+  const getResolverForPath = (toolPath: string, cwd: string): LspDiscoveryResolver => {
     const factory = options.resolverFactory;
-    if (factory) return factory(dirname(resolveFromCwd(toolPath, ctx.cwd)));
+    if (factory) return factory(dirname(resolveFromCwd(toolPath, cwd)));
     return new LspDiscoveryResolver({});
   };
   pi.registerTool({
@@ -186,8 +192,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
       let serverId = "unknown";
       try {
         throwIfAborted(signal);
-        const filePath = resolveFromCwd(params.path, ctx.cwd);
-        const resolver = getResolverForPath(params.path, ctx);
+        const cwd = getToolCwd(params, ctx);
+        const filePath = resolveFromCwd(params.path, cwd);
+        const resolver = getResolverForPath(params.path, cwd);
         const client = await withAbort(lspManager.getClient(filePath, resolver), signal);
         serverId = client.serverId();
         let items = await client.diagnostics(filePath, signal);
@@ -200,7 +207,7 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
         // Translate a narrow transient untyped "Internal error" into an
         // actionable hint without over-classifying real LSP failures.
         if (e.code == null && e.message === "Internal error") {
-          const displayPath = resolveFromCwd(String(params.path), ctx.cwd);
+          const displayPath = resolveFromCwd(String(params.path), getToolCwd(params, ctx));
           return {
             content: [{
               type: "text" as const,
@@ -235,11 +242,12 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {
         throwIfAborted(signal);
-        const filePath = resolveFromCwd(params.path, ctx.cwd);
+        const cwd = getToolCwd(params, ctx);
+        const filePath = resolveFromCwd(params.path, cwd);
         if (params.line === undefined) throw new Error("line is required.");
         const line = requirePositiveInteger(params.line, "line");
         const character = requireNonNegativeInteger(params.character, "character", 0);
-        const resolver = getResolverForPath(params.path, ctx);
+        const resolver = getResolverForPath(params.path, cwd);
         const client = await withAbort(lspManager.getClient(filePath, resolver), signal);
         if (!client.supportsMethod("textDocument/definition")) {
           return { content: [{ type: "text" as const, text: `Error: LSP server '${client.serverId()}' does not advertise go-to-definition. Try grep or read to locate definitions manually.` }], isError: true };
@@ -268,9 +276,10 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {
         throwIfAborted(signal);
-        const filePath = resolveFromCwd(params.path, ctx.cwd);
+        const cwd = getToolCwd(params, ctx);
+        const filePath = resolveFromCwd(params.path, cwd);
         const limit = requireNonNegativeInteger(params.limit, "limit", 50);
-        const resolver = getResolverForPath(params.path, ctx);
+        const resolver = getResolverForPath(params.path, cwd);
         const client = await withAbort(lspManager.getClient(filePath, resolver), signal);
         if (!client.supportsMethod("workspace/symbol")) {
           return { content: [{ type: "text" as const, text: `Error: LSP server '${client.serverId()}' does not advertise workspace/symbol support. Try grep, find, or read with offset/limit instead.` }], isError: true };
@@ -299,8 +308,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {
         throwIfAborted(signal);
-        const workspaceFile = resolveFromCwd(params.path, ctx.cwd);
-        const resolver = getResolverForPath(params.path, ctx);
+        const cwd = getToolCwd(params, ctx);
+        const workspaceFile = resolveFromCwd(params.path, cwd);
+        const resolver = getResolverForPath(params.path, cwd);
         const client = await withAbort(lspManager.getClient(workspaceFile, resolver), signal);
         if (!client.supportsMethod("java/classFileContents")) {
           return { content: [{ type: "text" as const, text: `Error: lsp_java_decompile is only supported by jdtls; current server is '${client.serverId()}'.` }], isError: true };
@@ -311,7 +321,7 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
           if (!source) return { content: [{ type: "text" as const, text: "Error: Could not load Java class file contents." }], isError: true };
           return { content: [{ type: "text" as const, text: source }] };
         }
-        const targetUri = fileUrlForTarget(String(params.target), ctx.cwd ?? process.cwd());
+        const targetUri = fileUrlForTarget(String(params.target), cwd);
         const source = await client.decompileClass(targetUri, signal);
         if (!source) return { content: [{ type: "text" as const, text: "Error: Could not decompile class." }], isError: true };
         return { content: [{ type: "text" as const, text: source }] };

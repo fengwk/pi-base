@@ -9,9 +9,10 @@ Usage:
 
 Parameters:
 - `path` (required)
+- `workdir` (required)
 - `line` (required, 1-based)
 - `character` (optional, 0-based, default: 0)
 
 Examples show the arguments passed to the tool:
-- `{"path":"src/example.ts","line":45,"character":15}`
-- `{"path":"src/example.ts","line":45}`
+- `{"path":"src/example.ts","workdir":"packages/web","line":45,"character":15}`
+- `{"path":"src/example.ts","workdir":"services/api","line":45}`

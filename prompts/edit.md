@@ -2,16 +2,29 @@ Edit an existing text file using fresh `LINE#HASH` anchors.
 
 Usage:
 - Use `edit` only with fresh anchors from `read`, `write`, or a prior successful `edit` result for the same region.
-- `edit` has only two top-level parameters: `path` and `edits`.
+- `edit` has three top-level parameters: `path`, `workdir`, and `edits`.
 - Each `edits` item must contain exactly one operation: `replace_lines`, `delete_lines`, `insert_before_lines`, or `insert_after_lines`.
 - Anchor values are copied exactly from tool output, for example `45#2574`. Never include `LINE#HASH|` prefixes in `new_text`.
+- `replace_lines.start_anchor` and `replace_lines.end_anchor` define an inclusive line range: both the start and end lines are replaced. Use the same anchor for a single-line replacement.
+- `delete_lines.start_anchor` and `delete_lines.end_anchor` define an inclusive line range: both the start and end lines are deleted. Use the same anchor for a single-line deletion.
 - `replace_lines.new_text` is raw replacement file content for the inclusive line range. Use `\n` inside the string when the replacement contains multiple lines.
 - `insert_before_lines.new_text` and `insert_after_lines.new_text` are complete line(s) to insert before/after the anchor. `new_text: ""` inserts one empty line.
+- For every `replace_lines.new_text`, `insert_before_lines.new_text`, and `insert_after_lines.new_text`, provide the complete intended content for that operation. Do not use placeholders such as `...` or omitted sections.
 - After a successful edit, only lines prefixed with `+` or `|` carry current reusable anchors. Lines prefixed with `-` are old/deleted content and are not reusable anchors.
 - If the anchor you need is stale, outside the returned diff, or replaced by a context compression placeholder, rerun `read` before editing.
 - Hashes below are computed examples, but you must always copy the actual `LINE#HASH` anchors from the latest tool output.
 - Argument examples show only the arguments passed to the `edit` tool. Do not add wrapper metadata around the arguments.
 
+Parameters:
+- `path` (required)
+- `workdir` (required)
+- `edits` (required array; each item must contain exactly one of `replace_lines`, `delete_lines`, `insert_before_lines`, or `insert_after_lines`)
+- `replace_lines` requires `start_anchor`, `end_anchor`, and `new_text`
+- `delete_lines` requires `start_anchor` and `end_anchor`
+- `insert_before_lines` requires `anchor` and `new_text`
+- `insert_after_lines` requires `anchor` and `new_text`
+
+Examples:
 Example: replace one anchored line with multiple output lines
 
 Suppose `read` returned:
@@ -26,7 +39,7 @@ Suppose `read` returned:
 Use these `arguments` for `edit`. `new_text` may contain `\n` to produce multiple file lines:
 
 ```
-{"path":"src/example.ts","edits":[{"replace_lines":{"start_anchor":"45#2574","end_anchor":"45#2574","new_text":"export function buildDemoDirectory(): UserDirectory {\n  const enabled = true;"}}]}
+{"path":"src/example.ts","workdir":"packages/app","edits":[{"replace_lines":{"start_anchor":"45#2574","end_anchor":"45#2574","new_text":"export function buildDemoDirectory(): UserDirectory {\n  const enabled = true;"}}]}
 ```
 
 A successful result looks like this. Reuse only `|` and `+` anchors for follow-up edits:
@@ -41,7 +54,7 @@ A successful result looks like this. Reuse only `|` and `+` anchors for follow-u
 
 Example: apply multiple non-overlapping operations in one edit call
 
-Use one `edit` call when several changes target the same file and all anchors are fresh for the target file's current content. The anchors may come from multiple `read`, `write`, or prior successful `edit` outputs, as long as the target file has not changed in a way that makes them stale. Range edits must not overlap.
+Use one `edit` call when several changes target the same file and all anchors are fresh for the target file's current content. Prefer several small, non-overlapping operations over one broad replacement range; range edits must not overlap. The anchors may come from multiple `read`, `write`, or prior successful `edit` outputs, as long as the target file has not changed in a way that makes them stale.
 
 Suppose `read` returned:
 
@@ -55,7 +68,7 @@ Suppose `read` returned:
 Replace line 10, delete line 12, and insert a line after line 11 in one call:
 
 ```
-{"path":"src/example.ts","edits":[{"replace_lines":{"start_anchor":"10#e687","end_anchor":"10#e687","new_text":"const title = \"New\";"}},{"delete_lines":{"start_anchor":"12#2221","end_anchor":"12#2221"}},{"insert_after_lines":{"anchor":"11#c8dd","new_text":"log(title);"}}]}
+{"path":"src/example.ts","workdir":"packages/app","edits":[{"replace_lines":{"start_anchor":"10#e687","end_anchor":"10#e687","new_text":"const title = \"New\";"}},{"delete_lines":{"start_anchor":"12#2221","end_anchor":"12#2221"}},{"insert_after_lines":{"anchor":"11#c8dd","new_text":"log(title);"}}]}
 ```
 
 Expected diff shape:
@@ -83,7 +96,7 @@ Suppose `read` returned:
 Replace lines 45 through 47 with three new lines:
 
 ```
-{"path":"src/example.ts","edits":[{"replace_lines":{"start_anchor":"45#2574","end_anchor":"47#0f8d","new_text":"export function createDemoDirectory(): UserDirectory {\n  return { users: [] };\n}"}}]}
+{"path":"src/example.ts","workdir":"services/api","edits":[{"replace_lines":{"start_anchor":"45#2574","end_anchor":"47#0f8d","new_text":"export function createDemoDirectory(): UserDirectory {\n  return { users: [] };\n}"}}]}
 ```
 
 Expected diff shape:
@@ -111,7 +124,7 @@ Suppose `read` returned:
 Delete line 60:
 
 ```
-{"path":"src/example.ts","edits":[{"delete_lines":{"start_anchor":"60#f318","end_anchor":"60#f318"}}]}
+{"path":"src/example.ts","workdir":"services/api","edits":[{"delete_lines":{"start_anchor":"60#f318","end_anchor":"60#f318"}}]}
 ```
 
 Expected diff shape:
@@ -135,7 +148,7 @@ Suppose `read` returned:
 Delete lines 60 through 61:
 
 ```
-{"path":"src/example.ts","edits":[{"delete_lines":{"start_anchor":"60#f318","end_anchor":"61#7f3c"}}]}
+{"path":"src/example.ts","workdir":"packages/web","edits":[{"delete_lines":{"start_anchor":"60#f318","end_anchor":"61#7f3c"}}]}
 ```
 
 Expected diff shape:
@@ -159,7 +172,7 @@ Suppose `read` returned:
 Insert two complete lines before line 20:
 
 ```
-{"path":"src/example.ts","edits":[{"insert_before_lines":{"anchor":"20#ee88","new_text":"const enabled = true;\nlog(enabled);"}}]}
+{"path":"src/example.ts","workdir":"packages/web","edits":[{"insert_before_lines":{"anchor":"20#ee88","new_text":"const enabled = true;\nlog(enabled);"}}]}
 ```
 
 Expected diff shape:
@@ -184,7 +197,7 @@ Suppose `read` returned:
 Insert two complete lines after line 20:
 
 ```
-{"path":"src/example.ts","edits":[{"insert_after_lines":{"anchor":"20#859b","new_text":"log(enabled);\nrun();"}}]}
+{"path":"src/example.ts","workdir":".","edits":[{"insert_after_lines":{"anchor":"20#859b","new_text":"log(enabled);\nrun();"}}]}
 ```
 
 Expected diff shape:
@@ -208,7 +221,7 @@ Suppose `read` returned:
 `new_text: ""` inserts one empty line after line 29:
 
 ```
-{"path":"src/example.ts","edits":[{"insert_after_lines":{"anchor":"29#5056","new_text":""}}]}
+{"path":"src/example.ts","workdir":"packages/docs","edits":[{"insert_after_lines":{"anchor":"29#5056","new_text":""}}]}
 ```
 
 Expected file effect:
@@ -230,5 +243,5 @@ Suppose the file is one unterminated line and `read` returned:
 When the final line has no trailing newline, `new_text: ""` inserts the missing line separator after it. This turns `export const value = 1;` into `export const value = 1;\n`:
 
 ```
-{"path":"src/example.ts","edits":[{"insert_after_lines":{"anchor":"1#7936","new_text":""}}]}
+{"path":"src/example.ts","workdir":"packages/app","edits":[{"insert_after_lines":{"anchor":"1#7936","new_text":""}}]}
 ```
