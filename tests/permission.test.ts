@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 describe("permission guard", () => {
-  it("asks before write and only offers Yes/No", async () => {
+  it("shows compact arguments before write and only offers Yes/No", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, { permission: { write: "ask" } });
 
@@ -57,8 +57,9 @@ describe("permission guard", () => {
     expect(result.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]!.title).toContain("Tool: write");
-    expect(prompts[0]!.title).toContain("Details are shown in the tool preview above.");
-    expect(prompts[0]!.title).not.toContain("Path: src/allowed.ts");
+    expect(prompts[0]!.title).toContain("Arguments: ");
+    expect(prompts[0]!.title).toContain("\"path\":\"src/allowed.ts\"");
+    expect(prompts[0]!.title).toContain("\"content\":\"export const allowed = true;\\n\"");
     expect(prompts[0]!.items).toEqual(["Yes", "No"]);
     expect(registry.getStatuses().get("pi-base-permission")).toBeUndefined();
     expect(await readFile(join(root, "src/allowed.ts"), "utf8")).toBe("export const allowed = true;\n");
@@ -127,7 +128,8 @@ describe("permission guard", () => {
     expect(asked.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Tool: write");
-    expect(prompts[0]).not.toContain("Path: notes.txt");
+    expect(prompts[0]).toContain("Arguments: ");
+    expect(prompts[0]).toContain("\"path\":\"notes.txt\"");
   });
 
   it("toggles yolo mode via /yolo and bypasses permission checks", async () => {
@@ -261,7 +263,9 @@ describe("permission guard", () => {
     expect(npmResult.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Tool: bash");
-    expect(prompts[0]).not.toContain("Command: npm test");
+    expect(prompts[0]).toContain("Arguments: ");
+    expect(prompts[0]).toContain("\"command\":\"npm test\"");
+    expect(prompts[0]).toContain("\"workdir\":\".\"");
   });
 
   it("asks for composite bash commands even when early segments are allowlisted", async () => {
@@ -306,10 +310,11 @@ describe("permission guard", () => {
     expect(result.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Tool: bash");
-    expect(prompts[0]).not.toContain("Command: pwd && ls -ld . && touch a.py");
+    expect(prompts[0]).toContain("Arguments: ");
+    expect(prompts[0]).toContain("pwd && ls -ld . && touch a.py");
   });
 
-  it("keeps bash permission prompts short for long commands", async () => {
+  it("keeps bash permission argument previews single-line and truncated for long commands", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, { permission: { bash: "ask" } });
 
@@ -350,8 +355,11 @@ describe("permission guard", () => {
     expect(result.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Tool: bash");
-    expect(prompts[0]).toContain("Details are shown in the tool preview above.");
-    expect(prompts[0]).not.toContain("TestDebug");
-    expect(prompts[0]!.split("\n").length).toBeLessThanOrEqual(6);
+    const promptLines = prompts[0]!.split("\n");
+    const argumentLines = promptLines.filter((line) => line.startsWith("Arguments: "));
+    expect(argumentLines).toHaveLength(1);
+    expect(argumentLines[0]).toContain("TestDebug");
+    expect(argumentLines[0]).toContain("...");
+    expect(promptLines.length).toBeLessThanOrEqual(6);
   });
 });

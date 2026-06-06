@@ -130,7 +130,8 @@ Context compression does not add session-history messages or a persistent UI mar
 Behavior notes:
 
 - `ask` prompts in interactive mode before the tool runs.
-- The prompt is intentionally minimal: only `Yes` or `No`.
+- The prompt shows the tool name plus a compact one-line `Arguments: ...` preview; long previews are truncated with `...`.
+- The only choices are `Yes` or `No`.
 - Future automatic allowance comes only from config pattern matches; there is no in-session "always allow this file/command" shortcut.
 - For path-based tools (`read`, `edit`, `write`, and similar tools that expose `path`), patterns are matched against the given path, the cwd-relative path, the project-relative path, and the absolute path.
 - For `bash`, patterns are matched against the full command string.

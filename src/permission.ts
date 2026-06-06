@@ -8,6 +8,7 @@ const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
 const YOLO_ENTRY_TYPE = "pi-base-permission-yolo";
 const ALLOW_LABEL = "Yes";
 const DENY_LABEL = "No";
+const PROMPT_ARGUMENTS_MAX_CHARS = 120;
 
 interface PermissionState {
   yolo: boolean;
@@ -204,12 +205,38 @@ function syncYoloStatusFooter(ctx: ExtensionContext, pi: Pick<ExtensionAPI, "get
   if (state.yolo) syncYoloFooter(ctx, pi, { statusKey: STATUS_KEY, extraStatusKeys: PI_BASE_INLINE_STATUS_KEYS });
 }
 
-function buildPrompt(toolName: string): string {
+function stringifyPromptArguments(input: unknown): string {
+  try {
+    const serialized = JSON.stringify(input, (_key, value) => {
+      if (typeof value === "bigint") return `${value.toString()}n`;
+      if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
+      return value;
+    });
+    if (serialized !== undefined) return serialized;
+  } catch {
+    // Fall through to a compact fallback for unusual tool input objects.
+  }
+  return String(input);
+}
+
+function toSingleLine(value: string): string {
+  return value.replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
+}
+
+function truncateSingleLine(value: string, maxChars = PROMPT_ARGUMENTS_MAX_CHARS): string {
+  const singleLine = toSingleLine(value);
+  if (singleLine.length <= maxChars) return singleLine;
+  const sliceLength = Math.max(0, maxChars - 3);
+  return `${singleLine.slice(0, sliceLength)}...`;
+}
+
+function buildPrompt(toolName: string, input: unknown): string {
+  const argumentsPreview = truncateSingleLine(stringifyPromptArguments(input)) || "{}";
   return [
     "Permission request",
     "",
     `Tool: ${toolName}`,
-    "Details are shown in the tool preview above.",
+    `Arguments: ${argumentsPreview}`,
     "",
     "Allow this tool call?",
   ].join("\n");
@@ -287,7 +314,7 @@ export function registerPermissionGuard(
       return { block: true, reason: buildAskWithoutUiReason(event.toolName, loaded) };
     }
 
-    const choice = await ctx.ui.select(buildPrompt(event.toolName), [ALLOW_LABEL, DENY_LABEL]);
+    const choice = await ctx.ui.select(buildPrompt(event.toolName, event.input), [ALLOW_LABEL, DENY_LABEL]);
     if (choice === ALLOW_LABEL) return undefined;
     ctx.abort();
     return { block: true, reason: buildRejectedReason(event.toolName) };
