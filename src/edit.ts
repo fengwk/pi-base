@@ -1,4 +1,5 @@
 import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { readFile, writeFile } from "node:fs/promises";
 import { detectLineEnding, generateCompactOrFullDiff, normalizeToLF, restoreLineEndings, stripBom } from "./edit-diff.js";
 import { applyHashlineEdits, ensureHashInit, HashlineMismatchError, type HashlineEditItem } from "./hashline.js";
@@ -10,6 +11,22 @@ import { editSchema } from "./schemas/edit.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 
+const EDIT_ARGUMENT_VALIDATION_HINT = "Hint: Adjust the input parameters and re-run the `edit` command.";
+
+function prepareEditArguments(args: unknown, validationTool: any): any {
+  try {
+    return validateToolArguments(validationTool, {
+      type: "toolCall",
+      id: "edit-argument-validation",
+      name: "edit",
+      arguments: args as any,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}\n\n${EDIT_ARGUMENT_VALIDATION_HINT}`);
+  }
+}
+
 export function registerEditTool(
   pi: ExtensionAPI,
   options: {
@@ -20,11 +37,17 @@ export function registerEditTool(
   } = {},
 ) {
   const callPreviewSnapshots: EditCallPreviewSnapshots = new Map();
+  const description = loadToolDescription("edit");
+  const promptSnippet = loadToolPromptSnippet("edit");
+  const validationTool = { name: "edit", description, parameters: editSchema };
   const tool = {
     name: "edit",
     label: "Edit",
-    description: loadToolDescription("edit"),
-    promptSnippet: loadToolPromptSnippet("edit"),
+    description,
+    promptSnippet,
+    prepareArguments(args: unknown) {
+      return prepareEditArguments(args, validationTool);
+    },
     parameters: editSchema,
     renderShell: "default" as const,
     renderCall(args: any, theme: any, context: any) {

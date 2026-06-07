@@ -30,6 +30,34 @@ async function withTempGlobalPiBaseConfig<T>(content: unknown, run: (root: strin
 }
 
 describe("edit/write flow", () => {
+  it("adds retry guidance to edit argument validation failures", () => {
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const editTool = registry.getTool("edit");
+
+    let message = "";
+    try {
+      editTool.prepareArguments({
+        workdir: ".",
+        path: "src/example.ts",
+        edits: [
+          {
+            replace_lines: {
+              start_anchor: "1#abcd",
+              end_anchor: { end_anchor: { new_text: "alpha" } },
+            },
+          },
+        ],
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("Validation failed for tool \"edit\":");
+    expect(message).toContain("edits.0.replace_lines.end_anchor: must be string");
+    expect(message).toContain("Adjust the input parameters and re-run the `edit` command.");
+  });
+
   it("write returns anchors that can be used by edit", async () => {
     const root = await createTempWorkspace();
     const registry = createToolRegistry();
