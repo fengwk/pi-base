@@ -14,7 +14,7 @@ Parameters:
 - `limit` (optional, default: 1000)
 - `timeout_seconds` (optional, no default)
 
-Examples show the arguments passed to the tool:
-- `{"pattern":"*.ts","path":"src","workdir":"packages/web"}`
-- `{"pattern":"*.java","path":".","workdir":"services/java","limit":200}`
-- `{"pattern":"*.md","path":".","workdir":".","timeout_seconds":30}`
+Examples use pseudo-code tool calls:
+- `find({ pattern: "*.ts", path: "src", workdir: "packages/web" })`
+- `find({ pattern: "*.java", path: ".", workdir: "services/java", limit: 200 })`
+- `find({ pattern: "*.md", path: ".", workdir: ".", timeout_seconds: 30 })`

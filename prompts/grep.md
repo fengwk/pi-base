@@ -18,7 +18,7 @@ Parameters:
 - `limit` (optional, default: 100)
 - `timeout_seconds` (optional, default: 15)
 
-Examples show the arguments passed to the tool:
-- `{"pattern":"createDemoDirectory","path":"src","workdir":"packages/web","literal":true}`
-- `{"pattern":"create.*Directory","path":"src","workdir":"services/api","ignoreCase":true}`
-- `{"pattern":"TODO","path":".","workdir":".","include":"**/*.ts","timeout_seconds":30}`
+Examples use pseudo-code tool calls:
+- `grep({ pattern: "createDemoDirectory", path: "src", workdir: "packages/web", literal: true })`
+- `grep({ pattern: "create.*Directory", path: "src", workdir: "services/api", ignoreCase: true })`
+- `grep({ pattern: "TODO", path: ".", workdir: ".", include: "**/*.ts", timeout_seconds: 30 })`

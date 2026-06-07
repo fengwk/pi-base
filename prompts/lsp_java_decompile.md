@@ -13,6 +13,6 @@ Parameters:
 - `workdir` (required)
 - `target` (required)
 
-Examples show the arguments passed to the tool:
-- `{"path":"src/main/java/com/acme/App.java","workdir":"services/java","target":"jdt://contents/java.base/java/lang/String.class?..."}`
-- `{"path":"src/main/java/com/acme/App.java","workdir":"services/java","target":"String (Class) - jdt://contents/java.base/java/lang/String.class?..."}`
+Examples use pseudo-code tool calls:
+- `lsp_java_decompile({ path: "src/main/java/com/acme/App.java", workdir: "services/java", target: "jdt://contents/java.base/java/lang/String.class?..." })`
+- `lsp_java_decompile({ path: "src/main/java/com/acme/App.java", workdir: "services/java", target: "String (Class) - jdt://contents/java.base/java/lang/String.class?..." })`

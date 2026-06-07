@@ -11,9 +11,8 @@ Usage:
 - `insert_before_lines.new_text` and `insert_after_lines.new_text` are complete line(s) to insert before/after the anchor. `new_text: ""` inserts one empty line.
 - For every `replace_lines.new_text`, `insert_before_lines.new_text`, and `insert_after_lines.new_text`, provide the complete intended content for that operation. Do not use placeholders such as `...` or omitted sections.
 - After a successful edit, only lines prefixed with `+` or `|` carry current reusable anchors. Lines prefixed with `-` are old/deleted content and are not reusable anchors.
-- If the anchor you need is stale, outside the returned diff, or replaced by a context compression placeholder, rerun `read` before editing.
 - Hashes below are computed examples, but you must always copy the actual `LINE#HASH` anchors from the latest tool output.
-- Argument examples show only the arguments passed to the `edit` tool. Do not add wrapper metadata around the arguments.
+- Examples use pseudo-code tool calls like `edit({ ... })`. When making an actual tool call, pass exactly the object inside the parentheses as the tool arguments.
 
 Parameters:
 - `path` (required)
@@ -36,10 +35,10 @@ Suppose `read` returned:
 47#0f8d|  return { users };
 ```
 
-Use these `arguments` for `edit`. `new_text` may contain `\n` to produce multiple file lines:
+Use this pseudo-code `edit({ ... })` call. `new_text` may contain `\n` to produce multiple file lines:
 
 ```
-{"path":"src/example.ts","workdir":"packages/app","edits":[{"replace_lines":{"start_anchor":"45#2574","end_anchor":"45#2574","new_text":"export function buildDemoDirectory(): UserDirectory {\n  const enabled = true;"}}]}
+edit({ path: "src/example.ts", workdir: "packages/app", edits: [{ replace_lines: { start_anchor: "45#2574", end_anchor: "45#2574", new_text: "export function buildDemoDirectory(): UserDirectory {\n  const enabled = true;" } }] })
 ```
 
 A successful result looks like this. Reuse only `|` and `+` anchors for follow-up edits:
@@ -68,7 +67,7 @@ Suppose `read` returned:
 Replace line 10, delete line 12, and insert a line after line 11 in one call:
 
 ```
-{"path":"src/example.ts","workdir":"packages/app","edits":[{"replace_lines":{"start_anchor":"10#e687","end_anchor":"10#e687","new_text":"const title = \"New\";"}},{"delete_lines":{"start_anchor":"12#2221","end_anchor":"12#2221"}},{"insert_after_lines":{"anchor":"11#c8dd","new_text":"log(title);"}}]}
+edit({ path: "src/example.ts", workdir: "packages/app", edits: [{ replace_lines: { start_anchor: "10#e687", end_anchor: "10#e687", new_text: "const title = \"New\";" } }, { delete_lines: { start_anchor: "12#2221", end_anchor: "12#2221" } }, { insert_after_lines: { anchor: "11#c8dd", new_text: "log(title);" } }] })
 ```
 
 Expected diff shape:
@@ -96,7 +95,7 @@ Suppose `read` returned:
 Replace lines 45 through 47 with three new lines:
 
 ```
-{"path":"src/example.ts","workdir":"services/api","edits":[{"replace_lines":{"start_anchor":"45#2574","end_anchor":"47#0f8d","new_text":"export function createDemoDirectory(): UserDirectory {\n  return { users: [] };\n}"}}]}
+edit({ path: "src/example.ts", workdir: "services/api", edits: [{ replace_lines: { start_anchor: "45#2574", end_anchor: "47#0f8d", new_text: "export function createDemoDirectory(): UserDirectory {\n  return { users: [] };\n}" } }] })
 ```
 
 Expected diff shape:
@@ -124,7 +123,7 @@ Suppose `read` returned:
 Delete line 60:
 
 ```
-{"path":"src/example.ts","workdir":"services/api","edits":[{"delete_lines":{"start_anchor":"60#f318","end_anchor":"60#f318"}}]}
+edit({ path: "src/example.ts", workdir: "services/api", edits: [{ delete_lines: { start_anchor: "60#f318", end_anchor: "60#f318" } }] })
 ```
 
 Expected diff shape:
@@ -148,7 +147,7 @@ Suppose `read` returned:
 Delete lines 60 through 61:
 
 ```
-{"path":"src/example.ts","workdir":"packages/web","edits":[{"delete_lines":{"start_anchor":"60#f318","end_anchor":"61#7f3c"}}]}
+edit({ path: "src/example.ts", workdir: "packages/web", edits: [{ delete_lines: { start_anchor: "60#f318", end_anchor: "61#7f3c" } }] })
 ```
 
 Expected diff shape:
@@ -172,7 +171,7 @@ Suppose `read` returned:
 Insert two complete lines before line 20:
 
 ```
-{"path":"src/example.ts","workdir":"packages/web","edits":[{"insert_before_lines":{"anchor":"20#ee88","new_text":"const enabled = true;\nlog(enabled);"}}]}
+edit({ path: "src/example.ts", workdir: "packages/web", edits: [{ insert_before_lines: { anchor: "20#ee88", new_text: "const enabled = true;\nlog(enabled);" } }] })
 ```
 
 Expected diff shape:
@@ -197,7 +196,7 @@ Suppose `read` returned:
 Insert two complete lines after line 20:
 
 ```
-{"path":"src/example.ts","workdir":".","edits":[{"insert_after_lines":{"anchor":"20#859b","new_text":"log(enabled);\nrun();"}}]}
+edit({ path: "src/example.ts", workdir: ".", edits: [{ insert_after_lines: { anchor: "20#859b", new_text: "log(enabled);\nrun();" } }] })
 ```
 
 Expected diff shape:
@@ -221,7 +220,7 @@ Suppose `read` returned:
 `new_text: ""` inserts one empty line after line 29:
 
 ```
-{"path":"src/example.ts","workdir":"packages/docs","edits":[{"insert_after_lines":{"anchor":"29#5056","new_text":""}}]}
+edit({ path: "src/example.ts", workdir: "packages/docs", edits: [{ insert_after_lines: { anchor: "29#5056", new_text: "" } }] })
 ```
 
 Expected file effect:
@@ -243,5 +242,5 @@ Suppose the file is one unterminated line and `read` returned:
 When the final line has no trailing newline, `new_text: ""` inserts the missing line separator after it. This turns `export const value = 1;` into `export const value = 1;\n`:
 
 ```
-{"path":"src/example.ts","workdir":"packages/app","edits":[{"insert_after_lines":{"anchor":"1#7936","new_text":""}}]}
+edit({ path: "src/example.ts", workdir: "packages/app", edits: [{ insert_after_lines: { anchor: "1#7936", new_text: "" } }] })
 ```

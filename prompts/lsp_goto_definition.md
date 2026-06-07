@@ -13,6 +13,6 @@ Parameters:
 - `line` (required, 1-based)
 - `character` (optional, 0-based, default: 0)
 
-Examples show the arguments passed to the tool:
-- `{"path":"src/example.ts","workdir":"packages/web","line":45,"character":15}`
-- `{"path":"src/example.ts","workdir":"services/api","line":45}`
+Examples use pseudo-code tool calls:
+- `lsp_goto_definition({ path: "src/example.ts", workdir: "packages/web", line: 45, character: 15 })`
+- `lsp_goto_definition({ path: "src/example.ts", workdir: "services/api", line: 45 })`

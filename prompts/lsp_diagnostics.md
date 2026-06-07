@@ -13,6 +13,6 @@ Parameters:
 - `workdir` (required)
 - `severity` (optional, one of `error`, `warning`, `information`, `hint`, `all`; default `all`)
 
-Examples show the arguments passed to the tool:
-- `{"path":"src/main/java/com/acme/App.java","workdir":"services/java","severity":"error"}`
-- `{"path":"src/example.ts","workdir":"packages/web"}`
+Examples use pseudo-code tool calls:
+- `lsp_diagnostics({ path: "src/main/java/com/acme/App.java", workdir: "services/java", severity: "error" })`
+- `lsp_diagnostics({ path: "src/example.ts", workdir: "packages/web" })`

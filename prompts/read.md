@@ -12,8 +12,8 @@ Parameters:
 - `offset` (optional, default: 1)
 - `limit` (optional, default: 200, max: 2000)
 
-Examples show the arguments passed to the tool:
-- `{"path":"src/example.ts","workdir":"packages/web"}`
-- `{"path":"src/example.ts","workdir":"services/api","offset":120,"limit":40}`
-- `{"path":"src/","workdir":"."}`
-- `{"path":"screenshot.png","workdir":"/tmp/agent-artifacts"}`
+Examples use pseudo-code tool calls:
+- `read({ path: "src/example.ts", workdir: "packages/web" })`
+- `read({ path: "src/example.ts", workdir: "services/api", offset: 120, limit: 40 })`
+- `read({ path: "src/", workdir: "." })`
+- `read({ path: "screenshot.png", workdir: "/tmp/agent-artifacts" })`

@@ -13,6 +13,6 @@ Parameters:
 - `query` (required)
 - `limit` (optional output limit, default: 50)
 
-Examples show the arguments passed to the tool:
-- `{"path":"src/main/java/com/acme/App.java","workdir":"services/java","query":"UserService","limit":20}`
-- `{"path":"src/example.ts","workdir":"packages/web","query":"createDemoDirectory"}`
+Examples use pseudo-code tool calls:
+- `lsp_workspace_symbols({ path: "src/main/java/com/acme/App.java", workdir: "services/java", query: "UserService", limit: 20 })`
+- `lsp_workspace_symbols({ path: "src/example.ts", workdir: "packages/web", query: "createDemoDirectory" })`

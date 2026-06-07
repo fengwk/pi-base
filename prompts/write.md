@@ -2,17 +2,16 @@ Create a text file or intentionally overwrite a whole text file.
 
 Usage:
 - Use `write` for new files or intentional whole-file replacement only.
-- For existing files, prefer `edit` with the smallest safe ranges. Use `write` only when the file is being replaced as a whole, rewritten into a substantially different file, or changed/refactored at roughly 60%+ of its content.
+- For existing files, prefer `edit`; use `write` only for whole-file replacement or roughly 70%+ file-wide rewrites, never for localized edits that small `edit` operations can handle.
 - Provide complete content without placeholders such as `...` or omitted sections.
-- After a successful write, the result includes the current file content with fresh `LINE#HASH` anchors. Use those anchors directly for follow-up `edit` calls on the same file.
-- Use `edit` instead of `write` for local changes to an existing file.
+- After a successful write, the result includes the current file content with fresh `LINE#HASH` anchors.
 
 Parameters:
 - `path` (required)
 - `workdir` (required)
 - `content` (required)
 
-Examples show the arguments passed to the tool:
-- `{"path":"src/new-module.ts","workdir":"packages/web","content":"export const demo = 1;\n"}`
-- `{"path":"src/config.ts","workdir":"services/api","content":"export const config = { enabled: true };\n"}`
-- `{"path":"src/config.ts","workdir":".","content":"export const config = { enabled: false };\n"}`
+Examples use pseudo-code tool calls:
+- `write({ path: "src/new-module.ts", workdir: "packages/web", content: "export const demo = 1;\n" })`
+- `write({ path: "docs/new-template.md", workdir: "packages/web", content: "# New template\n\nComplete file content.\n" })`
+- `write({ path: "generated/report.txt", workdir: "/tmp/agent-artifacts", content: "full generated report\n" })`
