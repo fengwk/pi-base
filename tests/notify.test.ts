@@ -72,6 +72,47 @@ describe("notify support", () => {
     ]);
   });
 
+  it("stays disabled when notify config is omitted", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: { write: "ask" },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root, ui: { select: async () => "Yes" } });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    await registry.getTool("write").execute(
+      "1",
+      { workdir: ".", path: "src/no-notify.ts", content: "export const silent = true;\n" },
+      undefined,
+      undefined,
+      {
+        cwd: root,
+        sessionManager: {
+          getSessionId: () => "session-0",
+          getSessionName: () => "Silent Session",
+        },
+      },
+    );
+
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, {
+      cwd: root,
+      sessionManager: {
+        getSessionId: () => "session-0",
+        getSessionName: () => "Silent Session",
+      },
+    });
+
+    expect(payloads).toEqual([]);
+  });
   it("sends a completion notification on agent_end and suppresses it after permission rejection", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {

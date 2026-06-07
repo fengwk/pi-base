@@ -73,7 +73,7 @@ function createShellNotificationSender(
 ): (payload: PiBaseNotifyPayload, ctx: ExtensionContext) => Promise<void> {
   return async (payload, ctx) => {
     const notify = loadSettings?.(ctx.cwd).settings.notify;
-    if (notify?.enabled === false) return;
+    if (!notify || notify.enabled === false) return;
 
     const command = getNotifyCommand(notify);
     if (command.length === 0) return;
@@ -103,11 +103,11 @@ function getNotifyCommand(config: NotifyConfig | undefined): string[] {
 }
 
 function shouldNotifyForPermissionAsk(config: NotifyConfig | undefined, ctx: ExtensionContext): boolean {
-  return ctx.hasUI && config?.enabled !== false && config?.permissionAsked !== false;
+  return ctx.hasUI && config?.enabled === true && config.permissionAsked !== false;
 }
 
 function shouldNotifyForAgentEnd(config: NotifyConfig | undefined, ctx: ExtensionContext, _event: AgentEndEvent): boolean {
-  return ctx.hasUI && config?.enabled !== false && config?.agentEnd !== false;
+  return ctx.hasUI && config?.enabled === true && config.agentEnd !== false;
 }
 
 function buildPayload(kind: PiBaseNotifyKind, ctx: ExtensionContext): PiBaseNotifyPayload {
