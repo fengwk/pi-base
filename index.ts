@@ -6,8 +6,9 @@ import { registerEditTool } from "./src/edit.js";
 import { registerGrepTool } from "./src/grep.js";
 import { registerWriteTool } from "./src/write.js";
 import { registerBashRendererTool } from "./src/bash-renderer.js";
-import { loadPiBaseSettings, type LoadedPiBaseSettings } from "./src/config.js";
+import { type LoadedPiBaseSettings } from "./src/config.js";
 import { registerPermissionGuard } from "./src/permission.js";
+import { loadRuntimePiBaseSettings, reloadRuntimePiBaseSettings, toggleRuntimeYolo } from "./src/runtime-settings.js";
 import { lspManager } from "./src/lsp/client.js";
 import { registerLspTools, type LspResolverFactory } from "./src/lsp/tools.js";
 import { LspDiscoveryResolver } from "./src/lsp/discovery.js";
@@ -42,23 +43,8 @@ function loadBaseToolGuide(): string {
   return readFileSync(new URL("./prompts/base.md", import.meta.url), "utf8").trim();
 }
 
-type CachedSettingsLoader = ((cwd: string) => LoadedPiBaseSettings) & { clear: () => void };
 
 type CachedLspResolverFactory = LspResolverFactory & { clear: () => void };
-
-function createSettingsLoader(): CachedSettingsLoader {
-  const cache = new Map<string, LoadedPiBaseSettings>();
-  const load = ((cwd: string) => {
-    const cached = cache.get(cwd);
-    if (cached) return cached;
-    const loaded = loadPiBaseSettings(cwd);
-    cache.set(cwd, loaded);
-    return loaded;
-  }) as CachedSettingsLoader;
-  load.clear = () => cache.clear();
-  return load;
-}
-
 function createResolverFactory(loadSettings: (cwd: string) => LoadedPiBaseSettings): CachedLspResolverFactory {
   const cache = new Map<string, LspDiscoveryResolver>();
   const create = ((cwd: string) => {
@@ -172,7 +158,7 @@ export function registerFindTool(
 }
 
 export default function piBaseExtension(pi: ExtensionAPI): void {
-  const loadSettings = createSettingsLoader();
+  const loadSettings = loadRuntimePiBaseSettings;
   const resolverFactory = createResolverFactory(loadSettings);
   const getCollapsedResultLines = createCollapsedResultLinesResolver(loadSettings);
   const filesWithFreshAnchors = new Set<string>();
@@ -186,8 +172,8 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
   const syncLsp = (absolutePath: string) => {
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
-  pi.on("session_start", async () => {
-    loadSettings.clear();
+  pi.on("session_start", async (event) => {
+    if (event.reason === "reload") reloadRuntimePiBaseSettings();
     resolverFactory.clear();
     await lspManager.shutdownAll();
   });
@@ -202,7 +188,7 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
   registerEditTool(pi, { wasReadInSession: hasFreshAnchors, getCachedLines, getCollapsedResultLines, onSuccessfulEdit: (absolutePath, lines) => { noteAnchorsAndSnapshot(absolutePath, lines); syncLsp(absolutePath); } });
   registerWriteTool(pi, { onFileAnchored: noteAnchorsAndSnapshot, onSuccessfulWrite: syncLsp, getCollapsedResultLines });
   registerLspTools(pi, { resolverFactory, getCollapsedResultLines });
-  registerPermissionGuard(pi, { loadSettings });
+  registerPermissionGuard(pi, { loadSettings, toggleYolo: toggleRuntimeYolo });
   registerResumeAllCommand(pi);
 
 

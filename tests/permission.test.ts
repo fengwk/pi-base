@@ -230,7 +230,7 @@ describe("permission guard", () => {
     expect(registry.renderFooter(120).join("\n")).not.toContain("YOLO");
   });
 
-  it("applies configured default yolo mode when a session has no prior yolo entry", async () => {
+  it("applies configured default yolo mode when workspace settings first load", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, { permission: { write: "ask" }, yolo: true, contextCompression: { anchorHygiene: true } });
     await writeFile(join(root, ".pi", "settings.json"), JSON.stringify({ compaction: { enabled: true } }), "utf8");
@@ -277,7 +277,7 @@ describe("permission guard", () => {
     );
     expect(deniedBeforeChange.isError).toBe(true);
     expect(getText(deniedBeforeChange)).toContain("Permission denied for write");
-    expect(getText(deniedBeforeChange)).toContain("run /reload or start a new session");
+    expect(getText(deniedBeforeChange)).toContain("run /reload for the change to take effect");
 
     await writeProjectSettings(root, { permission: { write: "allow" } });
 
@@ -301,6 +301,32 @@ describe("permission guard", () => {
     );
     expect(allowedAfterReload.isError).not.toBe(true);
     expect(await readFile(join(root, "src/reload.ts"), "utf8")).toBe("export const value = 3;\n");
+  });
+  it("reloads yolo runtime mode from pi-base settings", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, { permission: { write: "ask" }, yolo: false });
+
+    const registry = createToolRegistry({ hasUI: true });
+    registry.setUI({ select: async () => "No" });
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    await registry.runCommand("yolo", "", { cwd: root });
+    expect(registry.getStatuses().get("pi-base-permission")).toBe("YOLO");
+
+    await writeProjectSettings(root, { permission: { write: "ask" }, yolo: false });
+    await registry.emit("session_start", { reason: "reload" }, { cwd: root });
+    expect(registry.getStatuses().get("pi-base-permission")).toBeUndefined();
+
+    const blocked = await registry.getTool("write").execute(
+      "1",
+      { workdir: ".", path: "src/reload-yolo.ts", content: "export const value = true;\n" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(blocked.isError).toBe(true);
+    expect(getText(blocked)).toContain("Permission denied by user for write");
   });
 
   it("respects configured bash patterns and still asks for unmatched commands", async () => {

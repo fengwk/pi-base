@@ -1,19 +1,16 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { analyzeBashSurfaceCommand, buildBashSurfaceCandidates } from "./bash-command-analyzer.js";
 import { dirname, relative } from "node:path";
-import { loadPiBaseSettings, type LoadedPiBaseSettings, type PermissionAction, type PermissionRuleEntry } from "./config.js";
+import { type LoadedPiBaseSettings, type PermissionAction, type PermissionRuleEntry } from "./config.js";
 import { expandHomePath, normalizeSlashes, resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
 import { PI_BASE_INLINE_STATUS_KEYS, PI_BASE_PERMISSION_STATUS_KEY, syncYoloFooter } from "./yolo-footer.js";
+import { loadRuntimePiBaseSettings, toggleRuntimeYolo } from "./runtime-settings.js";
 
 const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
-const YOLO_ENTRY_TYPE = "pi-base-permission-yolo";
 const ALLOW_LABEL = "Yes";
 const DENY_LABEL = "No";
 const PROMPT_ARGUMENTS_MAX_CHARS = 120;
 
-interface PermissionState {
-  yolo: boolean;
-}
 
 interface TargetDescriptor {
   candidates: string[];
@@ -150,29 +147,15 @@ function evaluateBashRules(command: string, ...rulesets: Array<PermissionRuleEnt
   return action;
 }
 
-function restoreStateFromEntries(state: PermissionState, entries: unknown[]): boolean {
-  let restored = false;
-  state.yolo = false;
-  for (const entry of entries) {
-    if (!entry || typeof entry !== "object") continue;
-    const record = entry as { type?: string; customType?: string; data?: Record<string, unknown> };
-    if (record.type !== "custom") continue;
-    if (record.customType === YOLO_ENTRY_TYPE && typeof record.data?.enabled === "boolean") {
-      state.yolo = record.data.enabled;
-      restored = true;
-    }
-  }
-  return restored;
-}
 
-function updateYoloStatus(ctx: ExtensionContext, state: PermissionState): void {
+function updateYoloStatus(ctx: ExtensionContext, enabled: boolean): void {
   if (!ctx.hasUI) return;
-  ctx.ui.setStatus(STATUS_KEY, state.yolo ? ctx.ui.theme.fg("warning", "YOLO") : undefined);
+  ctx.ui.setStatus(STATUS_KEY, enabled ? ctx.ui.theme.fg("warning", "YOLO") : undefined);
 }
 
-function syncYoloStatusFooter(ctx: ExtensionContext, pi: Pick<ExtensionAPI, "getThinkingLevel">, state: PermissionState): void {
-  updateYoloStatus(ctx, state);
-  if (state.yolo) syncYoloFooter(ctx, pi, { statusKey: STATUS_KEY, extraStatusKeys: PI_BASE_INLINE_STATUS_KEYS });
+function syncYoloStatusFooter(ctx: ExtensionContext, pi: Pick<ExtensionAPI, "getThinkingLevel">, enabled: boolean): void {
+  updateYoloStatus(ctx, enabled);
+  if (enabled) syncYoloFooter(ctx, pi, { statusKey: STATUS_KEY, extraStatusKeys: PI_BASE_INLINE_STATUS_KEYS });
 }
 
 function stringifyPromptArguments(input: unknown): string {
@@ -222,7 +205,7 @@ function buildPrompt(toolName: string, input: unknown): string {
 }
 
 function buildSettingsHint(loaded: LoadedPiBaseSettings): string {
-  return `Update ${loaded.projectPath} or ${loaded.globalPath} under \`permission\`, then run /reload or start a new session for the change to take effect.`;
+  return `Update ${loaded.projectPath} or ${loaded.globalPath} under \`permission\`, then run /reload for the change to take effect.`;
 }
 
 function buildDeniedReason(toolName: string, loaded: LoadedPiBaseSettings): string {
@@ -238,18 +221,16 @@ function buildRejectedReason(toolName: string): string {
 }
 
 
-function configuredYoloEnabled(loaded: LoadedPiBaseSettings): boolean {
-  return loaded.settings.yolo === true;
-}
 
 export function registerPermissionGuard(
-  pi: Pick<ExtensionAPI, "appendEntry" | "on" | "registerCommand" | "getThinkingLevel">,
-  options: { loadSettings?: (cwd: string) => LoadedPiBaseSettings } = {},
+  pi: Pick<ExtensionAPI, "on" | "registerCommand" | "getThinkingLevel">,
+  options: {
+    loadSettings?: (cwd: string) => LoadedPiBaseSettings;
+    toggleYolo?: (cwd: string) => boolean;
+  } = {},
 ): void {
-  const state: PermissionState = {
-    yolo: false,
-  };
-  const loadSettings = options.loadSettings ?? loadPiBaseSettings;
+  const loadSettings = options.loadSettings ?? loadRuntimePiBaseSettings;
+  const toggleYolo = options.toggleYolo ?? toggleRuntimeYolo;
 
   pi.registerCommand("yolo", {
     description: "Toggle yolo mode (bypass permission checks)",
@@ -258,25 +239,22 @@ export function registerPermissionGuard(
         if (ctx.hasUI) ctx.ui.notify("Usage: /yolo", "warning");
         return;
       }
-      state.yolo = !state.yolo;
-      pi.appendEntry(YOLO_ENTRY_TYPE, { enabled: state.yolo });
-      syncYoloStatusFooter(ctx, pi, state);
+      const enabled = toggleYolo(ctx.cwd);
+      syncYoloStatusFooter(ctx, pi, enabled);
     },
   });
 
   pi.on("session_start", async (_event, ctx) => {
     const loaded = loadSettings(ctx.cwd);
-    const entries = ctx.sessionManager.getEntries();
-    const restored = restoreStateFromEntries(state, Array.isArray(entries) ? entries : []);
-    if (!restored) state.yolo = configuredYoloEnabled(loaded);
-    syncYoloStatusFooter(ctx, pi, state);
+    syncYoloStatusFooter(ctx, pi, loaded.settings.yolo === true);
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    updateYoloStatus(ctx, state);
-    if (state.yolo) return undefined;
-
     const loaded = loadSettings(ctx.cwd);
+    const yoloEnabled = loaded.settings.yolo === true;
+    updateYoloStatus(ctx, yoloEnabled);
+    if (yoloEnabled) return undefined;
+
     const permission = loaded.settings.permission;
     if (!permission) return undefined;
 

@@ -41,7 +41,7 @@ The same file contains LSP, permission, render preview config, context compressi
 
 For isolated tests or temporary runs, `PI_BASE_GLOBAL_SETTINGS_PATH` can override the global `pi-base` config path.
 
-Config is loaded for the current session and refreshed when a new session starts. If you edit either config file while pi is running, run `/reload` (or start a new session) for the change to take effect.
+Config is loaded into the current Pi process and cached by workspace. If you edit either config file while pi is running, run `/reload` for the latest `pi-base.json` values to replace the in-memory policy.
 
 Precedence:
 
@@ -138,7 +138,7 @@ Behavior notes:
 - For path-based tools (`read`, `edit`, `write`, and similar tools that expose `path`), patterns are matched against the given path, the workdir-relative path, the project-relative path, and the absolute path.
 - For `bash`, patterns are matched against static surface command segments. The matcher is quote/escape-aware for top-level `&&`, `||`, `|`, `|&`, `;`, and newline separators, but it does not expand variables, read scripts, or recursively inspect runtime content inside `bash -c`, command substitutions, `eval`, `source`, functions, or aliases.
 - In non-interactive mode, `ask` blocks the tool call because there is no UI to confirm it.
-- `/yolo` toggles a bypass mode that disables all permission checks for the current session and shows `YOLO` inline in the footer while it is active. It does not take subcommands; use `/yolo` again to switch back.
+- `/yolo` toggles a runtime bypass mode that disables all permission checks for the current Pi process and workspace, and shows `YOLO` inline in the footer while it is active. It does not take subcommands; use `/yolo` again to switch back.
 
 ### Example: default YOLO mode
 
@@ -150,12 +150,12 @@ Set `yolo` to a boolean:
 }
 ```
 
-When omitted, the default is `false`. When present, it seeds the default `/yolo` state for sessions that do not already have a persisted YOLO toggle entry. A session that already persisted a prior `/yolo` toggle keeps its stored state.
+When omitted, the default is `false`. When present, it seeds the in-memory YOLO mode when pi-base first loads the workspace settings. `/yolo` changes only the current Pi process state; it is not persisted into session history or written back to `pi-base.json`.
 
 ## Slash commands
 
 - `/yolo`
-  - Toggles permission bypass for the current session.
+  - Toggles permission bypass for the current Pi process and workspace.
 - `/resume-all`
   - Opens a picker for sessions across all project directories known to Pi, unlike the built-in `/resume` flow that stays focused on the current project/session directory.
   - In TUI mode it opens directly in the all-project view with recent sorting.
