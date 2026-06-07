@@ -3,7 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { resolveToCwd } from "./path-utils.js";
-import { type CollapsedResultLinesResolver, renderCallText, renderRawResult, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning } from "./render.js";
+import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, renderCallText, renderRawResult, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning } from "./render.js";
 import { bashSchema } from "./schemas/bash.js";
 import { loadToolPromptSnippet } from "./tool-prompt.js";
 import { parsePositiveNumber } from "./timeout.js";
@@ -63,24 +63,35 @@ function formatBashWarnings(result: any): string[] {
   return warnings;
 }
 
-function formatBashResultText(result: any, options: any, theme: any, context: any, collapsedLines: number): string {
+function formatBashResultText(result: any, options: any, theme: any, context: any, collapsedLines: number, maxCollapsedChars: number | undefined): string {
   const state = context?.state ?? {};
   let output = extractBashText(result).trim();
   output = stripStructuredTruncationFooter(output, result, options);
 
-  const styledLines = output
-    ? output.split("\n").map((line) => styleOutput(theme, line))
-    : [];
-  const visibleLines = options?.expanded
-    ? styledLines
+  const outputLines = output ? output.split("\n") : [];
+  const collapsedOutput = options?.expanded
+    ? output
     : collapsedLines === 0
-      ? []
-      : styledLines.slice(-collapsedLines);
-  const hiddenLineCount = styledLines.length - visibleLines.length;
+      ? ""
+      : outputLines.slice(-collapsedLines).join("\n");
+  const wasLineTruncated = !options?.expanded && collapsedLines > 0 && outputLines.length > collapsedLines;
+  const wasCharTruncated = !options?.expanded && typeof maxCollapsedChars === "number" && collapsedOutput.length > maxCollapsedChars;
+  const visibleOutput = wasCharTruncated ? `${collapsedOutput.slice(0, maxCollapsedChars)}...` : collapsedOutput;
+  const visibleLines = visibleOutput
+    ? visibleOutput.split("\n").map((line) => styleOutput(theme, line))
+    : [];
+  const hiddenLineCount = !options?.expanded
+    ? (collapsedLines === 0 ? outputLines.length : Math.max(0, outputLines.length - collapsedLines))
+    : 0;
   const sections: string[] = [];
 
-  if (!options?.expanded && hiddenLineCount > 0) {
-    sections.push(styleMuted(theme, `... (${hiddenLineCount} earlier lines, ctrl+o to expand)`));
+  if (!options?.expanded && (hiddenLineCount > 0 || wasCharTruncated)) {
+    const details = [
+      hiddenLineCount > 0 ? `${hiddenLineCount} earlier lines` : undefined,
+      wasCharTruncated ? "output truncated" : undefined,
+      "ctrl+o to expand",
+    ].filter((part): part is string => Boolean(part));
+    sections.push(styleMuted(theme, `... (${details.join(", ")})`));
   }
   if (visibleLines.length > 0) sections.push(...visibleLines);
 
@@ -210,7 +221,7 @@ function buildHostShellOptions(): BashToolOptions | undefined {
 
 export function registerBashRendererTool(
   pi: Pick<ExtensionAPI, "registerTool">,
-  options: { createBuiltInBashTool?: BashFactory; createBuiltInBashToolDefinition?: BashDefinitionFactory; getCollapsedResultLines?: CollapsedResultLinesResolver } = {},
+  options: { createBuiltInBashTool?: BashFactory; createBuiltInBashToolDefinition?: BashDefinitionFactory; getCollapsedResultLines?: CollapsedResultLinesResolver; getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver } = {},
 ) {
   const shellOptions = buildHostShellOptions();
   const builtins = new Map<string, { tool: BashExecutionTool; definition: BashRenderDefinition }>();
@@ -257,8 +268,9 @@ export function registerBashRendererTool(
       const cwd = rawWorkdir ? resolveToCwd(rawWorkdir, context.cwd ?? process.cwd()) : (context.cwd ?? process.cwd());
       const configuredCollapsedLines = options.getCollapsedResultLines?.(context?.cwd ?? process.cwd(), "bash");
       const collapsedLines = configuredCollapsedLines ?? BASH_COLLAPSED_PREVIEW_LINES;
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("bash", undefined, context, options.getCollapsedResultMaxChars);
       const builtIn = getBuiltIn(cwd);
-      if (configuredCollapsedLines === undefined && options.createBuiltInBashToolDefinition && builtIn.definition.renderResult) {
+      if (configuredCollapsedLines === undefined && maxCollapsedChars === undefined && options.createBuiltInBashToolDefinition && builtIn.definition.renderResult) {
         const builtInContext = {
           ...context,
           state,
@@ -273,10 +285,10 @@ export function registerBashRendererTool(
 
       try {
         const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-        text.setText(formatBashResultText(result, renderOptions, _theme, { ...context, state }, collapsedLines));
+        text.setText(formatBashResultText(result, renderOptions, _theme, { ...context, state }, collapsedLines, maxCollapsedChars));
         return text;
       } catch {
-        return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
+        return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, _theme, context);
       }
     },
     async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}) {

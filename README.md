@@ -74,6 +74,26 @@ project JSON > global JSON > built-in defaults
   }
 }
 ```
+### Example: tool result preview max characters
+
+`render.collapsedToolResultMaxChars` accepts either:
+
+- a single non-negative integer, applied to every tool result, or
+- an object keyed by tool name, with optional `"*"` as the fallback default.
+
+This limit only affects the **collapsed** result preview. Expanded tool results still render the full content. It is useful for very large single-line outputs or huge JSON payloads.
+
+```json
+{
+  "render": {
+    "collapsedToolResultMaxChars": {
+      "*": 10000,
+      "bash": 4000,
+      "echo": 2000
+    }
+  }
+}
+```
 
 ### Example: context compression
 

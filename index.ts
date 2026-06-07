@@ -16,7 +16,7 @@ import { applyUnifiedOutputTruncation } from "./src/tool-output.js";
 import { findSchema } from "./src/schemas/find.js";
 import { inferToolResultIsError } from "./src/tool-result.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./src/tool-prompt.js";
-import { formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver } from "./src/render.js";
+import { formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./src/render.js";
 import { applyContextCompressionToMessages } from "./src/context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./src/anthropic-cache-boundary.js";
 import { registerResumeAllCommand } from "./src/resume-all.js";
@@ -24,7 +24,7 @@ import { createTimeoutSignal, parsePositiveNumber } from "./src/timeout.js";
 import { resolveToolWorkdir } from "./src/path-utils.js";
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./src/mcp/index.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./src/lsp/discovery.js";
-export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type YoloMode, type ContextCompressionConfig } from "./src/config.js";
+export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type YoloMode, type ContextCompressionConfig } from "./src/config.js";
 export type { LocalMcpServerConfig, McpConfig, McpRemoteTransport, McpServerConfig, McpSnapshot, McpToolSnapshot, RemoteMcpServerConfig } from "./src/mcp/types.js";
 
 const BASE_TOOL_NAMES = [
@@ -72,6 +72,14 @@ function createCollapsedResultLinesResolver(loadSettings: (cwd: string) => Loade
     return config[toolName] ?? config["*"];
   };
 }
+function createCollapsedResultMaxCharsResolver(loadSettings: (cwd: string) => LoadedPiBaseSettings): CollapsedResultMaxCharsResolver {
+  return (cwd: string, toolName: string) => {
+    const config = loadSettings(cwd).settings.render?.collapsedToolResultMaxChars;
+    if (config === undefined) return undefined;
+    if (typeof config === "number") return config;
+    return config[toolName] ?? config["*"];
+  };
+}
 
 type FindToolDefinitionFactory = (cwd: string) => any;
 function formatFindCall(args: any, theme: any): string {
@@ -101,7 +109,7 @@ function formatFindCall(args: any, theme: any): string {
 export function registerFindTool(
   pi: ExtensionAPI,
   createToolDefinition: FindToolDefinitionFactory = createFindToolDefinition,
-  options: { getCollapsedResultLines?: CollapsedResultLinesResolver } = {},
+  options: { getCollapsedResultLines?: CollapsedResultLinesResolver; getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver } = {},
 ): void {
   const template = createToolDefinition(process.cwd());
   pi.registerTool({
@@ -114,10 +122,11 @@ export function registerFindTool(
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("find", undefined, context, options.getCollapsedResultLines);
-      if (collapsedLines === undefined) {
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("find", undefined, context, options.getCollapsedResultMaxChars);
+      if (collapsedLines === undefined && maxCollapsedChars === undefined) {
         return template.renderResult ? template.renderResult(result, renderOptions, theme, context) : renderRawResult(result, renderOptions, theme, context);
       }
-      return renderRawResult(result, { ...renderOptions, collapsedLines }, theme, context);
+      return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, theme, context);
     },
     async execute(toolCallId: string, params: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any = {}) {
       const rawPath = typeof params?.path === "string" ? params.path.trim() : "";
@@ -166,6 +175,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   const loadSettings = loadRuntimePiBaseSettings;
   const resolverFactory = createResolverFactory(loadSettings);
   const getCollapsedResultLines = createCollapsedResultLinesResolver(loadSettings);
+  const getCollapsedResultMaxChars = createCollapsedResultMaxCharsResolver(loadSettings);
   const filesWithFreshAnchors = new Set<string>();
   const cachedFileLines = new Map<string, string[]>();
   const noteAnchorsAndSnapshot = (absolutePath: string, lines?: string[]) => {
@@ -183,16 +193,38 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     await lspManager.shutdownAll();
   });
 
-  registerReadTool(pi, { onSuccessfulRead: noteAnchorsAndSnapshot, createResolver: resolverFactory, getCollapsedResultLines });
-  registerGrepTool(pi, { getCollapsedResultLines });
+  registerReadTool(pi, {
+    onSuccessfulRead: noteAnchorsAndSnapshot,
+    createResolver: resolverFactory,
+    getCollapsedResultLines,
+    getCollapsedResultMaxChars,
+  });
+  registerGrepTool(pi, { getCollapsedResultLines, getCollapsedResultMaxChars });
   // Delegate `find` to the built-in pi-coding-agent tool, which uses `fd` directly,
   // respects `.gitignore` (rg/fd default), and auto-downloads `fd` if missing.
   // This keeps `pi-base` thin and lets upstream handle fd behavior.
-  registerFindTool(pi, createFindToolDefinition, { getCollapsedResultLines });
-  registerBashRendererTool(pi, { getCollapsedResultLines });
-  registerEditTool(pi, { wasReadInSession: hasFreshAnchors, getCachedLines, getCollapsedResultLines, onSuccessfulEdit: (absolutePath, lines) => { noteAnchorsAndSnapshot(absolutePath, lines); syncLsp(absolutePath); } });
-  registerWriteTool(pi, { onFileAnchored: noteAnchorsAndSnapshot, onSuccessfulWrite: syncLsp, getCollapsedResultLines });
-  registerLspTools(pi, { resolverFactory, getCollapsedResultLines });
+  registerFindTool(pi, createFindToolDefinition, { getCollapsedResultLines, getCollapsedResultMaxChars });
+  registerBashRendererTool(pi, { getCollapsedResultLines, getCollapsedResultMaxChars });
+  registerEditTool(pi, {
+    wasReadInSession: hasFreshAnchors,
+    getCachedLines,
+    getCollapsedResultLines,
+    getCollapsedResultMaxChars,
+    onSuccessfulEdit: (absolutePath, lines) => { noteAnchorsAndSnapshot(absolutePath, lines); syncLsp(absolutePath); },
+  });
+  registerWriteTool(pi, {
+    onFileAnchored: noteAnchorsAndSnapshot,
+    onSuccessfulWrite: syncLsp,
+    getCollapsedResultLines,
+    getCollapsedResultMaxChars,
+  });
+  registerLspTools(pi, { resolverFactory, getCollapsedResultLines, getCollapsedResultMaxChars });
+  registerMcpSupport(pi, {
+    loadSettings,
+    getCollapsedResultLines,
+    getCollapsedResultMaxChars,
+    ...options.mcp,
+  });
   registerPermissionGuard(pi, { loadSettings, toggleYolo: toggleRuntimeYolo });
   registerResumeAllCommand(pi);
 

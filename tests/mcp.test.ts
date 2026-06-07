@@ -71,13 +71,16 @@ class FakeMcpClient implements McpProtocolClient {
 
 function createClientFactory(stepsByServer: Record<string, FakeClientStep[]>): McpClientFactory {
   return (serverKey) => {
-    const next = stepsByServer[serverKey]?.shift();
+    const steps = stepsByServer[serverKey] ?? [];
+    const next = steps.length > 1 ? steps.shift() : steps[0];
     if (!next) throw new Error(`No fake MCP client scripted for ${serverKey}`);
     return new FakeMcpClient(next);
   };
 }
 
 let previousGlobalSettingsPath: string | undefined;
+const registries: Array<ReturnType<typeof createToolRegistry>> = [];
+
 
 beforeEach(async () => {
   previousGlobalSettingsPath = process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
@@ -87,7 +90,13 @@ beforeEach(async () => {
   process.env.PI_BASE_GLOBAL_SETTINGS_PATH = globalPath;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  while (registries.length > 0) {
+    const registry = registries.pop();
+    if (registry) {
+      await registry.emit("session_shutdown", {});
+    }
+  }
   if (previousGlobalSettingsPath === undefined) {
     delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
   } else {
@@ -118,6 +127,11 @@ const noArgTool: McpTool = {
     properties: {},
   },
 };
+function createMcpRegistry(options: Parameters<typeof createToolRegistry>[0]): ReturnType<typeof createToolRegistry> {
+  const registry = createToolRegistry(options);
+  registries.push(registry);
+  return registry;
+}
 
 describe("mcp support", () => {
   it("registers MCP tools with an empty prefix and updates the MCP status line", async () => {
@@ -134,7 +148,7 @@ describe("mcp support", () => {
       },
     });
 
-    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
     piBaseExtension(registry.pi as any, {
       mcp: {
         clientFactory: createClientFactory({
@@ -164,6 +178,70 @@ describe("mcp support", () => {
     const callText = (callComponent?.render(120).join("\n") ?? "").trimEnd();
     expect(callText).toContain('"text": "hello"');
   });
+  it("renders MCP results with collapsed truncation and full expansion", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      render: {
+        collapsedToolResultMaxChars: {
+          echo: 20,
+        },
+      },
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({ mm: [{ tools: [echoTool] }] }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "echo"));
+
+    const tool = registry.getTool("echo");
+    const longLine = "x".repeat(200);
+    const renderContext = {
+      args: { text: "hello" },
+      toolCallId: "1",
+      invalidate() {},
+      state: {},
+      cwd: root,
+      executionStarted: true,
+      argsComplete: true,
+      isPartial: false,
+      expanded: false,
+      showImages: false,
+      lastComponent: undefined,
+    };
+
+    const collapsedComponent = tool.renderResult?.({
+      content: [{ type: "text", text: longLine }],
+    } as any, { expanded: false, isPartial: false }, {}, renderContext as any);
+    const collapsedText = (collapsedComponent?.render(120).join("\n") ?? "").trimEnd();
+    expect(collapsedText).toContain("ctrl+o to expand");
+    expect(collapsedText).not.toContain(longLine);
+    expect(collapsedText).toContain("output truncated");
+    expect(collapsedText).toContain("xxxxxxxxxxxxxxxxxxxx...");
+
+    const expandedComponent = tool.renderResult?.({
+      content: [{ type: "text", text: longLine }],
+    } as any, { expanded: true, isPartial: false }, {}, { ...renderContext, expanded: true } as any);
+    const expandedText = (expandedComponent?.render(20000).join("\n") ?? "").trimEnd();
+    expect(expandedText).toContain(longLine);
+    expect(expandedText).not.toContain("ctrl+o to expand");
+  });
   it("omits an empty JSON block for no-argument MCP tools", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
@@ -178,7 +256,7 @@ describe("mcp support", () => {
       },
     });
 
-    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
     piBaseExtension(registry.pi as any, {
       mcp: {
         clientFactory: createClientFactory({ mm: [{ tools: [noArgTool] }] }),
@@ -210,7 +288,7 @@ describe("mcp support", () => {
       },
     });
 
-    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
     piBaseExtension(registry.pi as any, {
       mcp: {
         clientFactory: createClientFactory({ mm: [{ tools: [echoTool] }] }),
@@ -243,7 +321,7 @@ describe("mcp support", () => {
     });
     await writeFile(join(root, ".pi", "settings.json"), JSON.stringify({ compaction: { enabled: true } }), "utf8");
 
-    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
     piBaseExtension(registry.pi as any, {
       mcp: {
         clientFactory: createClientFactory({ mm: [{ tools: [echoTool] }] }),
@@ -275,7 +353,7 @@ describe("mcp support", () => {
       },
     });
 
-    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
     piBaseExtension(registry.pi as any, {
       mcp: {
         clientFactory: createClientFactory({ mm: [{ connectDelayMs: 100, tools: [echoTool] }] }),
@@ -303,7 +381,7 @@ describe("mcp support", () => {
       },
     });
 
-    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
     piBaseExtension(registry.pi as any, {
       mcp: {
         clientFactory: createClientFactory({ mm: [{ connectError: "missing credentials" }] }),
@@ -330,7 +408,7 @@ describe("mcp support", () => {
       },
     });
 
-    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
     piBaseExtension(registry.pi as any, {
       mcp: {
         clientFactory: createClientFactory({
@@ -365,7 +443,7 @@ describe("mcp support", () => {
       },
     });
 
-    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
     piBaseExtension(registry.pi as any, {
       mcp: {
         clientFactory: createClientFactory({ mm: [{ tools: [echoTool] }] }),
@@ -376,7 +454,7 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers");
+    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
 
     await registry.runCommand("mcp-status", "", { cwd: root });
 

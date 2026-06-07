@@ -6,7 +6,7 @@ import { createGrepTool } from "@earendil-works/pi-coding-agent";
 import { open, stat } from "node:fs/promises";
 import { looksLikeBinary } from "./binary-detect.js";
 import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
-import { type CollapsedResultLinesResolver, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
+import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
 import { grepSchema } from "./schemas/grep.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -213,7 +213,7 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
 }
 export function registerGrepTool(
   pi: ExtensionAPI,
-  options: { createBuiltInGrepTool?: GrepFactory; getCollapsedResultLines?: CollapsedResultLinesResolver } = {},
+  options: { createBuiltInGrepTool?: GrepFactory; getCollapsedResultLines?: CollapsedResultLinesResolver; getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver } = {},
 ) {
   const tool = {
     name: "grep",
@@ -226,7 +226,8 @@ export function registerGrepTool(
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("grep", RESULT_COLLAPSED_LINES, context, options.getCollapsedResultLines);
-      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("grep", undefined, context, options.getCollapsedResultMaxChars);
+      return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, _theme, context);
     },
     async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}) {
       try {

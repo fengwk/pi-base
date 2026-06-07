@@ -61,10 +61,23 @@ describe("pi-base config", () => {
     await mkdir(projectDir, { recursive: true });
     await withTempGlobalSettings(async (globalPath) => {
       await mkdir(dirname(globalPath), { recursive: true });
-      await writeFile(globalPath, JSON.stringify({ render: { collapsedToolResultLines: 12 } }), "utf8");
-      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ render: { collapsedToolResultLines: { read: 0, grep: 15 } } }), "utf8");
+      await writeFile(globalPath, JSON.stringify({
+        render: {
+          collapsedToolResultLines: 12,
+          collapsedToolResultMaxChars: 1000,
+        },
+      }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        render: {
+          collapsedToolResultLines: { read: 0, grep: 15 },
+          collapsedToolResultMaxChars: { read: 200, echo: 20 },
+        },
+      }), "utf8");
       const loaded = loadPiBaseSettings(root);
-      expect(loaded.settings.render).toEqual({ collapsedToolResultLines: { "*": 12, read: 0, grep: 15 } });
+      expect(loaded.settings.render).toEqual({
+        collapsedToolResultLines: { "*": 12, read: 0, grep: 15 },
+        collapsedToolResultMaxChars: { "*": 1000, read: 200, echo: 20 },
+      });
     });
   });
 

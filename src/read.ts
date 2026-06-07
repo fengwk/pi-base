@@ -7,7 +7,7 @@ import { normalizeToLF, stripBom } from "./edit-diff.js";
 import { ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay } from "./hashline.js";
 import { LspDiscoveryResolver, type LspSupportInfo } from "./lsp/discovery.js";
 import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
-import { type CollapsedResultLinesResolver, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "./render.js";
+import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { readSchema } from "./schemas/read.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -65,6 +65,7 @@ export function registerReadTool(
     createBuiltInReadTool?: ReadFactory;
     createResolver?: ReadLspResolverFactory;
     getCollapsedResultLines?: CollapsedResultLinesResolver;
+    getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
   } = {},
 ) {
   const tool = {
@@ -78,7 +79,8 @@ export function registerReadTool(
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("read", RESULT_COLLAPSED_LINES, context, options.getCollapsedResultLines);
-      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("read", undefined, context, options.getCollapsedResultMaxChars);
+      return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, _theme, context);
     },
     async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}) {
       try {

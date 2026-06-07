@@ -6,7 +6,7 @@ import { applyHashlineEdits, ensureHashInit, HashlineMismatchError, type Hashlin
 import { buildEditCallPreviewSignature, rememberEditCallPreviewSnapshot, renderEditCall, type EditCallPreviewSnapshots } from "./edit-preview.js";
 import { buildNoChangeError, buildResultDiff, buildStaleError } from "./edit-result.js";
 import { resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
-import { type CollapsedResultLinesResolver, renderRawResult, resolveCollapsedResultLines } from "./render.js";
+import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars } from "./render.js";
 import { editSchema } from "./schemas/edit.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
@@ -32,6 +32,7 @@ export function registerEditTool(
   options: {
     wasReadInSession?: (absolutePath: string) => boolean;
     getCollapsedResultLines?: CollapsedResultLinesResolver;
+    getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
     getCachedLines?: (absolutePath: string) => string[] | undefined;
     onSuccessfulEdit?: (absolutePath: string, lines?: string[]) => void;
   } = {},
@@ -55,7 +56,8 @@ export function registerEditTool(
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("edit", undefined, context, options.getCollapsedResultLines);
-      return renderRawResult(result, { ...renderOptions, collapsedLines }, theme, context);
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("edit", undefined, context, options.getCollapsedResultMaxChars);
+      return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {

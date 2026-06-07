@@ -69,6 +69,7 @@ export function styleWarning(theme: any, text: string): string {
 }
 
 export type CollapsedResultLinesResolver = (cwd: string, toolName: string) => number | undefined;
+export type CollapsedResultMaxCharsResolver = (cwd: string, toolName: string) => number | undefined;
 
 export function resolveCollapsedResultLines(
   toolName: string,
@@ -78,6 +79,15 @@ export function resolveCollapsedResultLines(
 ): number | undefined {
   const configured = getCollapsedResultLines?.(context?.cwd ?? process.cwd(), toolName);
   return configured ?? defaultCollapsedLines;
+}
+export function resolveCollapsedResultMaxChars(
+  toolName: string,
+  defaultMaxChars: number | undefined,
+  context: { cwd?: string } | undefined,
+  getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver,
+): number | undefined {
+  const configured = getCollapsedResultMaxChars?.(context?.cwd ?? process.cwd(), toolName);
+  return configured ?? defaultMaxChars;
 }
 
 export function renderCallText(textValue: string, lastComponent?: unknown) {
@@ -150,7 +160,7 @@ function colorizeResultBody(text: string, theme: any, isError: boolean): string 
     .join("\n");
 }
 
-export function renderRawResult(result: any, options: { expanded?: boolean; collapsedLines?: number; isPartial?: boolean } | undefined, theme: any, context: { lastComponent?: unknown; isError?: boolean }) {
+export function renderRawResult(result: any, options: { expanded?: boolean; collapsedLines?: number; maxCollapsedChars?: number; isPartial?: boolean } | undefined, theme: any, context: { lastComponent?: unknown; isError?: boolean }) {
   const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
   const parts = Array.isArray(result?.content)
     ? result.content.map((item: any) => {
@@ -159,18 +169,38 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
         return `[${String(item?.type ?? "unknown")} attachment]`;
       })
     : [""];
-  const body = colorizeResultBody(parts.join("\n\n"), theme, Boolean(context.isError));
-  const bodyLines = body ? body.split("\n") : [];
+  const rawBody = parts.join("\n\n");
+  const bodyLines = rawBody ? rawBody.split("\n") : [];
   const collapsedLines = typeof options?.collapsedLines === "number" && Number.isFinite(options.collapsedLines) && options.collapsedLines >= 0
     ? Math.floor(options.collapsedLines)
     : DEFAULT_COLLAPSED_RESULT_LINES;
-  if (options?.expanded || bodyLines.length <= collapsedLines) {
-    text.setText(bodyLines.length ? bodyLines.join("\n") : "");
+  const maxCollapsedChars = typeof options?.maxCollapsedChars === "number" && Number.isFinite(options.maxCollapsedChars) && options.maxCollapsedChars >= 0
+    ? Math.floor(options.maxCollapsedChars)
+    : undefined;
+  if (options?.expanded || isWithinCollapsedLimits(rawBody, bodyLines.length, collapsedLines, maxCollapsedChars)) {
+    text.setText(rawBody ? colorizeResultBody(rawBody, theme, Boolean(context.isError)) : "");
     return text;
   }
-  const visible = bodyLines.slice(0, collapsedLines);
-  const remaining = bodyLines.length - collapsedLines;
-  const tail = paint(theme, "dim", `... (${remaining} more lines, ctrl+o to expand)`);
-  text.setText([...visible, tail].join("\n"));
+
+  const visibleBody = bodyLines.slice(0, collapsedLines).join("\n");
+  const truncatedBody = typeof maxCollapsedChars === "number" && visibleBody.length > maxCollapsedChars
+    ? `${visibleBody.slice(0, maxCollapsedChars)}...`
+    : visibleBody;
+  const remaining = Math.max(0, bodyLines.length - collapsedLines);
+  const wasCharTruncated = truncatedBody !== visibleBody;
+  const tailDetails = [
+    remaining > 0 ? `${remaining} more lines` : undefined,
+    wasCharTruncated ? "output truncated" : undefined,
+    "ctrl+o to expand",
+  ].filter((part): part is string => Boolean(part));
+  const tail = paint(theme, "dim", `... (${tailDetails.join(", ")})`);
+  const body = truncatedBody ? colorizeResultBody(truncatedBody, theme, Boolean(context.isError)) : "";
+  text.setText(body ? `${body}\n${tail}` : tail);
   return text;
+}
+
+function isWithinCollapsedLimits(body: string, lineCount: number, collapsedLines: number, maxCollapsedChars: number | undefined): boolean {
+  if (lineCount > collapsedLines) return false;
+  if (typeof maxCollapsedChars === "number" && body.length > maxCollapsedChars) return false;
+  return true;
 }

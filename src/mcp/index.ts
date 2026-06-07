@@ -1,6 +1,7 @@
 import { Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LoadedPiBaseSettings } from "../config.js";
+import type { CollapsedResultLinesResolver, CollapsedResultMaxCharsResolver } from "../render.js";
 import { createMcpManager, type McpManagerOptions } from "./manager.js";
 import { renderMcpFooterStatus, renderMcpStatusTree } from "./status.js";
 
@@ -9,6 +10,8 @@ const MCP_STATUS_MESSAGE_TYPE = "pi-base-mcp-status";
 
 export interface RegisterMcpSupportOptions extends Pick<McpManagerOptions, "clientFactory" | "heartbeatIntervalMs" | "retryDelaysMs" | "callWaitTimeoutMs"> {
   loadSettings?: (cwd: string) => LoadedPiBaseSettings;
+  getCollapsedResultLines?: CollapsedResultLinesResolver;
+  getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
 }
 
 export function registerMcpSupport(
@@ -35,6 +38,8 @@ export function registerMcpSupport(
     heartbeatIntervalMs: options.heartbeatIntervalMs,
     retryDelaysMs: options.retryDelaysMs,
     callWaitTimeoutMs: options.callWaitTimeoutMs,
+    getCollapsedResultLines: options.getCollapsedResultLines,
+    getCollapsedResultMaxChars: options.getCollapsedResultMaxChars,
     onSnapshotChange: (snapshot, ctx) => {
       if (!ctx.hasUI) return;
       ctx.ui.setStatus(PI_BASE_MCP_STATUS_KEY, renderMcpFooterStatus(snapshot));

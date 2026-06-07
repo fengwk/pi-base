@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { LoadedPiBaseSettings } from "../config.js";
+import type { CollapsedResultLinesResolver, CollapsedResultMaxCharsResolver } from "../render.js";
 import { buildMcpToolName, createMcpToolDefinition, resolveMcpToolPrefix } from "./adapter.js";
 import { createSdkMcpClient } from "./client.js";
 import type { McpClientFactory, McpProtocolClient, McpServerConfig, McpServerSnapshot, McpServerState, McpSnapshot, McpTool, McpToolSnapshot } from "./types.js";
@@ -30,6 +31,8 @@ export interface McpManagerOptions {
   heartbeatIntervalMs?: number;
   retryDelaysMs?: readonly number[];
   callWaitTimeoutMs?: number;
+  getCollapsedResultLines?: CollapsedResultLinesResolver;
+  getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
   onSnapshotChange?: (snapshot: McpSnapshot, ctx: ExtensionContext) => void;
 }
 
@@ -229,6 +232,8 @@ export class McpManager {
           serverConfig: runtime.config,
           tool,
           callTool: (serverKey, toolName, args, ctx, signal) => this.call(serverKey, toolName, args, ctx, signal),
+          getCollapsedResultLines: this.options.getCollapsedResultLines,
+          getCollapsedResultMaxChars: this.options.getCollapsedResultMaxChars,
         }));
         this.toolOwners.set(aliasName, runtime.key);
         existingToolNames.add(aliasName);

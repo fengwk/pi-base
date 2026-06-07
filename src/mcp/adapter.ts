@@ -1,7 +1,7 @@
 import type { TSchema } from "@sinclair/typebox";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { renderCallText, styleOutput, styleToolTitle } from "../render.js";
+import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, styleOutput, styleToolTitle } from "../render.js";
 import { convertJsonSchemaToTypeBox } from "./schema.js";
 import type { McpTool, McpToolCallResult, McpServerConfig } from "./types.js";
 
@@ -14,6 +14,8 @@ export interface CreateMcpToolDefinitionOptions {
   serverConfig: McpServerConfig;
   tool: McpTool;
   callTool: McpToolCallExecutor;
+  getCollapsedResultLines?: CollapsedResultLinesResolver;
+  getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
 }
 
 export function resolveMcpToolPrefix(serverKey: string, toolPrefix: string | undefined): string {
@@ -25,8 +27,9 @@ export function buildMcpToolName(serverKey: string, toolName: string, toolPrefix
   return prefix === "" ? toolName : `${prefix}_${toolName}`;
 }
 
+const MCP_DEFAULT_COLLAPSED_RESULT_MAX_CHARS = 10_000;
 export function createMcpToolDefinition(options: CreateMcpToolDefinitionOptions): ToolDefinition<TSchema, { server: string; tool: string }> {
-  const { serverKey, serverConfig, tool, callTool } = options;
+  const { serverKey, serverConfig, tool, callTool, getCollapsedResultLines, getCollapsedResultMaxChars } = options;
   const aliasName = buildMcpToolName(serverKey, tool.name, serverConfig.toolPrefix);
   const parameters = buildParameters(tool);
 
@@ -41,6 +44,15 @@ export function createMcpToolDefinition(options: CreateMcpToolDefinitionOptions)
         ? styleToolTitle(theme, aliasName)
         : `${styleToolTitle(theme, aliasName)}\n${styleOutput(theme, stringifyJson(objectArgs))}`;
       return renderCallText(callText, context.lastComponent);
+    },
+    renderResult(result, renderOptions, theme, context) {
+      const collapsedLines = resolveCollapsedResultLines(aliasName, undefined, context, getCollapsedResultLines);
+      const maxCollapsedChars = resolveCollapsedResultMaxChars(aliasName, MCP_DEFAULT_COLLAPSED_RESULT_MAX_CHARS, context, getCollapsedResultMaxChars);
+      return renderRawResult(result, {
+        ...renderOptions,
+        collapsedLines,
+        maxCollapsedChars,
+      }, theme, context);
     },
     async execute(_toolCallId, params, signal, _onUpdate, ctx: ExtensionContext) {
       if (signal?.aborted) {

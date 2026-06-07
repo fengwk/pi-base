@@ -3,7 +3,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ensureHashInit, formatHashlineDisplay } from "./hashline.js";
 import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
-import { type CollapsedResultLinesResolver, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleMuted, styleToolTitle } from "./render.js";
+import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { writeSchema } from "./schemas/write.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -40,7 +40,7 @@ function formatWriteCall(args: any, theme: any): string {
 
 export function registerWriteTool(
   pi: ExtensionAPI,
-  options: { onFileAnchored?: (absolutePath: string, lines?: string[]) => void; onSuccessfulWrite?: (absolutePath: string) => void; getCollapsedResultLines?: CollapsedResultLinesResolver } = {},
+  options: { onFileAnchored?: (absolutePath: string, lines?: string[]) => void; onSuccessfulWrite?: (absolutePath: string) => void; getCollapsedResultLines?: CollapsedResultLinesResolver; getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver } = {},
 ) {
   const tool = {
     name: "write",
@@ -53,7 +53,8 @@ export function registerWriteTool(
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("write", COLLAPSED_PREVIEW_LINES, context, options.getCollapsedResultLines);
-      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("write", undefined, context, options.getCollapsedResultMaxChars);
+      return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {

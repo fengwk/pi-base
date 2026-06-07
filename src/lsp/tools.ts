@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { type CollapsedResultLinesResolver, formatInlineValue, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "../render.js";
+import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, formatInlineValue, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "../render.js";
 import { lspDiagnosticsSchema, lspGotoDefinitionSchema, lspJavaDecompileSchema, lspWorkspaceSymbolsSchema } from "../schemas/lsp.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
 import { resolveToCwd, resolveToolWorkdir } from "../path-utils.js";
@@ -168,7 +168,7 @@ function fileUrlForTarget(target: string, cwd: string): string {
  */
 export type LspResolverFactory = (cwd: string) => LspDiscoveryResolver;
 
-export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: LspResolverFactory; getCollapsedResultLines?: CollapsedResultLinesResolver } = {}) {
+export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: LspResolverFactory; getCollapsedResultLines?: CollapsedResultLinesResolver; getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver } = {}) {
   const getToolCwd = (params: any, ctx: any): string => resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd()).cwd;
   const getResolverForPath = (toolPath: string, cwd: string): LspDiscoveryResolver => {
     const factory = options.resolverFactory;
@@ -186,7 +186,8 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("lsp_diagnostics", undefined, context, options.getCollapsedResultLines);
-      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("lsp_diagnostics", undefined, context, options.getCollapsedResultMaxChars);
+      return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       let serverId = "unknown";
@@ -237,7 +238,8 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("lsp_goto_definition", undefined, context, options.getCollapsedResultLines);
-      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("lsp_goto_definition", undefined, context, options.getCollapsedResultMaxChars);
+      return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {
@@ -271,7 +273,8 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("lsp_workspace_symbols", undefined, context, options.getCollapsedResultLines);
-      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("lsp_workspace_symbols", undefined, context, options.getCollapsedResultMaxChars);
+      return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {
@@ -303,7 +306,8 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("lsp_java_decompile", undefined, context, options.getCollapsedResultLines);
-      return renderRawResult(result, { ...renderOptions, collapsedLines }, _theme, context);
+      const maxCollapsedChars = resolveCollapsedResultMaxChars("lsp_java_decompile", undefined, context, options.getCollapsedResultMaxChars);
+      return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, _theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {

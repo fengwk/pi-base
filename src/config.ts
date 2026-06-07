@@ -15,9 +15,11 @@ export interface PermissionRuleEntry {
 export type PermissionConfig = Record<string, PermissionRuleEntry[]>;
 
 export type CollapsedToolResultLinesConfig = number | Record<string, number>;
+export type CollapsedToolResultMaxCharsConfig = number | Record<string, number>;
 
 export interface RenderConfig {
   collapsedToolResultLines?: CollapsedToolResultLinesConfig;
+  collapsedToolResultMaxChars?: CollapsedToolResultMaxCharsConfig;
 }
 
 
@@ -202,6 +204,41 @@ function mergeCollapsedToolResultLinesConfig(
   const baseMap = typeof base === "number" ? { "*": base } : { ...base };
   return { ...baseMap, ...override };
 }
+function sanitizeCollapsedToolResultMaxCharsConfig(value: unknown, path: string): CollapsedToolResultMaxCharsConfig {
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || Number(value) < 0) {
+      throw new Error(`${path} must be a non-negative integer.`);
+    }
+    return Number(value);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${path} must be a non-negative integer or an object keyed by tool name.`);
+  }
+  const output: Record<string, number> = {};
+  for (const [toolName, charCount] of Object.entries(value as Record<string, unknown>)) {
+    if (!Number.isInteger(charCount) || Number(charCount) < 0) {
+      throw new Error(`${path}.${toolName} must be a non-negative integer.`);
+    }
+    output[toolName] = Number(charCount);
+  }
+  return output;
+}
+
+function cloneCollapsedToolResultMaxCharsConfig(value: CollapsedToolResultMaxCharsConfig | undefined): CollapsedToolResultMaxCharsConfig | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === "number" ? value : { ...value };
+}
+
+function mergeCollapsedToolResultMaxCharsConfig(
+  base: CollapsedToolResultMaxCharsConfig | undefined,
+  override: CollapsedToolResultMaxCharsConfig | undefined,
+): CollapsedToolResultMaxCharsConfig | undefined {
+  if (override === undefined) return cloneCollapsedToolResultMaxCharsConfig(base);
+  if (base === undefined) return cloneCollapsedToolResultMaxCharsConfig(override);
+  if (typeof override === "number") return override;
+  const baseMap = typeof base === "number" ? { "*": base } : { ...base };
+  return { ...baseMap, ...override };
+}
 
 function sanitizeRenderConfig(value: unknown): RenderConfig | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -211,6 +248,9 @@ function sanitizeRenderConfig(value: unknown): RenderConfig | undefined {
   const output: RenderConfig = {};
   if (input.collapsedToolResultLines !== undefined) {
     output.collapsedToolResultLines = sanitizeCollapsedToolResultLinesConfig(input.collapsedToolResultLines, "render.collapsedToolResultLines");
+  }
+  if (input.collapsedToolResultMaxChars !== undefined) {
+    output.collapsedToolResultMaxChars = sanitizeCollapsedToolResultMaxCharsConfig(input.collapsedToolResultMaxChars, "render.collapsedToolResultMaxChars");
   }
   return Object.keys(output).length > 0 ? output : undefined;
 }
@@ -448,8 +488,12 @@ function mergePermission(base: PermissionConfig | undefined, override: Permissio
 function mergeRender(base: RenderConfig | undefined, override: RenderConfig | undefined): RenderConfig | undefined {
   if (!base && !override) return undefined;
   const collapsedToolResultLines = mergeCollapsedToolResultLinesConfig(base?.collapsedToolResultLines, override?.collapsedToolResultLines);
-  if (collapsedToolResultLines === undefined) return undefined;
-  return { collapsedToolResultLines };
+  const collapsedToolResultMaxChars = mergeCollapsedToolResultMaxCharsConfig(base?.collapsedToolResultMaxChars, override?.collapsedToolResultMaxChars);
+  if (collapsedToolResultLines === undefined && collapsedToolResultMaxChars === undefined) return undefined;
+  return {
+    ...(collapsedToolResultLines !== undefined ? { collapsedToolResultLines } : {}),
+    ...(collapsedToolResultMaxChars !== undefined ? { collapsedToolResultMaxChars } : {}),
+  };
 }
 
 function mergeYolo(base: YoloMode | undefined, override: YoloMode | undefined): YoloMode | undefined {
