@@ -183,7 +183,7 @@ describe("mcp support", () => {
     await writeProjectSettings(root, {
       render: {
         collapsedToolResultMaxChars: {
-          echo: 20,
+          "e*o": 20,
         },
       },
       mcp: {

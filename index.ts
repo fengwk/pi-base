@@ -16,7 +16,7 @@ import { applyUnifiedOutputTruncation } from "./src/tool-output.js";
 import { findSchema } from "./src/schemas/find.js";
 import { inferToolResultIsError } from "./src/tool-result.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./src/tool-prompt.js";
-import { formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./src/render.js";
+import { formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, resolveToolPatternValue, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./src/render.js";
 import { applyContextCompressionToMessages } from "./src/context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./src/anthropic-cache-boundary.js";
 import { registerResumeAllCommand } from "./src/resume-all.js";
@@ -67,17 +67,13 @@ function createResolverFactory(loadSettings: (cwd: string) => LoadedPiBaseSettin
 function createCollapsedResultLinesResolver(loadSettings: (cwd: string) => LoadedPiBaseSettings): CollapsedResultLinesResolver {
   return (cwd: string, toolName: string) => {
     const config = loadSettings(cwd).settings.render?.collapsedToolResultLines;
-    if (config === undefined) return undefined;
-    if (typeof config === "number") return config;
-    return config[toolName] ?? config["*"];
+    return resolveToolPatternValue(config, toolName);
   };
 }
 function createCollapsedResultMaxCharsResolver(loadSettings: (cwd: string) => LoadedPiBaseSettings): CollapsedResultMaxCharsResolver {
   return (cwd: string, toolName: string) => {
     const config = loadSettings(cwd).settings.render?.collapsedToolResultMaxChars;
-    if (config === undefined) return undefined;
-    if (typeof config === "number") return config;
-    return config[toolName] ?? config["*"];
+    return resolveToolPatternValue(config, toolName);
   };
 }
 

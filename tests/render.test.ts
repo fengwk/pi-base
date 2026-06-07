@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderRawResult } from "../src/render.js";
+import { renderRawResult, resolveToolPatternValue } from "../src/render.js";
 
 function render(component: any): string {
   return component.render(200).join("\n");
@@ -81,5 +81,20 @@ describe("render helpers", () => {
     expect(rendered).toContain("<success>Created src/demo.ts.</success>");
     expect(rendered).toContain("<warning>Review the written file content below. Lines prefixed with digits carry LINE#HASH anchors for follow-up edits.</warning>");
     expect(rendered).toContain("<muted>1#abcd|</muted><toolOutput>hello</toolOutput>");
+  });
+  it("resolves wildcard tool config patterns by specificity", () => {
+    const config = {
+      "*": 5,
+      "lsp_*": 4,
+      "*_search": 3,
+      "web_*": 2,
+      "web_search": 1,
+    };
+
+    expect(resolveToolPatternValue(config, "web_search")).toBe(1);
+    expect(resolveToolPatternValue(config, "web_lookup")).toBe(2);
+    expect(resolveToolPatternValue(config, "image_search")).toBe(3);
+    expect(resolveToolPatternValue(config, "lsp_diagnostics")).toBe(4);
+    expect(resolveToolPatternValue(config, "unknown_tool")).toBe(5);
   });
 });

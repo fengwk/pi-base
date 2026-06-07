@@ -164,6 +164,33 @@ describe("tool renderers", () => {
       }
     });
   });
+  it("applies wildcard collapsed result line overrides", async () => {
+    await withTempGlobalPiBaseConfig({ render: { collapsedToolResultLines: { "lsp_*": 1, "*_diagnostics": 2, "*": 4 } } }, async (root) => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const output = "line-1\nline-2\nline-3\nline-4";
+
+      const diagnosticsRendered = render(registry.getTool("lsp_diagnostics").renderResult(
+        { content: [{ type: "text", text: output }] },
+        { expanded: false, isPartial: false },
+        {} as any,
+        { lastComponent: undefined, cwd: root },
+      ));
+      expect(diagnosticsRendered).toContain("line-1");
+      expect(diagnosticsRendered).not.toContain("line-3");
+      expect(diagnosticsRendered).toContain("2 more lines");
+
+      const symbolsRendered = render(registry.getTool("lsp_workspace_symbols").renderResult(
+        { content: [{ type: "text", text: output }] },
+        { expanded: false, isPartial: false },
+        {} as any,
+        { lastComponent: undefined, cwd: root },
+      ));
+      expect(symbolsRendered).toContain("line-1");
+      expect(symbolsRendered).not.toContain("line-2");
+      expect(symbolsRendered).toContain("3 more lines");
+    });
+  });
 
   it("does not apply zero-line write result preview config to write call rendering", async () => {
     await withTempGlobalPiBaseConfig({ render: { collapsedToolResultLines: { write: 0 } } }, async (root) => {

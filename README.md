@@ -55,11 +55,12 @@ project JSON > global JSON > built-in defaults
 `render.collapsedToolResultLines` accepts either:
 
 - a single non-negative integer, applied to every tool result, or
-- an object keyed by tool name, with optional `"*"` as the fallback default.
+- an object keyed by exact tool name or `*` wildcard pattern, with optional `"*"` as the fallback default.
 
 - `0` hides a collapsed result body entirely and shows only the expand hint.
 - When omitted, `pi-base` keeps the existing per-tool defaults (`read=10`, `grep=15`, `find=20`, `bash=20`, others use their current renderer defaults).
 - This only affects **tool result** folding, not tool call previews.
+- Exact tool names win over wildcard patterns. When multiple wildcard patterns match, the most specific pattern wins.
 
 ```json
 {
@@ -68,7 +69,8 @@ project JSON > global JSON > built-in defaults
       "*": 20,
       "read": 10,
       "grep": 15,
-      "write": 10,
+      "lsp_*": 5,
+      "mcp_*": 8,
       "bash": 0
     }
   }
@@ -79,9 +81,10 @@ project JSON > global JSON > built-in defaults
 `render.collapsedToolResultMaxChars` accepts either:
 
 - a single non-negative integer, applied to every tool result, or
-- an object keyed by tool name, with optional `"*"` as the fallback default.
+- an object keyed by exact tool name or `*` wildcard pattern, with optional `"*"` as the fallback default.
 
 This limit only affects the **collapsed** result preview. Expanded tool results still render the full content. It is useful for very large single-line outputs or huge JSON payloads.
+Wildcard precedence matches `collapsedToolResultLines`: exact tool names win first, then the most specific wildcard pattern, then `"*"`.
 
 ```json
 {
@@ -89,7 +92,8 @@ This limit only affects the **collapsed** result preview. Expanded tool results 
     "collapsedToolResultMaxChars": {
       "*": 10000,
       "bash": 4000,
-      "echo": 2000
+      "*_search": 2000,
+      "web_search": 1200
     }
   }
 }

@@ -70,6 +70,32 @@ export function styleWarning(theme: any, text: string): string {
 
 export type CollapsedResultLinesResolver = (cwd: string, toolName: string) => number | undefined;
 export type CollapsedResultMaxCharsResolver = (cwd: string, toolName: string) => number | undefined;
+export function resolveToolPatternValue(
+  config: number | Record<string, number> | undefined,
+  toolName: string,
+): number | undefined {
+  if (config === undefined) return undefined;
+  if (typeof config === "number") return config;
+  if (Object.prototype.hasOwnProperty.call(config, toolName)) {
+    return config[toolName];
+  }
+
+  let bestPatternValue: number | undefined;
+  let bestSpecificity: [number, number, number] | undefined;
+  for (const [pattern, value] of Object.entries(config)) {
+    if (pattern === "*" || !pattern.includes("*")) continue;
+    if (!matchesToolPattern(pattern, toolName)) continue;
+
+    const specificity = getToolPatternSpecificity(pattern);
+    if (!bestSpecificity || compareToolPatternSpecificity(specificity, bestSpecificity) > 0) {
+      bestSpecificity = specificity;
+      bestPatternValue = value;
+    }
+  }
+
+  return bestPatternValue ?? config["*"];
+}
+
 
 export function resolveCollapsedResultLines(
   toolName: string,
@@ -89,6 +115,30 @@ export function resolveCollapsedResultMaxChars(
   const configured = getCollapsedResultMaxChars?.(context?.cwd ?? process.cwd(), toolName);
   return configured ?? defaultMaxChars;
 }
+function matchesToolPattern(pattern: string, toolName: string): boolean {
+  const regex = new RegExp(`^${escapeToolPatternRegex(pattern)}$`);
+  return regex.test(toolName);
+}
+
+function escapeToolPatternRegex(pattern: string): string {
+  return pattern.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*");
+}
+
+function getToolPatternSpecificity(pattern: string): [number, number, number] {
+  const wildcardCount = (pattern.match(/\*/g) ?? []).length;
+  const literalLength = pattern.length - wildcardCount;
+  return [literalLength, -wildcardCount, pattern.length];
+}
+
+function compareToolPatternSpecificity(
+  left: [number, number, number],
+  right: [number, number, number],
+): number {
+  if (left[0] !== right[0]) return left[0] - right[0];
+  if (left[1] !== right[1]) return left[1] - right[1];
+  return left[2] - right[2];
+}
+
 
 export function renderCallText(textValue: string, lastComponent?: unknown) {
   const text = (lastComponent as Text | undefined) ?? new Text("", 0, 0);
