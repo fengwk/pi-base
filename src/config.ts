@@ -22,6 +22,13 @@ export interface RenderConfig {
   collapsedToolResultMaxChars?: CollapsedToolResultMaxCharsConfig;
 }
 
+export interface NotifyConfig {
+  enabled?: boolean;
+  command?: string[];
+  permissionAsked?: boolean;
+  agentEnd?: boolean;
+}
+
 
 export interface ContextCompressionToolConfig {
   enable?: boolean;
@@ -40,6 +47,7 @@ export interface PiBaseSettings {
   lsp?: LspDiscoveryConfig;
   permission?: PermissionConfig;
   render?: RenderConfig;
+  notify?: NotifyConfig;
   yolo?: YoloMode;
   mcp?: McpConfig;
   contextCompression?: ContextCompressionConfig;
@@ -254,6 +262,18 @@ function sanitizeRenderConfig(value: unknown): RenderConfig | undefined {
   }
   return Object.keys(output).length > 0 ? output : undefined;
 }
+function sanitizeNotifyConfig(value: unknown): NotifyConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("notify must be an object.");
+  }
+  const input = value as Record<string, unknown>;
+  const output: NotifyConfig = {};
+  if (input.enabled !== undefined) output.enabled = sanitizeOptionalBoolean(input.enabled, "notify.enabled");
+  if (input.command !== undefined) output.command = requireNonEmptyStringArray(input.command, "notify.command");
+  if (input.permissionAsked !== undefined) output.permissionAsked = sanitizeOptionalBoolean(input.permissionAsked, "notify.permissionAsked");
+  if (input.agentEnd !== undefined) output.agentEnd = sanitizeOptionalBoolean(input.agentEnd, "notify.agentEnd");
+  return Object.keys(output).length > 0 ? output : undefined;
+}
 
 function sanitizePositiveInteger(value: unknown, path: string): number {
   if (!Number.isInteger(value) || Number(value) < 1) {
@@ -388,6 +408,7 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
     lsp: input.lsp === undefined ? undefined : sanitizeLspDiscoveryConfig(input.lsp),
     permission: input.permission === undefined ? undefined : sanitizePermissionConfig(input.permission),
     render: input.render === undefined ? undefined : sanitizeRenderConfig(input.render),
+    notify: input.notify === undefined ? undefined : sanitizeNotifyConfig(input.notify),
     yolo: input.yolo === undefined ? undefined : sanitizeYoloMode(input.yolo),
     mcp: input.mcp === undefined ? undefined : sanitizeMcpConfig(input.mcp),
     contextCompression: input.contextCompression === undefined ? undefined : sanitizeContextCompressionConfig(input.contextCompression),
@@ -445,11 +466,20 @@ function normalizeMcpConfigPaths(config: McpConfig | undefined): McpConfig | und
     })),
   };
 }
+function normalizeNotifyConfigPaths(config: NotifyConfig | undefined): NotifyConfig | undefined {
+  if (!config?.command) return config;
+  const [command0, ...rest] = config.command;
+  return {
+    ...config,
+    command: [normalizeCommandExecutable(command0, "notify"), ...rest],
+  };
+}
 function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
   return {
     ...(settings.lsp ? { lsp: normalizeLspConfigPaths(settings.lsp) } : {}),
     ...(settings.permission ? { permission: settings.permission } : {}),
     ...(settings.render ? { render: settings.render } : {}),
+    ...(settings.notify ? { notify: normalizeNotifyConfigPaths(settings.notify) } : {}),
     ...(settings.yolo !== undefined ? { yolo: settings.yolo } : {}),
     ...(settings.mcp ? { mcp: normalizeMcpConfigPaths(settings.mcp) } : {}),
     ...(settings.contextCompression ? { contextCompression: settings.contextCompression } : {}),
@@ -493,6 +523,14 @@ function mergeRender(base: RenderConfig | undefined, override: RenderConfig | un
   return {
     ...(collapsedToolResultLines !== undefined ? { collapsedToolResultLines } : {}),
     ...(collapsedToolResultMaxChars !== undefined ? { collapsedToolResultMaxChars } : {}),
+  };
+}
+function mergeNotify(base: NotifyConfig | undefined, override: NotifyConfig | undefined): NotifyConfig | undefined {
+  if (!base && !override) return undefined;
+  return {
+    ...(base ?? {}),
+    ...(override ?? {}),
+    ...(override?.command !== undefined ? { command: [...override.command] } : base?.command !== undefined ? { command: [...base.command] } : {}),
   };
 }
 
@@ -552,6 +590,7 @@ export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSet
       lsp: mergeLsp(globalSettings.lsp, projectSettings.lsp),
       permission: mergePermission(globalSettings.permission, projectSettings.permission),
       render: mergeRender(globalSettings.render, projectSettings.render),
+      notify: mergeNotify(globalSettings.notify, projectSettings.notify),
       yolo: mergeYolo(globalSettings.yolo, projectSettings.yolo),
       mcp: mergeMcp(globalSettings.mcp, projectSettings.mcp),
       contextCompression: mergeContextCompression(globalSettings.contextCompression, projectSettings.contextCompression),

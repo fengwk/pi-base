@@ -179,6 +179,35 @@ describe("pi-base config", () => {
     });
   });
 
+  it("loads notify settings and expands HOME shortcuts in notify commands", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async (globalPath) => {
+      await mkdir(dirname(globalPath), { recursive: true });
+      await writeFile(globalPath, JSON.stringify({
+        notify: {
+          enabled: true,
+          permissionAsked: true,
+          agentEnd: false,
+          command: ["$HOME/bin/global-notify.sh"],
+        },
+      }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        notify: {
+          agentEnd: true,
+          command: ["~/bin/project-notify.sh"],
+        },
+      }), "utf8");
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.notify).toEqual({
+        enabled: true,
+        permissionAsked: true,
+        agentEnd: true,
+        command: [join(homedir(), "bin", "project-notify.sh")],
+      });
+    });
+  });
   it("loads default yolo flag from unified pi-base config and lets project settings override it", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");

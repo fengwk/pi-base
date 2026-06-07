@@ -227,10 +227,14 @@ export function registerPermissionGuard(
   options: {
     loadSettings?: (cwd: string) => LoadedPiBaseSettings;
     toggleYolo?: (cwd: string) => boolean;
+    onPermissionAsked?: (input: { ctx: ExtensionContext }) => Promise<void>;
+    onPermissionRejected?: (input: { ctx: ExtensionContext }) => void;
   } = {},
 ): void {
   const loadSettings = options.loadSettings ?? loadRuntimePiBaseSettings;
   const toggleYolo = options.toggleYolo ?? toggleRuntimeYolo;
+  const onPermissionAsked = options.onPermissionAsked;
+  const onPermissionRejected = options.onPermissionRejected;
 
   pi.registerCommand("yolo", {
     description: "Toggle yolo mode (bypass permission checks)",
@@ -271,8 +275,10 @@ export function registerPermissionGuard(
       return { block: true, reason: buildAskWithoutUiReason(event.toolName, loaded) };
     }
 
+    await onPermissionAsked?.({ ctx });
     const choice = await ctx.ui.select(buildPrompt(event.toolName, event.input), [ALLOW_LABEL, DENY_LABEL]);
     if (choice === ALLOW_LABEL) return undefined;
+    onPermissionRejected?.({ ctx });
     ctx.abort();
     return { block: true, reason: buildRejectedReason(event.toolName) };
   });

@@ -30,6 +30,7 @@
 - When a tool result indicates a failure (text starts with `Error:` / `Edit failed` / `Command exited with code N`), the global `tool_result` hook repairs the missing `isError` flag so downstream code (session logs, renderers, orchestration) can react correctly.
 - LSP servers are **fully user-defined** in the unified `pi-base` config under `lsp.servers`. `pi-base` ships no built-in server table.
 - MCP servers are configured in the same unified `pi-base` config under `mcp.servers`. `pi-base` connects to them asynchronously, auto-registers their tools, shows `MCP: x/y servers` in the second footer line, and exposes `/mcp-status` for a tree view of server/tool state.
+- `notify` can mirror OpenCode-style desktop notifications for permission prompts and completed agent turns. By default it uses `$HOME/.config/opencode/scripts/notify.sh` when that script exists, and otherwise stays silent.
 
 ## Configuration
 
@@ -137,6 +138,26 @@ Placeholders are intentionally short and unambiguous:
 
 Context compression does not add session-history messages or a persistent UI marker; the configured behavior is driven entirely by `pi-base.json`.
 
+### Example: notifications
+
+`notify` controls desktop notifications emitted by `pi-base` itself.
+
+- When omitted, `pi-base` tries the default OpenCode notifier script at `$HOME/.config/opencode/scripts/notify.sh`.
+- Set `enabled: false` to disable notifications completely.
+- `permissionAsked` controls approval-request notifications.
+- `agentEnd` controls completion notifications emitted on `agent_end`.
+- `command` can override the notifier executable and arguments.
+
+```json
+{
+  "notify": {
+    "enabled": true,
+    "permissionAsked": true,
+    "agentEnd": true,
+    "command": ["$HOME/.config/opencode/scripts/notify.sh"]
+  }
+}
+```
 ### Example: permission guard
 
 `permission` follows an OpenCode-style `allow` / `ask` / `deny` model. Put it in the unified `pi-base` config file (`~/.pi/agent/pi-base.json` or `.pi/pi-base.json`). Top-level strings apply to all tools, and per-tool objects can override them with ordered wildcard rules (`*` and `?`, last match wins).

@@ -23,8 +23,10 @@ import { registerResumeAllCommand } from "./src/resume-all.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./src/timeout.js";
 import { resolveToolWorkdir } from "./src/path-utils.js";
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./src/mcp/index.js";
+import { registerNotifySupport, type RegisterNotifySupportOptions } from "./src/notify.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./src/lsp/discovery.js";
-export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type YoloMode, type ContextCompressionConfig } from "./src/config.js";
+export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig } from "./src/config.js";
+export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./src/notify.js";
 export type { LocalMcpServerConfig, McpConfig, McpRemoteTransport, McpServerConfig, McpSnapshot, McpToolSnapshot, RemoteMcpServerConfig } from "./src/mcp/types.js";
 
 const BASE_TOOL_NAMES = [
@@ -41,6 +43,7 @@ const BASE_TOOL_NAMES = [
 ] as const;
 export interface PiBaseExtensionOptions {
   mcp?: RegisterMcpSupportOptions;
+  notify?: RegisterNotifySupportOptions;
 }
 
 
@@ -215,13 +218,22 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getCollapsedResultMaxChars,
   });
   registerLspTools(pi, { resolverFactory, getCollapsedResultLines, getCollapsedResultMaxChars });
+  const notifyHooks = registerNotifySupport(pi, {
+    loadSettings,
+    ...options.notify,
+  });
   registerMcpSupport(pi, {
     loadSettings,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
     ...options.mcp,
   });
-  registerPermissionGuard(pi, { loadSettings, toggleYolo: toggleRuntimeYolo });
+  registerPermissionGuard(pi, {
+    loadSettings,
+    toggleYolo: toggleRuntimeYolo,
+    onPermissionAsked: notifyHooks.onPermissionAsked,
+    onPermissionRejected: notifyHooks.onPermissionRejected,
+  });
   registerResumeAllCommand(pi);
 
 
@@ -257,10 +269,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     if (pi.getActiveTools().length === 0) {
       pi.setActiveTools([...BASE_TOOL_NAMES]);
     }
-  });
-  registerMcpSupport(pi, {
-    loadSettings,
-    ...options.mcp,
   });
 
   pi.on("before_agent_start", async (event) => {
