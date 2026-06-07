@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import type { LoadedPiBaseSettings, NotifyConfig } from "./config.js";
 
-const DEFAULT_NOTIFY_COMMAND = [join(homedir(), ".config", "opencode", "scripts", "notify.sh")];
+const DEFAULT_NOTIFY_COMMAND = [join(homedir(), ".pi", "agent", "scripts", "notify.sh")];
 const SUPPRESS_COMPLETED_MS = 2_000;
 
 export type PiBaseNotifyKind = "permission.requested" | "session.completed";
@@ -85,12 +85,12 @@ function createShellNotificationSender(
       stdio: "ignore",
       env: {
         ...process.env,
-        OPENCODE_NOTIFY_KIND: payload.kind,
-        OPENCODE_NOTIFY_PROJECT: payload.projectName,
-        OPENCODE_NOTIFY_SESSION_ID: payload.sessionID,
-        OPENCODE_NOTIFY_SESSION_TITLE: payload.sessionTitle,
-        OPENCODE_NOTIFY_TMUX_PANE: process.env.TMUX_PANE ?? "",
-        OPENCODE_NOTIFY_ALACRITTY_WINDOW_ID: process.env.ALACRITTY_WINDOW_ID ?? "",
+        PI_NOTIFY_KIND: payload.kind,
+        PI_NOTIFY_PROJECT: payload.projectName,
+        PI_NOTIFY_SESSION_ID: payload.sessionID,
+        PI_NOTIFY_SESSION_TITLE: payload.sessionTitle,
+        PI_NOTIFY_TMUX_PANE: process.env.TMUX_PANE ?? "",
+        PI_NOTIFY_ALACRITTY_WINDOW_ID: process.env.ALACRITTY_WINDOW_ID ?? "",
       },
     });
     child.on("error", () => undefined);

@@ -142,7 +142,7 @@ Context compression does not add session-history messages or a persistent UI mar
 
 `notify` controls desktop notifications emitted by `pi-base` itself.
 
-- When omitted, `pi-base` tries the default OpenCode notifier script at `$HOME/.config/opencode/scripts/notify.sh`.
+- When omitted, `pi-base` tries the default Pi notifier script at `$HOME/.pi/agent/scripts/notify.sh`.
 - Set `enabled: false` to disable notifications completely.
 - `permissionAsked` controls approval-request notifications.
 - `agentEnd` controls completion notifications emitted on `agent_end`.
@@ -154,7 +154,7 @@ Context compression does not add session-history messages or a persistent UI mar
     "enabled": true,
     "permissionAsked": true,
     "agentEnd": true,
-    "command": ["$HOME/.config/opencode/scripts/notify.sh"]
+    "command": ["$HOME/.pi/agent/scripts/notify.sh"]
   }
 }
 ```
