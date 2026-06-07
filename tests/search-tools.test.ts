@@ -176,6 +176,38 @@ describe("grep", () => {
     expect(result.isError).not.toBe(true);
     expect(seenParams.glob).toBe("**/*.ts");
   });
+  it("passes multiline to builtin grep when a custom factory is provided", async () => {
+    const registry = createToolRegistry();
+    let seenParams: any;
+    registerGrepTool(registry.pi as any, {
+      createBuiltInGrepTool: () => ({
+        execute: async (_id: string, params: any) => {
+          seenParams = params;
+          return { content: [{ type: "text", text: "example.ts:1: alpha" }] };
+        },
+      }),
+    });
+
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "alpha\\nbeta", path: "src", multiline: true }, undefined, undefined, { cwd: process.cwd() });
+
+    expect(result.isError).not.toBe(true);
+    expect(seenParams.multiline).toBe(true);
+  });
+
+  it("supports multiline matches and prefixes every matched line", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "prefix\nalpha\nbeta\nsuffix\n");
+    const registry = createToolRegistry();
+    registerGrepTool(registry.pi as any);
+
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "alpha\\nbeta", path: "src", multiline: true }, undefined, undefined, { cwd: root });
+    const text = getText(result);
+
+    expect(result.isError).not.toBe(true);
+    expect(text).toContain("example.ts:2: alpha");
+    expect(text).toContain("example.ts:3: beta");
+    expect(text.split("\n")).not.toContain("beta");
+  });
 });
 
 describe("find (delegated to built-in pi-coding-agent)", () => {

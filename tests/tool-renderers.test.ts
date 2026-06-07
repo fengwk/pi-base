@@ -187,7 +187,7 @@ describe("tool renderers", () => {
 
     const expectations = [
       { name: "read", args: { path: "/home/fengwk/proj/pi-base/src/edit.ts", workdir: ".", offset: 150, limit: 110 }, expected: "Read ~/proj/pi-base/src/edit.ts in . [offset=150, limit=110]" },
-      { name: "grep", args: { pattern: "demo", path: "src", workdir: "packages/web", include: "*.ts" }, expected: "grep \"demo\" in src from packages/web [include=*.ts]" },
+      { name: "grep", args: { pattern: "demo", path: "src", workdir: "packages/web", include: "*.ts", multiline: true }, expected: "grep \"demo\" in src from packages/web [include=*.ts, multiline=true]" },
       { name: "find", args: { pattern: "*.ts", path: "src", workdir: "packages/web" }, expected: "find *.ts in src from packages/web" },
       { name: "bash", args: { command: "npm test", workdir: "packages/web", timeout_seconds: 5 }, expected: "$ npm test (timeout 5s) in packages/web" },
       { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" }, expected: "write src/example.ts in services/api" },
