@@ -1,11 +1,11 @@
 import type { AgentEndEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
-import { homedir } from "node:os";
+import { basename, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { LoadedPiBaseSettings, NotifyConfig } from "./config.js";
 
-const DEFAULT_NOTIFY_COMMAND = [join(homedir(), ".pi", "agent", "scripts", "notify.sh")];
+const DEFAULT_NOTIFY_COMMAND = [resolve(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "notify.sh")];
 const SUPPRESS_COMPLETED_MS = 2_000;
 
 export type PiBaseNotifyKind = "permission.requested" | "session.completed";
@@ -73,11 +73,11 @@ function createShellNotificationSender(
 ): (payload: PiBaseNotifyPayload, ctx: ExtensionContext) => Promise<void> {
   return async (payload, ctx) => {
     const notify = loadSettings?.(ctx.cwd).settings.notify;
-    if (!notify || notify.enabled === false) return;
+    if (!notify) return;
 
-    const command = getNotifyCommand(notify);
+    const command = getNotifyCommand();
     if (command.length === 0) return;
-    if ((command[0]!.includes("/") || command[0]!.includes("\\")) && !existsSync(command[0]!)) return;
+    if (!existsSync(command[0]!)) return;
 
     const [executable, ...args] = command;
     const child = spawn(executable!, args, {
@@ -98,16 +98,16 @@ function createShellNotificationSender(
   };
 }
 
-function getNotifyCommand(config: NotifyConfig | undefined): string[] {
-  return config?.command?.length ? [...config.command] : DEFAULT_NOTIFY_COMMAND;
+function getNotifyCommand(): string[] {
+  return [...DEFAULT_NOTIFY_COMMAND];
 }
 
 function shouldNotifyForPermissionAsk(config: NotifyConfig | undefined, ctx: ExtensionContext): boolean {
-  return ctx.hasUI && config?.enabled === true && config.permissionAsked !== false;
+  return ctx.hasUI && config?.permissionAsked === true;
 }
 
 function shouldNotifyForAgentEnd(config: NotifyConfig | undefined, ctx: ExtensionContext, _event: AgentEndEvent): boolean {
-  return ctx.hasUI && config?.enabled === true && config.agentEnd !== false;
+  return ctx.hasUI && config?.agentEnd === true;
 }
 
 function buildPayload(kind: PiBaseNotifyKind, ctx: ExtensionContext): PiBaseNotifyPayload {

@@ -33,7 +33,7 @@ describe("notify support", () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
       permission: { write: "ask" },
-      notify: { enabled: true, permissionAsked: true, agentEnd: false },
+      notify: { permissionAsked: true, agentEnd: false },
     });
 
     const payloads: PiBaseNotifyPayload[] = [];
@@ -117,7 +117,7 @@ describe("notify support", () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
       permission: { write: "ask" },
-      notify: { enabled: true, permissionAsked: true, agentEnd: true },
+      notify: { permissionAsked: true, agentEnd: true },
     });
 
     const payloads: PiBaseNotifyPayload[] = [];

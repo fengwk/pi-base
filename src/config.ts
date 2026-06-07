@@ -23,8 +23,6 @@ export interface RenderConfig {
 }
 
 export interface NotifyConfig {
-  enabled?: boolean;
-  command?: string[];
   permissionAsked?: boolean;
   agentEnd?: boolean;
 }
@@ -268,8 +266,6 @@ function sanitizeNotifyConfig(value: unknown): NotifyConfig | undefined {
   }
   const input = value as Record<string, unknown>;
   const output: NotifyConfig = {};
-  if (input.enabled !== undefined) output.enabled = sanitizeOptionalBoolean(input.enabled, "notify.enabled");
-  if (input.command !== undefined) output.command = requireNonEmptyStringArray(input.command, "notify.command");
   if (input.permissionAsked !== undefined) output.permissionAsked = sanitizeOptionalBoolean(input.permissionAsked, "notify.permissionAsked");
   if (input.agentEnd !== undefined) output.agentEnd = sanitizeOptionalBoolean(input.agentEnd, "notify.agentEnd");
   return Object.keys(output).length > 0 ? output : undefined;
@@ -466,20 +462,12 @@ function normalizeMcpConfigPaths(config: McpConfig | undefined): McpConfig | und
     })),
   };
 }
-function normalizeNotifyConfigPaths(config: NotifyConfig | undefined): NotifyConfig | undefined {
-  if (!config?.command) return config;
-  const [command0, ...rest] = config.command;
-  return {
-    ...config,
-    command: [normalizeCommandExecutable(command0, "notify"), ...rest],
-  };
-}
 function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
   return {
     ...(settings.lsp ? { lsp: normalizeLspConfigPaths(settings.lsp) } : {}),
     ...(settings.permission ? { permission: settings.permission } : {}),
     ...(settings.render ? { render: settings.render } : {}),
-    ...(settings.notify ? { notify: normalizeNotifyConfigPaths(settings.notify) } : {}),
+    ...(settings.notify ? { notify: settings.notify } : {}),
     ...(settings.yolo !== undefined ? { yolo: settings.yolo } : {}),
     ...(settings.mcp ? { mcp: normalizeMcpConfigPaths(settings.mcp) } : {}),
     ...(settings.contextCompression ? { contextCompression: settings.contextCompression } : {}),
@@ -530,7 +518,6 @@ function mergeNotify(base: NotifyConfig | undefined, override: NotifyConfig | un
   return {
     ...(base ?? {}),
     ...(override ?? {}),
-    ...(override?.command !== undefined ? { command: [...override.command] } : base?.command !== undefined ? { command: [...base.command] } : {}),
   };
 }
 

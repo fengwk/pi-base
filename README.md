@@ -143,19 +143,16 @@ Context compression does not add session-history messages or a persistent UI mar
 `notify` controls desktop notifications emitted by `pi-base` itself.
 
 - When omitted, notifications stay disabled.
-- Set `enabled: true` to opt in.
-- When `enabled` is `true` and `command` is omitted, `pi-base` uses the default Pi notifier script at `$HOME/.pi/agent/scripts/notify.sh`.
+- Notifications are enabled per event: set `permissionAsked` and/or `agentEnd` to `true`.
+- `pi-base` uses its bundled Pi notifier script from `scripts/notify.sh` automatically; no command path is required in config.
 - `permissionAsked` controls approval-request notifications.
 - `agentEnd` controls completion notifications emitted on `agent_end`.
-- `command` can override the notifier executable and arguments.
 
 ```json
 {
   "notify": {
-    "enabled": true,
     "permissionAsked": true,
-    "agentEnd": true,
-    "command": ["$HOME/.pi/agent/scripts/notify.sh"]
+    "agentEnd": true
   }
 }
 ```
