@@ -29,6 +29,7 @@
 - Tool output is wrapped by a global truncation layer (`MAX_LINES=2000`, `MAX_BYTES=50KB`); full output is saved under `os.tmpdir()/pi-base-truncation/` and re-exposed via `details.truncation`.
 - When a tool result indicates a failure (text starts with `Error:` / `Edit failed` / `Command exited with code N`), the global `tool_result` hook repairs the missing `isError` flag so downstream code (session logs, renderers, orchestration) can react correctly.
 - LSP servers are **fully user-defined** in the unified `pi-base` config under `lsp.servers`. `pi-base` ships no built-in server table.
+- MCP servers are configured in the same unified `pi-base` config under `mcp.servers`. `pi-base` connects to them asynchronously, auto-registers their tools, shows `MCP: x/y servers` in the second footer line, and exposes `/mcp-status` for a tree view of server/tool state.
 
 ## Configuration
 
@@ -37,7 +38,7 @@
 - Global: `~/.pi/agent/pi-base.json`
 - Project: `<repo>/.pi/pi-base.json`
 
-The same file contains LSP, permission, render preview config, context compression config, and optional default YOLO mode.
+The same file contains LSP, permission, render preview config, MCP config, context compression config, and optional default YOLO mode.
 
 For isolated tests or temporary runs, `PI_BASE_GLOBAL_SETTINGS_PATH` can override the global `pi-base` config path.
 
@@ -152,6 +153,47 @@ Set `yolo` to a boolean:
 
 When omitted, the default is `false`. When present, it seeds the in-memory YOLO mode when pi-base first loads the workspace settings. `/yolo` changes only the current Pi process state; it is not persisted into session history or written back to `pi-base.json`.
 
+### Example: MCP servers
+
+`mcp.servers` defines MCP connections by server key. `toolPrefix` defaults to the server key; set it to `""` to expose the raw MCP tool names.
+
+Remote servers must declare their transport explicitly. Supported values are `"websocket"`, `"sse"`, and `"streamable-http"`.
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "mm": {
+        "type": "local",
+        "command": ["my-mcp", "serve"],
+        "env": {
+          "MINIMAX_API_HOST": "https://api.minimaxi.com",
+          "MINIMAX_API_KEY": "${MINIMAX_API_KEY}"
+        },
+        "toolPrefix": "",
+      },
+      "docs": {
+        "type": "remote",
+        "transport": "streamable-http",
+        "url": "https://example.com/mcp",
+        "headers": {
+          "Authorization": "Bearer <token>"
+        },
+        "toolPrefix": "docs"
+      }
+    }
+  }
+}
+```
+
+Behavior notes:
+
+- MCP startup is asynchronous and does not block session startup.
+- `toolPrefix: ""` keeps the original MCP tool names.
+- When omitted, `toolPrefix` falls back to the server key, for example `mm_scrape`.
+- `env` and `headers` values support exact `$VAR` and `${VAR}` environment variable references. Literal strings remain unchanged.
+- Connection summary is shown in the second footer line as `MCP: connected/enabled servers`.
+- `/mcp-status` prints the full server/tool tree, including reconnect state and name conflicts.
 ## Slash commands
 
 - `/yolo`
@@ -160,6 +202,8 @@ When omitted, the default is `false`. When present, it seeds the in-memory YOLO 
   - Opens a picker for sessions across all project directories known to Pi, unlike the built-in `/resume` flow that stays focused on the current project/session directory.
   - In TUI mode it opens directly in the all-project view with recent sorting.
   - Takes no arguments.
+- `/mcp-status`
+  - Prints the current MCP server summary and a tree of discovered tools, reconnect state, and any name conflicts.
 
 ### Example: LSP servers for a Java + Go + TS + Python workspace
 

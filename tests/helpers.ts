@@ -35,6 +35,8 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
   const events = new Map<string, Function[]>();
   const entries: any[] = [];
   const notifications: Array<{ message: string; variant: string }> = [];
+  const messages: any[] = [];
+  const messageRenderers = new Map<string, any>();
   const statuses = new Map<string, string | undefined>();
   let activeTools: string[] = [];
   let defaultHasUI = options.hasUI ?? true;
@@ -70,7 +72,11 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
         uiOverrides.notify?.(message, variant);
       },
       setStatus(key: string, text: string | undefined) {
-        statuses.set(key, text);
+        if (text === undefined) {
+          statuses.delete(key);
+        } else {
+          statuses.set(key, text);
+        }
         uiOverrides.setStatus?.(key, text);
       },
       async select(title: string, items: string[]) {
@@ -245,6 +251,9 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       getActiveTools() {
         return activeTools;
       },
+      getAllTools() {
+        return Array.from(tools.values());
+      },
       getThinkingLevel() {
         return thinkingLevel;
       },
@@ -253,6 +262,12 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
         list.push(handler);
         events.set(name, list);
       },
+      registerMessageRenderer(customType: string, renderer: any) {
+        messageRenderers.set(customType, renderer);
+      },
+      sendMessage(message: any) {
+        messages.push(message);
+      }
     },
     getTool(name: string) {
       const tool = tools.get(name);
@@ -280,6 +295,12 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
     },
     getNotifications() {
       return [...notifications];
+    },
+    getMessages() {
+      return [...messages];
+    },
+    getMessageRenderer(customType: string) {
+      return messageRenderers.get(customType);
     },
     setUI(overrides: MockUiOverrides) {
       uiOverrides = { ...uiOverrides, ...overrides };

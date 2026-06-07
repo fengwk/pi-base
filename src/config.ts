@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LspDiscoveryConfig, LspServerEntry } from "./lsp/discovery.js";
+import type { LocalMcpServerConfig, McpConfig, McpServerConfig, RemoteMcpServerConfig } from "./mcp/types.js";
 import { expandHomePath, isHomeShortcutPath } from "./path-utils.js";
 
 export type PermissionAction = "allow" | "ask" | "deny";
@@ -38,6 +39,7 @@ export interface PiBaseSettings {
   permission?: PermissionConfig;
   render?: RenderConfig;
   yolo?: YoloMode;
+  mcp?: McpConfig;
   contextCompression?: ContextCompressionConfig;
 }
 
@@ -72,6 +74,22 @@ function isStringArray(value: unknown): value is string[] {
 function requireStringArray(value: unknown, path: string): string[] {
   if (!isStringArray(value)) throw new Error(`${path} must be an array of strings.`);
   return value;
+}
+
+function requireNonEmptyStringArray(value: unknown, path: string): string[] {
+  const output = requireStringArray(value, path);
+  if (output.length === 0) throw new Error(`${path} must contain at least one entry.`);
+  return output;
+}
+
+function requireStringRecord(value: unknown, path: string): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object keyed by string.`);
+  const output: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry !== "string") throw new Error(`${path}.${key} must be a string.`);
+    output[key] = entry;
+  }
+  return output;
 }
 
 function sanitizeLspServerEntry(value: unknown, path: string): LspServerEntry {
@@ -248,21 +266,92 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
 }
 
 
+function sanitizeMcpLocalServerConfig(value: unknown, path: string): LocalMcpServerConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
+  const input = value as Record<string, unknown>;
+  if (input.type !== "local") throw new Error(`${path}.type must be "local".`);
+  const output: LocalMcpServerConfig = {
+    type: "local",
+    command: requireNonEmptyStringArray(input.command, `${path}.command`),
+  };
+  if (input.env !== undefined) output.env = requireStringRecord(input.env, `${path}.env`);
+  if (input.cwd !== undefined) {
+    if (typeof input.cwd !== "string") throw new Error(`${path}.cwd must be a string.`);
+    output.cwd = input.cwd;
+  }
+  if (input.enabled !== undefined) output.enabled = sanitizeOptionalBoolean(input.enabled, `${path}.enabled`);
+  if (input.toolPrefix !== undefined) {
+    if (typeof input.toolPrefix !== "string") throw new Error(`${path}.toolPrefix must be a string.`);
+    output.toolPrefix = input.toolPrefix;
+  }
+  if (input.startupTimeoutMs !== undefined) {
+    output.startupTimeoutMs = sanitizePositiveInteger(input.startupTimeoutMs, `${path}.startupTimeoutMs`);
+  }
+  return output;
+}
+
+function sanitizeMcpRemoteServerConfig(value: unknown, path: string): RemoteMcpServerConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
+  const input = value as Record<string, unknown>;
+  if (input.type !== "remote") throw new Error(`${path}.type must be "remote".`);
+  if (typeof input.url !== "string") throw new Error(`${path}.url must be a string.`);
+  if (typeof input.transport !== "string" || (input.transport !== "websocket" && input.transport !== "sse" && input.transport !== "streamable-http")) {
+    throw new Error(`${path}.transport must be one of websocket, sse, or streamable-http.`);
+  }
+  try {
+    new URL(input.url);
+  } catch {
+    throw new Error(`${path}.url must be a valid URL.`);
+  }
+  const output: RemoteMcpServerConfig = {
+    type: "remote",
+    transport: input.transport,
+    url: input.url,
+  };
+  if (input.headers !== undefined) output.headers = requireStringRecord(input.headers, `${path}.headers`);
+  if (input.enabled !== undefined) output.enabled = sanitizeOptionalBoolean(input.enabled, `${path}.enabled`);
+  if (input.toolPrefix !== undefined) {
+    if (typeof input.toolPrefix !== "string") throw new Error(`${path}.toolPrefix must be a string.`);
+    output.toolPrefix = input.toolPrefix;
+  }
+  if (input.startupTimeoutMs !== undefined) {
+    output.startupTimeoutMs = sanitizePositiveInteger(input.startupTimeoutMs, `${path}.startupTimeoutMs`);
+  }
+  return output;
+}
+
+function sanitizeMcpServerConfig(value: unknown, path: string): McpServerConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
+  const type = (value as Record<string, unknown>).type;
+  if (type === "local") return sanitizeMcpLocalServerConfig(value, path);
+  if (type === "remote") return sanitizeMcpRemoteServerConfig(value, path);
+  throw new Error(`${path}.type must be either "local" or "remote".`);
+}
+
+function sanitizeMcpConfig(value: unknown): McpConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("mcp must be an object.");
+  const input = value as Record<string, unknown>;
+  if (!input.servers || typeof input.servers !== "object" || Array.isArray(input.servers)) {
+    throw new Error("mcp.servers must be an object keyed by server name.");
+  }
+  const servers: Record<string, McpServerConfig> = {};
+  for (const [serverKey, config] of Object.entries(input.servers as Record<string, unknown>)) {
+    if (!serverKey.trim()) throw new Error("mcp.servers contains an empty server name.");
+    servers[serverKey] = sanitizeMcpServerConfig(config, `mcp.servers.${serverKey}`);
+  }
+  return { servers };
+}
 function sanitizeSettings(value: unknown): PiBaseSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("settings must be a JSON object.");
   const input = value as Record<string, unknown>;
-  const output: PiBaseSettings = {};
-  const lsp = input.lsp === undefined ? undefined : sanitizeLspDiscoveryConfig(input.lsp);
-  if (lsp) output.lsp = lsp;
-  const permission = input.permission === undefined ? undefined : sanitizePermissionConfig(input.permission);
-  if (permission) output.permission = permission;
-  const render = input.render === undefined ? undefined : sanitizeRenderConfig(input.render);
-  if (render) output.render = render;
-  const yolo = input.yolo === undefined ? undefined : sanitizeYoloMode(input.yolo);
-  if (yolo !== undefined) output.yolo = yolo;
-  const contextCompression = input.contextCompression === undefined ? undefined : sanitizeContextCompressionConfig(input.contextCompression);
-  if (contextCompression !== undefined) output.contextCompression = contextCompression;
-  return output;
+  return {
+    lsp: input.lsp === undefined ? undefined : sanitizeLspDiscoveryConfig(input.lsp),
+    permission: input.permission === undefined ? undefined : sanitizePermissionConfig(input.permission),
+    render: input.render === undefined ? undefined : sanitizeRenderConfig(input.render),
+    yolo: input.yolo === undefined ? undefined : sanitizeYoloMode(input.yolo),
+    mcp: input.mcp === undefined ? undefined : sanitizeMcpConfig(input.mcp),
+    contextCompression: input.contextCompression === undefined ? undefined : sanitizeContextCompressionConfig(input.contextCompression),
+  };
 }
 
 
@@ -291,12 +380,38 @@ function normalizeLspConfigPaths(config: LspDiscoveryConfig | undefined): LspDis
   };
 }
 
+function normalizeDirectoryPath(value: string, path: string): string {
+  const expanded = expandHomePath(value);
+  if (!isAbsolute(expanded)) {
+    throw new Error(`${path} must be an absolute path. ~/..., $HOME/..., and \${HOME}/... are supported.`);
+  }
+  return expanded;
+}
+
+function normalizeMcpConfigPaths(config: McpConfig | undefined): McpConfig | undefined {
+  if (!config?.servers) return config;
+  return {
+    servers: Object.fromEntries(Object.entries(config.servers).map(([id, entry]) => {
+      if (entry.type !== "local") return [id, entry];
+      const [command0, ...rest] = entry.command;
+      const normalizedCommand = command0
+        ? [normalizeCommandExecutable(command0, `mcp.servers.${id}`), ...rest]
+        : entry.command;
+      return [id, {
+        ...entry,
+        command: normalizedCommand,
+        ...(entry.cwd !== undefined ? { cwd: normalizeDirectoryPath(entry.cwd, `mcp.servers.${id}.cwd`) } : {}),
+      } satisfies LocalMcpServerConfig];
+    })),
+  };
+}
 function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
   return {
     ...(settings.lsp ? { lsp: normalizeLspConfigPaths(settings.lsp) } : {}),
     ...(settings.permission ? { permission: settings.permission } : {}),
     ...(settings.render ? { render: settings.render } : {}),
     ...(settings.yolo !== undefined ? { yolo: settings.yolo } : {}),
+    ...(settings.mcp ? { mcp: normalizeMcpConfigPaths(settings.mcp) } : {}),
     ...(settings.contextCompression ? { contextCompression: settings.contextCompression } : {}),
   };
 }
@@ -339,6 +454,11 @@ function mergeRender(base: RenderConfig | undefined, override: RenderConfig | un
 
 function mergeYolo(base: YoloMode | undefined, override: YoloMode | undefined): YoloMode | undefined {
   return override ?? base;
+}
+function mergeMcp(base: McpConfig | undefined, override: McpConfig | undefined): McpConfig | undefined {
+  if (!base && !override) return undefined;
+  const servers = { ...(base?.servers ?? {}), ...(override?.servers ?? {}) };
+  return Object.keys(servers).length > 0 ? { servers } : undefined;
 }
 
 
@@ -389,6 +509,7 @@ export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSet
       permission: mergePermission(globalSettings.permission, projectSettings.permission),
       render: mergeRender(globalSettings.render, projectSettings.render),
       yolo: mergeYolo(globalSettings.yolo, projectSettings.yolo),
+      mcp: mergeMcp(globalSettings.mcp, projectSettings.mcp),
       contextCompression: mergeContextCompression(globalSettings.contextCompression, projectSettings.contextCompression),
     },
   };

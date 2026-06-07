@@ -31,6 +31,8 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@sinclair/typebox": "^0.34.48",
     "diff": "^8.0.3",
     "xxhash-wasm": "^1.1.0"
   },

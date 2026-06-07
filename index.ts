@@ -22,8 +22,10 @@ import { applyAnthropicCompressionBoundaryCacheMarker } from "./src/anthropic-ca
 import { registerResumeAllCommand } from "./src/resume-all.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./src/timeout.js";
 import { resolveToolWorkdir } from "./src/path-utils.js";
+import { registerMcpSupport, type RegisterMcpSupportOptions } from "./src/mcp/index.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./src/lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type YoloMode, type ContextCompressionConfig } from "./src/config.js";
+export type { LocalMcpServerConfig, McpConfig, McpRemoteTransport, McpServerConfig, McpSnapshot, McpToolSnapshot, RemoteMcpServerConfig } from "./src/mcp/types.js";
 
 const BASE_TOOL_NAMES = [
   "read",
@@ -37,6 +39,9 @@ const BASE_TOOL_NAMES = [
   "lsp_workspace_symbols",
   "lsp_java_decompile",
 ] as const;
+export interface PiBaseExtensionOptions {
+  mcp?: RegisterMcpSupportOptions;
+}
 
 
 function loadBaseToolGuide(): string {
@@ -157,7 +162,7 @@ export function registerFindTool(
   } as any);
 }
 
-export default function piBaseExtension(pi: ExtensionAPI): void {
+export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensionOptions = {}): void {
   const loadSettings = loadRuntimePiBaseSettings;
   const resolverFactory = createResolverFactory(loadSettings);
   const getCollapsedResultLines = createCollapsedResultLinesResolver(loadSettings);
@@ -224,6 +229,10 @@ export default function piBaseExtension(pi: ExtensionAPI): void {
     if (pi.getActiveTools().length === 0) {
       pi.setActiveTools([...BASE_TOOL_NAMES]);
     }
+  });
+  registerMcpSupport(pi, {
+    loadSettings,
+    ...options.mcp,
   });
 
   pi.on("before_agent_start", async (event) => {
