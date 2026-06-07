@@ -92,7 +92,7 @@ export class McpManager {
     await Promise.allSettled(disconnects);
 
     if (ctx) {
-      this.options.onSnapshotChange?.({ enabledServers: 0, connectedServers: 0, servers: [] }, ctx);
+      this.notifySnapshot({ enabledServers: 0, connectedServers: 0, servers: [] }, ctx);
     }
   }
 
@@ -371,7 +371,15 @@ export class McpManager {
 
   private publishSnapshot(): void {
     if (!this.ctx) return;
-    this.options.onSnapshotChange?.(this.getSnapshot(), this.ctx);
+    this.notifySnapshot(this.getSnapshot(), this.ctx);
+  }
+
+  private notifySnapshot(snapshot: McpSnapshot, ctx: ExtensionContext): void {
+    try {
+      this.options.onSnapshotChange?.(snapshot, ctx);
+    } catch {
+      // Extension contexts can become stale during session replacement; status updates are best-effort.
+    }
   }
 }
 

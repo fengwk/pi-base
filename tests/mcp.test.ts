@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
+import { createMcpManager } from "../src/mcp/manager.js";
 import type { McpClientFactory, McpProtocolClient, McpTool, McpToolCallResult } from "../src/mcp/types.js";
 import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";
 
@@ -393,6 +394,25 @@ describe("mcp support", () => {
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
     await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 0/1 servers connection failed");
+  });
+  it("treats MCP status UI updates as best-effort", async () => {
+    const manager = createMcpManager({
+      loadSettings: () => ({ settings: { mcp: { servers: {} } } } as any),
+      onSnapshotChange: () => {
+        throw new Error("stale ctx");
+      },
+    });
+
+    const pi = {
+      registerTool() {},
+      getAllTools: () => [],
+      getActiveTools: () => [],
+      setActiveTools() {},
+    };
+    const ctx = { cwd: await createTempWorkspace() };
+
+    await expect(manager.start(ctx as any, pi as any)).resolves.toBeUndefined();
+    await expect(manager.shutdown()).resolves.toBeUndefined();
   });
 
   it("retries failed MCP connections until the server becomes available", async () => {
