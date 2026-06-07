@@ -4,7 +4,7 @@ import { normalizeToLF, stripBom } from "./edit-diff.js";
 import { escapeControlCharsForDisplay, splitNewTextLines } from "./hashline.js";
 import { resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
 import { styleAccent, styleDiffAdded, styleDiffContext, styleDiffRemoved, styleMuted, styleToolTitle, styleWarning } from "./render.js";
-import { safeParseLineRef, visualizeLeadingWhitespace } from "./edit-display.js";
+import { formatAnchorRefForDisplay, getLineRefError, safeParseLineRef, visualizeLeadingWhitespace } from "./edit-display.js";
 
 const MAX_EDIT_CALL_PREVIEW_SNAPSHOTS = 100;
 const EDIT_CALL_PREVIEW_STATE = Symbol("piBaseEditCallPreviewState");
@@ -64,6 +64,15 @@ function splitPreviewNewLines(text: unknown): string[] {
   return splitNewTextLines(String(text ?? ""));
 }
 
+function formatAnchorRange(startAnchor: string | undefined, endAnchor: string | undefined): string {
+  return `${formatAnchorRefForDisplay(startAnchor)} .. ${formatAnchorRefForDisplay(endAnchor)}`;
+}
+
+function formatInvalidAnchorWarning(operation: string, anchors: Array<string | undefined>, theme: any): string | undefined {
+  const error = anchors.map((anchor) => getLineRefError(anchor)).find((message) => message !== undefined);
+  return error ? styleWarning(theme, `? invalid anchor in ${operation}: ${error}`) : undefined;
+}
+
 function formatPreviewLine(prefix: " " | "+" | "-", lineNumber: number, content: string, width: number, theme: any): string {
   const rendered = `${prefix} ${String(lineNumber).padStart(width, " ")} ${escapeControlCharsForDisplay(visualizeLeadingWhitespace(content))}`;
   if (prefix === "+") return styleDiffAdded(theme, rendered);
@@ -88,15 +97,17 @@ function collectAfterLines(lines: string[], startLine: number): Array<{ line: nu
 }
 
 function renderReplacePreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const anchorError = formatInvalidAnchorWarning("replace_lines", [entry.replace_lines.start_anchor, entry.replace_lines.end_anchor], theme);
+  if (anchorError) return [anchorError];
   const startRef = safeParseLineRef(entry.replace_lines.start_anchor);
   const endRef = safeParseLineRef(entry.replace_lines.end_anchor);
-  if (!startRef || !endRef) return [styleWarning(theme, "? invalid anchor in replace_lines")];
-  const start = startRef.line;
-  const end = endRef.line;
+  const start = startRef!.line;
+  const end = endRef!.line;
+  const anchorRange = formatAnchorRange(entry.replace_lines.start_anchor, entry.replace_lines.end_anchor);
   const newLines = splitPreviewNewLines(entry.replace_lines.new_text);
   const delta = newLines.length - (end - start + 1);
   return [
-    styleToolTitle(theme, `replace_lines ${entry.replace_lines.start_anchor} .. ${entry.replace_lines.end_anchor}`),
+    styleToolTitle(theme, `replace_lines ${anchorRange}`),
     ...collectBeforeLines(lines, start - 1).map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
     ...lines.slice(start - 1, end).map((content, index) => formatPreviewLine("-", start + index, content ?? "", width, theme)),
     ...newLines.map((content, index) => formatPreviewLine("+", start + index, content, width, theme)),
@@ -105,14 +116,16 @@ function renderReplacePreview(lines: string[], entry: any, width: number, theme:
 }
 
 function renderDeletePreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const anchorError = formatInvalidAnchorWarning("delete_lines", [entry.delete_lines.start_anchor, entry.delete_lines.end_anchor], theme);
+  if (anchorError) return [anchorError];
   const startRef = safeParseLineRef(entry.delete_lines.start_anchor);
   const endRef = safeParseLineRef(entry.delete_lines.end_anchor);
-  if (!startRef || !endRef) return [styleWarning(theme, "? invalid anchor in delete_lines")];
-  const start = startRef.line;
-  const end = endRef.line;
+  const start = startRef!.line;
+  const end = endRef!.line;
+  const anchorRange = formatAnchorRange(entry.delete_lines.start_anchor, entry.delete_lines.end_anchor);
   const delta = -(end - start + 1);
   return [
-    styleToolTitle(theme, `delete_lines ${entry.delete_lines.start_anchor} .. ${entry.delete_lines.end_anchor}`),
+    styleToolTitle(theme, `delete_lines ${anchorRange}`),
     ...collectBeforeLines(lines, start - 1).map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
     ...lines.slice(start - 1, end).map((content, index) => formatPreviewLine("-", start + index, content ?? "", width, theme)),
     ...collectAfterLines(lines, end + 1).map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
@@ -120,25 +133,29 @@ function renderDeletePreview(lines: string[], entry: any, width: number, theme: 
 }
 
 function renderInsertBeforeLinesPreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const anchorError = formatInvalidAnchorWarning("insert_before_lines", [entry.insert_before_lines.anchor], theme);
+  if (anchorError) return [anchorError];
   const anchorRef = safeParseLineRef(entry.insert_before_lines.anchor);
-  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_before_lines")];
-  const anchor = anchorRef.line;
+  const anchor = anchorRef!.line;
+  const anchorLabel = formatAnchorRefForDisplay(entry.insert_before_lines.anchor);
   const newLines = splitPreviewNewLines(entry.insert_before_lines.new_text);
   const delta = newLines.length;
   return [
-    styleToolTitle(theme, `insert_before_lines ${entry.insert_before_lines.anchor}`),
+    styleToolTitle(theme, `insert_before_lines ${anchorLabel}`),
     ...newLines.map((content, index) => formatPreviewLine("+", anchor + index, content, width, theme)),
     ...collectAfterLines(lines, anchor).map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
   ];
 }
 
 function renderInsertAfterLinesPreview(lines: string[], entry: any, width: number, theme: any): string[] {
+  const anchorError = formatInvalidAnchorWarning("insert_after_lines", [entry.insert_after_lines.anchor], theme);
+  if (anchorError) return [anchorError];
   const anchorRef = safeParseLineRef(entry.insert_after_lines.anchor);
-  if (!anchorRef) return [styleWarning(theme, "? invalid anchor in insert_after_lines")];
-  const anchor = anchorRef.line;
+  const anchor = anchorRef!.line;
+  const anchorLabel = formatAnchorRefForDisplay(entry.insert_after_lines.anchor);
   const newLines = splitPreviewNewLines(entry.insert_after_lines.new_text);
   return [
-    styleToolTitle(theme, `insert_after_lines ${entry.insert_after_lines.anchor}`),
+    styleToolTitle(theme, `insert_after_lines ${anchorLabel}`),
     ...collectBeforeLines(lines, anchor).map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
     ...newLines.map((content, index) => formatPreviewLine("+", anchor + 1 + index, content, width, theme)),
   ];
@@ -171,25 +188,29 @@ function formatEditCall(args: any, theme: any, previewLines?: string[]): string 
   for (const entry of edits) {
     lines.push("");
     if (entry?.replace_lines) {
-      lines.push(styleToolTitle(theme, `replace_lines ${entry.replace_lines.start_anchor} .. ${entry.replace_lines.end_anchor}`));
-      lines.push(styleDiffRemoved(theme, `- range ${entry.replace_lines.start_anchor} .. ${entry.replace_lines.end_anchor}`));
+      const anchorRange = formatAnchorRange(entry.replace_lines.start_anchor, entry.replace_lines.end_anchor);
+      lines.push(styleToolTitle(theme, `replace_lines ${anchorRange}`));
+      lines.push(styleDiffRemoved(theme, `- range ${anchorRange}`));
       lines.push(...renderInsertedText(String(entry.replace_lines.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }
     if (entry?.delete_lines) {
-      lines.push(styleToolTitle(theme, `delete_lines ${entry.delete_lines.start_anchor} .. ${entry.delete_lines.end_anchor}`));
-      lines.push(styleDiffRemoved(theme, `- range ${entry.delete_lines.start_anchor} .. ${entry.delete_lines.end_anchor}`));
+      const anchorRange = formatAnchorRange(entry.delete_lines.start_anchor, entry.delete_lines.end_anchor);
+      lines.push(styleToolTitle(theme, `delete_lines ${anchorRange}`));
+      lines.push(styleDiffRemoved(theme, `- range ${anchorRange}`));
       continue;
     }
     if (entry?.insert_before_lines) {
-      lines.push(styleToolTitle(theme, `insert_before_lines ${entry.insert_before_lines.anchor}`));
-      lines.push(styleDiffContext(theme, `| before ${entry.insert_before_lines.anchor}`));
+      const anchorLabel = formatAnchorRefForDisplay(entry.insert_before_lines.anchor);
+      lines.push(styleToolTitle(theme, `insert_before_lines ${anchorLabel}`));
+      lines.push(styleDiffContext(theme, `| before ${anchorLabel}`));
       lines.push(...renderInsertedText(String(entry.insert_before_lines.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }
     if (entry?.insert_after_lines) {
-      lines.push(styleToolTitle(theme, `insert_after_lines ${entry.insert_after_lines.anchor}`));
-      lines.push(styleDiffContext(theme, `| after ${entry.insert_after_lines.anchor}`));
+      const anchorLabel = formatAnchorRefForDisplay(entry.insert_after_lines.anchor);
+      lines.push(styleToolTitle(theme, `insert_after_lines ${anchorLabel}`));
+      lines.push(styleDiffContext(theme, `| after ${anchorLabel}`));
       lines.push(...renderInsertedText(String(entry.insert_after_lines.new_text ?? "")).map((line) => styleDiffAdded(theme, line)));
       continue;
     }

@@ -81,10 +81,22 @@ export function formatHashlineDisplay(lineNumber: number, content: string, width
   return `${padded}#${computeLineHash(lineNumber, content)}|${displayOverride ?? escapeControlCharsForDisplay(content)}`;
 }
 
+export function suggestAnchorFromDisplayedLine(ref: string): string | undefined {
+  const match = String(ref).trim().match(new RegExp(`^(\\d+)#([0-9a-fA-F]{${HASH_LEN}})\\|`));
+  if (!match) return undefined;
+  const line = Number.parseInt(match[1], 10);
+  if (line < 1) return undefined;
+  return `${line}#${match[2].toLowerCase()}`;
+}
+
 export function parseLineRef(ref: string): { line: number; hash: string } {
-  const normalized = String(ref).replace(/\|.*$/, "").trim();
+  const normalized = String(ref).trim();
+  const suggestedAnchor = suggestAnchorFromDisplayedLine(normalized);
+  if (suggestedAnchor) {
+    throw new Error(`Invalid anchor: received a full displayed line. Use only the LINE#HASH anchor ${JSON.stringify(suggestedAnchor)}; do not include the "|..." line content from read/write/edit output.`);
+  }
   const match = normalized.match(new RegExp(`^(\\d+)#([0-9a-fA-F]{${HASH_LEN}})$`));
-  if (!match) throw new Error(`Invalid anchor ${JSON.stringify(ref)}. Expected LINE#HASH.`);
+  if (!match) throw new Error(`Invalid anchor ${JSON.stringify(ref)}. Expected exactly LINE#HASH (for example "12#ab34"). Use only the part before "|" from read/write/edit output.`);
   const line = Number.parseInt(match[1], 10);
   if (line < 1) throw new Error(`Invalid anchor ${JSON.stringify(ref)}. Line must be >= 1.`);
   return { line, hash: match[2].toLowerCase() };

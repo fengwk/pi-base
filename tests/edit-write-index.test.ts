@@ -691,6 +691,29 @@ describe("edit/write flow", () => {
     expect(rendered).toContain("+  1 ··new");
   });
 
+  it("rejects full LINE#HASH|content anchors with an actionable message", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const fullAnchor = getText(readResult).split("\n").find((line) => line.includes("|alpha"))!;
+    const shortAnchor = fullAnchor.split("|")[0]!;
+    const result = await registry.getTool("edit").execute(
+      "2",
+      { workdir: ".", path: "src/example.ts", edits: [{ replace_lines: { start_anchor: fullAnchor, end_anchor: fullAnchor, new_text: "gamma" } }] },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    const text = getText(result);
+
+    expect(result.isError).toBe(true);
+    expect(text).toContain(`Use only the LINE#HASH anchor "${shortAnchor}"`);
+    expect(text).toContain("do not include the \"|...\" line content");
+    expect(await readFile(join(root, "src/example.ts"), "utf8")).toBe("alpha\nbeta\n");
+  });
+
   it("summarizes edit calls without validating anchors", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
