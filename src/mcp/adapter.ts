@@ -36,8 +36,10 @@ export function createMcpToolDefinition(options: CreateMcpToolDefinitionOptions)
     description: tool.description || `Call ${tool.name} on MCP server ${serverKey}`,
     parameters,
     renderCall(args: unknown, theme, context) {
-      const formattedArgs = stringifyJson((args ?? {}) as Record<string, unknown>);
-      const callText = `${styleToolTitle(theme, aliasName)}\n${styleOutput(theme, formattedArgs)}`;
+      const objectArgs = isRecord(args) ? args : {};
+      const callText = Object.keys(objectArgs).length === 0
+        ? styleToolTitle(theme, aliasName)
+        : `${styleToolTitle(theme, aliasName)}\n${styleOutput(theme, stringifyJson(objectArgs))}`;
       return renderCallText(callText, context.lastComponent);
     },
     async execute(_toolCallId, params, signal, _onUpdate, ctx: ExtensionContext) {
@@ -111,6 +113,9 @@ function convertResultToContent(result: McpToolCallResult): Array<{ type: "text"
   return output;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 function stringifyJson(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2);

@@ -110,6 +110,14 @@ const echoTool: McpTool = {
     required: ["text"],
   },
 };
+const noArgTool: McpTool = {
+  name: "create_temp_dir",
+  description: "Create a temporary directory",
+  inputSchema: {
+    type: "object",
+    properties: {},
+  },
+};
 
 describe("mcp support", () => {
   it("registers MCP tools with an empty prefix and updates the MCP status line", async () => {
@@ -155,6 +163,38 @@ describe("mcp support", () => {
     const callComponent = registry.getTool("echo").renderCall?.({ text: "hello" }, {}, { lastComponent: undefined });
     const callText = (callComponent?.render(120).join("\n") ?? "").trimEnd();
     expect(callText).toContain('"text": "hello"');
+  });
+  it("omits an empty JSON block for no-argument MCP tools", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({ mm: [{ tools: [noArgTool] }] }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "create_temp_dir"));
+
+    const callComponent = registry.getTool("create_temp_dir").renderCall?.({}, {}, { lastComponent: undefined });
+    const callText = (callComponent?.render(120).join("\n") ?? "").trimEnd();
+    expect(callText).toContain("create_temp_dir");
+    expect(callText).not.toContain("{}");
   });
 
   it("uses the server key as the default tool prefix", async () => {
