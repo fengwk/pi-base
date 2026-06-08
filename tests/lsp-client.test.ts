@@ -265,6 +265,21 @@ describe("LspClient internals", () => {
       expect(waitSpy).not.toHaveBeenCalled();
       expect(result).toBe(items);
     });
+    it("prefers publishDiagnostics for jdtls instead of pull diagnostics", async () => {
+      const root = await createTempWorkspace();
+      const filePath = await writeWorkspaceFile(root, "src/App.java", "class App {}\n");
+      const client = new LspClient(root, { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 200 } as any);
+      const openSpy = vi.spyOn(client, "openFile").mockResolvedValue(undefined);
+      const sendSpy = vi.spyOn(client as any, "send");
+      const waitSpy = vi.spyOn(client as any, "waitForPublishedDiagnostics").mockResolvedValue([{ message: "from push diagnostics" }]);
+
+      const result = await client.diagnostics(filePath);
+
+      expect(openSpy).toHaveBeenCalledWith(filePath);
+      expect(sendSpy).not.toHaveBeenCalled();
+      expect(waitSpy).toHaveBeenCalledWith(pathToFileURL(filePath).href, 200, undefined);
+      expect(result).toEqual([{ message: "from push diagnostics" }]);
+    });
     it("re-throws when the diagnostic request fails for a non-Method-Not-Found reason", async () => {
       const root = await createTempWorkspace();
       const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");

@@ -212,6 +212,9 @@ export class LspClient {
   isJdtls(): boolean {
     return isJdtlsCommand(this.server.command);
   }
+  prefersPublishedDiagnostics(): boolean {
+    return this.isJdtls();
+  }
 
   /** Server id from the discovery config (e.g. "jdtls", "typescript-language-server"). */
   serverId(): string {
@@ -302,6 +305,9 @@ export class LspClient {
     const absPath = resolve(filePath);
     const uri = pathToFileURL(absPath).href;
     await this.openFile(absPath);
+    if (this.prefersPublishedDiagnostics()) {
+      return this.waitForPublishedDiagnostics(uri, this.requestTimeoutMs, signal);
+    }
     let firstError: (Error & { code?: number }) | null = null;
     try {
       const result = (await this.send("textDocument/diagnostic", { textDocument: { uri } }, signal)) as any;

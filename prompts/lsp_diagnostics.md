@@ -6,7 +6,7 @@ Usage:
 - Prefer this before large builds when you only need current-file errors or warnings.
 - After a successful `edit` or `write`, the LSP layer will sync already-open files before diagnostics are requested again.
 - If a server does not actually support diagnostics, the configured `requestTimeoutMs` will surface that as a timeout error rather than the call returning silently with no data.
-- This tool does not pre-check server capabilities; it first tries `textDocument/diagnostic`, then falls back to waiting for pushed diagnostics with a configurable timeout.
+- This tool does not pre-check server capabilities. For most servers it first tries `textDocument/diagnostic`, then falls back to waiting for pushed diagnostics with a configurable timeout; for `jdtls` it waits for `publishDiagnostics` directly because that path is more reliable in practice.
 
 Parameters:
 - `path` (required)
