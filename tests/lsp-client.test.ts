@@ -280,6 +280,129 @@ describe("LspClient internals", () => {
       expect(waitSpy).toHaveBeenCalledWith(pathToFileURL(filePath).href, 200, undefined);
       expect(result).toEqual([{ message: "from push diagnostics" }]);
     });
+    it("serializes concurrent cold-start diagnostics for jdtls until the first publish result arrives", async () => {
+      const root = await createTempWorkspace();
+      const firstPath = await writeWorkspaceFile(root, "src/First.java", "class First {}\n");
+      const secondPath = await writeWorkspaceFile(root, "src/Second.java", "class Second {}\n");
+      const client = new LspClient(root, { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 200 } as any);
+      const sequence: string[] = [];
+      let releaseFirst!: () => void;
+      const firstWait = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      vi.spyOn(client, "openFile").mockImplementation(async (path: string) => {
+        sequence.push(`open:${path}`);
+      });
+      vi.spyOn(client as any, "waitForPublishedDiagnostics")
+        .mockImplementationOnce(async (...args: any[]) => {
+          const uri = args[0] as string;
+          sequence.push(`wait:${uri}`);
+          await firstWait;
+          return [];
+        })
+        .mockImplementationOnce(async (...args: any[]) => {
+          const uri = args[0] as string;
+          sequence.push(`wait:${uri}`);
+          return [];
+        });
+
+      const firstPromise = client.diagnostics(firstPath);
+      const secondPromise = client.diagnostics(secondPath);
+      await vi.waitFor(() => {
+        expect(sequence).toEqual([
+          `open:${firstPath}`,
+          `wait:${pathToFileURL(firstPath).href}`,
+        ]);
+      });
+
+      releaseFirst();
+      await Promise.all([firstPromise, secondPromise]);
+
+      expect(sequence).toEqual([
+        `open:${firstPath}`,
+        `wait:${pathToFileURL(firstPath).href}`,
+        `open:${secondPath}`,
+        `wait:${pathToFileURL(secondPath).href}`,
+      ]);
+    });
+
+    it("allows concurrent jdtls diagnostics after the first publish result warms the workspace", async () => {
+      const root = await createTempWorkspace();
+      const firstPath = await writeWorkspaceFile(root, "src/First.java", "class First {}\n");
+      const secondPath = await writeWorkspaceFile(root, "src/Second.java", "class Second {}\n");
+      const client = new LspClient(root, { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 200 } as any);
+      const sequence: string[] = [];
+      let releaseSecond!: () => void;
+      let releaseThird!: () => void;
+      const secondWait = new Promise<void>((resolve) => { releaseSecond = resolve; });
+      const thirdWait = new Promise<void>((resolve) => { releaseThird = resolve; });
+      vi.spyOn(client, "openFile").mockResolvedValue(undefined);
+      vi.spyOn(client as any, "waitForPublishedDiagnostics")
+        .mockImplementationOnce(async (...args: any[]) => {
+          const uri = args[0] as string;
+          sequence.push(`warm:${uri}`);
+          return [];
+        })
+        .mockImplementationOnce(async (...args: any[]) => {
+          const uri = args[0] as string;
+          sequence.push(`wait:${uri}`);
+          await secondWait;
+          return [];
+        })
+        .mockImplementationOnce(async (...args: any[]) => {
+          const uri = args[0] as string;
+          sequence.push(`wait:${uri}`);
+          await thirdWait;
+          return [];
+        });
+
+      await client.diagnostics(firstPath);
+      const secondPromise = client.diagnostics(firstPath);
+      const thirdPromise = client.diagnostics(secondPath);
+      await vi.waitFor(() => {
+        expect(sequence).toEqual([
+          `warm:${pathToFileURL(firstPath).href}`,
+          `wait:${pathToFileURL(firstPath).href}`,
+          `wait:${pathToFileURL(secondPath).href}`,
+        ]);
+      });
+
+      releaseSecond();
+      releaseThird();
+      await Promise.all([secondPromise, thirdPromise]);
+    });
+
+    it("does not serialize cold-start diagnostics for non-jdtls servers", async () => {
+      const root = await createTempWorkspace();
+      const firstPath = await writeWorkspaceFile(root, "src/first.ts", "export const first = 1;\n");
+      const secondPath = await writeWorkspaceFile(root, "src/second.ts", "export const second = 2;\n");
+      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      const sequence: string[] = [];
+      let releaseFirst!: () => void;
+      const firstSend = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      vi.spyOn(client, "openFile").mockResolvedValue(undefined);
+      vi.spyOn(client as any, "send")
+        .mockImplementationOnce(async () => {
+          sequence.push(`send:${firstPath}`);
+          await firstSend;
+          return { items: [] };
+        })
+        .mockImplementationOnce(async () => {
+          sequence.push(`send:${secondPath}`);
+          return { items: [] };
+        });
+
+      const firstPromise = client.diagnostics(firstPath);
+      const secondPromise = client.diagnostics(secondPath);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(sequence).toEqual([
+        `send:${firstPath}`,
+        `send:${secondPath}`,
+      ]);
+
+      releaseFirst();
+      await Promise.all([firstPromise, secondPromise]);
+    });
     it("re-throws when the diagnostic request fails for a non-Method-Not-Found reason", async () => {
       const root = await createTempWorkspace();
       const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");

@@ -326,7 +326,7 @@ For `lsp_workspace_symbols` and `lsp_goto_definition`, the LSP client inspects t
 - `pylsp` does not implement `go-to-definition` → "LSP server 'pylsp' does not advertise go-to-definition. Try grep or read to locate definitions manually."
 - `lsp_java_decompile` on a non-jdtls server → "lsp_java_decompile is only supported by jdtls; current server is 'X'."
 
-`lsp_diagnostics` does not pre-check because servers like `jdtls` push diagnostics in practice even when their advertised capability is missing or uses a non-standard field. For most servers the client tries `textDocument/diagnostic` first and falls back to waiting for pushed diagnostics; for `jdtls` it skips the pull request and waits for `publishDiagnostics` directly to match editor behavior and avoid unstable pull-diagnostics failures.
+`lsp_diagnostics` does not pre-check because servers like `jdtls` push diagnostics in practice even when their advertised capability is missing or uses a non-standard field. For most servers the client tries `textDocument/diagnostic` first and falls back to waiting for pushed diagnostics; for `jdtls` it skips the pull request, waits for `publishDiagnostics` directly, and serializes same-workspace cold-start diagnostics until the first publish result arrives to avoid startup races.
 
 ## Output truncation
 

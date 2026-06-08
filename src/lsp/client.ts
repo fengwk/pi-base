@@ -138,6 +138,8 @@ export class LspClient {
   private serverCapabilities: Record<string, unknown> = {};
   private requestTimeoutMs: number;
   private readonly onActivity: () => void;
+  private publishedDiagnosticsWarm = false;
+  private coldStartDiagnosticsQueueTail: Promise<void> = Promise.resolve();
 
   constructor(private readonly root: string, private readonly server: LspServerConfig, options: { onActivity?: () => void } = {}) {
     this.requestTimeoutMs = server.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
@@ -213,6 +215,9 @@ export class LspClient {
     return isJdtlsCommand(this.server.command);
   }
   prefersPublishedDiagnostics(): boolean {
+    return this.isJdtls();
+  }
+  serializesColdStartDiagnostics(): boolean {
     return this.isJdtls();
   }
 
@@ -304,36 +309,40 @@ export class LspClient {
   async diagnostics(filePath: string, signal?: AbortSignal): Promise<unknown[]> {
     const absPath = resolve(filePath);
     const uri = pathToFileURL(absPath).href;
-    await this.openFile(absPath);
-    if (this.prefersPublishedDiagnostics()) {
-      return this.waitForPublishedDiagnostics(uri, this.requestTimeoutMs, signal);
-    }
-    let firstError: (Error & { code?: number }) | null = null;
-    try {
-      const result = (await this.send("textDocument/diagnostic", { textDocument: { uri } }, signal)) as any;
-      if (result && Array.isArray(result.items)) return result.items;
-    } catch (error) {
-      // JSON-RPC -32601 = Method Not Found. The server may still push
-      // diagnostics via publishDiagnostics even when it does not implement
-      // textDocument/diagnostic.
-      // Some LSP servers return a transient untyped "Internal error" on the
-      // first pull of a freshly-opened workspace/file but then publish the same
-      // diagnostics within seconds. Fall through to the push-wait only in that
-      // narrow case so we don't fail fast on startup races or mask real
-      // server-side failures such as JSON-RPC -32603 Internal Error.
-      firstError = error as Error & { code?: number };
-      const shouldWaitForPublishedDiagnostics =
-        firstError.code === -32601 || isTransientPullDiagnosticsInternalError(firstError);
-      if (!shouldWaitForPublishedDiagnostics) throw firstError;
-    }
-    try {
-      return await this.waitForPublishedDiagnostics(uri, this.requestTimeoutMs, signal);
-    } catch (error) {
-      if (isTransientPullDiagnosticsInternalError(firstError) && error instanceof Error && error.message.startsWith("LSP diagnostics timeout after ")) {
-        throw new Error(formatTransientDiagnosticsTimeoutError(this.server.id, absPath));
+    return this.withSerializedColdStartDiagnostics(async () => {
+      await this.openFile(absPath);
+      if (this.prefersPublishedDiagnostics()) {
+        const diagnostics = await this.waitForPublishedDiagnostics(uri, this.requestTimeoutMs, signal);
+        this.publishedDiagnosticsWarm = true;
+        return diagnostics;
       }
-      throw error;
-    }
+      let firstError: (Error & { code?: number }) | null = null;
+      try {
+        const result = (await this.send("textDocument/diagnostic", { textDocument: { uri } }, signal)) as any;
+        if (result && Array.isArray(result.items)) return result.items;
+      } catch (error) {
+        // JSON-RPC -32601 = Method Not Found. The server may still push
+        // diagnostics via publishDiagnostics even when it does not implement
+        // textDocument/diagnostic.
+        // Some LSP servers return a transient untyped "Internal error" on the
+        // first pull of a freshly-opened workspace/file but then publish the same
+        // diagnostics within seconds. Fall through to the push-wait only in that
+        // narrow case so we don't fail fast on startup races or mask real
+        // server-side failures such as JSON-RPC -32603 Internal Error.
+        firstError = error as Error & { code?: number };
+        const shouldWaitForPublishedDiagnostics =
+          firstError.code === -32601 || isTransientPullDiagnosticsInternalError(firstError);
+        if (!shouldWaitForPublishedDiagnostics) throw firstError;
+      }
+      try {
+        return await this.waitForPublishedDiagnostics(uri, this.requestTimeoutMs, signal);
+      } catch (error) {
+        if (isTransientPullDiagnosticsInternalError(firstError) && error instanceof Error && error.message.startsWith("LSP diagnostics timeout after ")) {
+          throw new Error(formatTransientDiagnosticsTimeoutError(this.server.id, absPath));
+        }
+        throw error;
+      }
+    }, signal);
   }
 
   async definition(filePath: string, line: number, character: number, signal?: AbortSignal): Promise<unknown> {
@@ -375,6 +384,8 @@ export class LspClient {
     this.fileContents.clear();
     this.diagnosticsStore.clear();
     this.rejectAllPending("LSP client stopped");
+    this.publishedDiagnosticsWarm = false;
+    this.coldStartDiagnosticsQueueTail = Promise.resolve();
   }
 
   private toEncodedCharacter(filePath: string, line: number, codePointOffset: number): number {
@@ -388,6 +399,37 @@ export class LspClient {
     return utf16;
   }
 
+  private async withSerializedColdStartDiagnostics<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!this.serializesColdStartDiagnostics() || this.publishedDiagnosticsWarm) return task();
+    const previous = this.coldStartDiagnosticsQueueTail;
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.coldStartDiagnosticsQueueTail = previous.then(() => current, () => current);
+    await this.waitForColdStartDiagnosticsTurn(previous, signal);
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  }
+
+  private waitForColdStartDiagnosticsTurn(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(abortError());
+    return new Promise<void>((resolve, reject) => {
+      const onAbort = () => reject(abortError());
+      signal?.addEventListener("abort", onAbort, { once: true });
+      previous.then(
+        () => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        },
+        () => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        },
+      );
+    });
+  }
   private waitForPublishedDiagnostics(uri: string, timeoutMs: number, signal?: AbortSignal): Promise<unknown[]> {
     if (this.diagnosticsStore.has(uri)) return Promise.resolve(this.diagnosticsStore.get(uri) ?? []);
     return new Promise((resolve, reject) => {
@@ -510,6 +552,7 @@ export class LspClient {
         const message = JSON.parse(payload);
         if (message.method === "textDocument/publishDiagnostics" && message.params?.uri) {
           const diagnostics = message.params.diagnostics ?? [];
+          this.publishedDiagnosticsWarm = true;
           this.diagnosticsStore.set(message.params.uri, diagnostics);
           const waiters = this.diagnosticsWaiters.get(message.params.uri) ?? [];
           this.diagnosticsWaiters.delete(message.params.uri);
