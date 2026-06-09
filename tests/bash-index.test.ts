@@ -401,7 +401,7 @@ describe("bash tool and index", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" });
-    expect(registry.getActiveTools()).toEqual(["read", "grep", "find", "bash", "edit", "write", "lsp_diagnostics", "lsp_goto_definition", "lsp_workspace_symbols", "lsp_java_decompile"]);
+    expect(registry.getActiveTools()).toEqual(["read", "grep", "find", "bash", "edit", "write", "lsp_diagnostics", "lsp_goto_definition", "lsp_workspace_symbols", "lsp_java_decompile", "subagent"]);
 
     const injected = await registry.emit("before_agent_start", {
       systemPrompt: "base system prompt",

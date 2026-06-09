@@ -36,7 +36,8 @@ class SdkMcpClient implements McpProtocolClient {
     this.transport = transport;
     this.connected = false;
 
-    const connectPromise = (async () => {
+    const pendingConnect: { promise?: Promise<void> } = {};
+    pendingConnect.promise = (async () => {
       try {
         await withTimeout(client.connect(transport), timeoutMs, `Connection timeout (>${Math.ceil(timeoutMs / 1000)}s)`);
         if (this.connectionVersion !== connectionVersion || this.client !== client || this.transport !== transport) {
@@ -51,12 +52,12 @@ class SdkMcpClient implements McpProtocolClient {
         await closeClient(client);
         throw error;
       } finally {
-        if (this.connectPromise === connectPromise) this.connectPromise = undefined;
+        if (this.connectPromise === pendingConnect.promise) this.connectPromise = undefined;
       }
     })();
 
-    this.connectPromise = connectPromise;
-    return connectPromise;
+    this.connectPromise = pendingConnect.promise;
+    return pendingConnect.promise;
   }
 
   async disconnect(): Promise<void> {

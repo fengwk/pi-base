@@ -1,0 +1,89 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
+import { lspDiagnosticsSchema, lspGotoDefinitionSchema, lspJavaDecompileSchema, lspWorkspaceSymbolsSchema } from "../schemas/lsp.js";
+import { lspManager } from "./client.js";
+import {
+  executeLspDiagnostics,
+  executeLspGotoDefinition,
+  executeLspJavaDecompile,
+  executeLspWorkspaceSymbols,
+  formatLspDiagnosticsCall,
+  formatLspGotoDefinitionCall,
+  formatLspJavaDecompileCall,
+  formatLspWorkspaceSymbolsCall,
+  renderLspCall,
+  renderLspResult,
+  type LspResolverFactory,
+} from "./tool-helpers.js";
+
+export type { LspResolverFactory } from "./tool-helpers.js";
+
+export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: LspResolverFactory; getCollapsedResultLines?: any; getCollapsedResultMaxChars?: any } = {}) {
+  pi.registerTool({
+    name: "lsp_diagnostics",
+    label: "lsp_diagnostics",
+    description: loadToolDescription("lsp_diagnostics"),
+    promptSnippet: loadToolPromptSnippet("lsp_diagnostics"),
+    parameters: lspDiagnosticsSchema,
+    renderCall(args: any, theme: any, context: any) {
+      return renderLspCall(formatLspDiagnosticsCall(args, theme), context.lastComponent);
+    },
+    renderResult(result: any, renderOptions: any, theme: any, context: any) {
+      return renderLspResult("lsp_diagnostics", result, renderOptions, theme, context, options);
+    },
+    async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
+      return executeLspDiagnostics(params, signal, ctx, options.resolverFactory, lspManager);
+    },
+  } as any);
+
+  pi.registerTool({
+    name: "lsp_goto_definition",
+    label: "lsp_goto_definition",
+    description: loadToolDescription("lsp_goto_definition"),
+    promptSnippet: loadToolPromptSnippet("lsp_goto_definition"),
+    parameters: lspGotoDefinitionSchema,
+    renderCall(args: any, theme: any, context: any) {
+      return renderLspCall(formatLspGotoDefinitionCall(args, theme), context.lastComponent);
+    },
+    renderResult(result: any, renderOptions: any, theme: any, context: any) {
+      return renderLspResult("lsp_goto_definition", result, renderOptions, theme, context, options);
+    },
+    async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
+      return executeLspGotoDefinition(params, signal, ctx, options.resolverFactory, lspManager);
+    },
+  } as any);
+
+  pi.registerTool({
+    name: "lsp_workspace_symbols",
+    label: "lsp_workspace_symbols",
+    description: loadToolDescription("lsp_workspace_symbols"),
+    promptSnippet: loadToolPromptSnippet("lsp_workspace_symbols"),
+    parameters: lspWorkspaceSymbolsSchema,
+    renderCall(args: any, theme: any, context: any) {
+      return renderLspCall(formatLspWorkspaceSymbolsCall(args, theme), context.lastComponent);
+    },
+    renderResult(result: any, renderOptions: any, theme: any, context: any) {
+      return renderLspResult("lsp_workspace_symbols", result, renderOptions, theme, context, options);
+    },
+    async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
+      return executeLspWorkspaceSymbols(params, signal, ctx, options.resolverFactory, lspManager);
+    },
+  } as any);
+
+  pi.registerTool({
+    name: "lsp_java_decompile",
+    label: "lsp_java_decompile",
+    description: loadToolDescription("lsp_java_decompile"),
+    promptSnippet: loadToolPromptSnippet("lsp_java_decompile"),
+    parameters: lspJavaDecompileSchema,
+    renderCall(args: any, theme: any, context: any) {
+      return renderLspCall(formatLspJavaDecompileCall(args, theme), context.lastComponent);
+    },
+    renderResult(result: any, renderOptions: any, theme: any, context: any) {
+      return renderLspResult("lsp_java_decompile", result, renderOptions, theme, context, options);
+    },
+    async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
+      return executeLspJavaDecompile(params, signal, ctx, options.resolverFactory, lspManager);
+    },
+  } as any);
+}

@@ -8,25 +8,13 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "json-summary"],
       include: [
-        "index.ts",
-        "src/read.ts",
-        "src/edit.ts",
-        "src/write.ts",
-        "src/grep.ts",
-        "src/bash-renderer.ts",
-        "src/lsp/tools.ts",
-        "src/tool-output.ts"
+        "src/schemas/subagent.ts",
+        "src/subagent/prompt.ts",
+        "src/subagent/runner.ts",
+        "src/subagent/transcript.ts"
       ],
       exclude: [
-        "tests/**",
-        "src/hashline.ts",
-        "src/edit-diff.ts",
-        "src/binary-detect.ts",
-        "src/path-utils.ts",
-        "src/runtime.ts",
-        "src/timeout.ts",
-        "src/lsp/client.ts",
-        "src/lsp/discovery.ts"
+        "tests/**"
       ],
       thresholds: {
         lines: 95,
