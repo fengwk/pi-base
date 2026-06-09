@@ -8,7 +8,7 @@ Arguments:
 - `session_id`: optional existing child session id to resume. The same session can be resumed by a different `name` to hand off memory to another subagent profile.
 
 Behavior:
-- Subagent configs are loaded from `.pi/agents/*.md` and `~/.pi/agent/agents/*.md`.
+- Subagent configs are loaded from `.pi/subagents/*.md` and `~/.pi/agent/subagents/*.md`.
 - Config changes take effect on the next `subagent(...)` call because tools, skills, and allowed subagents are recomputed each time.
 - Child sessions are stored separately from normal Pi sessions under the subagent session directory.
 - The tool result returns the `session_id` plus the child agent's final output. Use the `session_id` to continue the same child memory later.

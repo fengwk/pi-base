@@ -29,7 +29,7 @@ describe("subagent registry", () => {
   it("loads global and project subagents with project override", async () => {
     await withTempAgentDir(async (agentDir) => {
       const workspace = await createTempWorkspace();
-      await writeAgentFile(join(agentDir, "agents"), "reviewer", `---
+      await writeAgentFile(join(agentDir, "subagents"), "reviewer", `---
 name: reviewer
 description: Global reviewer
 tools: read,grep
@@ -38,7 +38,7 @@ subagents: helper
 ---
 Global body
 `);
-      await writeAgentFile(join(workspace, ".pi", "agents"), "reviewer", `---
+      await writeAgentFile(join(workspace, ".pi", "subagents"), "reviewer", `---
 name: reviewer
 description: Project reviewer
 tools:
@@ -52,7 +52,7 @@ subagents:
 ---
 Project body
 `);
-      await writeAgentFile(join(workspace, ".pi", "agents"), "helper", `---
+      await writeAgentFile(join(workspace, ".pi", "subagents"), "helper", `---
 name: helper
 description: Helper
 tools: read
@@ -74,11 +74,41 @@ Helper body
       });
     });
   });
+  it("still loads legacy agents directories during migration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const workspace = await createTempWorkspace();
+      await writeAgentFile(join(agentDir, "agents"), "legacy-global", `---
+name: legacy-global
+description: Legacy global
+tools: read
+skills: []
+subagents: []
+---
+Legacy global body
+`);
+      await writeAgentFile(join(workspace, ".pi", "agents"), "legacy-project", `---
+name: legacy-project
+description: Legacy project
+tools: read
+skills: []
+subagents: []
+---
+Legacy project body
+`);
+
+      const registry = loadSubagentRegistry(workspace);
+      expect(listSubagentConfigs(registry).map((item) => item.name)).toEqual(["legacy-global", "legacy-project"]);
+      expect(getSubagentConfig(registry, "legacy-project")).toMatchObject({
+        source: "project",
+        body: "Legacy project body",
+      });
+    });
+  });
 
   it("supports csv strings and case-insensitive lookup", async () => {
     await withTempAgentDir(async (agentDir) => {
       const workspace = await createTempWorkspace();
-      await writeAgentFile(join(agentDir, "agents"), "coder", `---
+      await writeAgentFile(join(agentDir, "subagents"), "coder", `---
 name: coder
 description: Coder
 tools: read, grep, write
@@ -100,7 +130,7 @@ Coder body
   it("rejects mismatched file and frontmatter names", async () => {
     await withTempAgentDir(async (agentDir) => {
       const workspace = await createTempWorkspace();
-      await writeAgentFile(join(agentDir, "agents"), "wrong-name", `---
+      await writeAgentFile(join(agentDir, "subagents"), "wrong-name", `---
 name: right-name
 description: Broken
 tools: read
@@ -117,7 +147,7 @@ Body
   it("rejects empty tools or body", async () => {
     await withTempAgentDir(async (agentDir) => {
       const workspaceWithEmptyTools = await createTempWorkspace();
-      await writeAgentFile(join(agentDir, "agents"), "empty-tools", `---
+      await writeAgentFile(join(agentDir, "subagents"), "empty-tools", `---
 name: empty-tools
 description: Broken
 tools: []
@@ -131,7 +161,7 @@ Body
 
     await withTempAgentDir(async (agentDir) => {
       const workspaceWithEmptyBody = await createTempWorkspace();
-      await writeAgentFile(join(agentDir, "agents"), "empty-body", `---
+      await writeAgentFile(join(agentDir, "subagents"), "empty-body", `---
 name: empty-body
 description: Broken
 tools: read

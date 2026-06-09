@@ -2,6 +2,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { SubagentConfig } from "./types.js";
+const SUBAGENT_DIRNAME = "subagents";
+const LEGACY_SUBAGENT_DIRNAME = "agents";
 
 function normalizeName(value: string): string {
   return value.trim().toLowerCase();
@@ -81,8 +83,12 @@ function loadDirectory(dir: string, source: "project" | "global", registry: Map<
 export function loadSubagentRegistry(cwd: string): Map<string, SubagentConfig> {
   const resolvedCwd = resolve(cwd);
   const registry = new Map<string, SubagentConfig>();
-  loadDirectory(join(getAgentDir(), "agents"), "global", registry);
-  loadDirectory(join(resolvedCwd, ".pi", "agents"), "project", registry);
+  // Prefer the new `subagents` directories while keeping the previous `agents`
+  // locations readable for compatibility during migration.
+  loadDirectory(join(getAgentDir(), LEGACY_SUBAGENT_DIRNAME), "global", registry);
+  loadDirectory(join(getAgentDir(), SUBAGENT_DIRNAME), "global", registry);
+  loadDirectory(join(resolvedCwd, ".pi", LEGACY_SUBAGENT_DIRNAME), "project", registry);
+  loadDirectory(join(resolvedCwd, ".pi", SUBAGENT_DIRNAME), "project", registry);
   return registry;
 }
 
