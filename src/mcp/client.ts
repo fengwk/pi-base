@@ -18,33 +18,54 @@ class SdkMcpClient implements McpProtocolClient {
   private client: Client | undefined;
   private transport: ClientTransport | undefined;
   private connected = false;
+  private connectPromise: Promise<void> | undefined;
+  private connectionVersion = 0;
 
   constructor(private readonly config: McpServerConfig) {}
 
   async connect(timeoutMs: number): Promise<void> {
     if (this.connected) return;
+    if (this.connectPromise) return this.connectPromise;
 
+    const connectionVersion = ++this.connectionVersion;
     const client = new Client({ name: "pi-base-mcp", version: "0.1.0" });
     const transport = this.createTransport();
-    try {
-      await withTimeout(client.connect(transport), timeoutMs, `Connection timeout (>${Math.ceil(timeoutMs / 1000)}s)`);
-      this.client = client;
-      this.transport = transport;
-      this.connected = true;
-    } catch (error) {
-      await closeClient(client);
-      this.client = undefined;
-      this.transport = undefined;
-      this.connected = false;
-      throw error;
-    }
+    // Keep the in-flight SDK client reachable so shutdown can close a spawned stdio child
+    // even if connect() has not finished its initialization handshake yet.
+    this.client = client;
+    this.transport = transport;
+    this.connected = false;
+
+    const connectPromise = (async () => {
+      try {
+        await withTimeout(client.connect(transport), timeoutMs, `Connection timeout (>${Math.ceil(timeoutMs / 1000)}s)`);
+        if (this.connectionVersion !== connectionVersion || this.client !== client || this.transport !== transport) {
+          await closeClient(client);
+          throw new Error("MCP client connection was cancelled.");
+        }
+        this.connected = true;
+      } catch (error) {
+        if (this.client === client) this.client = undefined;
+        if (this.transport === transport) this.transport = undefined;
+        this.connected = false;
+        await closeClient(client);
+        throw error;
+      } finally {
+        if (this.connectPromise === connectPromise) this.connectPromise = undefined;
+      }
+    })();
+
+    this.connectPromise = connectPromise;
+    return connectPromise;
   }
 
   async disconnect(): Promise<void> {
     const client = this.client;
+    ++this.connectionVersion;
     this.client = undefined;
     this.transport = undefined;
     this.connected = false;
+    this.connectPromise = undefined;
     if (!client) return;
     await closeClient(client);
   }
