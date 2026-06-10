@@ -1,0 +1,115 @@
+src/schemas/task.ts
+  c95059f4dacfa9ab 5
+tests/subagent-guide.test.ts
+  c95059f4dacfa9ab 1-81
+src/index-impl.ts
+  c95059f4dacfa9ab 29,55-58,283-287
+src/task/runtime.ts
+  c95059f4dacfa9ab 66-71
+src/task/guide.ts
+  c95059f4dacfa9ab 1-41
+src/task/runner.ts
+  c95059f4dacfa9ab 18
+src/render.ts
+  c95059f4dacfa9ab 152-158
+src/task/task-format.ts
+  c95059f4dacfa9ab 28,40-48,69-71,74-75,78,83
+tests/subagent-registry.test.ts
+  c95059f4dacfa9ab 102-123
+tests/task-tool.test.ts
+  c95059f4dacfa9ab 15-19,59-71
+tests/subagent-runner.test.ts
+  c95059f4dacfa9ab 495-533
+tests/render.test.ts
+  c95059f4dacfa9ab 85-98
+prompts/task.md
+  c95059f4dacfa9ab 9,20,29
+src/task/registry.ts
+  c95059f4dacfa9ab 2,105-117,122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8-ntes.8",
+  "base_commit_sha": "0c914e9d79a4d9463bc5b2d084c4a5eb8afcad62",
+  "prompts": {
+    "c95059f4dacfa9ab": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_14d91270dffeURS4QbhYbyM713",
+        "model": "openai/gpt-5.4"
+      },
+      "human_author": "fengwk",
+      "messages": [],
+      "total_additions": 276,
+      "total_deletions": 25,
+      "accepted_lines": 276,
+      "overriden_lines": 0,
+      "per_file_stats": {
+        "src/task/task-format.ts": {
+          "additions": 17,
+          "deletions": 12,
+          "accepted_lines": 17
+        },
+        "tests/subagent-runner.test.ts": {
+          "additions": 39,
+          "accepted_lines": 39
+        },
+        "src/task/runner.ts": {
+          "additions": 1,
+          "deletions": 1,
+          "accepted_lines": 1
+        },
+        "src/task/runtime.ts": {
+          "additions": 6,
+          "deletions": 2,
+          "accepted_lines": 6
+        },
+        "tests/render.test.ts": {
+          "additions": 14,
+          "accepted_lines": 14
+        },
+        "src/task/registry.ts": {
+          "additions": 15,
+          "deletions": 2,
+          "accepted_lines": 15
+        },
+        "src/index-impl.ts": {
+          "additions": 10,
+          "deletions": 4,
+          "accepted_lines": 10
+        },
+        "src/render.ts": {
+          "additions": 7,
+          "deletions": 1,
+          "accepted_lines": 7
+        },
+        "tests/subagent-registry.test.ts": {
+          "additions": 22,
+          "accepted_lines": 22
+        },
+        "src/schemas/task.ts": {
+          "additions": 1,
+          "deletions": 1,
+          "accepted_lines": 1
+        },
+        "tests/task-tool.test.ts": {
+          "additions": 19,
+          "accepted_lines": 19
+        },
+        "tests/subagent-guide.test.ts": {
+          "additions": 81,
+          "accepted_lines": 81
+        },
+        "prompts/task.md": {
+          "additions": 3,
+          "deletions": 2,
+          "accepted_lines": 3
+        },
+        "src/task/guide.ts": {
+          "additions": 41,
+          "accepted_lines": 41
+        }
+      }
+    }
+  }
+}
