@@ -8,10 +8,11 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "json-summary"],
       include: [
-        "src/schemas/subagent.ts",
-        "src/subagent/prompt.ts",
-        "src/subagent/runner.ts",
-        "src/subagent/transcript.ts"
+        "src/schemas/task.ts",
+        "src/task/prompt.ts",
+        "src/task/runner.ts",
+        "src/task/tool.ts",
+        "src/task/transcript.ts"
       ],
       exclude: [
         "tests/**"

@@ -1,12 +1,12 @@
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { subagentActivityStore } from "../src/subagent/activity.js";
-import { buildSubagentSystemPrompt } from "../src/subagent/prompt.js";
-import { getSubagentConfig, loadSubagentRegistry } from "../src/subagent/registry.js";
-import { createSubagentSessionManager, getLatestSubagentInvocation, openSubagentSessionManager, readSubagentInvocations } from "../src/subagent/sessions.js";
-import { preloadSubagentSkills } from "../src/subagent/skills.js";
-import { buildTailLines, buildTranscriptLines, getFinalAssistantText, summarizeTailLines } from "../src/subagent/transcript.js";
+import { subagentActivityStore } from "../src/task/activity.js";
+import { buildSubagentSystemPrompt } from "../src/task/prompt.js";
+import { getSubagentConfig, loadSubagentRegistry } from "../src/task/registry.js";
+import { createSubagentSessionManager, getLatestSubagentInvocation, openSubagentSessionManager, readSubagentInvocations } from "../src/task/sessions.js";
+import { preloadSubagentSkills } from "../src/task/skills.js";
+import { buildTailLines, buildTranscriptLines, buildTranscriptText, getFinalAssistantText, summarizeTailLines } from "../src/task/transcript.js";
 import { createTempWorkspace } from "./helpers.js";
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
@@ -66,56 +66,44 @@ describe("subagent internals", () => {
     });
   });
 
-  it("builds prompts without skills or subagents and escapes xml descriptions", async () => {
+  it("builds prompts with skills only and validates invalid frontmatter arrays", async () => {
     await withTempAgentDir(async (agentDir) => {
       const workspace = await createTempWorkspace();
-      await writeText(join(agentDir, "agents", "base.md"), `---
+      await writeText(join(workspace, ".pi", "skills", "guidelines.md"), "Follow the evidence.");
+      await writeText(join(agentDir, "subagents", "base.md"), `---
 name: base
 description: Base
 tools: read
 skills: []
-subagents: []
 ---
 Body only
 `);
-      await writeText(join(agentDir, "agents", "xml-helper.md"), `---
-name: xml-helper
-description: <unsafe>& helper
-tools: read
-skills: []
-subagents: []
----
-Helper body
-`);
-      await writeText(join(agentDir, "agents", "caller.md"), `---
+      await writeText(join(agentDir, "subagents", "caller.md"), `---
 name: caller
 description: Caller
 tools: read
-skills: []
-subagents: xml-helper
+skills: guidelines
+model: haiku
+thinking: medium
 ---
 Caller body
 `);
 
       const registry = loadSubagentRegistry(workspace);
-      expect(buildSubagentSystemPrompt(getSubagentConfig(registry, "base")!, registry, workspace)).toBe("Body only");
-      const callerPrompt = buildSubagentSystemPrompt(getSubagentConfig(registry, "caller")!, registry, workspace);
-      expect(callerPrompt).toContain("<subagent name=\"xml-helper\">&lt;unsafe&gt;&amp; helper</subagent>");
-    });
-  });
-  it("returns an empty registry when agent directories are missing and rejects invalid arrays", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      const workspace = await createTempWorkspace();
-      expect(loadSubagentRegistry(workspace).size).toBe(0);
+      expect(buildSubagentSystemPrompt(getSubagentConfig(registry, "base")!, workspace)).toBe("Body only");
+      const callerPrompt = buildSubagentSystemPrompt(getSubagentConfig(registry, "caller")!, workspace);
+      expect(callerPrompt).toContain("<skills>");
+      expect(callerPrompt).toContain("Follow the evidence.");
+      expect(callerPrompt).toContain("Caller body");
+      expect(getSubagentConfig(registry, "caller")).toMatchObject({ model: "haiku", thinking: "medium" });
 
-      await writeText(join(agentDir, "agents", "broken.md"), `---
+      await writeText(join(agentDir, "subagents", "broken.md"), `---
 name: broken
 description: Broken
 tools:
   - read
   - 1
 skills: []
-subagents: []
 ---
 Body
 `);
@@ -161,14 +149,17 @@ Body
     ];
 
     const lines = buildTranscriptLines(messages, { responseText: "Streaming tail", activeTools: ["write"] });
-    expect(lines).toContain("[User]");
-    expect(lines).toContain("[Assistant]");
-    expect(lines).toContain("[Tool] read");
-    expect(lines).toContain("[Result]");
+    expect(lines).toContain("User:");
+    expect(lines).toContain("Assistant:");
+    expect(lines).toContain("Tool Call:");
+    expect(lines).toContain("name: read");
+    expect(lines).toContain("Tool Result:");
     expect(lines.some((line) => line.includes("(truncated)"))).toBe(true);
-    expect(lines).toContain("[Bash] npm test");
-    expect(lines).toContain("[Assistant…]");
-    expect(lines).toContain("[Running] write");
+    expect(lines).toContain("Shell:");
+    expect(lines).toContain("command: npm test");
+    expect(lines).toContain("Streaming Assistant:");
+    expect(lines).toContain("Running Tool:");
+    expect(lines).toContain("name: write");
     expect(buildTailLines([], {}, 10)).toEqual(["(waiting for output...)"]);
     expect(summarizeTailLines(["", "tail line"])).toBe("tail line");
     expect(getFinalAssistantText(messages)).toBe("Final answer");
@@ -181,7 +172,8 @@ Body
     ];
 
     const lines = buildTranscriptLines(messages, {});
-    expect(lines).toContain("[Tool] read");
+    expect(lines).toContain("Tool Call:");
+    expect(lines).toContain("name: read");
     expect(lines).toContain("plain assistant text");
     expect(summarizeTailLines(["x".repeat(130)])).toMatch(/\.\.\.$/);
     expect(getFinalAssistantText([{ role: "assistant", content: [] }])).toBe("");
@@ -189,6 +181,21 @@ Body
   it("handles unsupported transcript parts and empty assistant/tool sections", () => {
     expect(buildTranscriptLines([{ role: "user", content: { bad: true } }], {})).toEqual([]);
     expect(buildTranscriptLines([{ role: "assistant", content: [{ type: "image", text: "ignored" }] }], {})).toEqual([]);
+  });
+  it("renders attachment-only tool results, builds transcript text, and ignores empty bash blocks", () => {
+    const lines = buildTranscriptLines([
+      { role: "toolResult", toolName: "read", toolCallId: "c1", isError: true, content: [{ type: "image" }] },
+      { role: "bashExecution", command: "   ", output: "   " },
+    ], { maxToolResultChars: 20 });
+    expect(lines).toContain("Tool Result:");
+    expect(lines).toContain("name: read");
+    expect(lines).toContain("status: error");
+    expect(lines).toContain("call_id: c1");
+    expect(lines).toContain("attachments:");
+    expect(lines).toContain("[image attachment]");
+
+    const text = buildTranscriptText([{ role: "assistant", content: [{ type: "text", text: "A" }] }]);
+    expect(text).toContain("Assistant:");
   });
 
   it("reads invocation metadata and reopens child sessions", async () => {

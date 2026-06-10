@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildSubagentSystemPrompt } from "../src/subagent/prompt.js";
-import { loadSubagentRegistry } from "../src/subagent/registry.js";
+import { buildSubagentSystemPrompt } from "../src/task/prompt.js";
+import { getSubagentConfig, loadSubagentRegistry } from "../src/task/registry.js";
 import { createTempWorkspace } from "./helpers.js";
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
@@ -27,53 +27,65 @@ afterEach(() => {
 });
 
 describe("subagent prompt builder", () => {
-  it("injects skills and subagents xml before the body", async () => {
+  it("injects skills before the body", async () => {
     await withTempAgentDir(async (agentDir) => {
       const workspace = await createTempWorkspace();
       await writeText(join(workspace, ".pi", "skills", "review-guidelines.md"), "Always verify evidence.");
-      await writeText(join(agentDir, "agents", "reviewer.md"), `---
+      await writeText(join(agentDir, "subagents", "reviewer.md"), `---
 name: reviewer
 description: Review code
 tools: read,grep
 skills: review-guidelines
-subagents: helper,missing
+model: anthropic/claude-opus-4-1
+thinking: high
 ---
 You are the reviewer.
 `);
-      await writeText(join(agentDir, "agents", "helper.md"), `---
-name: helper
-description: Helper agent
-tools: read
-skills: []
-subagents: []
----
-You are helper.
-`);
 
       const registry = loadSubagentRegistry(workspace);
-      const reviewer = registry.get("reviewer");
+      const reviewer = getSubagentConfig(registry, "reviewer");
       expect(reviewer).toBeDefined();
-      const prompt = buildSubagentSystemPrompt(reviewer!, registry, workspace);
+      const prompt = buildSubagentSystemPrompt(reviewer!, workspace);
 
       expect(prompt).toContain("<skills>");
-      expect(prompt).toContain("<skill name=\"review-guidelines\">");
+      expect(prompt).toContain('<skill name="review-guidelines">');
       expect(prompt).toContain("Always verify evidence.");
-      expect(prompt).toContain("<subagents>");
-      expect(prompt).toContain("<subagent name=\"helper\">Helper agent</subagent>");
-      expect(prompt).toContain("<subagent name=\"missing\">Subagent configuration not found.</subagent>");
       expect(prompt.trim().endsWith("You are the reviewer.")).toBe(true);
     });
   });
-  it("builds subagent xml from manual config objects", async () => {
-    const workspace = await createTempWorkspace();
-    const registry = new Map([
-      ["caller", { name: "caller", description: "Caller", tools: ["read"], skills: [], subagents: ["child"], body: "Caller body", filePath: "caller.md", source: "project" as const }],
-      ["child", { name: "child", description: "Child description", tools: ["read"], skills: [], subagents: [], body: "Child body", filePath: "child.md", source: "project" as const }],
-    ]);
+  it("preserves multiline and missing skill content", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const workspace = await createTempWorkspace();
+      await writeText(join(workspace, ".pi", "skills", "multi.md"), "line 1\nline 2");
+      await writeText(join(agentDir, "subagents", "helper.md"), `---
+name: helper
+description: Helper
+tools: read
+skills:
+  - multi
+  - missing
+---
+Helper body
+`);
 
-    const prompt = buildSubagentSystemPrompt(registry.get("caller")!, registry as any, workspace);
-    expect(prompt).toContain("<subagents>");
-    expect(prompt).toContain("<subagent name=\"child\">Child description</subagent>");
-    expect(prompt.endsWith("Caller body")).toBe(true);
+      const registry = loadSubagentRegistry(workspace);
+      const prompt = buildSubagentSystemPrompt(getSubagentConfig(registry, "helper")!, workspace);
+      expect(prompt).toContain("line 1");
+      expect(prompt).toContain("line 2");
+      expect(prompt).toContain('(Skill "missing" not found in project or global skill locations)');
+    });
+  });
+
+  it("returns the body unchanged when no skills are configured", async () => {
+    const prompt = buildSubagentSystemPrompt({
+      name: "caller",
+      description: "Caller",
+      tools: ["read"],
+      skills: [],
+      body: "Caller body",
+      filePath: "caller.md",
+      source: "project",
+    }, process.cwd());
+    expect(prompt).toBe("Caller body");
   });
 });

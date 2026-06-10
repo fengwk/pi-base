@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getSubagentConfig, listSubagentConfigs, loadSubagentRegistry } from "../src/subagent/registry.js";
+import { getSubagentConfig, listSubagentConfigs, loadSubagentRegistry } from "../src/task/registry.js";
 import { createTempWorkspace } from "./helpers.js";
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
@@ -34,7 +34,8 @@ name: reviewer
 description: Global reviewer
 tools: read,grep
 skills: global-skill
-subagents: helper
+model: anthropic/claude-sonnet-4
+thinking: medium
 ---
 Global body
 `);
@@ -46,9 +47,8 @@ tools:
   - find
 skills:
   - project-skill
-subagents:
-  - helper
-  - auditor
+model: haiku
+thinking: high
 ---
 Project body
 `);
@@ -57,7 +57,6 @@ name: helper
 description: Helper
 tools: read
 skills: []
-subagents: []
 ---
 Helper body
 `);
@@ -68,39 +67,10 @@ Helper body
         description: "Project reviewer",
         tools: ["read", "find"],
         skills: ["project-skill"],
-        subagents: ["helper", "auditor"],
+        model: "haiku",
+        thinking: "high",
         source: "project",
         body: "Project body",
-      });
-    });
-  });
-  it("still loads legacy agents directories during migration", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      const workspace = await createTempWorkspace();
-      await writeAgentFile(join(agentDir, "agents"), "legacy-global", `---
-name: legacy-global
-description: Legacy global
-tools: read
-skills: []
-subagents: []
----
-Legacy global body
-`);
-      await writeAgentFile(join(workspace, ".pi", "agents"), "legacy-project", `---
-name: legacy-project
-description: Legacy project
-tools: read
-skills: []
-subagents: []
----
-Legacy project body
-`);
-
-      const registry = loadSubagentRegistry(workspace);
-      expect(listSubagentConfigs(registry).map((item) => item.name)).toEqual(["legacy-global", "legacy-project"]);
-      expect(getSubagentConfig(registry, "legacy-project")).toMatchObject({
-        source: "project",
-        body: "Legacy project body",
       });
     });
   });
@@ -113,7 +83,8 @@ name: coder
 description: Coder
 tools: read, grep, write
 skills: style, tests
-subagents: reviewer, planner
+model: claude
+thinking: low
 ---
 Coder body
 `);
@@ -122,7 +93,8 @@ Coder body
       expect(getSubagentConfig(registry, "CODER")).toMatchObject({
         tools: ["read", "grep", "write"],
         skills: ["style", "tests"],
-        subagents: ["reviewer", "planner"],
+        model: "claude",
+        thinking: "low",
       });
     });
   });
@@ -135,7 +107,6 @@ name: right-name
 description: Broken
 tools: read
 skills: []
-subagents: []
 ---
 Body
 `);
@@ -144,7 +115,7 @@ Body
     });
   });
 
-  it("rejects empty tools or body", async () => {
+  it("rejects empty tools, empty body, and invalid thinking levels", async () => {
     await withTempAgentDir(async (agentDir) => {
       const workspaceWithEmptyTools = await createTempWorkspace();
       await writeAgentFile(join(agentDir, "subagents"), "empty-tools", `---
@@ -152,7 +123,6 @@ name: empty-tools
 description: Broken
 tools: []
 skills: []
-subagents: []
 ---
 Body
 `);
@@ -166,10 +136,23 @@ name: empty-body
 description: Broken
 tools: read
 skills: []
-subagents: []
 ---
 `);
       expect(() => loadSubagentRegistry(workspaceWithEmptyBody)).toThrow("markdown body must not be empty");
+    });
+
+    await withTempAgentDir(async (agentDir) => {
+      const workspaceWithInvalidThinking = await createTempWorkspace();
+      await writeAgentFile(join(agentDir, "subagents"), "invalid-thinking", `---
+name: invalid-thinking
+description: Broken
+tools: read
+skills: []
+thinking: ultra
+---
+Body
+`);
+      expect(() => loadSubagentRegistry(workspaceWithInvalidThinking)).toThrow("frontmatter.thinking must be one of");
     });
   });
 });

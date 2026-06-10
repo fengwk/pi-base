@@ -1,20 +1,182 @@
 # pi-base
 
 `pi-base` is a minimal Pi extension that provides a stable local coding toolset built around hash-anchored text editing.
+## Jump to
+
+- [Quick start](#quick-start)
+- [Included tools](#included-tools)
+- [Task subagents](#task-subagents)
+- [Configuration](#configuration)
+- [Slash commands](#slash-commands)
+- [Validation](#validation)
+
+## Quick start
+
+For most setups, you only need four things:
+
+1. Put your global config in `~/.pi/agent/pi-base.json`.
+2. Optionally add a project override in `<repo>/.pi/pi-base.json`.
+3. After editing either file, run `/reload` in Pi.
+4. Use `task` for isolated delegated subtasks and `/subagents` to inspect the current parent session's subagent runs.
+
+Typical workflow:
+
+1. Discover with `read`, `grep`, `find`, and `lsp_*`.
+2. Modify files with `edit` or `write`.
+3. Run commands with `bash` when you need tests, builds, git, or external CLIs.
+4. Delegate long, noisy, or parallelizable subtasks with `task`.
+5. Add MCP servers when you want extra tools such as search, scraping, or internal platform integrations.
+
+If you just want to get started, create `~/.pi/agent/pi-base.json` with `{}` first, then add only the sections you actually need.
+### What to use when
+
+- Need to read a file or directory? Use `read`.
+- Need to search text across files? Use `grep`.
+- Need to locate files by name or glob? Use `find`.
+- Need to make a small change to an existing file? Use `edit`.
+- Need to create a new file or replace a whole file? Use `write`.
+- Need to run tests, builds, git, or external CLIs? Use `bash`.
+- Need IDE-style diagnostics or symbol navigation? Use `lsp_*`.
+- Need a long-running, noisy, or parallelizable subtask handled in isolation? Use `task`.
+- Changed `pi-base.json` or subagent markdown and want the running process to pick it up? Use `/reload`.
+- Want to inspect delegated runs for the current parent session? Use `/subagents`.
+- Want to inspect MCP server/tool state? Use `/mcp-status`.
 
 ## Included tools
 
-- `read`
-- `grep`
-- `find`
-- `bash`
-- `edit`
-- `write`
-- `lsp_diagnostics`
-- `lsp_goto_definition`
-- `lsp_workspace_symbols`
-- `lsp_java_decompile`
+Built-in tools:
 
+- `read` — read files, directories, and supported images
+- `grep` — search file contents and return matching lines
+- `find` — discover files by glob pattern
+- `bash` — run commands such as tests, builds, git, or external CLIs
+- `edit` — make small, anchor-based edits to existing files
+- `write` — create a new text file or intentionally replace a whole file
+- `lsp_diagnostics` — get diagnostics from a configured LSP server
+- `lsp_goto_definition` — jump to a symbol definition
+- `lsp_workspace_symbols` — search symbols across the workspace
+- `lsp_java_decompile` — inspect external Java classes through `jdtls`
+- `task` — delegate an isolated subtask to a configured subagent
+
+Dynamic tools:
+
+- configured MCP tools — any tools exposed by enabled MCP servers in `pi-base.json`
+## Task subagents
+
+`task` delegates a subtask to a subagent in an isolated session.
+In normal use, ask the main agent to delegate with `task`; you do not start a subagent session manually.
+Use `task` when the subtask is:
+
+- long-running,
+- noisy,
+- independent enough to run in parallel, or
+- better handled by a specialized subagent profile.
+
+Avoid `task` for tiny local actions such as reading one known file or checking one obvious symbol; direct tools are simpler.
+
+Subagent definitions live in Markdown files under:
+
+- Global: `~/.pi/agent/subagents/*.md`
+- Project: `<repo>/.pi/subagents/*.md`
+
+Project subagents override global subagents with the same name.
+
+Supported frontmatter fields:
+
+- `name`: subagent name used by the `task` tool
+- `description`: short selection hint shown to the parent agent
+- `tools`: allowed tool names for this subagent
+- `skills`: optional skill names injected into the subagent system prompt
+- `model`: optional model override for this subagent
+- `thinking`: optional thinking-level override (`off|minimal|low|medium|high|xhigh`)
+
+Minimal example:
+
+```md
+---
+name: reviewer
+description: Review code changes and report correctness issues.
+tools:
+  - read
+  - grep
+skills: []
+model: MiniMax-M3
+thinking: high
+---
+You are Reviewer.
+Return only a concise review report with file paths and evidence.
+```
+
+`/subagents` opens the subagent-session picker for the current parent session.
+
+Example use cases:
+
+- Ask a reviewer-style subagent to inspect a diff and return only correctness issues.
+- Ask an explorer/searcher-style subagent to investigate a module and return a structured summary.
+- Ask a helper-style subagent to run a long test/build command and report only pass/fail status and key errors.
+## Quick examples
+
+### Minimal `pi-base.json`
+
+```json
+{}
+```
+
+### Minimal subagent file
+
+Create `~/.pi/agent/subagents/reviewer.md`:
+
+```md
+---
+name: reviewer
+description: Review code changes and report correctness issues.
+tools:
+  - read
+  - grep
+skills: []
+model: MiniMax-M3
+thinking: high
+---
+You are Reviewer.
+Return only a concise review report with file paths and evidence.
+```
+
+### Example natural-language delegation
+
+Ask the main agent something like:
+
+```text
+Use task with the reviewer subagent to inspect the current diff and return only correctness issues with file paths and evidence.
+```
+
+### Minimal MCP config
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "mm": {
+        "type": "local",
+        "command": ["my-mcp", "serve"],
+        "toolPrefix": ""
+      }
+    }
+  }
+}
+```
+
+After editing config files, run `/reload` in Pi.
+### Minimal project override
+
+Create `<repo>/.pi/pi-base.json` when one repository needs different policy or integrations than your global defaults.
+
+```json
+{
+  "permission": {
+    "bash": "ask"
+  }
+}
+```
 ## Core ideas
 
 - Text reads prefix each displayed line with a `LINE#HASH|` anchor prefix, for example `1#7936|export const value = 1;`; use only the `LINE#HASH` part as an edit anchor.
@@ -32,6 +194,7 @@
 - MCP servers are configured in the same unified `pi-base` config under `mcp.servers`. `pi-base` connects to them asynchronously, auto-registers their tools, shows `MCP: x/y servers` in the second footer line, and exposes `/mcp-status` for a tree view of server/tool state.
 - `notify` can mirror OpenCode-style desktop notifications for permission prompts and completed agent turns. By default it uses `$HOME/.config/opencode/scripts/notify.sh` when that script exists, and otherwise stays silent.
 
+If you only need daily usage, you can usually stop reading after this section. The rest of the document is reference material for specific config areas and behaviors.
 ## Configuration
 
 `pi-base` uses a unified config file:
@@ -40,6 +203,13 @@
 - Project: `<repo>/.pi/pi-base.json`
 
 The same file contains LSP, permission, render preview config, MCP config, context compression config, and optional default YOLO mode.
+A completely valid starting point is:
+
+```json
+{}
+```
+
+Then add only the sections you need, for example `permission`, `lsp`, `mcp`, `notify`, `render`, or `contextCompression`.
 
 For isolated tests or temporary runs, `PI_BASE_GLOBAL_SETTINGS_PATH` can override the global `pi-base` config path.
 
@@ -241,6 +411,8 @@ Behavior notes:
 
 - `/yolo`
   - Toggles permission bypass for the current Pi process and workspace.
+- `/subagents`
+  - Opens the subagent-session picker for the current parent session.
 - `/resume-all`
   - Opens a picker for sessions across all project directories known to Pi, unlike the built-in `/resume` flow that stays focused on the current project/session directory.
   - In TUI mode it opens directly in the all-project view with recent sorting.

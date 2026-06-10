@@ -1,4 +1,4 @@
-import type { SubagentActivityEntry, SubagentToolDetails } from "./types.js";
+import type { SubagentActivityEntry, SubagentRunDetails } from "./types.js";
 
 class SubagentActivityStore {
   private readonly entries = new Map<string, SubagentActivityEntry>();
@@ -10,7 +10,7 @@ class SubagentActivityStore {
     });
   }
 
-  finish(details: SubagentToolDetails & { parentSessionPath?: string }): void {
+  finish(details: SubagentRunDetails & { parentSessionPath?: string }): void {
     const key = details.sessionId ?? `${details.name}:${details.mode}`;
     const current = this.entries.get(key);
     this.entries.set(key, {

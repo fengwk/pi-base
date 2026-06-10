@@ -1,9 +1,11 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { SubagentConfig } from "./types.js";
+
 const SUBAGENT_DIRNAME = "subagents";
-const LEGACY_SUBAGENT_DIRNAME = "agents";
+const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
 function normalizeName(value: string): string {
   return value.trim().toLowerCase();
@@ -14,6 +16,15 @@ function ensureNonEmptyString(value: unknown, path: string): string {
     throw new Error(`${path} must be a non-empty string.`);
   }
   return value.trim();
+}
+
+function readOptionalString(value: unknown, path: string): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") {
+    throw new Error(`${path} must be a string.`);
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function toStringArray(value: unknown, path: string): string[] {
@@ -28,6 +39,15 @@ function toStringArray(value: unknown, path: string): string[] {
     throw new Error(`${path} must be a string or an array of strings.`);
   }
   return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function parseThinkingLevel(value: unknown, path: string): ThinkingLevel | undefined {
+  const normalized = readOptionalString(value, path);
+  if (!normalized) return undefined;
+  if (!VALID_THINKING_LEVELS.has(normalized as ThinkingLevel)) {
+    throw new Error(`${path} must be one of: ${Array.from(VALID_THINKING_LEVELS).join(", ")}.`);
+  }
+  return normalized as ThinkingLevel;
 }
 
 function parseSubagentFile(filePath: string, source: "project" | "global"): SubagentConfig {
@@ -46,7 +66,8 @@ function parseSubagentFile(filePath: string, source: "project" | "global"): Suba
   }
 
   const skills = toStringArray(frontmatter.skills, `${filePath}: frontmatter.skills`);
-  const subagents = toStringArray(frontmatter.subagents, `${filePath}: frontmatter.subagents`);
+  const model = readOptionalString(frontmatter.model, `${filePath}: frontmatter.model`);
+  const thinking = parseThinkingLevel(frontmatter.thinking, `${filePath}: frontmatter.thinking`);
   const trimmedBody = body.trim();
   if (!trimmedBody) {
     throw new Error(`${filePath}: markdown body must not be empty.`);
@@ -57,7 +78,8 @@ function parseSubagentFile(filePath: string, source: "project" | "global"): Suba
     description,
     tools,
     skills,
-    subagents,
+    model,
+    thinking,
     body: trimmedBody,
     filePath,
     source,
@@ -83,11 +105,7 @@ function loadDirectory(dir: string, source: "project" | "global", registry: Map<
 export function loadSubagentRegistry(cwd: string): Map<string, SubagentConfig> {
   const resolvedCwd = resolve(cwd);
   const registry = new Map<string, SubagentConfig>();
-  // Prefer the new `subagents` directories while keeping the previous `agents`
-  // locations readable for compatibility during migration.
-  loadDirectory(join(getAgentDir(), LEGACY_SUBAGENT_DIRNAME), "global", registry);
   loadDirectory(join(getAgentDir(), SUBAGENT_DIRNAME), "global", registry);
-  loadDirectory(join(resolvedCwd, ".pi", LEGACY_SUBAGENT_DIRNAME), "project", registry);
   loadDirectory(join(resolvedCwd, ".pi", SUBAGENT_DIRNAME), "project", registry);
   return registry;
 }
@@ -98,8 +116,4 @@ export function getSubagentConfig(registry: Map<string, SubagentConfig>, name: s
 
 export function listSubagentConfigs(registry: Map<string, SubagentConfig>): SubagentConfig[] {
   return Array.from(registry.values()).sort((left, right) => left.name.localeCompare(right.name));
-}
-
-export function normalizeSubagentName(name: string): string {
-  return normalizeName(name);
 }

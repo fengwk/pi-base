@@ -12,11 +12,10 @@ function padVisible(text: string, width: number): string {
 
 function colorizeLine(line: string, theme: any): string {
   if (line === "───") return theme.fg("dim", line);
-  if (line === "[User]") return theme.fg("accent", line);
-  if (line === "[Assistant]" || line === "[Assistant…]") return theme.fg("toolTitle", theme.bold ? theme.bold(line) : line);
-  if (line === "[Result]") return theme.fg("muted", line);
-  if (line.startsWith("[Tool] ") || line.startsWith("[Bash] ")) return theme.fg("muted", line);
-  if (line.startsWith("[Running] ")) return theme.fg("warning", line);
+  if (line === "User:") return theme.fg("accent", line);
+  if (line === "Assistant:" || line === "Streaming Assistant:") return theme.fg("toolTitle", theme.bold ? theme.bold(line) : line);
+  if (line === "Tool Call:" || line === "Tool Result:" || line === "Shell:") return theme.fg("muted", theme.bold ? theme.bold(line) : line);
+  if (line === "Running Tool:") return theme.fg("warning", theme.bold ? theme.bold(line) : line);
   return line;
 }
 

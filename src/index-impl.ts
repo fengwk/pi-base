@@ -24,8 +24,8 @@ import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
 import { resolveToolWorkdir } from "./path-utils.js";
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.js";
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
-import { registerSubagentTool } from "./subagent/tool.js";
-import { registerSubagentsCommand } from "./subagent/ui.js";
+import { registerTaskTool } from "./task/tool.js";
+import { registerSubagentsCommand } from "./task/ui.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
@@ -42,7 +42,7 @@ const BASE_TOOL_NAMES = [
   "lsp_goto_definition",
   "lsp_workspace_symbols",
   "lsp_java_decompile",
-  "subagent",
+  "task",
 ] as const;
 
 export interface PiBaseExtensionOptions {
@@ -222,7 +222,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getCollapsedResultMaxChars,
   });
   registerLspTools(pi, { resolverFactory, getCollapsedResultLines, getCollapsedResultMaxChars });
-  registerSubagentTool(pi);
+  registerTaskTool(pi);
   const notifyHooks = registerNotifySupport(pi, {
     loadSettings,
     ...options.notify,

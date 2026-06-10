@@ -8,6 +8,7 @@ export const SUBAGENT_INVOCATION_ENTRY_TYPE = "pi-base-subagent-invocation";
 function encodeCwd(cwd: string): string {
   return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
+
 function isEncodedCwdDir(name: string): boolean {
   return name.startsWith("--") && name.endsWith("--");
 }
@@ -57,8 +58,19 @@ export function createSubagentSessionManager(
   return manager;
 }
 
-export async function listSubagentSessions(cwd: string, agentDir: string = getAgentDir(), parentSessionDir?: string): Promise<SessionInfo[]> {
-  return SessionManager.list(cwd, getSubagentSessionDir(cwd, agentDir, parentSessionDir));
+function filterSessionsByParent(sessions: SessionInfo[], parentSessionPath?: string): SessionInfo[] {
+  if (!parentSessionPath) return sessions;
+  return sessions.filter((info) => info.parentSessionPath === parentSessionPath);
+}
+
+export async function listSubagentSessions(
+  cwd: string,
+  agentDir: string = getAgentDir(),
+  parentSessionDir?: string,
+  parentSessionPath?: string,
+): Promise<SessionInfo[]> {
+  const sessions = await SessionManager.list(cwd, getSubagentSessionDir(cwd, agentDir, parentSessionDir));
+  return filterSessionsByParent(sessions, parentSessionPath);
 }
 
 export async function findSubagentSessionInfo(
@@ -66,8 +78,9 @@ export async function findSubagentSessionInfo(
   sessionId: string,
   agentDir: string = getAgentDir(),
   parentSessionDir?: string,
+  parentSessionPath?: string,
 ): Promise<SessionInfo | undefined> {
-  const sessions = await listSubagentSessions(cwd, agentDir, parentSessionDir);
+  const sessions = await listSubagentSessions(cwd, agentDir, parentSessionDir, parentSessionPath);
   return sessions.find((info) => info.id === sessionId);
 }
 
@@ -76,8 +89,9 @@ export async function openSubagentSessionManager(
   sessionId: string,
   agentDir: string = getAgentDir(),
   parentSessionDir?: string,
+  parentSessionPath?: string,
 ): Promise<SessionManager> {
-  const info = await findSubagentSessionInfo(cwd, sessionId, agentDir, parentSessionDir);
+  const info = await findSubagentSessionInfo(cwd, sessionId, agentDir, parentSessionDir, parentSessionPath);
   if (!info) {
     throw new Error(`Unknown subagent session_id: ${sessionId}`);
   }

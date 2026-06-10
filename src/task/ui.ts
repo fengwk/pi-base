@@ -1,11 +1,11 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 import { subagentActivityStore } from "./activity.js";
-import { getSubagentSessionDir, listSubagentSessions, collapseInvocationChain } from "./sessions.js";
+import { collapseInvocationChain, getSubagentSessionDir, listSubagentSessions } from "./sessions.js";
 import { buildTailLines, summarizeTailLines } from "./transcript.js";
-import type { SubagentSessionRecord, SubagentTreeNode } from "./types.js";
+import type { SubagentSessionRecord } from "./types.js";
 import { SubagentConversationViewer } from "./viewer.js";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 function createSelectListTheme(theme: any) {
   return {
@@ -33,59 +33,28 @@ export function buildSessionRecord(info: Awaited<ReturnType<typeof listSubagentS
   };
 }
 
-export function buildSubagentTree(records: SubagentSessionRecord[], parentSessionFile?: string): SubagentTreeNode[] {
-  const byPath = new Map(records.map((record) => [record.info.path, { record, children: [] as SubagentTreeNode[] }]));
-  const roots: SubagentTreeNode[] = [];
-
-  for (const node of byPath.values()) {
-    const parentPath = node.record.info.parentSessionPath;
-    const parentNode = parentPath ? byPath.get(parentPath) : undefined;
-    if (parentNode) {
-      parentNode.children.push(node);
-      continue;
-    }
-    if (!parentSessionFile || parentPath === parentSessionFile) {
-      roots.push(node);
-    }
-  }
-
-  const sortNodes = (nodes: SubagentTreeNode[]) => {
-    nodes.sort((left, right) => right.record.info.modified.getTime() - left.record.info.modified.getTime());
-    for (const node of nodes) sortNodes(node.children);
-  };
-
-  sortNodes(roots);
-  return roots;
+function sortSessionRecords(records: SubagentSessionRecord[]): SubagentSessionRecord[] {
+  return [...records].sort((left, right) => right.info.modified.getTime() - left.info.modified.getTime());
 }
 
-export function flattenSubagentTree(nodes: SubagentTreeNode[], depth = 0): Array<{ node: SubagentTreeNode; depth: number }> {
-  const flat: Array<{ node: SubagentTreeNode; depth: number }> = [];
-  for (const node of nodes) {
-    flat.push({ node, depth });
-    flat.push(...flattenSubagentTree(node.children, depth + 1));
-  }
-  return flat;
-}
-
-async function showTreePicker(ctx: ExtensionCommandContext, records: SubagentSessionRecord[]): Promise<SubagentSessionRecord | undefined> {
-  const nodes = buildSubagentTree(records, ctx.sessionManager.getSessionFile());
-  const flattened = flattenSubagentTree(nodes);
-  if (flattened.length === 0) return undefined;
+async function showSessionPicker(ctx: ExtensionCommandContext, records: SubagentSessionRecord[]): Promise<SubagentSessionRecord | undefined> {
+  const sorted = sortSessionRecords(records);
+  if (sorted.length === 0) return undefined;
 
   return ctx.ui.custom<SubagentSessionRecord | undefined>((tui, theme, _kb, done) => {
-    const items = flattened.map(({ node, depth }) => ({
-      value: node.record.info.id,
-      label: `${"  ".repeat(depth)}${depth > 0 ? "└─ " : ""}${node.record.currentName}`,
-      description: `${node.record.status} · ${node.record.invocationChain.join(" -> ") || node.record.currentName} · ${node.record.summary}`,
+    const items = sorted.map((record) => ({
+      value: record.info.id,
+      label: record.currentName,
+      description: `${record.status} · ${record.invocationChain.join(" -> ") || record.currentName} · ${record.summary}`,
     }));
 
     const selectList = new SelectList(items, Math.min(items.length, 14), createSelectListTheme(theme));
-    selectList.onSelect = (item) => done(flattened.find((entry) => entry.node.record.info.id === item.value)?.node.record);
+    selectList.onSelect = (item) => done(sorted.find((record) => record.info.id === item.value));
     selectList.onCancel = () => done(undefined);
 
     const container = new Container();
     container.addChild(new Text(theme.fg("accent", theme.bold ? theme.bold("Subagents") : "Subagents")));
-    container.addChild(new Text(theme.fg("dim", "Current workspace subagent sessions")));
+    container.addChild(new Text(theme.fg("dim", "Subagent sessions for the current parent session")));
     container.addChild(new Text(""));
     container.addChild(selectList);
     container.addChild(new Text(""));
@@ -121,11 +90,9 @@ async function showConversationViewer(ctx: ExtensionCommandContext, record: Suba
 
 export function registerSubagentsCommand(pi: Pick<ExtensionAPI, "registerCommand">): void {
   pi.registerCommand("subagents", {
-    description: "Browse subagent sessions for the current workspace",
+    description: "Browse subagent sessions for the current parent session",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      if (!ctx.hasUI) {
-        return;
-      }
+      if (!ctx.hasUI) return;
       if (args.trim().length > 0) {
         ctx.ui.notify("Usage: /subagents", "warning");
         return;
@@ -134,15 +101,16 @@ export function registerSubagentsCommand(pi: Pick<ExtensionAPI, "registerCommand
       const parentSessionDir = typeof ctx.sessionManager.getSessionDir === "function"
         ? ctx.sessionManager.getSessionDir()
         : undefined;
+      const currentParentSessionPath = ctx.sessionManager.getSessionFile();
       const sessionDir = getSubagentSessionDir(ctx.cwd, undefined, parentSessionDir);
-      const sessions = await listSubagentSessions(ctx.cwd, undefined, parentSessionDir);
+      const sessions = await listSubagentSessions(ctx.cwd, undefined, parentSessionDir, currentParentSessionPath);
       if (sessions.length === 0) {
-        ctx.ui.notify(`No subagent sessions found in ${sessionDir}`, "info");
+        ctx.ui.notify(`No subagent sessions found for the current parent session in ${sessionDir}`, "info");
         return;
       }
 
       const records = sessions.map((info) => buildSessionRecord(info, sessionDir));
-      const selected = await showTreePicker(ctx, records);
+      const selected = await showSessionPicker(ctx, records);
       if (!selected) return;
       await showConversationViewer(ctx, selected);
     },

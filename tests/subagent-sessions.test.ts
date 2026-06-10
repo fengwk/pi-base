@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { appendSubagentInvocation, collapseInvocationChain, createSubagentSessionManager, deriveSubagentSessionDir, findSubagentSessionInfo, getLatestSubagentInvocation, getSubagentSessionDir, getSubagentSessionsRoot, listSubagentSessions, openSubagentSessionManager, readSubagentInvocations } from "../src/subagent/sessions.js";
+import { appendSubagentInvocation, collapseInvocationChain, createSubagentSessionManager, deriveSubagentSessionDir, findSubagentSessionInfo, getLatestSubagentInvocation, getSubagentSessionDir, getSubagentSessionsRoot, listSubagentSessions, openSubagentSessionManager, readSubagentInvocations } from "../src/task/sessions.js";
 import { createTempWorkspace } from "./helpers.js";
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
@@ -52,25 +52,33 @@ describe("subagent session helpers", () => {
     });
   });
 
-  it("creates, lists, opens, and links subagent sessions", async () => {
+  it("creates, lists, opens, and links subagent sessions scoped to the current parent session", async () => {
     await withTempAgentDir(async (agentDir) => {
       const workspace = await createTempWorkspace();
       const parent = SessionManager.create(workspace);
       parent.appendMessage({ role: "user", content: [{ type: "text", text: "root" }] } as any);
+      const otherParent = SessionManager.create(workspace);
 
       const manager = createSubagentSessionManager(workspace, parent.getSessionFile(), agentDir, parent.getSessionDir());
       appendSubagentInvocation(manager, { name: "coder", timestamp: new Date().toISOString() });
       manager.appendMessage({ role: "user", content: [{ type: "text", text: "child task" }] } as any);
       manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "done" }] } as any);
 
-      const sessions = await listSubagentSessions(workspace, agentDir, parent.getSessionDir());
+      const otherManager = createSubagentSessionManager(workspace, otherParent.getSessionFile(), agentDir, otherParent.getSessionDir());
+      appendSubagentInvocation(otherManager, { name: "helper", timestamp: new Date().toISOString() });
+      otherManager.appendMessage({ role: "assistant", content: [{ type: "text", text: "other" }] } as any);
+
+      const sessions = await listSubagentSessions(workspace, agentDir, parent.getSessionDir(), parent.getSessionFile());
       expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.id).toBe(manager.getSessionId());
       expect(sessions[0]?.parentSessionPath).toBe(parent.getSessionFile());
 
-      const info = await findSubagentSessionInfo(workspace, manager.getSessionId(), agentDir, parent.getSessionDir());
+      const info = await findSubagentSessionInfo(workspace, manager.getSessionId(), agentDir, parent.getSessionDir(), parent.getSessionFile());
       expect(info?.id).toBe(manager.getSessionId());
+      const missing = await findSubagentSessionInfo(workspace, otherManager.getSessionId(), agentDir, parent.getSessionDir(), parent.getSessionFile());
+      expect(missing).toBeUndefined();
 
-      const reopened = await openSubagentSessionManager(workspace, manager.getSessionId(), agentDir, parent.getSessionDir());
+      const reopened = await openSubagentSessionManager(workspace, manager.getSessionId(), agentDir, parent.getSessionDir(), parent.getSessionFile());
       const entries = reopened.getEntries();
       expect(getLatestSubagentInvocation(entries)?.name).toBe("coder");
       expect(collapseInvocationChain(entries)).toEqual(["coder"]);
