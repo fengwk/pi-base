@@ -26,6 +26,7 @@ import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
 import { registerTaskTool } from "./task/tool.js";
 import { registerSubagentsCommand } from "./task/ui.js";
+import { buildSubagentGuide } from "./task/guide.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
@@ -51,8 +52,10 @@ export interface PiBaseExtensionOptions {
 }
 
 
-function loadBaseToolGuide(): string {
-  return readFileSync(new URL("../prompts/base.md", import.meta.url), "utf8").trim();
+function loadBaseToolGuide(cwd: string, selectedTools?: string[]): string {
+  const baseGuide = readFileSync(new URL("../prompts/base.md", import.meta.url), "utf8").trim();
+  if (Array.isArray(selectedTools) && !selectedTools.includes("task")) return baseGuide;
+  return `${baseGuide}\n\n${buildSubagentGuide(cwd)}`;
 }
 
 
@@ -277,8 +280,11 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     }
   });
 
-  pi.on("before_agent_start", async (event) => {
-    const guide = loadBaseToolGuide();
+  pi.on("before_agent_start", async (event, ctx: ExtensionContext) => {
+    const selectedTools = Array.isArray((event as any)?.systemPromptOptions?.selectedTools)
+      ? (event as any).systemPromptOptions.selectedTools as string[]
+      : undefined;
+    const guide = loadBaseToolGuide(ctx?.cwd ?? process.cwd(), selectedTools);
     if (!guide) return undefined;
     return {
       systemPrompt: `${event.systemPrompt}\n\n${guide}`,

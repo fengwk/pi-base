@@ -82,6 +82,20 @@ describe("render helpers", () => {
     expect(rendered).toContain("<warning>Review the written file content below. Lines prefixed with digits carry LINE#HASH anchors for follow-up edits.</warning>");
     expect(rendered).toContain("<muted>1#abcd|</muted><toolOutput>hello</toolOutput>");
   });
+  it("colorizes task-style status states and explicit error fields", () => {
+    const raw = [
+      "status: completed",
+      "status: running",
+      "status: failed",
+      "error: invalid api key",
+    ].join("\n");
+
+    const rendered = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: true }, theme, { lastComponent: undefined }));
+    expect(rendered).toContain("<muted>status:</muted> <success>completed</success>");
+    expect(rendered).toContain("<muted>status:</muted> <warning>running</warning>");
+    expect(rendered).toContain("<muted>status:</muted> <error>failed</error>");
+    expect(rendered).toContain("<muted>error:</muted> <error>invalid api key</error>");
+  });
   it("resolves wildcard tool config patterns by specificity", () => {
     const config = {
       "*": 5,

@@ -63,8 +63,12 @@ export function buildRunDetails(
   options: { responseText?: string; activeTools?: string[] } = {},
 ): SubagentRunDetails {
   const transcriptLines = buildTranscriptLines(session.messages, options);
-  const recentLines = transcriptLines.filter((line) => line.trim().length > 0).slice(-10);
-  const tailLines = recentLines.length > 0 ? recentLines : ["(waiting for output...)"];
+  const recentLines = transcriptLines
+    .filter((line) => line.trim().length > 0)
+    .slice(-(base.error ? 9 : 10));
+  const tailLines = recentLines.length > 0 ? [...recentLines] : [];
+  if (base.error) tailLines.push(`Error: ${base.error}`);
+  if (tailLines.length === 0) tailLines.push("(waiting for output...)");
   return {
     sessionId: session.sessionId,
     sessionFile: session.sessionFile,

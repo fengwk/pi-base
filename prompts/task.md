@@ -6,7 +6,7 @@ Advantages:
 - Efficiency: independent subtasks can be delegated to multiple subagents in parallel.
 - Isolation: each subagent runs in a separate session and focuses only on the prompt you provide.
 - Context hygiene: the subagent session absorbs long execution traces and returns only the information you asked for.
-- Specialization: available subagents are presented as a structured list of `name` and `description`; choose the subagent whose description best matches the subtask.
+- Specialization: available subagents are presented in the system prompt as a structured list of `name` and `description`; choose the subagent whose description best matches the subtask, and use only those exact names.
 
 Arguments:
 - `subagent`: subagent name.
@@ -17,6 +17,7 @@ Behavior:
 - The tool result returns the current subagent name, the subagent `session_id`, and the subagent's final report.
 - Subagents cannot invoke other subagents. You are responsible for coordinating all delegation from the parent session.
 - Different subagent sessions cannot communicate with each other directly. If one subagent's findings should inform another subagent, you must pass the relevant context yourself in a later `prompt`.
+- If the `Available task subagents` section says none are configured, do not call `task` until a subagent definition exists.
 
 Best practices:
 1. On the first delegation, include all relevant context explicitly. A subagent does not share your current session memory.

@@ -99,6 +99,28 @@ Coder body
     });
   });
 
+  it("finds project subagents from ancestor directories", async () => {
+    await withTempAgentDir(async () => {
+      const workspace = await createTempWorkspace();
+      const nested = join(workspace, "packages", "app");
+      await mkdir(nested, { recursive: true });
+      await writeAgentFile(join(workspace, ".pi", "subagents"), "reviewer", `---
+name: reviewer
+description: Ancestor reviewer
+tools: read
+skills: []
+---
+Reviewer body
+`);
+
+      const registry = loadSubagentRegistry(nested);
+      expect(getSubagentConfig(registry, "reviewer")).toMatchObject({
+        description: "Ancestor reviewer",
+        source: "project",
+      });
+    });
+  });
+
   it("rejects mismatched file and frontmatter names", async () => {
     await withTempAgentDir(async (agentDir) => {
       const workspace = await createTempWorkspace();

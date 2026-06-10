@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { SubagentConfig } from "./types.js";
@@ -102,11 +102,24 @@ function loadDirectory(dir: string, source: "project" | "global", registry: Map<
   }
 }
 
+export function resolveProjectSubagentDir(cwd: string): string {
+  const resolvedCwd = resolve(cwd);
+  let dir = resolvedCwd;
+  let previous = "";
+  while (dir !== previous) {
+    const candidate = join(dir, ".pi", SUBAGENT_DIRNAME);
+    if (existsSync(candidate)) return candidate;
+    previous = dir;
+    dir = dirname(dir);
+  }
+  return join(resolvedCwd, ".pi", SUBAGENT_DIRNAME);
+}
+
 export function loadSubagentRegistry(cwd: string): Map<string, SubagentConfig> {
   const resolvedCwd = resolve(cwd);
   const registry = new Map<string, SubagentConfig>();
   loadDirectory(join(getAgentDir(), SUBAGENT_DIRNAME), "global", registry);
-  loadDirectory(join(resolvedCwd, ".pi", SUBAGENT_DIRNAME), "project", registry);
+  loadDirectory(resolveProjectSubagentDir(resolvedCwd), "project", registry);
   return registry;
 }
 

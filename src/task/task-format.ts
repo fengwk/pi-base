@@ -25,6 +25,7 @@ export function buildTaskErrorResult(
   details: Pick<ParsedTaskParams, "subagent" | "mode" | "sessionId">,
   message: string,
 ): AgentToolResult<SubagentRunDetails> & { isError: true } {
+  const errorLine = `Error: ${message}`;
   return {
     content: [{
       type: "text",
@@ -36,15 +37,15 @@ export function buildTaskErrorResult(
         message,
       ].join("\n"),
     }],
-    details: {
-      ...(details.sessionId ? { sessionId: details.sessionId } : {}),
-      mode: details.mode,
-      name: details.subagent,
-      status: "failed",
-      tailLines: [message],
-      summary: message,
-      transcriptLines: ["Error:", message],
-      error: message,
+      details: {
+        ...(details.sessionId ? { sessionId: details.sessionId } : {}),
+        mode: details.mode,
+        name: details.subagent,
+        status: "failed",
+        tailLines: [errorLine],
+        summary: message,
+        transcriptLines: ["Error:", message],
+        error: message,
     },
     isError: true,
   };
@@ -65,17 +66,21 @@ export function formatTaskCallText(args: ParsedTaskParams, theme: any): string {
 }
 
 export function formatTaskResultSummaryText(details: SubagentRunDetails, theme: any): string {
-  const title = theme?.fg ? theme.fg("toolTitle", theme?.bold ? theme.bold("task result") : "task result") : "task result";
+  const stateColor = details.status === "failed" ? "error" : details.status === "running" ? "warning" : "toolTitle";
+  const statusColor = details.status === "failed" ? "error" : details.status === "running" ? "warning" : "success";
+  const title = theme?.fg ? theme.fg(stateColor, theme?.bold ? theme.bold("task result") : "task result") : "task result";
   const subagent = theme?.fg ? theme.fg("accent", details.name) : details.name;
   const muted = (text: string) => theme?.fg ? theme.fg("muted", text) : text;
+  const status = theme?.fg ? theme.fg(statusColor, details.status) : details.status;
+  const tailLines = details.tailLines.map((line) => line.startsWith("Error:") && theme?.fg ? theme.fg("error", line) : line);
   return [
     `${title} ${subagent}`,
-    `${muted("status:")} ${details.status}`,
+    `${muted("status:")} ${status}`,
     `${muted("mode:")} ${details.mode}`,
     ...(details.sessionId ? [`${muted("session_id:")} ${details.sessionId}`] : []),
     "",
     muted("tail"),
-    ...details.tailLines,
+    ...tailLines,
   ].join("\n");
 }
 

@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 
 export const taskSchema = Type.Object({
   subagent: Type.String({
-    description: "Name of the subagent to run. Choose it from the available subagent name/description list.",
+    description: "Exact subagent name to run. Use one of the names listed in the system prompt's `Available task subagents` section; do not invent a new name.",
     minLength: 1,
   }),
   prompt: Type.String({

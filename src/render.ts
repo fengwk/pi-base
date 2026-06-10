@@ -149,7 +149,13 @@ export function renderCallText(textValue: string, lastComponent?: unknown) {
 function colorizeResultValue(key: string, value: string, theme: any): string {
   if (!value) return "";
   if (key === "path" || key === "nextOffset") return paint(theme, "accent", value);
-  if (key === "status") return paint(theme, value === "ok" ? "success" : "error", value);
+  if (key === "status") {
+    const normalized = value.trim().toLowerCase();
+    if (["ok", "success", "completed"].includes(normalized)) return paint(theme, "success", value);
+    if (["running", "pending", "in_progress"].includes(normalized)) return paint(theme, "warning", value);
+    return paint(theme, "error", value);
+  }
+  if (key === "error") return paint(theme, "error", value);
   if (key === "lsp") return paint(theme, value.startsWith("supported") ? "success" : "warning", value);
   if (key === "message") return paint(theme, "toolOutput", value);
   return paint(theme, "toolOutput", value);

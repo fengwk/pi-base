@@ -492,6 +492,45 @@ Reviewer body
     });
   });
 
+  it("appends runtime failures to the collapsed tail summary", async () => {
+    await withTempAgentDir(async () => {
+      const workspace = await createTempWorkspace();
+      await writeAgentFile(workspace, "reviewer", `---
+name: reviewer
+description: Reviewer
+tools: read
+skills: []
+---
+Reviewer body
+`);
+
+      class AuthFailureSession extends FakeSession {
+        override async prompt(text: string): Promise<void> {
+          this.sessionManager.appendMessage({ role: "user", content: [{ type: "text", text }] } as any);
+          this.messages = this.sessionManager.buildSessionContext().messages as unknown[];
+          throw new Error("invalid api key");
+        }
+      }
+
+      const result = await executeSubagent({
+        pi: { getThinkingLevel: () => "off" },
+        ctx: {
+          cwd: workspace,
+          sessionManager: SessionManager.create(workspace) as any,
+          modelRegistry: {} as any,
+          model: undefined,
+        } as any,
+        name: "reviewer",
+        prompt: "Review this",
+        createSession: (async (input: any) => ({ session: new AuthFailureSession(input.sessionManager) as any, extensionsResult: {} as any })) as any,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.details.tailLines).toContain("Error: invalid api key");
+      expect(result.details.summary).toBe("Error: invalid api key");
+    });
+  });
+
   it("treats aborted assistant completions as failed subagent runs", async () => {
     await withTempAgentDir(async () => {
       const workspace = await createTempWorkspace();

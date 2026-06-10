@@ -12,6 +12,11 @@ const theme = {
   bold: (text: string) => text,
 };
 
+const styledTheme = {
+  fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  bold: (text: string) => `<b>${text}</b>`,
+};
+
 describe("task tool formatters", () => {
   it("formats calls and result summaries directly", () => {
     const call = formatTaskCallText(parseTaskParams({ subagent: "coder", prompt: "full prompt", session_id: "s1" }), theme);
@@ -50,6 +55,20 @@ describe("task tool formatters", () => {
     const errorResult = buildTaskErrorResult(parseTaskParams({ subagent: "reviewer", prompt: "x", session_id: "s1" }), "boom");
     expect(errorResult.isError).toBe(true);
     expect(errorResult.details.sessionId).toBe("s1");
+  });
+  it("styles failed summaries as errors and surfaces the failure reason", () => {
+    const summary = formatTaskResultSummaryText({
+      mode: "new",
+      name: "reviewer",
+      status: "failed",
+      tailLines: ["User:", "Inspect the diff", "Error: invalid api key"],
+      summary: "Error: invalid api key",
+      error: "invalid api key",
+    }, styledTheme);
+
+    expect(summary).toContain("<error><b>task result</b></error> <accent>reviewer</accent>");
+    expect(summary).toContain("<muted>status:</muted> <error>failed</error>");
+    expect(summary).toContain("<error>Error: invalid api key</error>");
   });
 });
 

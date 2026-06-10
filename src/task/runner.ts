@@ -15,7 +15,7 @@ function buildFailureResult(name: string, mode: "new" | "resume", message: strin
     mode,
     name,
     status: "failed",
-    tailLines: [summaryLine],
+    tailLines: [summaryLine, `Error: ${message}`],
     summary: summaryLine,
     transcriptLines: ["Error:", message],
     error: message,
