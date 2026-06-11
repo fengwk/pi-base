@@ -1,0 +1,65 @@
+tests/subagent-registry.test.ts
+  c95059f4dacfa9ab 50,70,86,96,102-115
+tests/subagent-internals.test.ts
+  c95059f4dacfa9ab 86,98
+tests/subagent-runner.test.ts
+  c95059f4dacfa9ab 79-86,158,171,197,227,252,268-269,276-278,282,290,360,371,393,402,417,439,467,478,502,520,542,570,593,614
+src/task/registry.ts
+  c95059f4dacfa9ab 53-62,79
+src/task/runtime.ts
+  c95059f4dacfa9ab 17-22,125-127,130-133,141-143
+README.md
+  c95059f4dacfa9ab 90,103,137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8-ntes.8",
+  "base_commit_sha": "010e91f1922f572c4ae71c2bf291c84e8e69e805",
+  "prompts": {
+    "c95059f4dacfa9ab": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_14d91270dffeURS4QbhYbyM713",
+        "model": "openai/gpt-5.4"
+      },
+      "human_author": "fengwk",
+      "messages": [],
+      "total_additions": 91,
+      "total_deletions": 61,
+      "accepted_lines": 88,
+      "overriden_lines": 0,
+      "per_file_stats": {
+        "tests/subagent-registry.test.ts": {
+          "additions": 21,
+          "deletions": 4,
+          "accepted_lines": 21
+        },
+        "tests/subagent-runner.test.ts": {
+          "additions": 38,
+          "deletions": 36,
+          "accepted_lines": 35
+        },
+        "src/task/runtime.ts": {
+          "additions": 16,
+          "deletions": 15,
+          "accepted_lines": 16
+        },
+        "tests/subagent-internals.test.ts": {
+          "additions": 2,
+          "deletions": 2,
+          "accepted_lines": 2
+        },
+        "README.md": {
+          "additions": 3,
+          "deletions": 3,
+          "accepted_lines": 3
+        },
+        "src/task/registry.ts": {
+          "additions": 11,
+          "deletions": 1,
+          "accepted_lines": 11
+        }
+      }
+    }
+  }
+}
