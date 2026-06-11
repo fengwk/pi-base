@@ -26,7 +26,7 @@ import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
 import { registerTaskTool } from "./task/tool.js";
 import { registerSubagentsCommand } from "./task/ui.js";
-import { buildSubagentGuide } from "./task/guide.js";
+import { buildSubagentGuide, hasAvailableSubagents } from "./task/guide.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
@@ -55,7 +55,14 @@ export interface PiBaseExtensionOptions {
 function loadBaseToolGuide(cwd: string, selectedTools?: string[]): string {
   const baseGuide = readFileSync(new URL("../prompts/base.md", import.meta.url), "utf8").trim();
   if (Array.isArray(selectedTools) && !selectedTools.includes("task")) return baseGuide;
-  return `${baseGuide}\n\n${buildSubagentGuide(cwd)}`;
+  const subagentGuide = buildSubagentGuide(cwd);
+  return subagentGuide ? `${baseGuide}\n\n${subagentGuide}` : baseGuide;
+}
+
+function buildDefaultActiveTools(cwd: string): string[] {
+  return hasAvailableSubagents(cwd)
+    ? [...BASE_TOOL_NAMES]
+    : BASE_TOOL_NAMES.filter((name) => name !== "task");
 }
 
 
@@ -274,9 +281,15 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     };
   });
 
-  pi.on("session_start", async () => {
-    if (pi.getActiveTools().length === 0) {
-      pi.setActiveTools([...BASE_TOOL_NAMES]);
+  pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+    const cwd = ctx?.cwd ?? process.cwd();
+    const activeTools = pi.getActiveTools();
+    if (activeTools.length === 0) {
+      pi.setActiveTools(buildDefaultActiveTools(cwd));
+      return;
+    }
+    if (!hasAvailableSubagents(cwd) && activeTools.includes("task")) {
+      pi.setActiveTools(activeTools.filter((name) => name !== "task"));
     }
   });
 

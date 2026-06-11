@@ -50,32 +50,62 @@ Reviewer body
 
       const registry = createToolRegistry({ cwd: nested });
       piBaseExtension(registry.pi as any);
+      await registry.emit("session_start", { reason: "startup" }, { cwd: nested });
       const injected = await registry.emit("before_agent_start", {
         systemPrompt: "base system prompt",
-        systemPromptOptions: { selectedTools: ["task"] },
+        systemPromptOptions: { selectedTools: registry.getActiveTools() },
       }, { cwd: nested });
 
+      expect(registry.getActiveTools()).toContain("task");
       expect(injected.systemPrompt).toContain("base system prompt");
-      expect(injected.systemPrompt).toContain("## Available task subagents");
-      expect(injected.systemPrompt).toContain("`helper` — Run long commands");
-      expect(injected.systemPrompt).toContain("`reviewer` — Review diffs");
-      expect(injected.systemPrompt).toContain(join(workspace, ".pi", "subagents"));
+      expect(injected.systemPrompt).toContain("<available_subagents>");
+      expect(injected.systemPrompt).toContain("<name>helper</name>");
+      expect(injected.systemPrompt).toContain("<description>Run long commands</description>");
+      expect(injected.systemPrompt).toContain("<name>reviewer</name>");
+      expect(injected.systemPrompt).not.toContain("<subagent_discovery>");
     });
   });
 
-  it("warns when task is active but no subagents are configured", async () => {
+  it("does not activate or inject task when no subagents are configured", async () => {
     await withTempAgentDir(async () => {
       const workspace = await createTempWorkspace();
       const registry = createToolRegistry({ cwd: workspace });
       piBaseExtension(registry.pi as any);
+      await registry.emit("session_start", { reason: "startup" }, { cwd: workspace });
       const injected = await registry.emit("before_agent_start", {
         systemPrompt: "base system prompt",
-        systemPromptOptions: { selectedTools: ["task"] },
+        systemPromptOptions: { selectedTools: registry.getActiveTools() },
       }, { cwd: workspace });
 
-      expect(injected.systemPrompt).toContain("## Available task subagents");
-      expect(injected.systemPrompt).toContain("None configured for this workspace.");
-      expect(injected.systemPrompt).toContain("do not call `task`");
+      expect(registry.getActiveTools()).not.toContain("task");
+      expect(injected.systemPrompt).not.toContain("<available_subagents>");
+    });
+  });
+
+  it("removes task from the active tools when subagent discovery fails", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const workspace = await createTempWorkspace();
+      await writeAgentFile(join(agentDir, "subagents"), "coder", `---
+name: coder
+description: Broken coder
+tools: read
+skills: []
+model: MiniMax-M2.7
+---
+Coder body
+`);
+
+      const registry = createToolRegistry({ cwd: workspace });
+      registry.pi.setActiveTools(["read", "task"]);
+      piBaseExtension(registry.pi as any);
+      await registry.emit("session_start", { reason: "startup" }, { cwd: workspace });
+      const injected = await registry.emit("before_agent_start", {
+        systemPrompt: "base system prompt",
+        systemPromptOptions: { selectedTools: registry.getActiveTools() },
+      }, { cwd: workspace });
+
+      expect(registry.getActiveTools()).toEqual(["read"]);
+      expect(injected.systemPrompt).not.toContain("<available_subagents>");
     });
   });
 });
