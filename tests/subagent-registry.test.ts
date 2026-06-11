@@ -47,7 +47,7 @@ tools:
   - find
 skills:
   - project-skill
-model: haiku
+model: anthropic/claude-haiku-4
 thinking: high
 ---
 Project body
@@ -67,7 +67,7 @@ Helper body
         description: "Project reviewer",
         tools: ["read", "find"],
         skills: ["project-skill"],
-        model: "haiku",
+        model: "anthropic/claude-haiku-4",
         thinking: "high",
         source: "project",
         body: "Project body",
@@ -83,7 +83,7 @@ name: coder
 description: Coder
 tools: read, grep, write
 skills: style, tests
-model: claude
+model: anthropic/claude-sonnet-4
 thinking: low
 ---
 Coder body
@@ -93,9 +93,26 @@ Coder body
       expect(getSubagentConfig(registry, "CODER")).toMatchObject({
         tools: ["read", "grep", "write"],
         skills: ["style", "tests"],
-        model: "claude",
+        model: "anthropic/claude-sonnet-4",
         thinking: "low",
       });
+    });
+  });
+
+  it("rejects provider-less model identifiers", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const workspace = await createTempWorkspace();
+      await writeAgentFile(join(agentDir, "subagents"), "reviewer", `---
+name: reviewer
+description: Reviewer
+tools: read
+skills: []
+model: MiniMax-M2.7
+---
+Reviewer body
+`);
+
+      expect(() => loadSubagentRegistry(workspace)).toThrow('frontmatter.model must be an exact "provider/model" identifier');
     });
   });
 

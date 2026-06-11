@@ -87,7 +87,7 @@ Supported frontmatter fields:
 - `description`: short selection hint shown to the parent agent
 - `tools`: allowed tool names for this subagent
 - `skills`: optional skill names injected into the subagent system prompt
-- `model`: optional model override for this subagent
+- `model`: exact required `provider/model` identifier for this subagent; parent model inheritance is disabled
 - `thinking`: optional thinking-level override (`off|minimal|low|medium|high|xhigh`)
 
 Minimal example:
@@ -100,7 +100,7 @@ tools:
   - read
   - grep
 skills: []
-model: MiniMax-M3
+model: minimax-cn/MiniMax-M3
 thinking: high
 ---
 You are Reviewer.
@@ -134,7 +134,7 @@ tools:
   - read
   - grep
 skills: []
-model: MiniMax-M3
+model: minimax-cn/MiniMax-M3
 thinking: high
 ---
 You are Reviewer.

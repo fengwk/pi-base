@@ -14,6 +14,12 @@ type ModelRegistryLike = {
   getAll?(): Model<any>[];
 };
 
+function parseExactModelIdentifier(input: string): { provider: string; id: string } | undefined {
+  const parts = input.split("/").map((item) => item.trim()).filter(Boolean);
+  if (parts.length !== 2) return undefined;
+  return { provider: parts[0], id: parts[1] };
+}
+
 function extensionCanonicalName(extensionPath: string): string {
   const base = basename(extensionPath);
   return (base === "index.ts" || base === "index.js"
@@ -116,22 +122,15 @@ function resolveConfiguredModel(input: string, registry: ModelRegistryLike): { m
     return { error: `Model not found: "${input}". No available models are configured.` };
   }
 
-  const normalizedInput = input.trim().toLowerCase();
-  const exact = models.find((model) => {
-    const full = `${model.provider}/${model.id}`.toLowerCase();
-    return full === normalizedInput || model.id.toLowerCase() === normalizedInput;
-  });
-  if (exact) {
-    return { model: registry.find(exact.provider, exact.id) ?? exact };
+  const parsed = parseExactModelIdentifier(input);
+  if (!parsed) {
+    return { error: `Subagent model must use an exact "provider/model" identifier. Received: "${input}".` };
   }
 
-  const fuzzy = models.find((model) => {
-    const full = `${model.provider}/${model.id}`.toLowerCase();
-    const name = String((model as { name?: unknown }).name ?? "").toLowerCase();
-    return full.includes(normalizedInput) || model.id.toLowerCase().includes(normalizedInput) || name.includes(normalizedInput);
-  });
-  if (fuzzy) {
-    return { model: registry.find(fuzzy.provider, fuzzy.id) ?? fuzzy };
+  const normalizedInput = `${parsed.provider}/${parsed.id}`.toLowerCase();
+  const exact = models.find((model) => `${model.provider}/${model.id}`.toLowerCase() === normalizedInput);
+  if (exact) {
+    return { model: registry.find(exact.provider, exact.id) ?? exact };
   }
 
   const available = models.map((model) => `  ${model.provider}/${model.id}`).sort().join("\n");
@@ -139,7 +138,9 @@ function resolveConfiguredModel(input: string, registry: ModelRegistryLike): { m
 }
 
 export function resolveSubagentModel(config: SubagentConfig, ctx: ExtensionContext): { model?: Model<any>; error?: string } {
-  if (!config.model) return { model: ctx.model };
+  if (!config.model) {
+    return { error: `Subagent "${config.name}" must declare frontmatter.model as an exact "provider/model" identifier. Parent model inheritance is disabled.` };
+  }
   const registry = ctx.modelRegistry as unknown as ModelRegistryLike | undefined;
   if (!registry || typeof registry.find !== "function" || typeof registry.getAvailable !== "function") {
     return { error: "Subagent model resolution requires a model registry, but the runtime did not provide one." };

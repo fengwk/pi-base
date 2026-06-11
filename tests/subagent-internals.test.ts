@@ -83,7 +83,7 @@ name: caller
 description: Caller
 tools: read
 skills: guidelines
-model: haiku
+model: anthropic/claude-haiku-4
 thinking: medium
 ---
 Caller body
@@ -95,7 +95,7 @@ Caller body
       expect(callerPrompt).toContain("<skills>");
       expect(callerPrompt).toContain("Follow the evidence.");
       expect(callerPrompt).toContain("Caller body");
-      expect(getSubagentConfig(registry, "caller")).toMatchObject({ model: "haiku", thinking: "medium" });
+      expect(getSubagentConfig(registry, "caller")).toMatchObject({ model: "anthropic/claude-haiku-4", thinking: "medium" });
 
       await writeText(join(agentDir, "subagents", "broken.md"), `---
 name: broken

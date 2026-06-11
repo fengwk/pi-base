@@ -76,6 +76,14 @@ class FakeSession {
   dispose(): void {}
 }
 
+const exactModelRegistry = {
+  getAvailable: () => [
+    { provider: "anthropic", id: "claude-haiku-4", name: "haiku" },
+    { provider: "anthropic", id: "claude-sonnet-4", name: "sonnet" },
+  ],
+  find: (provider: string, id: string) => ({ provider, id }),
+};
+
 afterEach(() => {
   delete process.env.PI_CODING_AGENT_DIR;
 });
@@ -147,7 +155,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
-model: sonnet
+model: anthropic/claude-sonnet-4
 thinking: high
 ---
 Reviewer body
@@ -160,13 +168,7 @@ Reviewer body
         ctx: {
           cwd: workspace,
           sessionManager: parent as any,
-          modelRegistry: {
-            getAvailable: () => [
-              { provider: "anthropic", id: "claude-haiku-4", name: "haiku" },
-              { provider: "anthropic", id: "claude-sonnet-4", name: "sonnet" },
-            ],
-            find: (provider: string, id: string) => ({ provider, id }),
-          },
+          modelRegistry: exactModelRegistry,
           model: { provider: "anthropic", id: "claude-haiku-4" },
         } as any,
         name: "reviewer",
@@ -192,7 +194,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
-model: sonnet
+model: anthropic/claude-sonnet-4
 ---
 Reviewer body
 `);
@@ -222,7 +224,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
-model: sonnet
+model: anthropic/claude-sonnet-4
 ---
 Reviewer body
 `);
@@ -247,7 +249,7 @@ Reviewer body
     });
   });
 
-  it("falls back to the parent model and thinking level when not configured", async () => {
+  it("requires an explicit subagent model instead of inheriting the parent model", async () => {
     await withTempAgentDir(async () => {
       const workspace = await createTempWorkspace();
       await writeAgentFile(workspace, "reviewer", `---
@@ -259,32 +261,25 @@ skills: []
 Reviewer body
 `);
 
-      const parent = SessionManager.create(workspace);
-      const seen: { model?: any; thinkingLevel?: string } = {};
       const result = await executeSubagent({
         pi: { getThinkingLevel: () => "medium" },
         ctx: {
           cwd: workspace,
-          sessionManager: parent as any,
-          modelRegistry: { getAvailable: () => [], find: () => undefined },
+          sessionManager: SessionManager.create(workspace) as any,
+          modelRegistry: exactModelRegistry,
           model: { provider: "anthropic", id: "claude-haiku-4" },
         } as any,
         name: "reviewer",
         prompt: "Review this",
-        createSession: (async (input: any) => {
-          seen.model = input.model;
-          seen.thinkingLevel = input.thinkingLevel;
-          return { session: new FakeSession(input.sessionManager, "Inherited") as any, extensionsResult: {} as any };
-        }) as any,
       });
 
-      expect(result.isError).not.toBe(true);
-      expect(seen.model).toEqual({ provider: "anthropic", id: "claude-haiku-4" });
-      expect(seen.thinkingLevel).toBe("medium");
+      expect(result.isError).toBe(true);
+      expect((result.content[0] as any)?.text).toContain("must declare frontmatter.model");
+      expect((result.content[0] as any)?.text).toContain("Parent model inheritance is disabled");
     });
   });
 
-  it("returns a clear error for invalid configured models", async () => {
+  it("returns a clear error for unavailable configured models", async () => {
     await withTempAgentDir(async () => {
       const workspace = await createTempWorkspace();
       await writeAgentFile(workspace, "reviewer", `---
@@ -292,7 +287,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
-model: opus
+model: anthropic/claude-opus-4
 ---
 Reviewer body
 `);
@@ -362,6 +357,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
+model: anthropic/claude-haiku-4
 ---
 Reviewer body
 `);
@@ -372,7 +368,7 @@ Reviewer body
         ctx: {
           cwd: workspace,
           sessionManager: SessionManager.create(workspace) as any,
-          modelRegistry: {} as any,
+          modelRegistry: exactModelRegistry,
           model: undefined,
         } as any,
         name: "reviewer",
@@ -394,6 +390,7 @@ name: coder
 description: Coder
 tools: read,grep
 skills: []
+model: anthropic/claude-haiku-4
 ---
 Coder body
 `);
@@ -402,6 +399,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
+model: anthropic/claude-haiku-4
 ---
 Reviewer body
 `);
@@ -416,7 +414,7 @@ Reviewer body
         ctx: {
           cwd: workspace,
           sessionManager: parent as any,
-          modelRegistry: {} as any,
+          modelRegistry: exactModelRegistry,
           model: undefined,
         } as any,
         name: "coder",
@@ -438,7 +436,7 @@ Reviewer body
         ctx: {
           cwd: workspace,
           sessionManager: parent as any,
-          modelRegistry: {} as any,
+          modelRegistry: exactModelRegistry,
           model: undefined,
         } as any,
         name: "reviewer",
@@ -466,6 +464,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
+model: anthropic/claude-haiku-4
 ---
 Reviewer body
 `);
@@ -476,7 +475,7 @@ Reviewer body
         ctx: {
           cwd: workspace,
           sessionManager: parent as any,
-          modelRegistry: {} as any,
+          modelRegistry: exactModelRegistry,
           model: undefined,
         } as any,
         name: "reviewer",
@@ -500,6 +499,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
+model: anthropic/claude-haiku-4
 ---
 Reviewer body
 `);
@@ -517,7 +517,7 @@ Reviewer body
         ctx: {
           cwd: workspace,
           sessionManager: SessionManager.create(workspace) as any,
-          modelRegistry: {} as any,
+          modelRegistry: exactModelRegistry,
           model: undefined,
         } as any,
         name: "reviewer",
@@ -539,6 +539,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
+model: anthropic/claude-haiku-4
 ---
 Reviewer body
 `);
@@ -566,7 +567,7 @@ Reviewer body
         ctx: {
           cwd: workspace,
           sessionManager: SessionManager.create(workspace) as any,
-          modelRegistry: {} as any,
+          modelRegistry: exactModelRegistry,
           model: undefined,
         } as any,
         name: "reviewer",
@@ -589,6 +590,7 @@ name: reviewer
 description: Reviewer
 tools: read
 skills: []
+model: anthropic/claude-haiku-4
 ---
 Reviewer body
 `);
@@ -609,7 +611,7 @@ Reviewer body
         ctx: {
           cwd: workspace,
           sessionManager: SessionManager.create(workspace) as any,
-          modelRegistry: {} as any,
+          modelRegistry: exactModelRegistry,
           model: undefined,
         } as any,
         name: "reviewer",

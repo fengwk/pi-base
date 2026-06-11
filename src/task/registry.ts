@@ -50,6 +50,16 @@ function parseThinkingLevel(value: unknown, path: string): ThinkingLevel | undef
   return normalized as ThinkingLevel;
 }
 
+function parseOptionalModelIdentifier(value: unknown, path: string): string | undefined {
+  const normalized = readOptionalString(value, path);
+  if (!normalized) return undefined;
+  const parts = normalized.split("/").map((item) => item.trim()).filter(Boolean);
+  if (parts.length !== 2) {
+    throw new Error(`${path} must be an exact "provider/model" identifier.`);
+  }
+  return `${parts[0]}/${parts[1]}`;
+}
+
 function parseSubagentFile(filePath: string, source: "project" | "global"): SubagentConfig {
   const raw = readFileSync(filePath, "utf8");
   const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(raw);
@@ -66,7 +76,7 @@ function parseSubagentFile(filePath: string, source: "project" | "global"): Suba
   }
 
   const skills = toStringArray(frontmatter.skills, `${filePath}: frontmatter.skills`);
-  const model = readOptionalString(frontmatter.model, `${filePath}: frontmatter.model`);
+  const model = parseOptionalModelIdentifier(frontmatter.model, `${filePath}: frontmatter.model`);
   const thinking = parseThinkingLevel(frontmatter.thinking, `${filePath}: frontmatter.thinking`);
   const trimmedBody = body.trim();
   if (!trimmedBody) {
