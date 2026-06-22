@@ -45,6 +45,8 @@ export function registerMcpSupport(
       ctx.ui.setStatus(PI_BASE_MCP_STATUS_KEY, renderMcpFooterStatus(snapshot));
     },
   });
+  let started = false;
+  let startPromise: Promise<void> | undefined;
 
   pi.registerMessageRenderer(MCP_STATUS_MESSAGE_TYPE, (message) => new Text(String(message.content ?? ""), 0, 0));
   pi.registerCommand("mcp-status", {
@@ -64,9 +66,20 @@ export function registerMcpSupport(
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    void manager.start(ctx, pi);
+    if (started) return;
+    if (startPromise) return startPromise;
+    startPromise = manager.start(ctx, pi)
+      .then(() => {
+        started = true;
+      })
+      .finally(() => {
+        startPromise = undefined;
+      });
+    return startPromise;
   });
   pi.on("session_shutdown", async () => {
+    started = false;
+    startPromise = undefined;
     await manager.shutdown();
   });
 }

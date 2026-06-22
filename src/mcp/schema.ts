@@ -53,6 +53,13 @@ export function convertJsonSchemaToTypeBox(schema: Record<string, unknown> | und
     return toUnionSchema(schema.oneOf.map((candidate) => convertJsonSchemaToTypeBox(isRecord(candidate) ? candidate : undefined)), sharedOptions);
   }
 
+  if (Array.isArray(schema.type) && schema.type.length > 0) {
+    const typeValues = schema.type.filter((value): value is string => typeof value === "string");
+    if (typeValues.length > 0) {
+      return toUnionSchema(typeValues.map((type) => convertJsonSchemaToTypeBox({ ...schema, type })), sharedOptions);
+    }
+  }
+
   const schemaType = typeof schema.type === "string"
     ? schema.type
     : (isRecord(schema.properties) ? "object" : Array.isArray(schema.items) || isRecord(schema.items) ? "array" : "any");

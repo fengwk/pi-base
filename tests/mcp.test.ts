@@ -3,7 +3,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { createMcpManager } from "../src/mcp/manager.js";
+import { createMcpToolDefinition } from "../src/mcp/adapter.js";
 import type { McpClientFactory, McpProtocolClient, McpTool, McpToolCallResult } from "../src/mcp/types.js";
+import { convertJsonSchemaToTypeBox } from "../src/mcp/schema.js";
 import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";
 
 async function writeProjectSettings(root: string, settings: unknown): Promise<void> {
@@ -304,6 +306,70 @@ describe("mcp support", () => {
 
     expect(hasTool(registry, "echo")).toBe(false);
     expect(hasTool(registry, "mm_echo")).toBe(true);
+  });
+  it("keeps MCP registration idempotent when session_start is emitted twice on the same registry", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({ mm: [{ tools: [echoTool] }] }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers");
+
+    await registry.runCommand("mcp-status", "", { cwd: root });
+    const message = String(registry.getMessages().at(-1)?.content ?? "");
+    expect(message).toContain("MCP: 1/1 servers");
+    expect(message).toContain("echo");
+    expect(message).not.toContain("[conflict");
+
+    const result = await registry.getTool("echo").execute("1", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(getText(result)).toContain("echo:");
+  });
+
+  it("converts JSON Schema type arrays into MCP parameter unions", () => {
+    const unionSchema: any = convertJsonSchemaToTypeBox({ type: ["string", "null"] });
+    expect(Array.isArray(unionSchema.anyOf)).toBe(true);
+    expect(unionSchema.anyOf).toHaveLength(2);
+    expect(unionSchema.anyOf.map((entry: any) => entry.type)).toEqual(expect.arrayContaining(["string", "null"]));
+
+    const definition = createMcpToolDefinition({
+      serverKey: "mm",
+      serverConfig: { type: "local", command: ["mock-mcp"] },
+      tool: {
+        name: "maybe_text",
+        inputSchema: {
+          type: "object",
+          properties: {
+            text: { type: ["string", "null"] },
+          },
+        },
+      },
+      callTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    });
+    const propertySchema = (definition.parameters as any).properties.text;
+    expect(Array.isArray(propertySchema.anyOf)).toBe(true);
+    expect(propertySchema.anyOf.map((entry: any) => entry.type)).toEqual(expect.arrayContaining(["string", "null"]));
   });
 
   it("shows MCP on the second footer line while keeping YOLO on the first line", async () => {
