@@ -24,9 +24,6 @@ import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
 import { resolveToolWorkdir } from "./path-utils.js";
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.js";
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
-import { registerTaskTool } from "./task/tool.js";
-import { registerSubagentsCommand } from "./task/ui.js";
-import { buildSubagentGuide, hasAvailableSubagents } from "./task/guide.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
@@ -43,26 +40,12 @@ const BASE_TOOL_NAMES = [
   "lsp_goto_definition",
   "lsp_workspace_symbols",
   "lsp_java_decompile",
-  "task",
 ] as const;
+const BASE_TOOL_GUIDE = readFileSync(new URL("../prompts/base.md", import.meta.url), "utf8").trim();
 
 export interface PiBaseExtensionOptions {
   mcp?: RegisterMcpSupportOptions;
   notify?: RegisterNotifySupportOptions;
-}
-
-
-function loadBaseToolGuide(cwd: string, selectedTools?: string[]): string {
-  const baseGuide = readFileSync(new URL("../prompts/base.md", import.meta.url), "utf8").trim();
-  if (Array.isArray(selectedTools) && !selectedTools.includes("task")) return baseGuide;
-  const subagentGuide = buildSubagentGuide(cwd);
-  return subagentGuide ? `${baseGuide}\n\n${subagentGuide}` : baseGuide;
-}
-
-function buildDefaultActiveTools(cwd: string): string[] {
-  return hasAvailableSubagents(cwd)
-    ? [...BASE_TOOL_NAMES]
-    : BASE_TOOL_NAMES.filter((name) => name !== "task");
 }
 
 
@@ -204,6 +187,13 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     if (event.reason === "reload") reloadRuntimePiBaseSettings();
     resolverFactory.clear();
     await lspManager.shutdownAll();
+    const activeTools = pi.getActiveTools();
+    if (activeTools.length === 0) {
+      pi.setActiveTools([...BASE_TOOL_NAMES]);
+    } else if (activeTools.includes("task")) {
+      const activeToolsWithoutRetiredTask = activeTools.filter((name) => name !== "task");
+      pi.setActiveTools(activeToolsWithoutRetiredTask.length > 0 ? activeToolsWithoutRetiredTask : [...BASE_TOOL_NAMES]);
+    }
   });
 
   registerReadTool(pi, {
@@ -232,7 +222,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getCollapsedResultMaxChars,
   });
   registerLspTools(pi, { resolverFactory, getCollapsedResultLines, getCollapsedResultMaxChars });
-  registerTaskTool(pi);
   const notifyHooks = registerNotifySupport(pi, {
     loadSettings,
     ...options.notify,
@@ -250,7 +239,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     onPermissionRejected: notifyHooks.onPermissionRejected,
   });
   registerResumeAllCommand(pi);
-  registerSubagentsCommand(pi);
 
 
   (pi as any).on("context", async (event: any, ctx: ExtensionContext) => {
@@ -281,26 +269,9 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     };
   });
 
-  pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-    const cwd = ctx?.cwd ?? process.cwd();
-    const activeTools = pi.getActiveTools();
-    if (activeTools.length === 0) {
-      pi.setActiveTools(buildDefaultActiveTools(cwd));
-      return;
-    }
-    if (!hasAvailableSubagents(cwd) && activeTools.includes("task")) {
-      pi.setActiveTools(activeTools.filter((name) => name !== "task"));
-    }
-  });
-
   pi.on("before_agent_start", async (event, ctx: ExtensionContext) => {
-    const selectedTools = Array.isArray((event as any)?.systemPromptOptions?.selectedTools)
-      ? (event as any).systemPromptOptions.selectedTools as string[]
-      : undefined;
-    const guide = loadBaseToolGuide(ctx?.cwd ?? process.cwd(), selectedTools);
-    if (!guide) return undefined;
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${guide}`,
+      systemPrompt: `${event.systemPrompt}\n\n${BASE_TOOL_GUIDE}`,
     };
   });
 }

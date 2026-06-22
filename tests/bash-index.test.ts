@@ -7,18 +7,6 @@ import piBaseExtension from "../index.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 import { lspManager } from "../src/lsp/client.js";
 
-async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
-  const previous = process.env.PI_CODING_AGENT_DIR;
-  const agentDir = await createTempWorkspace();
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-  try {
-    return await run(agentDir);
-  } finally {
-    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previous;
-  }
-}
-
 describe("bash tool and index", () => {
   it("detects WSL from environment variables and proc fallbacks", () => {
     expect(detectOsLabelFrom({ platform: "linux", env: { WSL_DISTRO_NAME: "Ubuntu" } })).toBe("wsl");
@@ -410,22 +398,20 @@ describe("bash tool and index", () => {
   });
 
   it("enables the default base tool set and injects the base guide", async () => {
-    await withTempAgentDir(async () => {
-      const registry = createToolRegistry();
-      piBaseExtension(registry.pi as any);
-      await registry.emit("session_start", { reason: "startup" });
-      expect(registry.getActiveTools()).toEqual(["read", "grep", "find", "bash", "edit", "write", "lsp_diagnostics", "lsp_goto_definition", "lsp_workspace_symbols", "lsp_java_decompile"]);
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" });
+    expect(registry.getActiveTools()).toEqual(["read", "grep", "find", "bash", "edit", "write", "lsp_diagnostics", "lsp_goto_definition", "lsp_workspace_symbols", "lsp_java_decompile"]);
 
-      const injected = await registry.emit("before_agent_start", {
-        systemPrompt: "base system prompt",
-        systemPromptOptions: { selectedTools: registry.getActiveTools() },
-      });
-
-      expect(injected.systemPrompt).toContain("base system prompt");
-      expect(injected.systemPrompt).toContain("Base Tool Usage Guidance");
-      expect(injected.systemPrompt).toContain("Use `bash` only for build, test, git");
-      expect(injected.systemPrompt).not.toContain("<available_subagents>");
+    const injected = await registry.emit("before_agent_start", {
+      systemPrompt: "base system prompt",
+      systemPromptOptions: { selectedTools: registry.getActiveTools() },
     });
+
+    expect(injected.systemPrompt).toContain("base system prompt");
+    expect(injected.systemPrompt).toContain("Base Tool Usage Guidance");
+    expect(injected.systemPrompt).toContain("Use `bash` only for build, test, git");
+    expect(injected.systemPrompt).not.toContain("<available_subagents>");
   });
 
   it("preserves an explicit active tool set", async () => {
@@ -434,6 +420,22 @@ describe("bash tool and index", () => {
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" });
     expect(registry.getActiveTools()).toEqual(["read"]);
+  });
+
+  it("removes retired task from explicit active tool sets", async () => {
+    const registry = createToolRegistry();
+    registry.pi.setActiveTools(["read", "task"]);
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" });
+    expect(registry.getActiveTools()).toEqual(["read"]);
+  });
+
+  it("falls back to the default tool set when only retired task was active", async () => {
+    const registry = createToolRegistry();
+    registry.pi.setActiveTools(["task"]);
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" });
+    expect(registry.getActiveTools()).toEqual(["read", "grep", "find", "bash", "edit", "write", "lsp_diagnostics", "lsp_goto_definition", "lsp_workspace_symbols", "lsp_java_decompile"]);
   });
 
   it("syncs LSP after successful write", async () => {

@@ -82,7 +82,7 @@ describe("render helpers", () => {
     expect(rendered).toContain("<warning>Review the written file content below. Lines prefixed with digits carry LINE#HASH anchors for follow-up edits.</warning>");
     expect(rendered).toContain("<muted>1#abcd|</muted><toolOutput>hello</toolOutput>");
   });
-  it("colorizes task-style status states and explicit error fields", () => {
+  it("colorizes status states and explicit error fields", () => {
     const raw = [
       "status: completed",
       "status: running",
