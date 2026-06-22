@@ -15,7 +15,7 @@ export function registerGrepTool(
     promptSnippet: loadToolPromptSnippet("grep"),
     parameters: grepSchema,
     renderCall(args: any, theme: any, context: any) {
-      return renderCallText(formatGrepCall(args, theme), context.lastComponent);
+      return renderCallText(formatGrepCall(args, theme, context?.cwd), context.lastComponent);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("grep", GREP_COLLAPSED_PREVIEW_LINES, context, options.getCollapsedResultLines);

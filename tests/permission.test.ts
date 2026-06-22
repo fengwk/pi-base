@@ -48,7 +48,7 @@ describe("permission guard", () => {
 
     const result = await registry.getTool("write").execute(
       "1",
-      { workdir: ".", path: "src/allowed.ts", content: "export const allowed = true;\n" },
+      { path: "src/allowed.ts", content: "export const allowed = true;\n" },
       undefined,
       undefined,
       { cwd: root },
@@ -57,7 +57,7 @@ describe("permission guard", () => {
     expect(result.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
     expect(prompts[0]!.title).toContain("Tool: write");
-    expect(prompts[0]!.title).toContain("Workdir: ");
+    expect(prompts[0]!.title).toContain(`Workdir: ${root} (default)`);
     expect(prompts[0]!.title).toContain("Arguments: ");
     expect(prompts[0]!.title).toContain("\"path\":\"src/allowed.ts\"");
     expect(prompts[0]!.title).toContain("\"content\":\"export const allowed = true;\\n\"");

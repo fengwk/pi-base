@@ -32,7 +32,7 @@ describe("tool renderers", () => {
       piBaseExtension(registry.pi as any);
 
       // pi-base wraps call/result previews for these tools to keep a consistent
-      // opencode-style display, including explicit workdir for cwd-scoped tools.
+      // opencode-style display, including effective cwd rendering for cwd-scoped tools.
       const cases = [
         { name: "read", args: { path: "src/example.ts", workdir: "packages/web", offset: 2, limit: 5 } },
         { name: "grep", args: { pattern: "demo", path: "src", workdir: "services/api", include: "*.ts" } },

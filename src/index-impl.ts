@@ -21,7 +21,7 @@ import { applyContextCompressionToMessages } from "./context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./anthropic-cache-boundary.js";
 import { registerResumeAllCommand } from "./resume-all.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
-import { resolveToolWorkdir } from "./path-utils.js";
+import { describeToolWorkdirForDisplay, resolveToolWorkdir } from "./path-utils.js";
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.js";
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./lsp/discovery.js";
@@ -78,10 +78,11 @@ function createCollapsedResultMaxCharsResolver(loadSettings: (cwd: string) => Lo
 }
 
 type FindToolDefinitionFactory = (cwd: string) => any;
-function formatFindCall(args: any, theme: any): string {
+function formatFindCall(args: any, theme: any, cwd?: string): string {
   const pattern = String(args?.pattern ?? "<missing-pattern>");
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
-  const workdir = `${styleMuted(theme, " from ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : shortenHomePath(String(args.workdir)))}`;
+  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
+  const workdir = usedDefault ? "" : `${styleMuted(theme, " from ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   const suffix = formatOptionalArgs([
     ["limit", args?.limit],
     ["timeout_seconds", args?.timeout_seconds],
@@ -99,8 +100,9 @@ function formatFindCall(args: any, theme: any): string {
  *    if it is missing or empty. The schema is the contract; the runtime check
  *    is defense in depth in case the model bypasses schema validation.
  *
- * `path` resolution uses the explicit `workdir` argument. There is no implicit
- * `ctx.cwd` fallback for missing `workdir`; callers must always pass it.
+ * `path` resolution defaults to the session `ctx.cwd`. If `workdir` is provided,
+ * resolution uses that directory instead. Callers should pass `workdir` whenever
+ * they intend to search outside the current workspace root.
  */
 export function registerFindTool(
   pi: ExtensionAPI,
@@ -114,7 +116,7 @@ export function registerFindTool(
     description: loadToolDescription("find"),
     promptSnippet: loadToolPromptSnippet("find"),
     renderCall(args: any, theme: any, context: any) {
-      return renderCallText(formatFindCall(args, theme), context.lastComponent);
+      return renderCallText(formatFindCall(args, theme, context?.cwd), context.lastComponent);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("find", undefined, context, options.getCollapsedResultLines);

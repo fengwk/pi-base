@@ -10,11 +10,11 @@ Usage:
 Parameters:
 - `pattern` (required)
 - `path` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
 - `limit` (optional, default: 1000)
 - `timeout_seconds` (optional, no default)
 
 Examples use pseudo-code tool calls:
 - `find({ pattern: "*.ts", path: "src", workdir: "packages/web" })`
-- `find({ pattern: "*.java", path: ".", workdir: "services/java", limit: 200 })`
-- `find({ pattern: "*.md", path: ".", workdir: ".", timeout_seconds: 30 })`
+- `find({ pattern: "*.java", path: "src", workdir: "services/java", limit: 200 })`
+- `find({ pattern: "*.md", path: "docs", timeout_seconds: 30 })`

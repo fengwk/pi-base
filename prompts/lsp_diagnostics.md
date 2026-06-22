@@ -10,9 +10,9 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
 - `severity` (optional, one of `error`, `warning`, `information`, `hint`, `all`; default `all`)
 
 Examples use pseudo-code tool calls:
 - `lsp_diagnostics({ path: "src/main/java/com/acme/App.java", workdir: "services/java", severity: "error" })`
-- `lsp_diagnostics({ path: "src/example.ts", workdir: "packages/web" })`
+- `lsp_diagnostics({ path: "src/example.ts" })`

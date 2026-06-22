@@ -36,9 +36,22 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 
-export function resolveToolWorkdir(workdir: unknown, cwd: string): { rawWorkdir: string; cwd: string } {
-  if (workdir === undefined || workdir === null) throw new Error("workdir is required.");
+export interface ResolvedToolWorkdir {
+  rawWorkdir: string;
+  cwd: string;
+  usedDefault: boolean;
+}
+
+export function describeToolWorkdirForDisplay(workdir: unknown, cwd?: string): { rawWorkdir: string; usedDefault: boolean } {
+  if (workdir === undefined || workdir === null) return { rawWorkdir: cwd ?? ".", usedDefault: true };
   const rawWorkdir = stripAtPrefix(String(workdir));
-  if (rawWorkdir.trim().length === 0) throw new Error("workdir is required.");
-  return { rawWorkdir, cwd: resolveToCwd(rawWorkdir, cwd) };
+  if (rawWorkdir.trim().length === 0) return { rawWorkdir: "<invalid-workdir>", usedDefault: false };
+  return { rawWorkdir, usedDefault: false };
+}
+
+export function resolveToolWorkdir(workdir: unknown, cwd: string): ResolvedToolWorkdir {
+  if (workdir === undefined || workdir === null) return { rawWorkdir: ".", cwd, usedDefault: true };
+  const rawWorkdir = stripAtPrefix(String(workdir));
+  if (rawWorkdir.trim().length === 0) throw new Error("workdir must be a non-empty string when provided.");
+  return { rawWorkdir, cwd: resolveToCwd(rawWorkdir, cwd), usedDefault: false };
 }

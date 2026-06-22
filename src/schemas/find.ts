@@ -21,9 +21,9 @@ export const findSchema = Type.Object({
   path: Type.String({
     description: "Directory to search in. Required. Use '.' for the current working directory. There is no implicit default — the model must always state the search root.",
   }),
-  workdir: Type.String({
-    description: "Working directory for resolving relative paths. Required. Use '.' for the current working directory.",
-  }),
+  workdir: Type.Optional(Type.String({
+    description: "Working directory for resolving relative paths. Defaults to the current working directory. If provided, relative paths resolve from that directory.",
+  })),
   limit: Type.Optional(Type.Number({ description: "Maximum number of results. Default: 1000." })),
   timeout_seconds: Type.Optional(Type.Union([Type.Number(), Type.String()], { description: "Optional timeout in seconds. No default timeout." })),
 });

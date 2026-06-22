@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { Text } from "@earendil-works/pi-tui";
 import { normalizeToLF, stripBom } from "./edit-diff.js";
 import { escapeControlCharsForDisplay, splitNewTextLines } from "./hashline.js";
-import { resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
+import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
 import { styleAccent, styleDiffAdded, styleDiffContext, styleDiffRemoved, styleMuted, styleToolTitle, styleWarning } from "./render.js";
 import { formatAnchorRefForDisplay, getLineRefError, safeParseLineRef, visualizeLeadingWhitespace } from "./edit-display.js";
 
@@ -174,9 +174,10 @@ function buildPerOperationPreview(args: any, previewLines: string[] | undefined,
   return blocks.map((block: string[]) => block.join("\n")).join("\n\n");
 }
 
-function formatEditCall(args: any, theme: any, previewLines?: string[]): string {
+function formatEditCall(args: any, theme: any, cwd?: string, previewLines?: string[]): string {
   const path = String(args?.path ?? "<missing-path>");
-  const workdir = `${styleMuted(theme, " in ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : String(args.workdir))}`;
+  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
+  const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, rawWorkdir)}`;
   const edits = Array.isArray(args?.edits) ? args.edits : [];
   const lines = [`${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}`];
   if (edits.length === 0) return `${lines[0]}\n\n(no edits)`;
@@ -237,11 +238,7 @@ export function renderEditCall(
     text.setText(`${styleToolTitle(theme, "edit")} ${styleAccent(theme, rawPath || "<missing-path>")}`);
     return text;
   }
-  if (renderArgs?.workdir === undefined) {
-    text.setText(formatEditCall(renderArgs, theme));
-    return text;
-  }
-  const { cwd: previewCwd } = resolveToolWorkdir(renderArgs.workdir, context.cwd ?? process.cwd());
+  const { cwd: previewCwd } = resolveToolWorkdir(renderArgs?.workdir, context.cwd ?? process.cwd());
   const absolutePath = rawPath ? resolveToCwd(rawPath, previewCwd) : "";
   const signature = buildEditCallPreviewSignature(absolutePath, renderArgs);
   const previewLines = getFrozenPreviewLines(text, signature, () => {
@@ -251,6 +248,6 @@ export function renderEditCall(
     if (loaded) rememberEditCallPreviewSnapshot(snapshots, signature, loaded);
     return loaded;
   });
-  text.setText(formatEditCall(renderArgs, theme, previewLines));
+  text.setText(formatEditCall(renderArgs, theme, context?.cwd, previewLines));
   return text;
 }

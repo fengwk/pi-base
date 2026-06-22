@@ -7,7 +7,7 @@ function render(component: any): string {
 }
 
 describe("bash renderer extra coverage", () => {
-  it("renders concise calls with missing values and timeout", () => {
+  it("renders concise calls without default workdir noise and with timeout", () => {
     const registry = createToolRegistry();
     registerBashRendererTool(registry.pi as any, {
       createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
@@ -17,7 +17,7 @@ describe("bash renderer extra coverage", () => {
     const rendered = render(tool.renderCall({ timeout_seconds: 9 }, {} as any, { lastComponent: undefined }));
     expect(rendered).toContain("$ <missing-command>");
     expect(rendered).toContain("timeout 9s");
-    expect(rendered).toContain("<missing-workdir>");
+    expect(rendered).not.toContain("(default)");
   });
 
   it("falls back cleanly when proc file reads throw during OS detection", () => {

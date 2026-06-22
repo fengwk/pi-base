@@ -2,7 +2,7 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ensureHashInit, formatHashlineDisplay } from "./hashline.js";
-import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
+import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { shortenHomePath, styleAccent, styleMuted, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 
@@ -19,9 +19,10 @@ export function formatWriteSuccess(rawPath: string, existed: boolean, content: s
   return `${action} ${rawPath}.\nReview the written file content below. Lines prefixed with digits carry LINE#HASH anchors for follow-up edits.\n\n${formatHashlineOutput(content)}`;
 }
 
-export function formatWriteCall(args: any, theme: any): string {
+export function formatWriteCall(args: any, theme: any, cwd?: string): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
-  const workdir = `${styleMuted(theme, " in ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : shortenHomePath(String(args.workdir)))}`;
+  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
+  const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   const content = String(args?.content ?? "");
   return `${styleToolTitle(theme, "write")} ${styleAccent(theme, path)}${workdir}\n\n${content.split("\n").join("\n")}`;
 }

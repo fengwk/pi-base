@@ -103,9 +103,9 @@ Create `<repo>/.pi/pi-base.json` when one repository needs different policy or i
 - `edit` works from fresh anchors and fails clearly on stale anchors.
 - `write` returns fresh anchors for follow-up edits.
 - Context compression can be enabled to prune stale file outputs and bulky historical tool results; when `anchorHygiene` is enabled, obsolete `LINE#HASH` anchors from `read` / `write` / `edit` are replaced with concise placeholders before model calls.
-- `grep` requires explicit `path` and `workdir`, defaults to a 15s timeout, fails fast on single-file binary inputs, and returns candidate locations rather than edit anchors; use `read` after `grep` before editing.
-- `find` is delegated to Pi's built-in implementation, but `pi-base` makes `path` and `workdir` explicit and required — there is no implicit search root or hidden cwd.
-- `bash` requires an explicit `workdir` on every call; `read`, `edit`, `write`, `grep`, `find`, and `lsp_*` also require explicit `workdir`. Missing `workdir` is an error, and relative paths are resolved against the given `workdir`.
+- `grep` requires an explicit `path`, defaults `workdir` to the current working directory, defaults to a 15s timeout, fails fast on single-file binary inputs, and returns candidate locations rather than edit anchors; use `read` after `grep` before editing.
+- `find` is delegated to Pi's built-in implementation. `pi-base` still requires an explicit `path`, while `workdir` defaults to the current working directory.
+- `bash`, `read`, `edit`, `write`, `grep`, `find`, and `lsp_*` default `workdir` to the current working directory. If `workdir` is provided, path resolution or command execution uses that directory.
 - On Linux, WSL, and macOS, `bash` prefers the host `bash` or `zsh` shell from `$SHELL` and loads common startup files to better match the terminal environment.
 - `permission` rules can require approval for selected tools such as `edit`, `write`, and `bash`; `/yolo` temporarily bypasses those checks, and `/resume-all` opens a session picker across all known project directories.
 - Tool output is wrapped by a global truncation layer (`MAX_LINES=2000`, `MAX_BYTES=50KB`); full output is saved under `os.tmpdir()/pi-base-truncation/` and re-exposed via `details.truncation`.

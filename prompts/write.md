@@ -8,10 +8,10 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
 - `content` (required)
 
 Examples use pseudo-code tool calls:
-- `write({ path: "src/new-module.ts", workdir: "packages/web", content: "export const demo = 1;\n" })`
+- `write({ path: "src/new-module.ts", content: "export const demo = 1;\n" })`
 - `write({ path: "docs/new-template.md", workdir: "packages/web", content: "# New template\n\nComplete file content.\n" })`
 - `write({ path: "generated/report.txt", workdir: "/tmp/agent-artifacts", content: "full generated report\n" })`

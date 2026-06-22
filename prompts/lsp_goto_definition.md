@@ -9,10 +9,10 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
 - `line` (required, 1-based)
 - `character` (optional, 0-based, default: 0)
 
 Examples use pseudo-code tool calls:
 - `lsp_goto_definition({ path: "src/example.ts", workdir: "packages/web", line: 45, character: 15 })`
-- `lsp_goto_definition({ path: "src/example.ts", workdir: "services/api", line: 45 })`
+- `lsp_goto_definition({ path: "src/example.ts", line: 45 })`

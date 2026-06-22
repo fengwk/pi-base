@@ -9,21 +9,25 @@ function render(component: any): string {
 }
 
 describe("lsp tool render and branch coverage", () => {
-  it("renders call previews with missing workdir fallbacks", () => {
+  it("renders call previews without default workdir noise", () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
 
     const diagnostics = render(registry.getTool("lsp_diagnostics").renderCall({ path: "src/example.ts", severity: "warning" }, {} as any, { lastComponent: undefined }));
-    expect(diagnostics).toContain("lsp_diagnostics src/example.ts in <missing-workdir>");
+    expect(diagnostics).toContain("lsp_diagnostics src/example.ts [severity=warning]");
+    expect(diagnostics).not.toContain("(default)");
 
     const gotoDefinition = render(registry.getTool("lsp_goto_definition").renderCall({ path: "src/example.ts", line: 3 }, {} as any, { lastComponent: undefined }));
     expect(gotoDefinition).toContain("[line=3, character=0]");
+    expect(gotoDefinition).not.toContain("(default)");
 
     const symbols = render(registry.getTool("lsp_workspace_symbols").renderCall({ path: "src/example.ts", query: "Example" }, {} as any, { lastComponent: undefined }));
-    expect(symbols).toContain("lsp_workspace_symbols src/example.ts in <missing-workdir> Example");
+    expect(symbols).toContain("lsp_workspace_symbols src/example.ts Example");
+    expect(symbols).not.toContain("(default)");
 
     const decompile = render(registry.getTool("lsp_java_decompile").renderCall({ path: "src/App.java", target: "jdt://demo" }, {} as any, { lastComponent: undefined }));
-    expect(decompile).toContain("lsp_java_decompile src/App.java in <missing-workdir> jdt://demo");
+    expect(decompile).toContain("lsp_java_decompile src/App.java jdt://demo");
+    expect(decompile).not.toContain("(default)");
   });
 
   it("supports workspace symbol errors and java decompile fallbacks", async () => {

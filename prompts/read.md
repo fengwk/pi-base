@@ -8,12 +8,12 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
 - `offset` (optional, default: 1)
 - `limit` (optional, default: 200, max: 2000)
 
 Examples use pseudo-code tool calls:
 - `read({ path: "src/example.ts", workdir: "packages/web" })`
 - `read({ path: "src/example.ts", workdir: "services/api", offset: 120, limit: 40 })`
-- `read({ path: "src/", workdir: "." })`
+- `read({ path: "src/" })`
 - `read({ path: "screenshot.png", workdir: "/tmp/agent-artifacts" })`

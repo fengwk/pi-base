@@ -92,14 +92,19 @@ describe("bash tool and index", () => {
     expect(seenParams).toEqual({ command: "npm test", timeout: 30 });
   });
 
-  it("requires an explicit workdir", async () => {
+  it("defaults bash workdir to the current cwd", async () => {
     const registry = createToolRegistry();
+    let seenCwd: string | undefined;
     registerBashRendererTool(registry.pi as any, {
-      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+      createBuiltInBashTool: (cwd) => {
+        seenCwd = cwd;
+        return { execute: async () => ({ content: [{ type: "text", text: "ok" }] }) };
+      },
     });
     const result = await registry.getTool("bash").execute("1", { command: "pwd" }, undefined, undefined, { cwd: process.cwd() });
-    expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("workdir is required");
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toBe("ok");
+    expect(seenCwd).toBe(process.cwd());
   });
 
   it("surfaces bash execution errors", async () => {

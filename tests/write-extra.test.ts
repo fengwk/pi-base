@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { registerWriteTool } from "../src/write.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 
@@ -21,17 +23,18 @@ describe("write extra coverage", () => {
     expect(rendered).toContain("beta");
   });
 
-  it("requires path and workdir during execution", async () => {
+  it("requires path and defaults workdir during execution", async () => {
     const registry = createToolRegistry();
     registerWriteTool(registry.pi as any);
 
-    const missingPath = await registry.getTool("write").execute("1", { workdir: ".", content: "x" }, undefined, undefined, { cwd: process.cwd() });
+    const missingPath = await registry.getTool("write").execute("1", { content: "x" }, undefined, undefined, { cwd: process.cwd() });
     expect(missingPath.isError).toBe(true);
     expect(getText(missingPath)).toContain("path is required");
 
-    const missingWorkdir = await registry.getTool("write").execute("2", { path: "x.ts", content: "x" }, undefined, undefined, { cwd: process.cwd() });
-    expect(missingWorkdir.isError).toBe(true);
-    expect(getText(missingWorkdir)).toContain("workdir is required");
+    const root = await createTempWorkspace();
+    const created = await registry.getTool("write").execute("2", { path: "x.ts", content: "x" }, undefined, undefined, { cwd: root });
+    expect(created.isError).not.toBe(true);
+    expect(await readFile(join(root, "x.ts"), "utf8")).toBe("x");
   });
 
   it("calls hooks on successful writes and reports overwrites", async () => {

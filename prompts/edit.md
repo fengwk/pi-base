@@ -2,7 +2,7 @@ Edit an existing text file using fresh `LINE#HASH` anchors.
 
 Usage:
 - Use `edit` only with fresh anchors from `read`, `write`, or a prior successful `edit` result for the same region.
-- `edit` has three top-level parameters: `path`, `workdir`, and `edits`.
+- `edit` has three top-level parameters: `path`, optional `workdir`, and `edits`. `workdir` defaults to the current working directory. If `workdir` is provided, path resolution uses that directory.
 - Each `edits` item must contain exactly one operation: `replace_lines`, `delete_lines`, `insert_before_lines`, or `insert_after_lines`.
 - Anchor values are copied exactly from tool output, for example `45#2574`. Never include `LINE#HASH|` prefixes in `new_text`.
 - `replace_lines.start_anchor` and `replace_lines.end_anchor` define an inclusive line range: both the start and end lines are replaced. Use the same anchor for a single-line replacement.
@@ -16,7 +16,7 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
 - `edits` (required array; each item must contain exactly one of `replace_lines`, `delete_lines`, `insert_before_lines`, or `insert_after_lines`)
 - `replace_lines` requires `start_anchor`, `end_anchor`, and `new_text`
 - `delete_lines` requires `start_anchor` and `end_anchor`
@@ -196,7 +196,7 @@ Suppose `read` returned:
 Insert two complete lines after line 20:
 
 ```
-edit({ path: "src/example.ts", workdir: ".", edits: [{ insert_after_lines: { anchor: "20#859b", new_text: "log(enabled);\nrun();" } }] })
+edit({ path: "src/example.ts", edits: [{ insert_after_lines: { anchor: "20#859b", new_text: "log(enabled);\nrun();" } }] })
 ```
 
 Expected diff shape:

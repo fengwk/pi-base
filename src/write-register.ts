@@ -15,7 +15,7 @@ export function registerWriteTool(
     promptSnippet: loadToolPromptSnippet("write"),
     parameters: writeSchema,
     renderCall(args: any, theme: any, context: any) {
-      return renderCallText(formatWriteCall(args, theme), context.lastComponent);
+      return renderCallText(formatWriteCall(args, theme, context?.cwd), context.lastComponent);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("write", WRITE_COLLAPSED_PREVIEW_LINES, context, options.getCollapsedResultLines);

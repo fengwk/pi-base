@@ -2,7 +2,7 @@ import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { CollapsedResultLinesResolver, CollapsedResultMaxCharsResolver } from "../render.js";
 import { formatInlineValue, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "../render.js";
-import { resolveToCwd, resolveToolWorkdir } from "../path-utils.js";
+import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "../path-utils.js";
 import { LspDiscoveryResolver } from "./discovery.js";
 
 const SYMBOL_KIND_NAMES: Record<number, string> = {
@@ -118,32 +118,32 @@ export function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise
   });
 }
 
-function formatWorkdirSuffix(args: any, theme: any): string {
-  if (args?.workdir === undefined) return `${styleOutput(theme, " in ")}${styleAccent(theme, "<missing-workdir>")}`;
-  return `${styleOutput(theme, " in ")}${styleAccent(theme, shortenHomePath(String(args.workdir)))}`;
+function formatWorkdirSuffix(args: any, theme: any, cwd?: string): string {
+  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
+  return usedDefault ? "" : `${styleOutput(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
 }
 
-export function formatLspDiagnosticsCall(args: any, theme: any): string {
+export function formatLspDiagnosticsCall(args: any, theme: any, cwd?: string): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
-  return `${styleToolTitle(theme, "lsp_diagnostics")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme)}${styleOutput(theme, formatOptionalArgs([["severity", args?.severity]]))}`;
+  return `${styleToolTitle(theme, "lsp_diagnostics")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme, cwd)}${styleOutput(theme, formatOptionalArgs([["severity", args?.severity]]))}`;
 }
 
-export function formatLspGotoDefinitionCall(args: any, theme: any): string {
+export function formatLspGotoDefinitionCall(args: any, theme: any, cwd?: string): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const suffix = formatOptionalArgs([["line", args?.line], ["character", args?.character ?? 0]]);
-  return `${styleToolTitle(theme, "lsp_goto_definition")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme)}${styleOutput(theme, suffix)}`;
+  return `${styleToolTitle(theme, "lsp_goto_definition")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme, cwd)}${styleOutput(theme, suffix)}`;
 }
 
-export function formatLspWorkspaceSymbolsCall(args: any, theme: any): string {
+export function formatLspWorkspaceSymbolsCall(args: any, theme: any, cwd?: string): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const query = formatInlineValue(String(args?.query ?? "<missing-query>"));
-  return `${styleToolTitle(theme, "lsp_workspace_symbols")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme)} ${styleOutput(theme, query)}${styleOutput(theme, formatOptionalArgs([["limit", args?.limit]]))}`;
+  return `${styleToolTitle(theme, "lsp_workspace_symbols")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme, cwd)} ${styleOutput(theme, query)}${styleOutput(theme, formatOptionalArgs([["limit", args?.limit]]))}`;
 }
 
-export function formatLspJavaDecompileCall(args: any, theme: any): string {
+export function formatLspJavaDecompileCall(args: any, theme: any, cwd?: string): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const target = formatInlineValue(String(args?.target ?? "<missing-target>"));
-  return `${styleToolTitle(theme, "lsp_java_decompile")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme)} ${styleOutput(theme, target)}`;
+  return `${styleToolTitle(theme, "lsp_java_decompile")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme, cwd)} ${styleOutput(theme, target)}`;
 }
 
 export function fileUrlForTarget(target: string, cwd: string): string {

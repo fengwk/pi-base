@@ -7,10 +7,10 @@ import {
   formatBashCall,
   loadBashDescription,
   loadBashPromptSnippet,
-  resolveBashToolCwd,
   type BashDefinitionFactory,
   type BashFactory,
 } from "./bash-renderer-core.js";
+import { resolveToolWorkdir } from "./path-utils.js";
 
 export {
   buildHostShellOptionsFor,
@@ -50,7 +50,7 @@ export function registerBashRendererTool(
         state.startedAt = Date.now();
         state.endedAt = undefined;
       }
-      return renderCallText(formatBashCall(args, theme), context.lastComponent);
+      return renderCallText(formatBashCall(args, theme, context?.cwd), context.lastComponent);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const built = buildBashRenderText(result, renderOptions, theme, context, options.getCollapsedResultLines, options.getCollapsedResultMaxChars);
@@ -77,9 +77,7 @@ export function registerBashRendererTool(
     },
     async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}) {
       try {
-        const rawWorkdir = String(params.workdir ?? "").replace(/^@/, "");
-        if (!rawWorkdir) throw new Error("workdir is required.");
-        const cwd = resolveBashToolCwd(rawWorkdir, ctx.cwd ?? process.cwd());
+        const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const builtIn = getBuiltIn(cwd);
         const timeoutSeconds = params.timeout_seconds === undefined ? undefined : Number(params.timeout_seconds);
         return await builtIn.tool.execute(

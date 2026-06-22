@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import { DEFAULT_MAX_BYTES, formatSize, type BashToolOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning, withLeadingResultNewline } from "./render.js";
-import { resolveToCwd } from "./path-utils.js";
+import { describeToolWorkdirForDisplay, resolveToCwd } from "./path-utils.js";
 import { loadToolPromptSnippet } from "./tool-prompt.js";
 
 export type BashExecutionTool = { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
@@ -12,13 +12,14 @@ export type BashFactory = (cwd: string) => BashExecutionTool;
 export type BashDefinitionFactory = (cwd: string) => BashRenderDefinition;
 export const BASH_COLLAPSED_PREVIEW_LINES = 20;
 
-export function formatBashCall(args: any, theme: any): string {
+export function formatBashCall(args: any, theme: any, cwd?: string): string {
   const rawCommand = args?.command;
   const command = typeof rawCommand === "string" ? rawCommand : "<missing-command>";
-  const workdir = shortenHomePath(String(args?.workdir ?? "<missing-workdir>"));
+  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
+  const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   const timeoutSeconds = args?.timeout_seconds;
   const timeoutSuffix = timeoutSeconds ? styleMuted(theme, ` (timeout ${timeoutSeconds}s)`) : "";
-  return `${styleToolTitle(theme, `$ ${command}`)}${timeoutSuffix}${styleMuted(theme, " in ")}${styleAccent(theme, workdir)}`;
+  return `${styleToolTitle(theme, `$ ${command}`)}${timeoutSuffix}${workdir}`;
 }
 
 export function formatDuration(ms: number): string {

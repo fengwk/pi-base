@@ -10,9 +10,9 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
 - `target` (required)
 
 Examples use pseudo-code tool calls:
 - `lsp_java_decompile({ path: "src/main/java/com/acme/App.java", workdir: "services/java", target: "jdt://contents/java.base/java/lang/String.class?..." })`
-- `lsp_java_decompile({ path: "src/main/java/com/acme/App.java", workdir: "services/java", target: "String (Class) - jdt://contents/java.base/java/lang/String.class?..." })`
+- `lsp_java_decompile({ path: "src/main/java/com/acme/App.java", target: "String (Class) - jdt://contents/java.base/java/lang/String.class?..." })`

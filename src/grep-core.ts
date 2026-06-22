@@ -4,7 +4,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { createGrepTool } from "@earendil-works/pi-coding-agent";
 import { looksLikeBinary } from "./binary-detect.js";
-import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
+import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { formatOptionalArgs, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
 
@@ -22,10 +22,11 @@ function formatGrepPattern(value: unknown): string {
   return JSON.stringify(String(value));
 }
 
-export function formatGrepCall(args: any, theme: any): string {
+export function formatGrepCall(args: any, theme: any, cwd?: string): string {
   const pattern = formatGrepPattern(args?.pattern);
   const searchPath = shortenHomePath(String(args?.path ?? "<missing-path>"));
-  const workdir = `${styleMuted(theme, " from ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : shortenHomePath(String(args.workdir)))}`;
+  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
+  const workdir = usedDefault ? "" : `${styleMuted(theme, " from ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   const suffix = formatOptionalArgs([
     ["include", args?.include],
     ["ignoreCase", args?.ignoreCase === true ? true : undefined],

@@ -7,7 +7,7 @@ Environment:
 
 Usage:
 - Use `bash` for commands, not as the normal way to read, search, or edit repository files.
-- Pass `workdir` on every `bash` call. Use `workdir` to choose the execution directory instead of embedding `cd ... &&` in `command`.
+- `workdir` defaults to the current working directory. If `workdir` is provided, the command runs from that directory. Use it instead of embedding `cd ... &&` in `command` when you need a different directory.
 - On Linux, WSL, and macOS, `bash` prefers the host shell when `$SHELL` is `bash` or `zsh`, and loads common startup files to better match the terminal environment.
 - If a command will create files or directories, first confirm the target parent location with the file tools.
 - Quote file paths that contain spaces.
@@ -16,13 +16,13 @@ Usage:
 
 Parameters:
 - `command` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, run in that directory)
 - `timeout_seconds` (optional, no default)
 
 Examples use pseudo-code tool calls:
 - `bash({ command: "npm test", workdir: "packages/web" })`
 - `bash({ command: "mvn -q test", workdir: "services/java", timeout_seconds: 120 })`
-- `bash({ command: "git status --short", workdir: "." })`
+- `bash({ command: "git status --short" })`
 - `bash({ command: "mkdir -p build && cp \"source file.txt\" build/", workdir: "packages/app" })`
 - `bash({ command: "mv src/old.ts src/archive/old.ts", workdir: "services/api" })`
 - `bash({ command: "cp \"source file.txt\" \"target file.txt\"", workdir: "/tmp/anydir" })`

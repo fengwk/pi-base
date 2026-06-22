@@ -6,7 +6,7 @@ import { looksLikeBinary } from "./binary-detect.js";
 import { normalizeToLF, stripBom } from "./edit-diff.js";
 import { ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay } from "./hashline.js";
 import { LspDiscoveryResolver, type LspSupportInfo } from "./lsp/discovery.js";
-import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
+import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { readSchema } from "./schemas/read.js";
@@ -38,10 +38,11 @@ function formatLine(content: string): { display: string; truncated: boolean } {
 
 type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any) => Promise<any> };
 
-function formatReadCall(args: any, theme: any): string {
+function formatReadCall(args: any, theme: any, cwd?: string): string {
   const rawPath = String(args?.path ?? "<missing-path>");
   const path = shortenHomePath(rawPath);
-  const workdir = `${styleOutput(theme, " in ")}${styleAccent(theme, args?.workdir === undefined ? "<missing-workdir>" : shortenHomePath(String(args.workdir)))}`;
+  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
+  const workdir = usedDefault ? "" : `${styleOutput(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   return `${styleToolTitle(theme, "Read")} ${styleAccent(theme, path)}${workdir}${styleOutput(theme, formatOptionalArgs([["offset", args?.offset], ["limit", args?.limit]]))}`;
 }
 
@@ -75,7 +76,7 @@ export function registerReadTool(
     promptSnippet: loadToolPromptSnippet("read"),
     parameters: readSchema,
     renderCall(args: any, _theme: any, context: any) {
-      return renderCallText(formatReadCall(args, _theme), context.lastComponent);
+      return renderCallText(formatReadCall(args, _theme, context?.cwd), context.lastComponent);
     },
     renderResult(result: any, renderOptions: any, _theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("read", RESULT_COLLAPSED_LINES, context, options.getCollapsedResultLines);

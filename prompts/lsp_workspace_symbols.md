@@ -9,10 +9,10 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
 - `query` (required)
 - `limit` (optional output limit, default: 50)
 
 Examples use pseudo-code tool calls:
 - `lsp_workspace_symbols({ path: "src/main/java/com/acme/App.java", workdir: "services/java", query: "UserService", limit: 20 })`
-- `lsp_workspace_symbols({ path: "src/example.ts", workdir: "packages/web", query: "createDemoDirectory" })`
+- `lsp_workspace_symbols({ path: "src/example.ts", query: "createDemoDirectory" })`

@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { analyzeBashSurfaceCommand, buildBashSurfaceCandidates } from "./bash-command-analyzer.js";
 import { dirname, relative } from "node:path";
 import { type LoadedPiBaseSettings, type PermissionAction, type PermissionRuleEntry } from "./config.js";
-import { expandHomePath, normalizeSlashes, resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
+import { describeToolWorkdirForDisplay, expandHomePath, normalizeSlashes, resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
 import { PI_BASE_INLINE_STATUS_KEYS, PI_BASE_PERMISSION_STATUS_KEY, syncYoloFooter } from "./yolo-footer.js";
 import { loadRuntimePiBaseSettings, toggleRuntimeYolo } from "./runtime-settings.js";
 
@@ -105,11 +105,8 @@ function buildGenericTargetDescriptor(_toolName: string): TargetDescriptor {
 
 function describeTarget(toolName: string, input: Record<string, unknown>, cwd: string, loaded: LoadedPiBaseSettings): TargetDescriptor {
   if (typeof input.path === "string" && input.path.trim().length > 0) {
-    if (typeof input.workdir === "string" && input.workdir.trim().length > 0) {
-      const { cwd: targetCwd } = resolveToolWorkdir(input.workdir, cwd);
-      return buildPathTargetDescriptor(input.path, targetCwd, loaded);
-    }
-    return { candidates: [normalizeSlashes(stripAtPrefix(input.path))] };
+    const { cwd: targetCwd } = resolveToolWorkdir(input.workdir, cwd);
+    return buildPathTargetDescriptor(input.path, targetCwd, loaded);
   }
   if (typeof input.command === "string") {
     return buildCommandTargetDescriptor(input.command);
@@ -183,21 +180,19 @@ function truncateSingleLine(value: string, maxChars = PROMPT_ARGUMENTS_MAX_CHARS
   return `${singleLine.slice(0, sliceLength)}...`;
 }
 
-function getPromptWorkdir(input: unknown): string {
-  if (input && typeof input === "object") {
-    const workdir = (input as Record<string, unknown>).workdir;
-    if (workdir !== undefined && workdir !== null) return truncateSingleLine(String(workdir));
-  }
-  return "<missing-workdir>";
+function getPromptWorkdir(input: unknown, cwd: string): string {
+  const workdir = input && typeof input === "object" ? (input as Record<string, unknown>).workdir : undefined;
+  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(workdir, cwd);
+  return `${truncateSingleLine(rawWorkdir)}${usedDefault ? " (default)" : ""}`;
 }
 
-function buildPrompt(toolName: string, input: unknown): string {
+function buildPrompt(toolName: string, input: unknown, cwd: string): string {
   const argumentsPreview = truncateSingleLine(stringifyPromptArguments(input)) || "{}";
   return [
     "Permission request",
     "",
     `Tool: ${toolName}`,
-    `Workdir: ${getPromptWorkdir(input)}`,
+    `Workdir: ${getPromptWorkdir(input, cwd)}`,
     `Arguments: ${argumentsPreview}`,
     "",
     "Allow this tool call?",
@@ -276,7 +271,7 @@ export function registerPermissionGuard(
     }
 
     await onPermissionAsked?.({ ctx });
-    const choice = await ctx.ui.select(buildPrompt(event.toolName, event.input), [ALLOW_LABEL, DENY_LABEL]);
+    const choice = await ctx.ui.select(buildPrompt(event.toolName, event.input, ctx.cwd), [ALLOW_LABEL, DENY_LABEL]);
     if (choice === ALLOW_LABEL) return undefined;
     onPermissionRejected?.({ ctx });
     ctx.abort();

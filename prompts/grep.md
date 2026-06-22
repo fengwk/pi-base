@@ -12,7 +12,7 @@ Usage:
 Parameters:
 - `pattern` (required)
 - `path` (required)
-- `workdir` (required)
+- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
 - `include` (optional)
 - `ignoreCase` (optional, default: false)
 - `literal` (optional, default: false)
@@ -23,5 +23,5 @@ Parameters:
 Examples use pseudo-code tool calls:
 - `grep({ pattern: "createDemoDirectory", path: "src", workdir: "packages/web", literal: true })`
 - `grep({ pattern: "create.*Directory", path: "src", workdir: "services/api", ignoreCase: true })`
-- `grep({ pattern: "TODO", path: ".", workdir: ".", include: "**/*.ts", timeout_seconds: 30 })`
-- `grep({ pattern: "start\\nend", path: "src", workdir: ".", multiline: true })`
+- `grep({ pattern: "TODO", path: "src", include: "**/*.ts", timeout_seconds: 30 })`
+- `grep({ pattern: "start\\nend", path: "src", multiline: true })`
