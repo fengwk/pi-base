@@ -187,7 +187,7 @@ describe("context compression", () => {
   it("respects anchorHygiene=false without disabling configured age compression", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: false, tools: { bash: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1 } } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: false, retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
     await writeWorkspaceFile(root, "src/example.txt", "alpha\nbeta\n");
 
     const registry = createToolRegistry({ cwd: root });
@@ -296,7 +296,7 @@ describe("context compression", () => {
   it("protects skill read outputs from read age compression", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: { read: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1 } } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["read"] } }), "utf8");
     await writeWorkspaceFile(root, "normal.txt", "normal\n");
     await writeWorkspaceFile(root, "skills/demo/SKILL.md", "# Demo Skill\n");
     await writeWorkspaceFile(root, "skills/demo/reference.md", "skill reference\n");
@@ -329,7 +329,7 @@ describe("context compression", () => {
   it("does not trust historical skill-looking messages for skill read protection", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: { read: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1 } } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["read"] } }), "utf8");
     await writeWorkspaceFile(root, "not-advertised/SKILL.md", "# Not Advertised\n");
     await writeWorkspaceFile(root, "not-advertised/reference.md", "not advertised reference\n");
 
@@ -353,7 +353,7 @@ describe("context compression", () => {
   it("still applies anchor hygiene to skill read outputs after the skill file changes", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true, tools: { read: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1 } } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true, retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["read"] } }), "utf8");
     await writeWorkspaceFile(root, "skills/demo/SKILL.md", "# Demo Skill\n");
     await writeWorkspaceFile(root, "skills/demo/reference.md", "skill reference\n");
 
@@ -386,7 +386,7 @@ describe("context compression", () => {
   it("recognizes skill reads through symlink-normalized paths", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: { read: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1 } } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["read"] } }), "utf8");
     await writeWorkspaceFile(root, "real-skills/demo/SKILL.md", "# Demo Skill\n");
     await writeWorkspaceFile(root, "real-skills/demo/reference.md", "skill reference via link\n");
     try {
@@ -418,7 +418,7 @@ describe("context compression", () => {
   it("compresses configured older tool results only when both user-message rounds and assistant turns exceed retention", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: { bash: {} } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: ["bash"] } }), "utf8");
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
@@ -444,7 +444,7 @@ describe("context compression", () => {
   it("does not age-compress when only one retention dimension is exceeded", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: { bash: {} } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: ["bash"] } }), "utf8");
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
@@ -475,7 +475,7 @@ describe("context compression", () => {
   it("treats consecutive user messages as one user-message round", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: { bash: { retainedUserMessageRounds: 3, retainedAssistantTurns: 1 } } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 3, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
@@ -495,10 +495,10 @@ describe("context compression", () => {
     expect(transformed).toBeUndefined();
   });
 
-  it("honors configured per-tool context compression thresholds", async () => {
+  it("honors configured context compression thresholds", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: { bash: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1 } } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
@@ -515,10 +515,10 @@ describe("context compression", () => {
     expect(getText(transformed.messages[2])).toContain("older tool output omitted");
   });
 
-  it("honors enable=false and supports arbitrary configured tool names", async () => {
+  it("supports arbitrary configured tool names and leaves unlisted tools alone", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: { bash: { enable: false }, custom_tool: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1 } } } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["custom_tool"] } }), "utf8");
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
@@ -526,8 +526,8 @@ describe("context compression", () => {
     const customResult = { content: [{ type: "text", text: "old custom output" }] };
     const messages = [
       userMessage("round 1"),
-      assistantToolCallMessage("bash", "disabled-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "disabled-bash", bashResult),
+      assistantToolCallMessage("bash", "unlisted-bash", { command: "echo old", workdir: "." }),
+      toolResultMessage("bash", "unlisted-bash", bashResult),
       assistantToolCallMessage("custom_tool", "custom-1", { anything: true }),
       toolResultMessage("custom_tool", "custom-1", customResult),
       userMessage("round 2"),

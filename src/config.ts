@@ -28,15 +28,11 @@ export interface NotifyConfig {
 }
 
 
-export interface ContextCompressionToolConfig {
-  enable?: boolean;
-  retainedUserMessageRounds?: number;
-  retainedAssistantTurns?: number;
-}
-
 export interface ContextCompressionConfig {
   anchorHygiene?: boolean;
-  tools?: Record<string, ContextCompressionToolConfig>;
+  retainedUserMessageRounds?: number;
+  retainedAssistantTurns?: number;
+  tools?: string[];
 }
 
 export type YoloMode = boolean;
@@ -283,33 +279,20 @@ function sanitizeOptionalBoolean(value: unknown, path: string): boolean {
   return value;
 }
 
-function sanitizeContextCompressionToolConfig(value: unknown, path: string): ContextCompressionToolConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${path} must be an object.`);
-  }
-  const input = value as Record<string, unknown>;
-  const output: ContextCompressionToolConfig = {};
-  if (input.enable !== undefined) output.enable = sanitizeOptionalBoolean(input.enable, `${path}.enable`);
-  if (input.retainedUserMessageRounds !== undefined) {
-    output.retainedUserMessageRounds = sanitizePositiveInteger(input.retainedUserMessageRounds, `${path}.retainedUserMessageRounds`);
-  }
-  if (input.retainedAssistantTurns !== undefined) {
-    output.retainedAssistantTurns = sanitizePositiveInteger(input.retainedAssistantTurns, `${path}.retainedAssistantTurns`);
+function sanitizeContextCompressionToolsConfig(value: unknown): string[] {
+  const tools = requireStringArray(value, "contextCompression.tools");
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const toolName of tools) {
+    const normalizedToolName = toolName.trim();
+    if (!normalizedToolName) throw new Error("contextCompression.tools contains an empty tool name.");
+    if (seen.has(normalizedToolName)) continue;
+    seen.add(normalizedToolName);
+    output.push(normalizedToolName);
   }
   return output;
 }
 
-function sanitizeContextCompressionToolsConfig(value: unknown): Record<string, ContextCompressionToolConfig> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("contextCompression.tools must be an object keyed by tool name.");
-  }
-  const output: Record<string, ContextCompressionToolConfig> = {};
-  for (const [toolName, toolConfig] of Object.entries(value as Record<string, unknown>)) {
-    if (!toolName.trim()) throw new Error("contextCompression.tools contains an empty tool name.");
-    output[toolName] = sanitizeContextCompressionToolConfig(toolConfig, `contextCompression.tools.${toolName}`);
-  }
-  return output;
-}
 function sanitizeContextCompressionConfig(value: unknown): ContextCompressionConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("contextCompression must be an object.");
@@ -317,6 +300,12 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
   const input = value as Record<string, unknown>;
   const output: ContextCompressionConfig = {};
   if (input.anchorHygiene !== undefined) output.anchorHygiene = sanitizeOptionalBoolean(input.anchorHygiene, "contextCompression.anchorHygiene");
+  if (input.retainedUserMessageRounds !== undefined) {
+    output.retainedUserMessageRounds = sanitizePositiveInteger(input.retainedUserMessageRounds, "contextCompression.retainedUserMessageRounds");
+  }
+  if (input.retainedAssistantTurns !== undefined) {
+    output.retainedAssistantTurns = sanitizePositiveInteger(input.retainedAssistantTurns, "contextCompression.retainedAssistantTurns");
+  }
   if (input.tools !== undefined) output.tools = sanitizeContextCompressionToolsConfig(input.tools);
   return output;
 }
@@ -531,25 +520,8 @@ function mergeMcp(base: McpConfig | undefined, override: McpConfig | undefined):
 }
 
 
-function mergeContextCompressionToolConfig(
-  base: ContextCompressionToolConfig | undefined,
-  override: ContextCompressionToolConfig | undefined,
-): ContextCompressionToolConfig | undefined {
-  if (!base && !override) return undefined;
-  return { ...(base ?? {}), ...(override ?? {}) };
-}
-
-function mergeContextCompressionTools(
-  base: Record<string, ContextCompressionToolConfig> | undefined,
-  override: Record<string, ContextCompressionToolConfig> | undefined,
-): Record<string, ContextCompressionToolConfig> | undefined {
-  if (!base && !override) return undefined;
-  const output: Record<string, ContextCompressionToolConfig> = {};
-  for (const toolName of new Set([...Object.keys(base ?? {}), ...Object.keys(override ?? {})])) {
-    const merged = mergeContextCompressionToolConfig(base?.[toolName], override?.[toolName]);
-    if (merged) output[toolName] = merged;
-  }
-  return output;
+function cloneContextCompressionTools(value: string[] | undefined): string[] | undefined {
+  return value === undefined ? undefined : [...value];
 }
 
 function mergeContextCompression(
@@ -557,10 +529,16 @@ function mergeContextCompression(
   override: ContextCompressionConfig | undefined,
 ): ContextCompressionConfig | undefined {
   if (!base && !override) return undefined;
-  const tools = mergeContextCompressionTools(base?.tools, override?.tools);
+  const tools = override?.tools !== undefined ? cloneContextCompressionTools(override.tools) : cloneContextCompressionTools(base?.tools);
   const output: ContextCompressionConfig = {
     ...(base?.anchorHygiene !== undefined || override?.anchorHygiene !== undefined ? { anchorHygiene: override?.anchorHygiene ?? base?.anchorHygiene } : {}),
-    ...(tools ? { tools } : {}),
+    ...(base?.retainedUserMessageRounds !== undefined || override?.retainedUserMessageRounds !== undefined
+      ? { retainedUserMessageRounds: override?.retainedUserMessageRounds ?? base?.retainedUserMessageRounds }
+      : {}),
+    ...(base?.retainedAssistantTurns !== undefined || override?.retainedAssistantTurns !== undefined
+      ? { retainedAssistantTurns: override?.retainedAssistantTurns ?? base?.retainedAssistantTurns }
+      : {}),
+    ...(tools !== undefined ? { tools } : {}),
   };
   return Object.keys(output).length > 0 ? output : undefined;
 }

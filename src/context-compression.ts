@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative } from "node:path";
 import { normalizeSlashes, resolveToCwd, stripAtPrefix } from "./path-utils.js";
-import type { ContextCompressionConfig, ContextCompressionToolConfig } from "./config.js";
+import type { ContextCompressionConfig } from "./config.js";
 
 type AnchorHygieneToolName = "read" | "write" | "edit";
 
@@ -25,6 +25,10 @@ interface ToolResultMessageLike {
 interface ToolCompressionOptions {
   retainedUserMessageRounds: number;
   retainedAssistantTurns: number;
+}
+
+interface ResolvedToolCompressionOptions extends ToolCompressionOptions {
+  toolNames: ReadonlySet<string>;
 }
 
 interface ContextCompressionProjectionOptions {
@@ -162,15 +166,13 @@ function isAnchorHygieneEnabled(config: ContextCompressionConfig | undefined): b
 }
 
 function resolveToolCompressionOptions(
-  toolName: string,
   config: ContextCompressionConfig | undefined,
-): ToolCompressionOptions | undefined {
-  if (!config?.tools || !Object.prototype.hasOwnProperty.call(config.tools, toolName)) return undefined;
-  const toolConfig: ContextCompressionToolConfig = config.tools[toolName] ?? {};
-  if (toolConfig.enable === false) return undefined;
+): ResolvedToolCompressionOptions | undefined {
+  if (!config?.tools || config.tools.length === 0) return undefined;
   return {
-    retainedUserMessageRounds: toolConfig.retainedUserMessageRounds ?? DEFAULT_CONTEXT_COMPRESSION_TOOL_OPTIONS.retainedUserMessageRounds,
-    retainedAssistantTurns: toolConfig.retainedAssistantTurns ?? DEFAULT_CONTEXT_COMPRESSION_TOOL_OPTIONS.retainedAssistantTurns,
+    toolNames: new Set(config.tools),
+    retainedUserMessageRounds: config.retainedUserMessageRounds ?? DEFAULT_CONTEXT_COMPRESSION_TOOL_OPTIONS.retainedUserMessageRounds,
+    retainedAssistantTurns: config.retainedAssistantTurns ?? DEFAULT_CONTEXT_COMPRESSION_TOOL_OPTIONS.retainedAssistantTurns,
   };
 }
 
@@ -245,6 +247,7 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
 ): T[] {
   const toolCalls = buildToolCallIndex(messages);
   const ageIndexes = buildAgeIndexes(messages);
+  const toolCompressionOptions = resolveToolCompressionOptions(config);
   const skillRoots = buildSkillRoots(cwd, options);
   const dirtyFiles = new Set<string>();
   const anchorHygieneEnabled = isAnchorHygieneEnabled(config);
@@ -264,11 +267,8 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
     let reason: CompressionReason | undefined;
     if (anchorHygieneEnabled && path && isAnchorHygieneToolName(toolName) && isFileContextResult(toolName, message) && dirtyFiles.has(path)) {
       reason = "file_changed_later";
-    } else if (!skillRead) {
-      const compressionOptions = resolveToolCompressionOptions(toolName, config);
-      if (compressionOptions && shouldCompressByAge(index, ageIndexes, compressionOptions)) {
-        reason = "older_tool_output";
-      }
+    } else if (!skillRead && toolCompressionOptions?.toolNames.has(toolName) && shouldCompressByAge(index, ageIndexes, toolCompressionOptions)) {
+      reason = "older_tool_output";
     }
 
     if (reason) {

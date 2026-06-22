@@ -217,7 +217,7 @@ describe("pi-base config", () => {
   });
 
 
-  it("loads context compression settings and lets project settings override individual tool values", async () => {
+  it("loads context compression settings and lets project settings override shared retention values and tool list", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
     await mkdir(projectDir, { recursive: true });
@@ -226,29 +226,24 @@ describe("pi-base config", () => {
       await writeFile(globalPath, JSON.stringify({
         contextCompression: {
           anchorHygiene: true,
-          tools: {
-            bash: { retainedUserMessageRounds: 4, retainedAssistantTurns: 8 },
-            custom_tool: { enable: false },
-          },
+          retainedUserMessageRounds: 4,
+          retainedAssistantTurns: 8,
+          tools: ["bash", "custom_tool"],
         },
       }), "utf8");
       await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
         contextCompression: {
           anchorHygiene: false,
-          tools: {
-            bash: { retainedAssistantTurns: 6 },
-            read: { enable: true },
-          },
+          retainedAssistantTurns: 6,
+          tools: ["bash", "read"],
         },
       }), "utf8");
       const loaded = loadPiBaseSettings(root);
       expect(loaded.settings.contextCompression).toEqual({
         anchorHygiene: false,
-        tools: {
-          bash: { retainedUserMessageRounds: 4, retainedAssistantTurns: 6 },
-          custom_tool: { enable: false },
-          read: { enable: true },
-        },
+        retainedUserMessageRounds: 4,
+        retainedAssistantTurns: 6,
+        tools: ["bash", "read"],
       });
     });
   });
@@ -373,8 +368,18 @@ describe("pi-base config", () => {
       const root = await createTempWorkspace();
       const projectDir = join(root, ".pi");
       await mkdir(projectDir, { recursive: true });
-      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ contextCompression: { tools: { read: { retainedUserMessageRounds: 0 } } } }), "utf8");
-      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: contextCompression\.tools\.read\.retainedUserMessageRounds must be a positive integer/);
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 0 } }), "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: contextCompression\.retainedUserMessageRounds must be a positive integer/);
+    });
+  });
+
+  it("rejects legacy per-tool context compression objects", async () => {
+    await withTempGlobalSettings(async () => {
+      const root = await createTempWorkspace();
+      const projectDir = join(root, ".pi");
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ contextCompression: { tools: { bash: {} } } }), "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(/Invalid pi-base settings at .*pi-base\.json: contextCompression\.tools must be an array of strings/);
     });
   });
 });

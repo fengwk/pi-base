@@ -198,24 +198,20 @@ It is a stateless projection over the current message list. It does not keep a r
 
 `anchorHygiene` controls whether earlier file outputs from `read` / `write` / `edit` are omitted after the same file changes later. It defaults to `false`.
 
-Age compression is configured per tool name under `tools`. Tool names are matched directly against `toolCall.name`; tools not listed are not age-compressed. A listed tool defaults to `retainedUserMessageRounds: 2` and `retainedAssistantTurns: 4` unless overridden. Consecutive user messages count as one user-message round.
+Age compression uses one shared retention window for every tool name listed under `tools`. Configure `retainedUserMessageRounds` and `retainedAssistantTurns` once at `contextCompression`, then list the tool names to match. Tool names are matched directly against `toolCall.name`; tools not listed are not age-compressed. When the shared retention fields are omitted, pi-base defaults to `retainedUserMessageRounds: 2` and `retainedAssistantTurns: 4`. Consecutive user messages count as one user-message round.
 
-Skill reads are protected from `tools.read` age compression. pi-base detects reads under currently advertised skill locations and keeps those outputs unless anchor hygiene later proves the same file changed. No separate `readSkill` config key is needed.
+Skill reads are protected from `tools` age compression. pi-base detects reads under currently advertised skill locations and keeps those outputs unless anchor hygiene later proves the same file changed. No separate `readSkill` config key is needed.
 
 ```json
 {
   "contextCompression": {
     "anchorHygiene": true,
-    "tools": {
-      "bash": {
-        "enable": true,
-        "retainedUserMessageRounds": 2,
-        "retainedAssistantTurns": 4
-      },
-      "custom_tool": {
-        "enable": true
-      }
-    }
+    "retainedUserMessageRounds": 2,
+    "retainedAssistantTurns": 4,
+    "tools": [
+      "bash",
+      "custom_tool"
+    ]
   }
 }
 ```
