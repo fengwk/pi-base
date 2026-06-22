@@ -8,7 +8,7 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
+- `workdir` (optional, default: the agent's current working directory; if provided, resolve from that directory)
 - `offset` (optional, default: 1)
 - `limit` (optional, default: 200, max: 2000)
 

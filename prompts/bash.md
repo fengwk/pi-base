@@ -7,7 +7,7 @@ Environment:
 
 Usage:
 - Use `bash` for commands, not as the normal way to read, search, or edit repository files.
-- `workdir` defaults to the current working directory. If `workdir` is provided, the command runs from that directory. Prefer `workdir` over embedding `cd ... &&` inside `command` when you need a different directory.
+- `workdir` defaults to the agent's current working directory. If `workdir` is provided, the command runs from that directory. Prefer `workdir` over embedding `cd ... &&` inside `command` when you need a different directory.
 - On Linux, WSL, and macOS, `bash` prefers the host shell when `$SHELL` is `bash` or `zsh`, and loads common startup files to better match the terminal environment.
 - If a command will create files or directories, first confirm the target parent location with the file tools.
 - Quote file paths that contain spaces.
@@ -16,7 +16,7 @@ Usage:
 
 Parameters:
 - `command` (required)
-- `workdir` (optional, default: current working directory; if provided, run in that directory; prefer it over `cd ... &&` in `command`)
+- `workdir` (optional, default: the agent's current working directory; if provided, run in that directory; prefer it over `cd ... &&` in `command`)
 - `timeout_seconds` (optional, no default)
 
 Examples use pseudo-code tool calls:

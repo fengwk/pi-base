@@ -9,7 +9,7 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
+- `workdir` (optional, default: the agent's current working directory; if provided, resolve from that directory)
 - `query` (required)
 - `limit` (optional output limit, default: 50)
 

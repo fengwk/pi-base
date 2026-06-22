@@ -8,7 +8,7 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
+- `workdir` (optional, default: the agent's current working directory; if provided, resolve from that directory)
 - `content` (required)
 
 Examples use pseudo-code tool calls:

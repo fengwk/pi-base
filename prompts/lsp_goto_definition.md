@@ -9,7 +9,7 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
+- `workdir` (optional, default: the agent's current working directory; if provided, resolve from that directory)
 - `line` (required, 1-based)
 - `character` (optional, 0-based, default: 0)
 

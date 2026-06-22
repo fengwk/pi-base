@@ -10,7 +10,7 @@ Usage:
 Parameters:
 - `pattern` (required)
 - `path` (required)
-- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
+- `workdir` (optional, default: the agent's current working directory; if provided, resolve from that directory)
 - `limit` (optional, default: 1000)
 - `timeout_seconds` (optional, no default)
 

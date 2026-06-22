@@ -10,7 +10,7 @@ Usage:
 
 Parameters:
 - `path` (required)
-- `workdir` (optional, default: current working directory; if provided, resolve from that directory)
+- `workdir` (optional, default: the agent's current working directory; if provided, resolve from that directory)
 - `severity` (optional, one of `error`, `warning`, `information`, `hint`, `all`; default `all`)
 
 Examples use pseudo-code tool calls:
