@@ -146,6 +146,11 @@ export function renderCallText(textValue: string, lastComponent?: unknown) {
   return text;
 }
 
+export function withLeadingResultNewline(textValue: string): string {
+  if (!textValue) return "";
+  return textValue.startsWith("\n") ? textValue : `\n${textValue}`;
+}
+
 function colorizeResultValue(key: string, value: string, theme: any): string {
   if (!value) return "";
   if (key === "path" || key === "nextOffset") return paint(theme, "accent", value);
@@ -234,7 +239,7 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
     ? Math.floor(options.maxCollapsedChars)
     : undefined;
   if (options?.expanded || isWithinCollapsedLimits(rawBody, bodyLines.length, collapsedLines, maxCollapsedChars)) {
-    text.setText(rawBody ? colorizeResultBody(rawBody, theme, Boolean(context.isError)) : "");
+    text.setText(withLeadingResultNewline(rawBody ? colorizeResultBody(rawBody, theme, Boolean(context.isError)) : ""));
     return text;
   }
 
@@ -251,7 +256,7 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
   ].filter((part): part is string => Boolean(part));
   const tail = paint(theme, "dim", `... (${tailDetails.join(", ")})`);
   const body = truncatedBody ? colorizeResultBody(truncatedBody, theme, Boolean(context.isError)) : "";
-  text.setText(body ? `${body}\n${tail}` : tail);
+  text.setText(withLeadingResultNewline(body ? `${body}\n${tail}` : tail));
   return text;
 }
 

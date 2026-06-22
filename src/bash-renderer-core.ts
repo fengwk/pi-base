@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { DEFAULT_MAX_BYTES, formatSize, type BashToolOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning } from "./render.js";
+import { resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning, withLeadingResultNewline } from "./render.js";
 import { resolveToCwd } from "./path-utils.js";
 import { loadToolPromptSnippet } from "./tool-prompt.js";
 
@@ -243,6 +243,6 @@ export function buildBashRenderText(result: any, renderOptions: any, theme: any,
   const collapsedLines = configuredCollapsedLines ?? BASH_COLLAPSED_PREVIEW_LINES;
   const maxCollapsedChars = resolveCollapsedResultMaxChars("bash", undefined, context, maxCharsResolver);
   const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-  text.setText(formatBashResultText(result, renderOptions, theme, { ...context, state }, collapsedLines, maxCollapsedChars));
+  text.setText(withLeadingResultNewline(formatBashResultText(result, renderOptions, theme, { ...context, state }, collapsedLines, maxCollapsedChars)));
   return { text, collapsedLines, maxCollapsedChars, cwd, state };
 }
