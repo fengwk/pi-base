@@ -21,6 +21,9 @@ afterEach(() => {
     process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
   }
 });
+const GENERIC_TOOL_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. Re-run the tool if you need those details.]";
+const WRITE_EDIT_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state or retrieve the relevant context again.]";
+const BASH_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state, or re-run the command only if it is safe to do so.]";
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -116,9 +119,7 @@ describe("context compression", () => {
     ];
 
     const transformed = await registry.emit("context", { messages }, { cwd: root });
-    expect(getText(transformed.messages[1])).toContain("earlier file output omitted because the file changed later");
-    expect(getText(transformed.messages[1])).toContain("LINE#HASH anchors");
-    expect(getText(transformed.messages[1])).not.toContain(`LINE${":"}HASH anchors`);
+    expect(getText(transformed.messages[1])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
   });
 
   it("masks stale read and edit outputs after later edits to the same file without modifying tool calls", async () => {
@@ -149,9 +150,8 @@ describe("context compression", () => {
     const transformed = await registry.emit("context", { messages }, { cwd: root });
 
     expect(transformed?.messages).toHaveLength(6);
-    expect(getText(transformed.messages[1])).toContain("earlier file output omitted because the file changed later");
-    expect(getText(transformed.messages[1])).not.toContain("alpha");
-    expect(getText(transformed.messages[3])).toContain("earlier file output omitted because the file changed later");
+    expect(getText(transformed.messages[1])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
+    expect(getText(transformed.messages[3])).toBe(WRITE_EDIT_OUTPUT_PLACEHOLDER);
     expect(getText(transformed.messages[3])).not.toContain("alpha v1");
     expect(transformed.messages[3].details).toBe(edit1.details);
     expect(getText(transformed.messages[5])).toContain("alpha v2");
@@ -179,7 +179,7 @@ describe("context compression", () => {
     ];
     const transformed = await registry.emit("context", { messages }, { cwd: root });
 
-    expect(getText(transformed.messages[1])).toContain("earlier file output omitted because the file changed later");
+    expect(getText(transformed.messages[1])).toBe(WRITE_EDIT_OUTPUT_PLACEHOLDER);
     expect(getText(transformed.messages[1])).not.toContain("alpha");
     expect(getText(transformed.messages[3])).toContain("alpha v1");
   });
@@ -212,7 +212,7 @@ describe("context compression", () => {
     const transformed = await registry.emit("context", { messages }, { cwd: root });
 
     expect(getText(transformed.messages[2])).toContain("alpha");
-    expect(getText(transformed.messages[4])).toContain("older tool output omitted");
+    expect(getText(transformed.messages[4])).toBe(BASH_OUTPUT_PLACEHOLDER);
   });
 
   it("does not treat grep output as editable file context", async () => {
@@ -236,7 +236,7 @@ describe("context compression", () => {
     expect(getText(editResult)).not.toContain("grep");
   });
 
-  it("masks stale edit error context after a later successful edit", async () => {
+  it("leaves failed edit error context visible after a later successful edit", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
     await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
@@ -263,11 +263,8 @@ describe("context compression", () => {
       ...toolExchange("edit", "edit-error-context", failedEditArgs, failedEdit),
       ...toolExchange("edit", "edit-after-error-context", goodEditArgs, goodEdit),
     ];
-    const transformed = await registry.emit("context", { messages }, { cwd: root });
 
-    expect(getText(transformed.messages[1])).toContain("earlier file output omitted because the file changed later");
-    expect(getText(transformed.messages[1])).not.toContain("alpha");
-    expect(getText(transformed.messages[3])).toContain("alpha v1");
+    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
   });
 
   it("does not age-compress tools that are not listed in contextCompression.tools", async () => {
@@ -322,7 +319,7 @@ describe("context compression", () => {
       { cwd: root, getSystemPrompt: () => availableSkillsPrompt(join(root, "skills/demo/SKILL.md")) },
     );
 
-    expect(getText(transformed.messages[2])).toContain("older tool output omitted");
+    expect(getText(transformed.messages[2])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
     expect(getText(transformed.messages[4])).toContain("skill reference");
   });
 
@@ -347,7 +344,7 @@ describe("context compression", () => {
 
     const transformed = await registry.emit("context", { messages }, { cwd: root, getSystemPrompt: () => "" });
 
-    expect(getText(transformed.messages[2])).toContain("older tool output omitted");
+    expect(getText(transformed.messages[2])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
   });
 
   it("still applies anchor hygiene to skill read outputs after the skill file changes", async () => {
@@ -379,7 +376,7 @@ describe("context compression", () => {
       { cwd: root, getSystemPrompt: () => availableSkillsPrompt(join(root, "skills/demo/SKILL.md")) },
     );
 
-    expect(getText(transformed.messages[2])).toContain("earlier file output omitted because the file changed later");
+    expect(getText(transformed.messages[2])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
     expect(getText(transformed.messages[4])).toContain("skill reference updated");
   });
 
@@ -415,7 +412,7 @@ describe("context compression", () => {
 
     expect(transformed).toBeUndefined();
   });
-  it("compresses configured older tool results only when both user-message rounds and assistant turns exceed retention", async () => {
+  it("compresses configured older tool results after enough future user windows accumulate retained assistant turns", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
     await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: ["bash"] } }), "utf8");
@@ -428,20 +425,24 @@ describe("context compression", () => {
       assistantToolCallMessage("bash", "old-bash", { command: "echo old", workdir: "." }),
       toolResultMessage("bash", "old-bash", oldResult),
       userMessage("round 2"),
-      assistantTextMessage("turn 2"),
+      assistantTextMessage("turn 2.1"),
       userMessage("round 3"),
-      assistantTextMessage("turn 3"),
+      assistantTextMessage("turn 3.1"),
+      assistantTextMessage("turn 3.2"),
+      assistantTextMessage("turn 3.3"),
       userMessage("round 4"),
-      assistantTextMessage("turn 4"),
-      assistantTextMessage("turn 5"),
-      assistantTextMessage("turn 6"),
+      assistantTextMessage("turn 4.1"),
+      assistantTextMessage("turn 4.2"),
+      userMessage("round 5"),
+      assistantTextMessage("turn 5.1"),
+      assistantTextMessage("turn 5.2"),
     ];
 
     const transformed = await registry.emit("context", { messages }, { cwd: root });
-    expect(getText(transformed.messages[2])).toBe("[context compression: older tool output omitted. Re-run the tool if you need those details.]");
+    expect(getText(transformed.messages[2])).toBe(BASH_OUTPUT_PLACEHOLDER);
   });
 
-  it("does not age-compress when only one retention dimension is exceeded", async () => {
+  it("does not age-compress when future user windows only accumulate one retained round", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
     await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: ["bash"] } }), "utf8");
@@ -449,46 +450,38 @@ describe("context compression", () => {
     piBaseExtension(registry.pi as any);
 
     const oldResult = { content: [{ type: "text", text: "old output remains" }] };
-    const userOnlyMessages = [
+    const messages = [
       userMessage("round 1"),
-      assistantToolCallMessage("bash", "user-only-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "user-only-bash", oldResult),
+      assistantToolCallMessage("bash", "user-window-bash", { command: "echo old", workdir: "." }),
+      toolResultMessage("bash", "user-window-bash", oldResult),
       userMessage("round 2"),
+      assistantTextMessage("turn 2.1"),
       userMessage("round 3"),
+      assistantTextMessage("turn 3.1"),
       userMessage("round 4"),
-    ];
-    const turnOnlyMessages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "turn-only-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "turn-only-bash", oldResult),
-      assistantTextMessage("turn 2"),
-      assistantTextMessage("turn 3"),
-      assistantTextMessage("turn 4"),
-      assistantTextMessage("turn 5"),
-      assistantTextMessage("turn 6"),
+      assistantTextMessage("turn 4.1"),
+      userMessage("round 5"),
+      assistantTextMessage("turn 5.1"),
     ];
 
-    expect(await registry.emit("context", { messages: userOnlyMessages }, { cwd: root })).toBeUndefined();
-    expect(await registry.emit("context", { messages: turnOnlyMessages }, { cwd: root })).toBeUndefined();
+    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
   });
 
-  it("treats consecutive user messages as one user-message round", async () => {
+  it("does not count consecutive user messages without assistant turns as retained rounds", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 3, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 2, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
     const oldResult = { content: [{ type: "text", text: "old output should remain" }] };
     const messages = [
-      userMessage("round 1a"),
-      userMessage("round 1b"),
+      userMessage("round 1"),
       assistantToolCallMessage("bash", "old-bash", { command: "echo old", workdir: "." }),
       toolResultMessage("bash", "old-bash", oldResult),
-      userMessage("round 2"),
+      userMessage("round 2a"),
+      userMessage("round 2b"),
       assistantTextMessage("turn 2"),
-      userMessage("round 3"),
-      assistantTextMessage("turn 3"),
     ];
 
     const transformed = await registry.emit("context", { messages }, { cwd: root });
@@ -512,7 +505,25 @@ describe("context compression", () => {
     ];
 
     const transformed = await registry.emit("context", { messages }, { cwd: root });
-    expect(getText(transformed.messages[2])).toContain("older tool output omitted");
+    expect(getText(transformed.messages[2])).toBe(BASH_OUTPUT_PLACEHOLDER);
+  });
+  it("does not age-compress failed tool results", async () => {
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
+    const registry = createToolRegistry({ cwd: root });
+    piBaseExtension(registry.pi as any);
+
+    const failedResult = { content: [{ type: "text", text: "Command exited with code 1" }], isError: true };
+    const messages = [
+      userMessage("round 1"),
+      assistantToolCallMessage("bash", "failed-bash", { command: "exit 1", workdir: "." }),
+      toolResultMessage("bash", "failed-bash", failedResult),
+      userMessage("round 2"),
+      assistantTextMessage("turn 2"),
+    ];
+
+    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
   });
 
   it("supports arbitrary configured tool names and leaves unlisted tools alone", async () => {
@@ -536,7 +547,7 @@ describe("context compression", () => {
 
     const transformed = await registry.emit("context", { messages }, { cwd: root });
     expect(getText(transformed.messages[2])).toBe("old bash output remains");
-    expect(getText(transformed.messages[4])).toContain("older tool output omitted");
+    expect(getText(transformed.messages[4])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
   });
 
   it("leaves stale file outputs in context by default", async () => {

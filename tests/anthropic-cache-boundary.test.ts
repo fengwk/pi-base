@@ -3,9 +3,11 @@ import piBaseExtension from "../index.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "../src/anthropic-cache-boundary.js";
 import { createToolRegistry } from "./helpers.js";
 
-const PLACEHOLDER = "[context compression: older tool output omitted. Re-run the tool if you need those details.]";
+const GENERIC_TOOL_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. Re-run the tool if you need those details.]";
+const WRITE_EDIT_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state or retrieve the relevant context again.]";
+const BASH_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state, or re-run the command only if it is safe to do so.]";
 
-function basePayload() {
+function basePayload(placeholder = GENERIC_TOOL_OUTPUT_PLACEHOLDER) {
   return {
     system: [{ type: "text", text: "system", cache_control: { type: "ephemeral" } }],
     tools: [{ name: "read", input_schema: {}, cache_control: { type: "ephemeral" } }],
@@ -14,7 +16,7 @@ function basePayload() {
       {
         role: "user",
         content: [
-          { type: "tool_result", tool_use_id: "toolu_read_1", content: PLACEHOLDER },
+          { type: "tool_result", tool_use_id: "toolu_read_1", content: placeholder },
           { type: "text", text: "latest", cache_control: { type: "ephemeral", ttl: "5m" } },
         ],
       },
@@ -35,6 +37,14 @@ describe("Anthropic compression boundary cache marker", () => {
     expect(source.cache_control).toEqual({ type: "ephemeral", ttl: "5m" });
     expect((payload.system[0] as any).cache_control).toEqual({ type: "ephemeral" });
     expect((payload.tools[0] as any).cache_control).toEqual({ type: "ephemeral" });
+  });
+  it("recognizes all pi-base placeholder variants", () => {
+    for (const placeholder of [GENERIC_TOOL_OUTPUT_PLACEHOLDER, WRITE_EDIT_OUTPUT_PLACEHOLDER, BASH_OUTPUT_PLACEHOLDER]) {
+      const payload = basePayload(placeholder);
+      const changed = applyAnthropicCompressionBoundaryCacheMarker(payload);
+      expect(changed).toBe(true);
+      expect((payload.messages[1].content[0] as any).cache_control).toEqual({ type: "ephemeral", ttl: "5m" });
+    }
   });
 
   it("moves the following message marker when adding one would exceed the Anthropic marker limit", () => {
@@ -58,7 +68,7 @@ describe("Anthropic compression boundary cache marker", () => {
     const payload = {
       messages: [
         { role: "user", content: [{ type: "text", text: "already cached", cache_control: { type: "ephemeral" } }] },
-        { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read_1", content: PLACEHOLDER }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read_1", content: GENERIC_TOOL_OUTPUT_PLACEHOLDER }] },
         { role: "user", content: [{ type: "text", text: "active tail" }] },
       ],
     };
@@ -84,7 +94,7 @@ describe("Anthropic compression boundary cache marker", () => {
     const payload = {
       system: [{ type: "text", text: "system", cache_control: { type: "ephemeral" } }],
       tools: [{ name: "read", input_schema: {}, cache_control: { type: "ephemeral" } }],
-      messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read_1", content: PLACEHOLDER }] }],
+      messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read_1", content: GENERIC_TOOL_OUTPUT_PLACEHOLDER }] }],
     };
 
     const changed = applyAnthropicCompressionBoundaryCacheMarker(payload);

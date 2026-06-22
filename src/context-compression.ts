@@ -42,10 +42,12 @@ export const DEFAULT_CONTEXT_COMPRESSION_TOOL_OPTIONS: ToolCompressionOptions = 
   retainedAssistantTurns: 4,
 };
 
-const FILE_CHANGED_PLACEHOLDER = "[context compression: earlier file output omitted because the file changed later. Re-run read for current content before using LINE#HASH anchors.]";
-const OLDER_TOOL_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. Re-run the tool if you need those details.]";
+const GENERIC_TOOL_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. Re-run the tool if you need those details.]";
+const WRITE_EDIT_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state or retrieve the relevant context again.]";
+const BASH_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state, or re-run the command only if it is safe to do so.]";
+const CONTEXT_COMPRESSION_PLACEHOLDERS = new Set([GENERIC_TOOL_OUTPUT_PLACEHOLDER, WRITE_EDIT_OUTPUT_PLACEHOLDER, BASH_OUTPUT_PLACEHOLDER]);
 export function isContextCompressionPlaceholderText(text: string): boolean {
-  return text === FILE_CHANGED_PLACEHOLDER || text === OLDER_TOOL_OUTPUT_PLACEHOLDER;
+  return CONTEXT_COMPRESSION_PLACEHOLDERS.has(text);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -176,46 +178,39 @@ function resolveToolCompressionOptions(
   };
 }
 
-function buildAgeIndexes(messages: readonly ToolResultMessageLike[]): {
-  userRoundAt: number[];
-  assistantTurnAt: number[];
-  totalUserRounds: number;
-  totalAssistantTurns: number;
-} {
-  const userRoundAt: number[] = [];
-  const assistantTurnAt: number[] = [];
-  let totalUserRounds = 0;
-  let totalAssistantTurns = 0;
-  let previousWasUser = false;
-
-  for (let index = 0; index < messages.length; index++) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      if (!previousWasUser) totalUserRounds++;
-      previousWasUser = true;
-    } else {
-      previousWasUser = false;
-    }
-
-    if (message?.role === "assistant") totalAssistantTurns++;
-
-    userRoundAt[index] = totalUserRounds;
-    assistantTurnAt[index] = totalAssistantTurns;
-  }
-
-  return { userRoundAt, assistantTurnAt, totalUserRounds, totalAssistantTurns };
-}
 
 function shouldCompressByAge(
   index: number,
-  ageIndexes: ReturnType<typeof buildAgeIndexes>,
+  messages: readonly ToolResultMessageLike[],
   options: ToolCompressionOptions,
 ): boolean {
-  if (ageIndexes.totalUserRounds === 0 || ageIndexes.totalAssistantTurns === 0) return false;
-  const userRoundsAfter = ageIndexes.totalUserRounds - ageIndexes.userRoundAt[index];
-  const assistantTurnsAfter = ageIndexes.totalAssistantTurns - ageIndexes.assistantTurnAt[index];
-  return userRoundsAfter >= options.retainedUserMessageRounds
-    && assistantTurnsAfter >= options.retainedAssistantTurns;
+  let effectiveUserRounds = 0;
+  let accumulatedAssistantTurns = 0;
+  let currentWindowAssistantTurns = 0;
+  let hasActiveWindow = false;
+
+  for (let cursor = index + 1; cursor < messages.length; cursor++) {
+    const message = messages[cursor];
+    if (message?.role === "user") {
+      if (hasActiveWindow) {
+        accumulatedAssistantTurns += currentWindowAssistantTurns;
+        if (accumulatedAssistantTurns >= options.retainedAssistantTurns) {
+          effectiveUserRounds++;
+          if (effectiveUserRounds >= options.retainedUserMessageRounds) return true;
+          accumulatedAssistantTurns = 0;
+        }
+      }
+      hasActiveWindow = true;
+      currentWindowAssistantTurns = 0;
+      continue;
+    }
+    if (message?.role === "assistant" && hasActiveWindow) currentWindowAssistantTurns++;
+  }
+
+  if (!hasActiveWindow) return false;
+  accumulatedAssistantTurns += currentWindowAssistantTurns;
+  if (accumulatedAssistantTurns >= options.retainedAssistantTurns) effectiveUserRounds++;
+  return effectiveUserRounds >= options.retainedUserMessageRounds;
 }
 
 function isFileContextResult(toolName: string, message: ToolResultMessageLike): boolean {
@@ -228,14 +223,16 @@ function isSuccessfulMutation(toolName: string, message: ToolResultMessageLike):
   return (toolName === "write" || toolName === "edit") && message.isError !== true;
 }
 
-function placeholderForReason(reason: CompressionReason): string {
-  return reason === "file_changed_later" ? FILE_CHANGED_PLACEHOLDER : OLDER_TOOL_OUTPUT_PLACEHOLDER;
+function placeholderForToolName(toolName: string): string {
+  if (toolName === "write" || toolName === "edit") return WRITE_EDIT_OUTPUT_PLACEHOLDER;
+  if (toolName === "bash") return BASH_OUTPUT_PLACEHOLDER;
+  return GENERIC_TOOL_OUTPUT_PLACEHOLDER;
 }
 
-function maskMessage<T extends ToolResultMessageLike>(message: T, reason: CompressionReason): T {
+function maskMessage<T extends ToolResultMessageLike>(message: T, toolName: string): T {
   return {
     ...message,
-    content: [{ type: "text" as const, text: placeholderForReason(reason) }],
+    content: [{ type: "text" as const, text: placeholderForToolName(toolName) }],
   };
 }
 
@@ -246,7 +243,6 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
   options?: ContextCompressionProjectionOptions,
 ): T[] {
   const toolCalls = buildToolCallIndex(messages);
-  const ageIndexes = buildAgeIndexes(messages);
   const toolCompressionOptions = resolveToolCompressionOptions(config);
   const skillRoots = buildSkillRoots(cwd, options);
   const dirtyFiles = new Set<string>();
@@ -257,6 +253,7 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role !== "toolResult") continue;
+    if (message.isError === true) continue;
 
     const call = resolveToolCall(message, toolCalls);
     if (!call) continue;
@@ -267,12 +264,12 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
     let reason: CompressionReason | undefined;
     if (anchorHygieneEnabled && path && isAnchorHygieneToolName(toolName) && isFileContextResult(toolName, message) && dirtyFiles.has(path)) {
       reason = "file_changed_later";
-    } else if (!skillRead && toolCompressionOptions?.toolNames.has(toolName) && shouldCompressByAge(index, ageIndexes, toolCompressionOptions)) {
+    } else if (!skillRead && toolCompressionOptions?.toolNames.has(toolName) && shouldCompressByAge(index, messages, toolCompressionOptions)) {
       reason = "older_tool_output";
     }
 
     if (reason) {
-      next[index] = maskMessage(message, reason);
+      next[index] = maskMessage(message, toolName);
       changed = true;
     }
 

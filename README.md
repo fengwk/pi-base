@@ -194,11 +194,11 @@ Wildcard precedence matches `collapsedToolResultLines`: exact tool names win fir
 ### Example: context compression
 
 `contextCompression` is the only context-pruning config. It is opt-in: when omitted, pi-base does not compress context.
-It is a stateless projection over the current message list. It does not keep a runtime tracker, delete assistant tool calls, modify tool call arguments, or change tool result metadata; only selected `toolResult.content` is replaced.
+It is a stateless projection over the current message list. It does not keep a runtime tracker, delete assistant tool calls, modify tool call arguments, or change tool result metadata; only selected successful `toolResult.content` is replaced.
 
 `anchorHygiene` controls whether earlier file outputs from `read` / `write` / `edit` are omitted after the same file changes later. It defaults to `false`.
 
-Age compression uses one shared retention window for every tool name listed under `tools`. Configure `retainedUserMessageRounds` and `retainedAssistantTurns` once at `contextCompression`, then list the tool names to match. Tool names are matched directly against `toolCall.name`; tools not listed are not age-compressed. When the shared retention fields are omitted, pi-base defaults to `retainedUserMessageRounds: 2` and `retainedAssistantTurns: 4`. Consecutive user messages count as one user-message round.
+Age compression uses one shared retention policy for every tool name listed under `tools`. Configure `retainedUserMessageRounds` and `retainedAssistantTurns` once at `contextCompression`, then list the tool names to match. Tool names are matched directly against `toolCall.name`; tools not listed are not age-compressed. When the shared retention fields are omitted, pi-base defaults to `retainedUserMessageRounds: 2` and `retainedAssistantTurns: 4`. Future conversation is grouped into user-message windows: each window starts at a user message and ends at the next user message or the current end of the transcript. Whole windows are accumulated until they contribute at least `retainedAssistantTurns` assistant turns; that accumulated set counts as one retained user round. A tool result is age-compressed only after at least `retainedUserMessageRounds` such retained user rounds appear after it. Failed tool results are never compressed.
 
 Skill reads are protected from `tools` age compression. pi-base detects reads under currently advertised skill locations and keeps those outputs unless anchor hygiene later proves the same file changed. No separate `readSkill` config key is needed.
 
@@ -216,11 +216,12 @@ Skill reads are protected from `tools` age compression. pi-base detects reads un
 }
 ```
 
-Placeholders are intentionally short and unambiguous:
+Placeholders stay short and vary only by tool category:
 
 ```text
-[context compression: earlier file output omitted because the file changed later. Re-run read for current content before using LINE#HASH anchors.]
 [context compression: older tool output omitted. Re-run the tool if you need those details.]
+[context compression: older tool output omitted. If you need those details, re-check the current state or retrieve the relevant context again.]
+[context compression: older tool output omitted. If you need those details, re-check the current state, or re-run the command only if it is safe to do so.]
 ```
 
 Context compression does not add session-history messages or a persistent UI marker; the configured behavior is driven entirely by `pi-base.json`.
