@@ -34,6 +34,10 @@ interface ResolvedToolCompressionOptions extends ToolCompressionOptions {
 interface ContextCompressionProjectionOptions {
   systemPrompt?: string;
 }
+interface UserWindow {
+  startMessageIndex: number;
+  assistantTurns: number;
+}
 
 const HASHLINE_RE = /(?:^|\n)(?:[+|]\s*)?\s*\d+#[0-9a-f]{4}\|/;
 
@@ -179,38 +183,80 @@ function resolveToolCompressionOptions(
 }
 
 
-function shouldCompressByAge(
-  index: number,
-  messages: readonly ToolResultMessageLike[],
-  options: ToolCompressionOptions,
-): boolean {
-  let effectiveUserRounds = 0;
-  let accumulatedAssistantTurns = 0;
-  let currentWindowAssistantTurns = 0;
-  let hasActiveWindow = false;
+function buildUserWindows(messages: readonly ToolResultMessageLike[]): UserWindow[] {
+  const windows: UserWindow[] = [];
+  let currentStartMessageIndex = -1;
+  let currentAssistantTurns = 0;
 
-  for (let cursor = index + 1; cursor < messages.length; cursor++) {
-    const message = messages[cursor];
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
     if (message?.role === "user") {
-      if (hasActiveWindow) {
-        accumulatedAssistantTurns += currentWindowAssistantTurns;
-        if (accumulatedAssistantTurns >= options.retainedAssistantTurns) {
-          effectiveUserRounds++;
-          if (effectiveUserRounds >= options.retainedUserMessageRounds) return true;
-          accumulatedAssistantTurns = 0;
-        }
+      if (currentStartMessageIndex !== -1) {
+        windows.push({ startMessageIndex: currentStartMessageIndex, assistantTurns: currentAssistantTurns });
       }
-      hasActiveWindow = true;
-      currentWindowAssistantTurns = 0;
+      currentStartMessageIndex = index;
+      currentAssistantTurns = 0;
       continue;
     }
-    if (message?.role === "assistant" && hasActiveWindow) currentWindowAssistantTurns++;
+    if (message?.role === "assistant" && currentStartMessageIndex !== -1) currentAssistantTurns++;
   }
 
-  if (!hasActiveWindow) return false;
-  accumulatedAssistantTurns += currentWindowAssistantTurns;
-  if (accumulatedAssistantTurns >= options.retainedAssistantTurns) effectiveUserRounds++;
-  return effectiveUserRounds >= options.retainedUserMessageRounds;
+  if (currentStartMessageIndex !== -1) {
+    windows.push({ startMessageIndex: currentStartMessageIndex, assistantTurns: currentAssistantTurns });
+  }
+  return windows;
+}
+
+function buildRetainedRoundsFromWindow(
+  windows: readonly UserWindow[],
+  retainedAssistantTurns: number,
+): number[] {
+  const nextRoundStartWindow = new Array<number>(windows.length).fill(-1);
+  let endWindow = 0;
+  let accumulatedAssistantTurns = 0;
+
+  for (let startWindow = 0; startWindow < windows.length; startWindow++) {
+    while (endWindow < windows.length && accumulatedAssistantTurns < retainedAssistantTurns) {
+      accumulatedAssistantTurns += windows[endWindow]?.assistantTurns ?? 0;
+      endWindow++;
+    }
+    if (accumulatedAssistantTurns >= retainedAssistantTurns) nextRoundStartWindow[startWindow] = endWindow;
+    accumulatedAssistantTurns -= windows[startWindow]?.assistantTurns ?? 0;
+  }
+
+  const retainedRoundsFromWindow = new Array<number>(windows.length).fill(0);
+  for (let startWindow = windows.length - 1; startWindow >= 0; startWindow--) {
+    const nextWindow = nextRoundStartWindow[startWindow];
+    retainedRoundsFromWindow[startWindow] = nextWindow === -1
+      ? 0
+      : 1 + (nextWindow < windows.length ? retainedRoundsFromWindow[nextWindow] ?? 0 : 0);
+  }
+  return retainedRoundsFromWindow;
+}
+
+function buildAgeCompressionEligibility(
+  messages: readonly ToolResultMessageLike[],
+  options: ToolCompressionOptions,
+): boolean[] {
+  const eligibility = new Array<boolean>(messages.length).fill(false);
+  const windows = buildUserWindows(messages);
+  if (windows.length === 0) return eligibility;
+
+  const retainedRoundsFromWindow = buildRetainedRoundsFromWindow(windows, options.retainedAssistantTurns);
+  const windowIndexByStartMessage = new Array<number>(messages.length).fill(-1);
+  for (let windowIndex = 0; windowIndex < windows.length; windowIndex++) {
+    windowIndexByStartMessage[windows[windowIndex]!.startMessageIndex] = windowIndex;
+  }
+
+  let nextUserWindow = -1;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (nextUserWindow !== -1 && retainedRoundsFromWindow[nextUserWindow]! >= options.retainedUserMessageRounds) {
+      eligibility[index] = true;
+    }
+    if (messages[index]?.role === "user") nextUserWindow = windowIndexByStartMessage[index] ?? nextUserWindow;
+  }
+
+  return eligibility;
 }
 
 function isFileContextResult(toolName: string, message: ToolResultMessageLike): boolean {
@@ -244,6 +290,7 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
 ): T[] {
   const toolCalls = buildToolCallIndex(messages);
   const toolCompressionOptions = resolveToolCompressionOptions(config);
+  const ageCompressionEligibility = toolCompressionOptions ? buildAgeCompressionEligibility(messages, toolCompressionOptions) : undefined;
   const skillRoots = buildSkillRoots(cwd, options);
   const dirtyFiles = new Set<string>();
   const anchorHygieneEnabled = isAnchorHygieneEnabled(config);
@@ -264,7 +311,7 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
     let reason: CompressionReason | undefined;
     if (anchorHygieneEnabled && path && isAnchorHygieneToolName(toolName) && isFileContextResult(toolName, message) && dirtyFiles.has(path)) {
       reason = "file_changed_later";
-    } else if (!skillRead && toolCompressionOptions?.toolNames.has(toolName) && shouldCompressByAge(index, messages, toolCompressionOptions)) {
+    } else if (!skillRead && toolCompressionOptions?.toolNames.has(toolName) && ageCompressionEligibility?.[index]) {
       reason = "older_tool_output";
     }
 

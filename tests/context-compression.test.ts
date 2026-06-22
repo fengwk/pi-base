@@ -487,6 +487,45 @@ describe("context compression", () => {
     const transformed = await registry.emit("context", { messages }, { cwd: root });
     expect(transformed).toBeUndefined();
   });
+  it("does not count assistant turns before the next future user window", async () => {
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
+    const registry = createToolRegistry({ cwd: root });
+    piBaseExtension(registry.pi as any);
+
+    const oldResult = { content: [{ type: "text", text: "old output before next user" }] };
+    const messages = [
+      userMessage("round 1"),
+      assistantToolCallMessage("bash", "pre-user-bash", { command: "echo old", workdir: "." }),
+      toolResultMessage("bash", "pre-user-bash", oldResult),
+      assistantTextMessage("turn before next user"),
+      userMessage("round 2"),
+    ];
+
+    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
+  });
+
+  it("counts at most one retained round per user window even when that window has many assistant turns", async () => {
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 2, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
+    const registry = createToolRegistry({ cwd: root });
+    piBaseExtension(registry.pi as any);
+
+    const oldResult = { content: [{ type: "text", text: "single-window output remains" }] };
+    const messages = [
+      userMessage("round 1"),
+      assistantToolCallMessage("bash", "single-window-bash", { command: "echo old", workdir: "." }),
+      toolResultMessage("bash", "single-window-bash", oldResult),
+      userMessage("round 2"),
+      assistantTextMessage("turn 2.1"),
+      assistantTextMessage("turn 2.2"),
+      assistantTextMessage("turn 2.3"),
+    ];
+
+    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
+  });
 
   it("honors configured context compression thresholds", async () => {
     const root = await createTempWorkspace();
