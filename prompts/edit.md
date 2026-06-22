@@ -8,6 +8,7 @@ Usage:
 - `replace_lines.start_anchor` and `replace_lines.end_anchor` define an inclusive line range: both the start and end lines are replaced. Use the same anchor for a single-line replacement.
 - `delete_lines.start_anchor` and `delete_lines.end_anchor` define an inclusive line range: both the start and end lines are deleted. Use the same anchor for a single-line deletion.
 - `replace_lines.new_text` is raw replacement file content for the inclusive line range. Use `\n` inside the string when the replacement contains multiple lines.
+- Preserve the target file's leading whitespace (spaces/tabs) in every `new_text` line unless the edit intentionally changes nesting or block structure. For single-line replacements, copy the original line's indentation exactly.
 - `insert_before_lines.new_text` and `insert_after_lines.new_text` are complete line(s) to insert before/after the anchor. `new_text: ""` inserts one empty line.
 - For every `replace_lines.new_text`, `insert_before_lines.new_text`, and `insert_after_lines.new_text`, provide the complete intended content for that operation. Do not use placeholders such as `...` or omitted sections.
 - After a successful edit, only lines prefixed with `+` or `|` carry current reusable anchors. Lines prefixed with `-` are old/deleted content and are not reusable anchors.

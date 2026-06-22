@@ -63,6 +63,30 @@ function getFrozenPreviewLines(text: Text, signature: string, load: () => string
 function splitPreviewNewLines(text: unknown): string[] {
   return splitNewTextLines(String(text ?? ""));
 }
+function leadingWhitespace(text: string): string {
+  const match = /^[\t ]*/.exec(text);
+  return match?.[0] ?? "";
+}
+
+function isStandaloneClosingLine(text: string | undefined): boolean {
+  if (text === undefined) return false;
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return /^[\]\)\}]+[;,]*$/.test(trimmed);
+}
+
+function firstNonEmptyLine(lines: string[]): string | undefined {
+  return lines.find((line) => line.trim().length > 0);
+}
+
+function formatDroppedIndentationWarning(referenceLine: string | undefined, candidateLine: string | undefined, message: string, theme: any): string | undefined {
+  if (referenceLine === undefined || candidateLine === undefined) return undefined;
+  if (candidateLine.trim().length === 0 || isStandaloneClosingLine(candidateLine)) return undefined;
+  const referenceIndent = leadingWhitespace(referenceLine);
+  const candidateIndent = leadingWhitespace(candidateLine);
+  if (referenceIndent.length === 0 || candidateIndent.length > 0) return undefined;
+  return styleWarning(theme, `Warning: ${message}`);
+}
 
 function formatAnchorRange(startAnchor: string | undefined, endAnchor: string | undefined): string {
   return `${formatAnchorRefForDisplay(startAnchor)} .. ${formatAnchorRefForDisplay(endAnchor)}`;
@@ -106,8 +130,17 @@ function renderReplacePreview(lines: string[], entry: any, width: number, theme:
   const anchorRange = formatAnchorRange(entry.replace_lines.start_anchor, entry.replace_lines.end_anchor);
   const newLines = splitPreviewNewLines(entry.replace_lines.new_text);
   const delta = newLines.length - (end - start + 1);
+  const indentationWarning = start === end && newLines.length === 1
+    ? formatDroppedIndentationWarning(
+        lines[start - 1],
+        newLines[0],
+        "replacement appears to drop leading indentation from the target line.",
+        theme,
+      )
+    : undefined;
   return [
     styleToolTitle(theme, `replace_lines ${anchorRange}`),
+    ...(indentationWarning ? [indentationWarning] : []),
     ...collectBeforeLines(lines, start - 1).map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
     ...lines.slice(start - 1, end).map((content, index) => formatPreviewLine("-", start + index, content ?? "", width, theme)),
     ...newLines.map((content, index) => formatPreviewLine("+", start + index, content, width, theme)),
@@ -140,8 +173,15 @@ function renderInsertBeforeLinesPreview(lines: string[], entry: any, width: numb
   const anchorLabel = formatAnchorRefForDisplay(entry.insert_before_lines.anchor);
   const newLines = splitPreviewNewLines(entry.insert_before_lines.new_text);
   const delta = newLines.length;
+  const indentationWarning = formatDroppedIndentationWarning(
+    lines[anchor - 1],
+    firstNonEmptyLine(newLines),
+    "inserted text appears to drop leading indentation from the surrounding block.",
+    theme,
+  );
   return [
     styleToolTitle(theme, `insert_before_lines ${anchorLabel}`),
+    ...(indentationWarning ? [indentationWarning] : []),
     ...newLines.map((content, index) => formatPreviewLine("+", anchor + index, content, width, theme)),
     ...collectAfterLines(lines, anchor).map((item) => formatPreviewLine(" ", item.line + delta, item.content, width, theme)),
   ];
@@ -154,8 +194,15 @@ function renderInsertAfterLinesPreview(lines: string[], entry: any, width: numbe
   const anchor = anchorRef!.line;
   const anchorLabel = formatAnchorRefForDisplay(entry.insert_after_lines.anchor);
   const newLines = splitPreviewNewLines(entry.insert_after_lines.new_text);
+  const indentationWarning = formatDroppedIndentationWarning(
+    lines[anchor - 1],
+    firstNonEmptyLine(newLines),
+    "inserted text appears to drop leading indentation from the surrounding block.",
+    theme,
+  );
   return [
     styleToolTitle(theme, `insert_after_lines ${anchorLabel}`),
+    ...(indentationWarning ? [indentationWarning] : []),
     ...collectBeforeLines(lines, anchor).map((item) => formatPreviewLine(" ", item.line, item.content, width, theme)),
     ...newLines.map((content, index) => formatPreviewLine("+", anchor + 1 + index, content, width, theme)),
   ];

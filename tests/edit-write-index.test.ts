@@ -718,6 +718,72 @@ describe("edit/write flow", () => {
     expect(rendered).toContain("-  1 ··old");
     expect(rendered).toContain("+  1 ··new");
   });
+  it("warns when a single-line replacement drops leading indentation", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "  old\nnext\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const anchor = getText(readResult).split("\n").find((line) => line.includes("|  old"))!.split("|")[0]!;
+    const tool = registry.getTool("edit");
+    const component = tool.renderCall(
+      { workdir: ".", path: "src/example.ts", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "new" } }] },
+      {} as any,
+      { lastComponent: undefined, cwd: root },
+    ) as any;
+    const rendered = component.render(200).join("\n");
+    expect(rendered).toContain("Warning: replacement appears to drop leading indentation from the target line.");
+  });
+
+  it("warns when inserted text drops leading indentation from the surrounding block", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "  old\n  next\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const anchor = getText(readResult).split("\n").find((line) => line.includes("|  next"))!.split("|")[0]!;
+    const tool = registry.getTool("edit");
+    const component = tool.renderCall(
+      { workdir: ".", path: "src/example.ts", edits: [{ insert_before_lines: { anchor, new_text: "inserted" } }] },
+      {} as any,
+      { lastComponent: undefined, cwd: root },
+    ) as any;
+    const rendered = component.render(200).join("\n");
+    expect(rendered).toContain("Warning: inserted text appears to drop leading indentation from the surrounding block.");
+  });
+
+  it("does not warn for an unindented closing delimiter replacement", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "  old\n}\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const anchor = getText(readResult).split("\n").find((line) => line.includes("|  old"))!.split("|")[0]!;
+    const tool = registry.getTool("edit");
+    const component = tool.renderCall(
+      { workdir: ".", path: "src/example.ts", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "}" } }] },
+      {} as any,
+      { lastComponent: undefined, cwd: root },
+    ) as any;
+    const rendered = component.render(200).join("\n");
+    expect(rendered).not.toContain("Warning: replacement appears to drop leading indentation from the target line.");
+  });
+  it("does not warn when a single-line replacement becomes empty", async () => {
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/example.ts", "  old\nnext\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const anchor = getText(readResult).split("\n").find((line) => line.includes("|  old"))!.split("|")[0]!;
+    const tool = registry.getTool("edit");
+    const component = tool.renderCall(
+      { workdir: ".", path: "src/example.ts", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "" } }] },
+      {} as any,
+      { lastComponent: undefined, cwd: root },
+    ) as any;
+    const rendered = component.render(200).join("\n");
+    expect(rendered).not.toContain("Warning: replacement appears to drop leading indentation from the target line.");
+  });
 
   it("rejects full LINE#HASH|content anchors with an actionable message", async () => {
     const root = await createTempWorkspace();
