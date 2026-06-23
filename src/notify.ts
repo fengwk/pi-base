@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { LoadedPiBaseSettings, NotifyConfig } from "./config.js";
 
 const DEFAULT_NOTIFY_COMMAND = [resolve(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "notify.sh")];
-const SUPPRESS_COMPLETED_DEFAULT_MS = 2_000;
+const SUPPRESS_COMPLETED_DEFAULT_MS = 5_000;
 
 export type PiBaseNotifyKind = "permission.requested" | "session.completed";
 

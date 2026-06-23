@@ -27,7 +27,7 @@ export interface NotifyConfig {
   agentEnd?: boolean;
   /**
    * How long (in milliseconds) a "session.completed" notification is
-   * suppressed after the user rejects a permission. Defaults to 2000.
+   * suppressed after the user rejects a permission. Defaults to 5000.
    * Set to 0 to disable the suppression entirely.
    */
   suppressCompletedAfterRejectionMs?: number;

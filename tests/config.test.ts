@@ -203,6 +203,19 @@ describe("pi-base config", () => {
       });
     });
   });
+  it("omits suppressCompletedAfterRejectionMs from the loaded notify config when not set", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        notify: { permissionAsked: true },
+      }), "utf8");
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.notify?.permissionAsked).toBe(true);
+      expect(loaded.settings.notify?.suppressCompletedAfterRejectionMs).toBeUndefined();
+    });
+  });
   it("accepts notify.suppressCompletedAfterRejectionMs as a non-negative integer", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
