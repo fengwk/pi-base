@@ -4,6 +4,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, extname } from "node:path";
 import { looksLikeBinary } from "./binary-detect.js";
 import { normalizeToLF, stripBom } from "./edit-diff.js";
+import { buildImageReadDowngradeMessage, modelSupportsImages } from "./image-fallback.js";
 import { ensureHashInit, escapeControlCharsForDisplay, formatHashlineDisplay } from "./hashline.js";
 import { LspDiscoveryResolver, type LspSupportInfo } from "./lsp/discovery.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
@@ -102,10 +103,16 @@ export function registerReadTool(
         }
 
         if (IMAGE_EXTENSIONS.has(extname(rawPath).toLowerCase())) {
+          if (!modelSupportsImages(ctx?.model)) {
+            return {
+              content: [{ type: "text" as const, text: buildImageReadDowngradeMessage(rawPath, absolutePath) }],
+            };
+          }
+
           const builtIn = (options.createBuiltInReadTool ?? createReadTool)(cwd);
           const builtInParams = { ...params, path: rawPath };
           delete builtInParams.workdir;
-          const result = await builtIn.execute(toolCallId, builtInParams, signal, onUpdate);
+          const result = await builtIn.execute(toolCallId, builtInParams, signal, onUpdate, ctx);
           const note = (result.content ?? [])
             .filter((item: any) => item.type === "text" && typeof item.text === "string")
             .map((item: any) => item.text)

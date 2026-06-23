@@ -44,7 +44,7 @@ If you just want to get started, create `~/.pi/agent/pi-base.json` with `{}` fir
 
 Built-in tools:
 
-- `read` — read files, directories, and supported images
+- `read` — read files, directories, and supported images; when the model has no image input, image reads return text-only guidance with the bundled `image-understanding` skill doc and CLI paths inlined (no Pi skill registration)
 - `grep` — search file contents and return matching lines
 - `find` — discover files by glob pattern
 - `bash` — run commands such as tests, builds, git, or external CLIs
