@@ -55,7 +55,7 @@ describe("read image downgrade", () => {
     expect(text).toContain(IMAGE_UNDERSTANDING_SKILL_DIR);
     expect(text).toContain("skill: image-understanding");
     expect(text).toContain("skillDoc:");
-    expect(text).toContain("read` the skill document");
+    expect(text).toContain("read the image-understanding skill");
     expect(text).not.toContain("Parameter Reference");
     expect(text).not.toContain("should not run");
     expect((result.content ?? []).some((item: any) => item.type === "image")).toBe(false);

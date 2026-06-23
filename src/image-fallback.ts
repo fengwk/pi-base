@@ -27,7 +27,7 @@ export function buildImageReadDowngradeMessage(rawPath: string, absolutePath: st
     `skillDir: ${IMAGE_UNDERSTANDING_SKILL_DIR}`,
     `skillDoc: ${IMAGE_UNDERSTANDING_SKILL_DOC}`,
     "",
-    "To understand this image, `read` the skill document above (`skillDoc`) for usage and CLI commands.",
-    "For basic file metadata only, you can use `bash` with `file` or `identify`.",
+    "If you need to understand this image, read the image-understanding skill (`skillDoc` above).",
+
   ].join("\n");
 }
