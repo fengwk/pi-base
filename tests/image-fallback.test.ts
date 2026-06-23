@@ -26,7 +26,7 @@ describe("modelSupportsImages", () => {
 });
 
 describe("read image downgrade", () => {
-  it("returns text-only guidance with inlined skill section and no image attachment", async () => {
+  it("returns text-only guidance with skill paths and read hint, no image attachment", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "shot.png", "fake");
     const registry = createToolRegistry();
@@ -53,17 +53,20 @@ describe("read image downgrade", () => {
     expect(text).toContain("mediaType: image");
     expect(text).toContain("skillDir:");
     expect(text).toContain(IMAGE_UNDERSTANDING_SKILL_DIR);
-    expect(text).toContain("# image-understanding");
-    expect(text).toContain("image-understanding-cli");
+    expect(text).toContain("skill: image-understanding");
+    expect(text).toContain("skillDoc:");
+    expect(text).toContain("read` the skill document");
+    expect(text).not.toContain("Parameter Reference");
     expect(text).not.toContain("should not run");
     expect((result.content ?? []).some((item: any) => item.type === "image")).toBe(false);
   });
 
-  it("buildImageReadDowngradeMessage includes absolute path and skill paths", () => {
+  it("buildImageReadDowngradeMessage includes absolute path, skill name, and skillDoc", () => {
     const msg = buildImageReadDowngradeMessage("a/b.png", "/tmp/a/b.png");
     expect(msg).toContain("path: a/b.png");
     expect(msg).toContain("absolutePath: /tmp/a/b.png");
     expect(msg).toContain("skillDir:");
-    expect(msg).toContain("/tmp/a/b.png");
+    expect(msg).toContain("skill: image-understanding");
+    expect(msg).toContain("SKILL.md");
   });
 });
