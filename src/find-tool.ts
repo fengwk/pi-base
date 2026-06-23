@@ -7,7 +7,7 @@ import {
   formatSize,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
-import { ensureTool } from "../node_modules/@earendil-works/pi-coding-agent/dist/utils/tools-manager.js";
+import { ensureTool } from "./internal/pi-coding-agent-utils.js";
 import { resolveToCwd } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
 

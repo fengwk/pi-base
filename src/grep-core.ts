@@ -3,7 +3,7 @@ import { open, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { createGrepTool, DEFAULT_MAX_BYTES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
-import { ensureTool } from "../node_modules/@earendil-works/pi-coding-agent/dist/utils/tools-manager.js";
+import { ensureTool } from "./internal/pi-coding-agent-utils.js";
 import { looksLikeBinary } from "./binary-detect.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";

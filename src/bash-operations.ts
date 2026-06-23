@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { waitForChildProcess } from "../node_modules/@earendil-works/pi-coding-agent/dist/utils/child-process.js";
-import { getShellConfig, getShellEnv, trackDetachedChildPid, untrackDetachedChildPid } from "../node_modules/@earendil-works/pi-coding-agent/dist/utils/shell.js";
+import { getShellConfig } from "@earendil-works/pi-coding-agent";
+import { getShellEnv, trackDetachedChildPid, untrackDetachedChildPid, waitForChildProcess } from "./internal/pi-coding-agent-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
 
 export interface BashOperations {
