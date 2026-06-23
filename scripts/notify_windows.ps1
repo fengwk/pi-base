@@ -120,6 +120,16 @@ public static class PiWindowsNotify {
   public static extern void SetCurrentProcessExplicitAppUserModelID(string AppID);
 
   public const string AppUserModelId = "Pi.Notify.Notifier";
+
+  [DllImport("kernel32.dll")]
+  public static extern IntPtr GetConsoleWindow();
+
+  [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+  public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+  public const uint WM_SETICON = 0x0080;
+  public static readonly IntPtr ICON_BIG = new IntPtr(1);
+  public static readonly IntPtr ICON_SMALL = new IntPtr(0);
 }
 
 public class PiNotifyWindow : Form {
@@ -376,6 +386,27 @@ $title = Limit-Text (Decode-Base64Utf8 $TitleBase64).Trim() 63
 $body = Limit-Text (Decode-Base64Utf8 $BodyBase64).Trim() 255
 $iconPath = (Decode-Base64Utf8 $IconPathBase64).Trim()
 
+# Rewrite the parent PowerShell window's title bar so it shows
+# "Pi" + the pi logo instead of inheriting the default "Windows
+# PowerShell" + powershell.exe icon. The hidden console window is
+# still tracked by Windows in taskbar preview / Alt-Tab and we want
+# it to look like the real source app, not a child PowerShell
+# process. Best-effort: if the console window is already gone or the
+# title-icon file is missing, fall through and let the toast fire
+# under the inherited PowerShell identity.
+try {
+  [Console]::Title = 'Pi'
+  $titleIconPath = Join-Path $PSScriptRoot 'assets/title-icon.png'
+  if (Test-Path -LiteralPath $titleIconPath) {
+    $titleIcon = [System.Drawing.Icon]::FromHandle(([System.Drawing.Bitmap]::FromFile($titleIconPath)).GetHicon())
+    $hwnd = [PiWindowsNotify]::GetConsoleWindow()
+    if ($hwnd -ne [IntPtr]::Zero) {
+      [PiWindowsNotify]::SendMessage($hwnd, [PiWindowsNotify]::WM_SETICON, [PiWindowsNotify]::ICON_BIG, $titleIcon.Handle) | Out-Null
+      [PiWindowsNotify]::SendMessage($hwnd, [PiWindowsNotify]::WM_SETICON, [PiWindowsNotify]::ICON_SMALL, $titleIcon.Handle) | Out-Null
+    }
+  }
+} catch { }
+
 # Self-register the pi AUMID so Windows attributes the Shell_NotifyIcon
 # toast to "Pi" with the pi logo as source-app icon, instead of
 # inheriting an AUMID from the calling context (e.g. an OpenCode AUMID
@@ -387,8 +418,17 @@ try {
     New-Item -Path $aumidKey -Force | Out-Null
   }
   Set-ItemProperty -LiteralPath $aumidKey -Name 'DisplayName' -Value 'Pi'
-  if (-not [string]::IsNullOrWhiteSpace($iconPath) -and (Test-Path -LiteralPath $iconPath)) {
-    Set-ItemProperty -LiteralPath $aumidKey -Name 'DisplayIcon' -Value "$iconPath,0"
+  # The AUMID's DisplayIcon controls the small source-app icon shown
+  # next to the app name in the toast (and in the action center). It
+  # is rendered at small sizes (16-32 px) and should be the actual
+  # brand logo, not the body notification icon. Use title-icon.png
+  # when present, fall back to the body icon otherwise.
+  $aumidIcon = Join-Path $PSScriptRoot 'assets/title-icon.png'
+  if (-not (Test-Path -LiteralPath $aumidIcon)) {
+    $aumidIcon = $iconPath
+  }
+  if (-not [string]::IsNullOrWhiteSpace($aumidIcon) -and (Test-Path -LiteralPath $aumidIcon)) {
+    Set-ItemProperty -LiteralPath $aumidKey -Name 'DisplayIcon' -Value "$aumidIcon,0"
   }
   Set-ItemProperty -LiteralPath $aumidKey -Name 'IconBackgroundColor' -Value '0'
   Set-ItemProperty -LiteralPath $aumidKey -Name 'ShowInSettings' -Value 0 -Type DWord
