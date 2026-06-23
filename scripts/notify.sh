@@ -54,23 +54,20 @@ build_title() {
 }
 
 build_message() {
-  # 正文格式：[proj] title
+  # 正文格式：有 title 就用 `[project] title`，没 title 就只用 project。
+  # 故意不再回退到 session_id（UUID），免得把不可读的标识符当标题渲染。
   local project_display="$project"
   local title_display="$session_title"
 
   if [[ -z "$project_display" ]]; then
-    project_display="unknown-project"
+    project_display="untitled"
   fi
 
   if [[ -z "$title_display" ]]; then
-    title_display="$session_id"
+    message="$project_display"
+  else
+    message="[${project_display}] ${title_display}"
   fi
-
-  if [[ -z "$title_display" ]]; then
-    title_display="unknown-session"
-  fi
-
-  message="[${project_display}] ${title_display}"
 }
 
 is_wsl() {

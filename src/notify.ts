@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { LoadedPiBaseSettings, NotifyConfig } from "./config.js";
 
 const DEFAULT_NOTIFY_COMMAND = [resolve(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "notify.sh")];
-const SUPPRESS_COMPLETED_MS = 2_000;
+const SUPPRESS_COMPLETED_DEFAULT_MS = 2_000;
 
 export type PiBaseNotifyKind = "permission.requested" | "session.completed";
 
@@ -61,9 +61,11 @@ export function registerNotifySupport(
       await sendNotification(buildPayload("permission.requested", ctx), ctx);
     },
     onPermissionRejected({ ctx }) {
+      const window = suppressCompletedWindowMs(loadSettings?.(ctx.cwd).settings.notify);
+      if (window <= 0) return;
       const payload = buildPayload("session.completed", ctx);
       if (!payload.sessionID) return;
-      suppressCompletedUntil.set(payload.sessionID, Date.now() + SUPPRESS_COMPLETED_MS);
+      suppressCompletedUntil.set(payload.sessionID, Date.now() + window);
     },
   };
 }
@@ -102,6 +104,12 @@ function getNotifyCommand(): string[] {
   return [...DEFAULT_NOTIFY_COMMAND];
 }
 
+function suppressCompletedWindowMs(config: NotifyConfig | undefined): number {
+  const value = config?.suppressCompletedAfterRejectionMs;
+  if (value === undefined) return SUPPRESS_COMPLETED_DEFAULT_MS;
+  return value;
+}
+
 function shouldNotifyForPermissionAsk(config: NotifyConfig | undefined, ctx: ExtensionContext): boolean {
   return ctx.hasUI && config?.permissionAsked === true;
 }
@@ -113,8 +121,12 @@ function shouldNotifyForAgentEnd(config: NotifyConfig | undefined, ctx: Extensio
 function buildPayload(kind: PiBaseNotifyKind, ctx: ExtensionContext): PiBaseNotifyPayload {
   const projectName = basename(ctx.cwd) || ctx.cwd;
   const sessionID = String(ctx.sessionManager.getSessionId?.() ?? basename(ctx.sessionManager.getSessionFile?.() ?? ""));
-  const sessionName = ctx.sessionManager.getSessionName?.();
-  const sessionTitle = sessionName && sessionName.trim().length > 0 ? sessionName : (sessionID || projectName);
+  // sessionTitle is rendered into the notification body as
+  // `[project] title`. If the session has no name, leave it empty so
+  // the bash script can fall back to a project-only body instead of
+  // showing the session UUID.
+  const sessionName = ctx.sessionManager.getSessionName?.() ?? "";
+  const sessionTitle = sessionName.trim();
   return {
     kind,
     cwd: ctx.cwd,

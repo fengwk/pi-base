@@ -203,6 +203,35 @@ describe("pi-base config", () => {
       });
     });
   });
+  it("accepts notify.suppressCompletedAfterRejectionMs as a non-negative integer", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        notify: { suppressCompletedAfterRejectionMs: 0 },
+      }), "utf8");
+      expect(loadPiBaseSettings(root).settings.notify?.suppressCompletedAfterRejectionMs).toBe(0);
+
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        notify: { suppressCompletedAfterRejectionMs: 750 },
+      }), "utf8");
+      expect(loadPiBaseSettings(root).settings.notify?.suppressCompletedAfterRejectionMs).toBe(750);
+    });
+  });
+  it("rejects negative or non-integer notify.suppressCompletedAfterRejectionMs values", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      for (const bad of [-1, 1.5, "500"]) {
+        await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+          notify: { suppressCompletedAfterRejectionMs: bad },
+        }), "utf8");
+        expect(() => loadPiBaseSettings(root)).toThrow(/suppressCompletedAfterRejectionMs/);
+      }
+    });
+  });
   it("loads default yolo flag from unified pi-base config and lets project settings override it", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");

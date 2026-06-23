@@ -25,6 +25,12 @@ export interface RenderConfig {
 export interface NotifyConfig {
   permissionAsked?: boolean;
   agentEnd?: boolean;
+  /**
+   * How long (in milliseconds) a "session.completed" notification is
+   * suppressed after the user rejects a permission. Defaults to 2000.
+   * Set to 0 to disable the suppression entirely.
+   */
+  suppressCompletedAfterRejectionMs?: number;
 }
 
 
@@ -264,7 +270,20 @@ function sanitizeNotifyConfig(value: unknown): NotifyConfig | undefined {
   const output: NotifyConfig = {};
   if (input.permissionAsked !== undefined) output.permissionAsked = sanitizeOptionalBoolean(input.permissionAsked, "notify.permissionAsked");
   if (input.agentEnd !== undefined) output.agentEnd = sanitizeOptionalBoolean(input.agentEnd, "notify.agentEnd");
+  if (input.suppressCompletedAfterRejectionMs !== undefined) {
+    output.suppressCompletedAfterRejectionMs = sanitizeNonNegativeInteger(
+      input.suppressCompletedAfterRejectionMs,
+      "notify.suppressCompletedAfterRejectionMs",
+    );
+  }
   return Object.keys(output).length > 0 ? output : undefined;
+}
+
+function sanitizeNonNegativeInteger(value: unknown, path: string): number {
+  if (!Number.isInteger(value) || Number(value) < 0) {
+    throw new Error(`${path} must be a non-negative integer.`);
+  }
+  return Number(value);
 }
 
 function sanitizePositiveInteger(value: unknown, path: string): number {

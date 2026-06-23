@@ -235,12 +235,14 @@ Context compression does not add session-history messages or a persistent UI mar
 - `pi-base` uses its bundled Pi notifier script from `scripts/notify.sh` automatically; no command path is required in config.
 - `permissionAsked` controls approval-request notifications.
 - `agentEnd` controls completion notifications emitted on `agent_end`.
+- `suppressCompletedAfterRejectionMs` (default `2000`, set `0` to disable) is the time window after a permission is rejected during which a follow-up `agent_end` completion notification is suppressed. The window prevents the "Pi - Permission" toast from being followed immediately by a "Pi - Completed" toast for the same session, which would be noise. Lower it (or set to `0`) if you want every completion to surface.
 
 ```json
 {
   "notify": {
     "permissionAsked": true,
-    "agentEnd": true
+    "agentEnd": true,
+    "suppressCompletedAfterRejectionMs": 0
   }
 }
 ```
