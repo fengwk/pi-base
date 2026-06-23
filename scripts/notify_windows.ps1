@@ -115,6 +115,11 @@ public static class PiWindowsNotify {
   public const uint WM_APP = 0x8000;
   public const int NIN_SELECT = 0x0400;
   public const int NIN_BALLOONUSERCLICK = 0x0405;
+
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern void SetCurrentProcessExplicitAppUserModelID(string AppID);
+
+  public const string AppUserModelId = "Pi.Notify.Notifier";
 }
 
 public class PiNotifyWindow : Form {
@@ -370,6 +375,32 @@ if ($Mode -eq 'jump') {
 $title = Limit-Text (Decode-Base64Utf8 $TitleBase64).Trim() 63
 $body = Limit-Text (Decode-Base64Utf8 $BodyBase64).Trim() 255
 $iconPath = (Decode-Base64Utf8 $IconPathBase64).Trim()
+
+# Self-register the pi AUMID so Windows attributes the Shell_NotifyIcon
+# toast to "Pi" with the pi logo as source-app icon, instead of
+# inheriting an AUMID from the calling context (e.g. an OpenCode AUMID
+# that would otherwise show the OpenCode icon and "Windows PowerShell"
+# as the source label). HKCU writes are cheap and idempotent.
+try {
+  $aumidKey = "HKCU:\Software\Classes\AppUserModelId\$([PiWindowsNotify]::AppUserModelId)"
+  if (-not (Test-Path -LiteralPath $aumidKey)) {
+    New-Item -Path $aumidKey -Force | Out-Null
+  }
+  Set-ItemProperty -LiteralPath $aumidKey -Name 'DisplayName' -Value 'Pi'
+  if (-not [string]::IsNullOrWhiteSpace($iconPath) -and (Test-Path -LiteralPath $iconPath)) {
+    Set-ItemProperty -LiteralPath $aumidKey -Name 'DisplayIcon' -Value "$iconPath,0"
+  }
+  Set-ItemProperty -LiteralPath $aumidKey -Name 'IconBackgroundColor' -Value '0'
+  Set-ItemProperty -LiteralPath $aumidKey -Name 'ShowInSettings' -Value 0 -Type DWord
+} catch {
+  # Best-effort: if HKCU is locked or the script runs in a constrained
+  # context, fall through and let the toast fire with whatever AUMID
+  # the process already has.
+}
+
+# Bind this PowerShell process to the AUMID so Shell_NotifyIcon
+# attributes the toast to Pi.Notify.Notifier.
+[PiWindowsNotify]::SetCurrentProcessExplicitAppUserModelID([PiWindowsNotify]::AppUserModelId) | Out-Null
 
 $form = $null
 $bitmap = $null
