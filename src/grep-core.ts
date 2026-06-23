@@ -262,19 +262,19 @@ function formatMultilineMatchLines(filePath: string, lineNumber: number, lineTex
 }
 
 async function executeMultilineGrep(options: MultilineGrepOptions, signal?: AbortSignal): Promise<any> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Operation aborted"));
-      return;
-    }
+  if (signal?.aborted) throw new Error("Operation aborted");
+  const rgPath = await ensureTool("rg", true);
+  if (!rgPath) throw new Error("ripgrep (rg) is not available and could not be downloaded");
+  if (signal?.aborted) throw new Error("Operation aborted");
 
+  return new Promise((resolve, reject) => {
     const args = ["--json", "--line-number", "--color=never", "--hidden", "--multiline"];
     if (options.ignoreCase) args.push("--ignore-case");
     if (options.literal) args.push("--fixed-strings");
     if (options.include) args.push("--glob", options.include);
     args.push("--", options.pattern, options.absolutePath);
 
-    const child = spawn("rg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
     const terminator = createGracefulTerminator(child);
     const rl = createInterface({ input: child.stdout });
     let stderr = "";
