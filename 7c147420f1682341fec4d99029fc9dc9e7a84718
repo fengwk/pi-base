@@ -1,0 +1,65 @@
+src/task/guide.ts
+  c95059f4dacfa9ab 1-2,4-19,23,27,30-33,35,37-38
+prompts/task.md
+  c95059f4dacfa9ab 9
+tests/bash-index.test.ts
+  c95059f4dacfa9ab 10-21,413-427
+tests/subagent-guide.test.ts
+  c95059f4dacfa9ab 53,56,59,61-65,69,74,77,80-108
+src/index-impl.ts
+  c95059f4dacfa9ab 29,58-59,62-65,284-292
+src/schemas/task.ts
+  c95059f4dacfa9ab 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8-ntes.8",
+  "base_commit_sha": "7c147420f1682341fec4d99029fc9dc9e7a84718",
+  "prompts": {
+    "c95059f4dacfa9ab": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_14d91270dffeURS4QbhYbyM713",
+        "model": "openai/gpt-5.4"
+      },
+      "human_author": "fengwk",
+      "messages": [],
+      "total_additions": 162,
+      "total_deletions": 106,
+      "accepted_lines": 115,
+      "overriden_lines": 0,
+      "per_file_stats": {
+        "tests/subagent-guide.test.ts": {
+          "additions": 52,
+          "deletions": 22,
+          "accepted_lines": 40
+        },
+        "src/task/guide.ts": {
+          "additions": 61,
+          "deletions": 62,
+          "accepted_lines": 28
+        },
+        "src/schemas/task.ts": {
+          "additions": 1,
+          "deletions": 1,
+          "accepted_lines": 1
+        },
+        "prompts/task.md": {
+          "additions": 2,
+          "deletions": 3,
+          "accepted_lines": 1
+        },
+        "src/index-impl.ts": {
+          "additions": 19,
+          "deletions": 6,
+          "accepted_lines": 18
+        },
+        "tests/bash-index.test.ts": {
+          "additions": 27,
+          "deletions": 12,
+          "accepted_lines": 27
+        }
+      }
+    }
+  }
+}
