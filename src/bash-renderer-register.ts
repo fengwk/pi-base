@@ -1,4 +1,5 @@
 import { createBashTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createGracefulBashOperations } from "./bash-operations.js";
 import { renderCallText, renderRawResult } from "./render.js";
 import { bashSchema } from "./schemas/bash.js";
 import {
@@ -11,6 +12,9 @@ import {
   type BashFactory,
 } from "./bash-renderer-core.js";
 import { resolveToolWorkdir } from "./path-utils.js";
+import { parsePositiveNumber } from "./timeout.js";
+
+const BASH_DEFAULT_TIMEOUT_SECONDS = 120;
 
 export {
   buildHostShellOptionsFor,
@@ -30,7 +34,12 @@ export function registerBashRendererTool(
     let entry = builtins.get(cwd);
     if (!entry) {
       entry = {
-        tool: options.createBuiltInBashTool ? options.createBuiltInBashTool(cwd) : createBashTool(cwd, shellOptions),
+        tool: options.createBuiltInBashTool
+          ? options.createBuiltInBashTool(cwd)
+          : createBashTool(cwd, {
+              ...shellOptions,
+              operations: createGracefulBashOperations({ shellPath: shellOptions?.shellPath }),
+            }),
         definition: options.createBuiltInBashToolDefinition ? options.createBuiltInBashToolDefinition(cwd) : {},
       };
       builtins.set(cwd, entry);
@@ -79,7 +88,7 @@ export function registerBashRendererTool(
       try {
         const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const builtIn = getBuiltIn(cwd);
-        const timeoutSeconds = params.timeout_seconds === undefined ? undefined : Number(params.timeout_seconds);
+        const timeoutSeconds = parsePositiveNumber(params.timeout_seconds, "timeout_seconds", BASH_DEFAULT_TIMEOUT_SECONDS);
         return await builtIn.tool.execute(
           toolCallId,
           {

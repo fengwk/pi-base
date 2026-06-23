@@ -91,6 +91,22 @@ describe("bash tool and index", () => {
     expect(getText(result)).toBe("ok");
     expect(seenParams).toEqual({ command: "npm test", timeout: 30 });
   });
+  it("applies the default bash timeout when timeout_seconds is omitted", async () => {
+    const registry = createToolRegistry();
+    let seenParams: any;
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({
+        execute: async (_toolCallId: string, params: any) => {
+          seenParams = params;
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+      }),
+    });
+
+    const result = await registry.getTool("bash").execute("1", { command: "npm test", workdir: "." }, undefined, undefined, { cwd: process.cwd() });
+    expect(getText(result)).toBe("ok");
+    expect(seenParams).toEqual({ command: "npm test", timeout: 120 });
+  });
 
   it("defaults bash workdir to the current cwd", async () => {
     const registry = createToolRegistry();

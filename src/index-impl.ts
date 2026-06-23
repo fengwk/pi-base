@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createFindToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createFindToolDefinition } from "./find-tool.js";
 import { readFileSync } from "node:fs";
 import { registerReadTool } from "./read.js";
 import { registerEditTool } from "./edit.js";
@@ -205,9 +205,9 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getCollapsedResultMaxChars,
   });
   registerGrepTool(pi, { getCollapsedResultLines, getCollapsedResultMaxChars });
-  // Delegate `find` to the built-in pi-coding-agent tool, which uses `fd` directly,
-  // respects `.gitignore` (rg/fd default), and auto-downloads `fd` if missing.
-  // This keeps `pi-base` thin and lets upstream handle fd behavior.
+  // `find` uses the same `fd` backend as pi-coding-agent, but pi-base owns the
+  // child-process termination strategy so timeout/abort handling is consistent
+  // with the local grep/bash wrappers.
   registerFindTool(pi, createFindToolDefinition, { getCollapsedResultLines, getCollapsedResultMaxChars });
   registerBashRendererTool(pi, { getCollapsedResultLines, getCollapsedResultMaxChars });
   registerEditTool(pi, {
