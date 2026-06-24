@@ -15,5 +15,6 @@ Parameters:
 Examples use pseudo-code tool calls:
 - `read({ path: "src/example.ts", workdir: "packages/web" })`
 - `read({ path: "src/example.ts", workdir: "services/api", offset: 120, limit: 40 })`
-- `read({ path: "src/" })`
+- `read({ path: "." })`             // list directory (replaces `ls .`)
+- `read({ path: "src/" })`          // list directory (replaces `ls src/`)
 - `read({ path: "screenshot.png", workdir: "/tmp/agent-artifacts" })`
