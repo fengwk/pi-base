@@ -37,7 +37,7 @@ function formatLine(content: string): { display: string; truncated: boolean } {
   return { display, truncated: false };
 }
 
-type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any) => Promise<any> };
+type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
 function formatReadCall(args: any, theme: any, cwd?: string): string {
   const rawPath = String(args?.path ?? "<missing-path>");
@@ -109,7 +109,9 @@ export function registerReadTool(
             };
           }
 
-          const builtIn = (options.createBuiltInReadTool ?? createReadTool)(cwd);
+          const builtIn = ((options.createBuiltInReadTool ?? createReadTool)(cwd) as {
+            execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any>;
+          });
           const builtInParams = { ...params, path: rawPath };
           delete builtInParams.workdir;
           const result = await builtIn.execute(toolCallId, builtInParams, signal, onUpdate, ctx);

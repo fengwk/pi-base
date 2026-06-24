@@ -1,5 +1,6 @@
 import xxhashWasm from "xxhash-wasm";
 import { throwIfAborted } from "./runtime.js";
+import type { ConcreteLineEnding, ParsedLineEndingDocument } from "./line-endings.js";
 
 export type HashlineEditItem =
   | { replace_lines: { start_anchor: string; end_anchor: string; new_text: string } }
@@ -104,18 +105,27 @@ export function parseLineRef(ref: string): { line: number; hash: string } {
 
 /** Normalize caller-provided edit text to the file's internal LF model. */
 export function normalizeEditText(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\u2028/g, "\n")
+    .replace(/\u2029/g, "\n")
+    .replace(/\u0085/g, "\n");
 }
-
 /**
  * Split raw edit text for display while preserving trailing newlines as
- * explicit empty trailing lines. Execution uses raw character spans; this
+ * explicit empty trailing lines. Execution uses normalized logical lines; this
  * helper is only for previews and summaries.
  */
 export function splitNewTextLines(text: string): string[] {
   return normalizeEditText(text).split("\n");
 }
 
+/**
+ * Insert-before payloads conceptually end with the separator that reconnects the
+ * inserted block to the anchor line, so previews and execution share the same
+ * trailing-LF wrapper.
+ */
 function normalizeInsertBeforeLinesText(text: string): string {
   const normalized = normalizeEditText(text);
   if (normalized.length === 0) return "\n";
@@ -123,11 +133,28 @@ function normalizeInsertBeforeLinesText(text: string): string {
   return `${normalized}\n`;
 }
 
+/**
+ * Insert-after payloads conceptually start with the separator that detaches the
+ * anchor line from the inserted block, so previews and execution share the same
+ * leading-LF wrapper.
+ */
 function normalizeInsertAfterLinesText(text: string): string {
   const normalized = normalizeEditText(text);
   if (normalized.length === 0) return "\n";
   if (normalized.startsWith("\n")) return normalized;
   return `\n${normalized}`;
+}
+
+function parseReplaceLinesText(text: string): string[] {
+  return normalizeEditText(text).split("\n");
+}
+
+function parseInsertBeforeLines(text: string): string[] {
+  return normalizeInsertBeforeLinesText(text).slice(0, -1).split("\n");
+}
+
+function parseInsertAfterLines(text: string): string[] {
+  return normalizeInsertAfterLinesText(text).slice(1).split("\n");
 }
 
 const MISMATCH_CONTEXT_RADIUS = 15;
@@ -196,41 +223,50 @@ function lineEnd(starts: number[], lines: string[], line: number, contentLength:
   return Math.min(contentLength, start + (lines[line - 1] ?? "").length);
 }
 
-export function applyHashlineEdits(
-  content: string,
-  edits: HashlineEditItem[],
-  signal?: AbortSignal,
-): { content: string; firstChangedLine: number | undefined } {
+type RangeOperation = {
+  kind: "replace_lines" | "delete_lines";
+  index: number;
+  start: number;
+  end: number;
+  refs: Array<{ line: number; hash: string }>;
+  spanStart: number;
+  spanEnd: number;
+  replacementText: string;
+  replacementLines: string[];
+};
+
+type PointOperation = {
+  kind: "insert_before_lines" | "insert_after_lines";
+  index: number;
+  line: number;
+  refs: Array<{ line: number; hash: string }>;
+  offset: number;
+  replacementText: string;
+  insertedLines: string[];
+};
+
+type ParsedOperation = RangeOperation | PointOperation;
+
+type PreparedHashlineOperations = {
+  operations: ParsedOperation[];
+  firstChangedLine: number | undefined;
+};
+
+const isRangeOperation = (operation: ParsedOperation): operation is RangeOperation => operation.kind === "replace_lines" || operation.kind === "delete_lines";
+
+function prepareHashlineOperations(content: string, edits: HashlineEditItem[], signal?: AbortSignal): PreparedHashlineOperations {
   throwIfAborted(signal);
-  if (edits.length === 0) return { content, firstChangedLine: undefined };
+  if (edits.length === 0) return { operations: [], firstChangedLine: undefined };
 
   const lines = content.split("\n");
   const lineStarts = buildLineStarts(content, lines);
 
-  type RangeOperation = {
-    kind: "replace_lines" | "delete_lines";
-    index: number;
-    start: number;
-    end: number;
-    refs: Array<{ line: number; hash: string }>;
-    spanStart: number;
-    spanEnd: number;
-    replacement: string;
-  };
-  type PointOperation = {
-    kind: "insert_before_lines" | "insert_after_lines";
-    index: number;
-    line: number;
-    refs: Array<{ line: number; hash: string }>;
-    offset: number;
-    replacement: string;
-  };
-
-  const operations: Array<RangeOperation | PointOperation> = edits.map((edit, index) => {
+  const operations: ParsedOperation[] = edits.map((edit, index) => {
     if ("replace_lines" in edit) {
       const start = parseLineRef(edit.replace_lines.start_anchor);
       const end = parseLineRef(edit.replace_lines.end_anchor);
       if (start.line > end.line) throw new Error("replace_lines requires start_anchor line <= end_anchor line.");
+      const replacementText = normalizeEditText(edit.replace_lines.new_text);
       return {
         kind: "replace_lines",
         index,
@@ -239,9 +275,11 @@ export function applyHashlineEdits(
         refs: [start, end],
         spanStart: lineStart(lineStarts, start.line),
         spanEnd: lineEnd(lineStarts, lines, end.line, content.length),
-        replacement: normalizeEditText(edit.replace_lines.new_text),
+        replacementText,
+        replacementLines: replacementText.split("\n"),
       };
     }
+
     if ("delete_lines" in edit) {
       const start = parseLineRef(edit.delete_lines.start_anchor);
       const end = parseLineRef(edit.delete_lines.end_anchor);
@@ -256,31 +294,45 @@ export function applyHashlineEdits(
       } else {
         spanEnd = content.length;
       }
-      return { kind: "delete_lines", index, start: start.line, end: end.line, refs: [start, end], spanStart, spanEnd, replacement: "" };
+      return {
+        kind: "delete_lines",
+        index,
+        start: start.line,
+        end: end.line,
+        refs: [start, end],
+        spanStart,
+        spanEnd,
+        replacementText: "",
+        replacementLines: [],
+      };
     }
+
     if ("insert_before_lines" in edit) {
       const before = parseLineRef(edit.insert_before_lines.anchor);
+      const replacementText = normalizeInsertBeforeLinesText(edit.insert_before_lines.new_text);
       return {
         kind: "insert_before_lines",
         index,
         line: before.line,
         refs: [before],
         offset: lineStart(lineStarts, before.line),
-        replacement: normalizeInsertBeforeLinesText(edit.insert_before_lines.new_text),
+        replacementText,
+        insertedLines: parseInsertBeforeLines(edit.insert_before_lines.new_text),
       };
     }
+
     const after = parseLineRef(edit.insert_after_lines.anchor);
+    const replacementText = normalizeInsertAfterLinesText(edit.insert_after_lines.new_text);
     return {
       kind: "insert_after_lines",
       index,
       line: after.line,
       refs: [after],
       offset: lineEnd(lineStarts, lines, after.line, content.length),
-      replacement: normalizeInsertAfterLinesText(edit.insert_after_lines.new_text),
+      replacementText,
+      insertedLines: parseInsertAfterLines(edit.insert_after_lines.new_text),
     };
   });
-
-  const isRangeOperation = (operation: RangeOperation | PointOperation): operation is RangeOperation => operation.kind === "replace_lines" || operation.kind === "delete_lines";
 
   for (const operation of operations) {
     throwIfAborted(signal);
@@ -291,9 +343,9 @@ export function applyHashlineEdits(
     .filter(isRangeOperation)
     .sort((a, b) => a.spanStart - b.spanStart || a.spanEnd - b.spanEnd || a.index - b.index);
 
-  for (let i = 1; i < rangeOperations.length; i++) {
-    const previous = rangeOperations[i - 1];
-    const current = rangeOperations[i];
+  for (let index = 1; index < rangeOperations.length; index++) {
+    const previous = rangeOperations[index - 1]!;
+    const current = rangeOperations[index]!;
     if (current.spanStart < previous.spanEnd) throw new Error("Overlapping replace_lines/delete_lines edits are not allowed.");
   }
 
@@ -320,12 +372,72 @@ export function applyHashlineEdits(
     firstChangedLine = firstChangedLine === undefined ? operation.line : Math.min(firstChangedLine, operation.line);
   }
 
-  type TextEdit = { start: number; end: number; index: number; placement: "before" | "replace" | "after"; replacement: string };
+  return { operations, firstChangedLine };
+}
+
+function incomingEnding(document: Pick<ParsedLineEndingDocument, "eolAfter">, line: number): ConcreteLineEnding | null {
+  return line > 1 ? (document.eolAfter[line - 2] ?? null) : null;
+}
+
+function outgoingEnding(document: Pick<ParsedLineEndingDocument, "eolAfter">, line: number): ConcreteLineEnding | null {
+  return document.eolAfter[line - 1] ?? null;
+}
+
+function inferReplaceBlockEnding(document: Pick<ParsedLineEndingDocument, "eolAfter" | "defaultEnding">, start: number, end: number): ConcreteLineEnding {
+  for (let line = start; line < end; line++) {
+    const ending = outgoingEnding(document, line);
+    if (ending) return ending;
+  }
+  return outgoingEnding(document, end) ?? incomingEnding(document, start) ?? document.defaultEnding;
+}
+
+function inferInsertBeforeBlockEnding(document: Pick<ParsedLineEndingDocument, "eolAfter" | "defaultEnding">, line: number): ConcreteLineEnding {
+  return outgoingEnding(document, line) ?? incomingEnding(document, line) ?? document.defaultEnding;
+}
+
+function inferInsertAfterBlockEnding(document: Pick<ParsedLineEndingDocument, "eolAfter" | "defaultEnding">, line: number): ConcreteLineEnding {
+  return incomingEnding(document, line) ?? outgoingEnding(document, line) ?? document.defaultEnding;
+}
+
+function compareLineEndingOperations(a: ParsedOperation, b: ParsedOperation): number {
+  const aLine = isRangeOperation(a) ? a.start : a.line;
+  const bLine = isRangeOperation(b) ? b.start : b.line;
+  if (aLine !== bLine) return bLine - aLine;
+  const rank = (operation: ParsedOperation) => operation.kind === "insert_after_lines" ? 0 : isRangeOperation(operation) ? 1 : 2;
+  const rankDiff = rank(a) - rank(b);
+  if (rankDiff !== 0) return rankDiff;
+  return b.index - a.index;
+}
+
+function finalizeLineEndingDocument(lines: string[], eolAfter: Array<ConcreteLineEnding | null>): { lines: string[]; eolAfter: Array<ConcreteLineEnding | null> } {
+  if (lines.length === 0) return { lines: [""], eolAfter: [null] };
+  if (lines.length !== eolAfter.length) {
+    throw new Error("Line ending document is inconsistent after editing.");
+  }
+  eolAfter[eolAfter.length - 1] = null;
+  return { lines, eolAfter };
+}
+
+export function applyHashlineEdits(
+  content: string,
+  edits: HashlineEditItem[],
+  signal?: AbortSignal,
+): { content: string; firstChangedLine: number | undefined } {
+  const { operations, firstChangedLine } = prepareHashlineOperations(content, edits, signal);
+  if (operations.length === 0) return { content, firstChangedLine };
+
+  type TextEdit = { start: number; end: number; index: number; placement: "before" | "replace" | "after"; replacementText: string };
   const textEdits: TextEdit[] = operations.map((operation) => {
     if (isRangeOperation(operation)) {
-      return { start: operation.spanStart, end: operation.spanEnd, index: operation.index, placement: "replace", replacement: operation.replacement };
+      return { start: operation.spanStart, end: operation.spanEnd, index: operation.index, placement: "replace", replacementText: operation.replacementText };
     }
-    return { start: operation.offset, end: operation.offset, index: operation.index, placement: operation.kind === "insert_before_lines" ? "before" : "after", replacement: operation.replacement };
+    return {
+      start: operation.offset,
+      end: operation.offset,
+      index: operation.index,
+      placement: operation.kind === "insert_before_lines" ? "before" : "after",
+      replacementText: operation.replacementText,
+    };
   });
 
   const byStart = new Map<number, TextEdit[]>();
@@ -348,11 +460,65 @@ export function applyHashlineEdits(
     const before = list.filter((textEdit) => textEdit.end === textEdit.start && textEdit.placement === "before").sort((a, b) => a.index - b.index);
     const after = list.filter((textEdit) => textEdit.end === textEdit.start && textEdit.placement === "after").sort((a, b) => a.index - b.index);
     const end = replacing?.end ?? start;
-    const replacement = replacing
-      ? `${before.map((textEdit) => textEdit.replacement).join("")}${replacing.replacement}${after.map((textEdit) => textEdit.replacement).join("")}`
-      : list.sort((a, b) => a.index - b.index).map((textEdit) => textEdit.replacement).join("");
-    output = `${output.slice(0, start)}${replacement}${output.slice(end)}`;
+    const replacementText = replacing
+      ? `${before.map((textEdit) => textEdit.replacementText).join("")}${replacing.replacementText}${after.map((textEdit) => textEdit.replacementText).join("")}`
+      : list.sort((a, b) => a.index - b.index).map((textEdit) => textEdit.replacementText).join("");
+    output = `${output.slice(0, start)}${replacementText}${output.slice(end)}`;
   }
 
   return { content: output, firstChangedLine };
+}
+
+export function applyHashlineLineEndings(
+  document: Pick<ParsedLineEndingDocument, "lines" | "eolAfter" | "defaultEnding">,
+  edits: HashlineEditItem[],
+  signal?: AbortSignal,
+): { lines: string[]; eolAfter: Array<ConcreteLineEnding | null> } {
+  const { operations } = prepareHashlineOperations(document.lines.join("\n"), edits, signal);
+  if (operations.length === 0) return { lines: [...document.lines], eolAfter: [...document.eolAfter] };
+
+  const currentLines = [...document.lines];
+  const currentEolAfter = [...document.eolAfter];
+  for (const operation of [...operations].sort(compareLineEndingOperations)) {
+    throwIfAborted(signal);
+    if (isRangeOperation(operation)) {
+      const spliceStart = operation.start - 1;
+      const spliceCount = operation.end - operation.start + 1;
+      if (operation.kind === "delete_lines") {
+        currentLines.splice(spliceStart, spliceCount);
+        currentEolAfter.splice(spliceStart, spliceCount);
+        if (currentLines.length === 0) {
+          currentLines.push("");
+          currentEolAfter.push(null);
+          continue;
+        }
+        if (spliceStart > 0 && spliceStart >= currentLines.length) currentEolAfter[spliceStart - 1] = null;
+        continue;
+      }
+
+      const blockEnding = inferReplaceBlockEnding(document, operation.start, operation.end);
+      const trailingEnding = currentEolAfter[operation.end - 1] ?? null;
+      const replacementEolAfter = operation.replacementLines.map((_, index) => index === operation.replacementLines.length - 1 ? trailingEnding : blockEnding);
+      currentLines.splice(spliceStart, spliceCount, ...operation.replacementLines);
+      currentEolAfter.splice(spliceStart, spliceCount, ...replacementEolAfter);
+      continue;
+    }
+
+    if (operation.kind === "insert_before_lines") {
+      const blockEnding = inferInsertBeforeBlockEnding(document, operation.line);
+      currentLines.splice(operation.line - 1, 0, ...operation.insertedLines);
+      currentEolAfter.splice(operation.line - 1, 0, ...operation.insertedLines.map(() => blockEnding));
+      continue;
+    }
+
+    const insertIndex = operation.line;
+    const blockEnding = inferInsertAfterBlockEnding(document, operation.line);
+    const trailingEnding = currentEolAfter[insertIndex - 1] ?? null;
+    currentEolAfter[insertIndex - 1] = blockEnding;
+    const insertedEolAfter = operation.insertedLines.map((_, index) => index === operation.insertedLines.length - 1 ? trailingEnding : blockEnding);
+    currentLines.splice(insertIndex, 0, ...operation.insertedLines);
+    currentEolAfter.splice(insertIndex, 0, ...insertedEolAfter);
+  }
+
+  return finalizeLineEndingDocument(currentLines, currentEolAfter);
 }

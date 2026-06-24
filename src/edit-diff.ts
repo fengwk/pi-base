@@ -1,35 +1,16 @@
 import * as Diff from "diff";
 import { formatHashlineDisplay } from "./hashline.js";
-
-// ─── Line ending normalization ──────────────────────────────────────────
-
-export type LineEndingStyle = "\r\n" | "\n" | "\r" | "mixed";
-
-export function detectLineEnding(content: string): LineEndingStyle {
-	const hasCRLF = content.includes("\r\n");
-	const withoutCRLF = content.replace(/\r\n/g, "");
-	const hasCR = withoutCRLF.includes("\r");
-	const hasLF = withoutCRLF.includes("\n");
-	const styles = [hasCRLF, hasCR, hasLF].filter(Boolean).length;
-	if (styles > 1) return "mixed";
-	if (hasCRLF) return "\r\n";
-	if (hasCR) return "\r";
-	return "\n";
-}
-
-export function normalizeToLF(text: string): string {
-	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-export function restoreLineEndings(text: string, ending: "\r\n" | "\n" | "\r"): string {
-	if (ending === "\r\n") return text.replace(/\n/g, "\r\n");
-	if (ending === "\r") return text.replace(/\n/g, "\r");
-	return text;
-}
-
-export function stripBom(content: string): { bom: string; text: string } {
-	return content.startsWith("﻿") ? { bom: "﻿", text: content.slice(1) } : { bom: "", text: content };
-}
+export {
+  detectLineEnding,
+  normalizeToLF,
+  restoreLineEndings,
+  stripBom,
+  parseLineEndingDocument,
+  serializeLineEndingDocument,
+  type ConcreteLineEnding,
+  type LineEndingStyle,
+  type ParsedLineEndingDocument,
+} from "./line-endings.js";
 
 // ─── Diff generation ────────────────────────────────────────────────────
 

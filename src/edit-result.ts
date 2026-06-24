@@ -1,5 +1,5 @@
 import * as Diff from "diff";
-import { formatHashlineDisplay, type HashlineMismatchError } from "./hashline.js";
+import { formatHashlineDisplay, normalizeEditText, type HashlineMismatchError } from "./hashline.js";
 import { formatCurrentAnchorLine, formatRemovedLine, safeParseLineRef } from "./edit-display.js";
 
 const RESULT_CONTEXT_LINES = 2;
@@ -114,9 +114,24 @@ export function buildNoChangeError(path: string, content: string, edits: any[]):
   const start = Math.max(1, center - radius);
   const end = Math.min(fileLines.length, center + radius);
   const context = fileLines.slice(start - 1, end).map((line, index) => formatHashlineDisplay(start + index, line));
+  const identityHints: string[] = [];
+  for (const edit of edits) {
+    const rep = edit?.replace_lines;
+    if (!rep) continue;
+    const startRef = safeParseLineRef(rep.start_anchor);
+    const endRef = safeParseLineRef(rep.end_anchor);
+    if (!startRef || !endRef) continue;
+    if (startRef.line < 1 || endRef.line > fileLines.length || startRef.line > endRef.line) continue;
+    const originalSlice = fileLines.slice(startRef.line - 1, endRef.line).join("\n");
+    if (normalizeEditText(rep.new_text) !== originalSlice) continue;
+    identityHints.push(
+      `Hint: replace_lines at lines ${startRef.line}..${endRef.line} received new_text identical to the current content at the anchor range. ` +
+        `Make sure new_text actually differs from the original line(s).`,
+    );
+  }
   const lines: string[] = [
     `Edit failed for ${path}. The requested edits would not change the file.`,
-    "",
+    ...(identityHints.length > 0 ? [...identityHints, ""] : [""]),
     `Current context in ${path} around line ${center}:`,
     "",
     `path: ${path}`,

@@ -1,8 +1,8 @@
 import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { readFile, writeFile } from "node:fs/promises";
-import { detectLineEnding, generateCompactOrFullDiff, normalizeToLF, restoreLineEndings, stripBom } from "./edit-diff.js";
-import { applyHashlineEdits, ensureHashInit, HashlineMismatchError, type HashlineEditItem } from "./hashline.js";
+import { generateCompactOrFullDiff, parseLineEndingDocument, serializeLineEndingDocument, stripBom } from "./edit-diff.js";
+import { applyHashlineEdits, applyHashlineLineEndings, ensureHashInit, HashlineMismatchError, type HashlineEditItem } from "./hashline.js";
 import { buildEditCallPreviewSignature, rememberEditCallPreviewSnapshot, renderEditCall, type EditCallPreviewSnapshots } from "./edit-preview.js";
 import { buildNoChangeError, buildResultDiff, buildStaleError } from "./edit-result.js";
 import { resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
@@ -87,15 +87,9 @@ export function registerEditTool(
           throwIfAborted(signal);
           const raw = await throwIfAbortedAfter(readFile(absolutePath, "utf8"), signal);
           const { bom, text } = stripBom(raw);
-          const originalEnding = detectLineEnding(text);
-          if (originalEnding === "mixed") {
-            return {
-              content: [{ type: "text" as const, text: `Edit failed for ${rawPath}. Mixed line endings are not supported. Normalize the file to a single line ending style before editing.` }],
-              isError: true,
-            };
-          }
-          const original = normalizeToLF(text);
-          rememberEditCallPreviewSnapshot(callPreviewSnapshots, previewSignature, original.split("\n"));
+          const document = parseLineEndingDocument(text);
+          const original = document.lines.join("\n");
+          rememberEditCallPreviewSnapshot(callPreviewSnapshots, previewSignature, document.lines);
           let next;
           try {
             next = applyHashlineEdits(original, params.edits as HashlineEditItem[], signal);
@@ -108,14 +102,20 @@ export function registerEditTool(
             return buildNoChangeError(rawPath, original, params.edits);
           }
 
-          const writeContent = bom + restoreLineEndings(next.content, originalEnding);
+          const nextDocument = applyHashlineLineEndings(document, params.edits as HashlineEditItem[], signal);
+          const nextContent = nextDocument.lines.join("\n");
+          if (nextContent !== next.content) {
+            throw new Error("Internal edit consistency error: normalized content diverged from line-ending serialization planning.");
+          }
+
+          const writeContent = bom + serializeLineEndingDocument(nextDocument);
           throwIfAborted(signal);
           await throwIfAbortedAfter(writeFile(absolutePath, writeContent, "utf8"), signal);
-          const nextLines = next.content.split("\n");
+          const nextLines = nextDocument.lines;
           options.onSuccessfulEdit?.(absolutePath, nextLines);
 
-          const diffText = buildResultDiff(original, next.content);
-          const diff = generateCompactOrFullDiff(original, next.content).diff;
+          const diffText = buildResultDiff(original, nextContent);
+          const diff = generateCompactOrFullDiff(original, nextContent).diff;
 
           return {
             content: [{ type: "text" as const, text: `Edit applied to ${rawPath}.\nReview the diff below. Use only LINE#HASH anchors from lines prefixed with "+" or "|" for follow-up edits in this region; lines prefixed with "-" are old/deleted content and intentionally do not carry reusable anchors.\n\n${diffText}` }],
