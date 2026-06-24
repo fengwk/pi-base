@@ -4,7 +4,7 @@
 - When moving or copying files, prefer `bash` with `mv` or `cp` instead of simulating copy/move operations by deleting or fully rewriting files.
 - For exploration, prefer `grep` plus targeted partial `read` calls to locate relevant code efficiently. Treat `grep` output as candidate locations only; before editing, use `read` to inspect enough surrounding context and obtain a fresh `[path#TAG]` header.
 - Parallel tool use is an important efficiency mechanism. When tool calls are independent and do not rely on each other, prefer issuing them in parallel. Unrelated reads, searches, and different-file mutations can still proceed concurrently.
-- For multiple changes to the same file, prefer one `edit` call with one `input` string that contains several hashline operations (`SWAP`, `DEL`, `INS.*`) under the same `[path#TAG]` header.
+- For multiple changes to the same file, prefer one `edit` call with one `input` string that contains several hashline operations (`SWAP`, `DEL`, `INS.*`) under the same `[path#TAG]` header; ranges must not overlap on the same original line.
 - For existing text files, call `edit` with a fresh `[path#TAG]` header from the latest `read`, `write`, or successful `edit` result. If `edit` reports a stale tag, rerun `read` for the relevant region before retrying.
 - If a prior tool result is replaced with a context compression placeholder, do not treat the placeholder as original tool output. Re-run the appropriate tool before relying on omitted details, file content, or `[path#TAG]` headers.
 - When citing line numbers, offsets, counts, or `[path#TAG]` headers from tool output, copy them verbatim instead of inferring or reformatting them.

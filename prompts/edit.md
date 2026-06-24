@@ -27,13 +27,9 @@ Body rows:
 - The body is only final file content. Never write bare context rows or unified-diff `-old` rows.
 
 Rules:
-- Numbers always refer to the ORIGINAL file that `TAG` names. They never shift as earlier hunks in the same patch apply.
-- After every successful `edit` or `write`, copy the fresh `[PATH#TAG]` header from the newest result before issuing another patch.
-- `SWAP` / `DEL` ranges must be tight. Cover only lines whose content changes.
-- If you touch a line, that exact line must have been displayed by the `read` result that minted `TAG`.
-- For insertions adjacent to a replacement, either include the inserted rows inside the `SWAP` body or anchor at the explicit boundary with `INS.PRE start` / `INS.POST end`.
-- Indent every `+TEXT` row exactly as it should land in the file.
-- Do not use block-level operations. Always read the full target range and state the exact line range yourself.
+- Line numbers are the ORIGINAL file for `TAG` (fixed for the whole patch). After success, copy the fresh `[path#TAG]` before the next edit.
+- Non-overlap: each original line belongs to at most one `SWAP`/`DEL` range. `INS.PRE`/`INS.POST` only outside those ranges, or at a range edge (`INS.PRE` at range start, `INS.POST` at range end).
+- Tight ranges only; anchor lines must have been shown in the `read` that minted `TAG`. Indent `+TEXT` as in the file.
 
 Canonical examples:
 
@@ -84,9 +80,6 @@ Anti-patterns:
 - WRONG: empty `SWAP` body to delete a line. RIGHT: `DEL`.
 - WRONG: widened `SWAP` just to insert one line. RIGHT: `INS.PRE` / `INS.POST`.
 - WRONG: body rows without a leading `+`. RIGHT: every literal body row is `+TEXT`.
+- WRONG: two `SWAP`/`DEL` ranges that share a line (e.g. `SWAP 7.=10` + `DEL 10`). RIGHT: one `SWAP` for the final block, or disjoint ranges.
 - WRONG: reusing a stale `[PATH#OLD]` header after a prior edit changed the file. RIGHT: copy the fresh header from the newest result.
 
-Critical reminders:
-1. Re-ground after every edit: new file state, new tag.
-2. Ranges are explicit and tight.
-3. The body is final content: only `+TEXT` rows.

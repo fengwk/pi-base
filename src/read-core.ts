@@ -12,7 +12,7 @@ import {
   splitDisplayedLines,
   stripBom,
 } from "./hashline/index.js";
-import { SNAPSHOT_MAX_BYTES, recordNormalizedSnapshot } from "./hashline-session.js";
+import { LARGE_FILE_NOTICE_BYTES, recordNormalizedSnapshot } from "./hashline-session.js";
 import { LspDiscoveryResolver, type LspSupportInfo } from "./lsp/discovery.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import {
@@ -78,7 +78,7 @@ function buildReadNotices(args: {
   totalLines: number;
   hasMore: boolean;
   upstreamTextTruncated: boolean;
-  snapshotOmitted: boolean;
+  largeFile: boolean;
   lsp: LspSupportInfo;
 }): string[] {
   const notices: string[] = [];
@@ -88,8 +88,8 @@ function buildReadNotices(args: {
   if (args.upstreamTextTruncated) {
     notices.push(`[Some displayed lines were truncated to ${MAX_LINE_CHARS} characters. Re-read a smaller window if you need the full line text.]`);
   }
-  if (args.snapshotOmitted) {
-    notices.push(`[Snapshot omitted: file is too large for hashline anchoring (${SNAPSHOT_MAX_BYTES} byte cap).]`);
+  if (args.largeFile) {
+    notices.push("[Large file: hashline edit is allowed only on line numbers shown in this read (or a later read window). Read other regions before editing there.]");
   }
   notices.push(`[${formatLspStatus(args.lsp)}]`);
   return notices;
@@ -202,8 +202,9 @@ export function registerReadTool(
           body.push(formatNumberedLine(line, formatted.display));
           displayedLines.push(line);
         }
-        const snapshotOmitted = Boolean(options.snapshots) && buffer.byteLength > SNAPSHOT_MAX_BYTES;
-        const tag = options.snapshots && !snapshotOmitted ? recordNormalizedSnapshot(options.snapshots, absolutePath, normalizedText, displayedLines) : undefined;
+        const tag = options.snapshots
+          ? recordNormalizedSnapshot(options.snapshots, absolutePath, normalizedText, displayedLines)
+          : undefined;
         const contentLines: string[] = [];
         if (tag) contentLines.push(formatHashlineHeader(rawPath, tag));
         contentLines.push(...body);
@@ -213,7 +214,7 @@ export function registerReadTool(
           totalLines: displayedFileLines.length,
           hasMore: end < displayedFileLines.length,
           upstreamTextTruncated,
-          snapshotOmitted,
+          largeFile: buffer.byteLength > LARGE_FILE_NOTICE_BYTES,
           lsp,
         }));
         options.onSuccessfulRead?.(absolutePath, displayedFileLines, { tag, displayedLines, rawPath });

@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PiBaseHashlineFilesystem } from "../src/hashline-filesystem.js";
 import {
-  SNAPSHOT_MAX_BYTES,
   canonicalSnapshotKey,
   recordFileSnapshot,
   recordNormalizedSnapshot,
@@ -28,14 +27,17 @@ describe("hashline-session", () => {
     }
   });
 
-  // Intent: files larger than SNAPSHOT_MAX_BYTES must not mint tags (read omits header) — guard is in recordFileSnapshot.
-  it("recordFileSnapshot skips oversized files", async () => {
+  // Intent: recordFileSnapshot must still mint a tag for oversized files (no byte cap on anchoring).
+  it("recordFileSnapshot records oversized files", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-base-big-"));
     try {
       const file = join(root, "big.txt");
-      await writeFile(file, "x".repeat(SNAPSHOT_MAX_BYTES + 1), "utf8");
+      const payload = `${"x".repeat(4 * 1024 * 1024 + 64)}\nline2\n`;
+      await writeFile(file, payload, "utf8");
       const store = new InMemorySnapshotStore();
-      expect(await recordFileSnapshot(store, file)).toBeUndefined();
+      const tag = await recordFileSnapshot(store, file);
+      expect(tag).toMatch(/^[0-9A-F]{4}$/);
+      expect(store.head(canonicalSnapshotKey(file))?.text).toContain("line2");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

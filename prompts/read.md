@@ -7,6 +7,7 @@ Usage:
   - numbered body lines: `LINE:TEXT`
 - Use the exact `[path#TAG]` header from the latest `read`, `write`, or successful `edit` result when authoring a hashline patch.
 - Use `offset` and `limit` to read large files in chunks. Only the lines that were actually displayed are authorized for follow-up `SWAP` / `DEL` / `INS.PRE` / `INS.POST` anchors under that tag.
+- File size does not disable `[path#TAG]`. Large files still get a tag bound to the full file; only the lines shown in this read are authorized for the next `edit` under that tag. Use `offset` / `limit` to read other regions before editing there.
 - Use `read` on directories instead of `bash ls`.
 
 Parameters:

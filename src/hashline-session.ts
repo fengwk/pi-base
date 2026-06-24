@@ -1,13 +1,12 @@
 import { realpathSync } from "node:fs";
-import { stat, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { InMemorySnapshotStore } from "./hashline/index.js";
 import { normalizeToLF } from "./hashline/normalize.js";
 
-/** Upper bound on the file size we snapshot during read. A hashline tag names
- * the whole normalized file content, so minting one means holding that content
- * in memory. Large files still read, but they omit the `[path#tag]` header. */
-export const SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
+/** Snapshot store holds full normalized text for TAG validation; read display
+ * limits (offset/limit, per-line chars) and seen-lines gate which lines may be edited. */
+export const LARGE_FILE_NOTICE_BYTES = 4 * 1024 * 1024;
 
 /** Canonicalize an absolute path into the stable key the snapshot store uses. */
 export function canonicalSnapshotKey(absolutePath: string): string {
@@ -23,14 +22,12 @@ export function canonicalSnapshotKey(absolutePath: string): string {
   }
 }
 
-/** Read, normalize, and record a whole-file snapshot if it is small enough. */
+/** Read, normalize, and record a whole-file snapshot for hashline anchoring. */
 export async function recordFileSnapshot(
   snapshots: InMemorySnapshotStore,
   absolutePath: string,
 ): Promise<string | undefined> {
   try {
-    const fileStat = await stat(absolutePath);
-    if (fileStat.size > SNAPSHOT_MAX_BYTES) return undefined;
     const normalized = normalizeToLF(await readFile(absolutePath, "utf8"));
     return snapshots.record(canonicalSnapshotKey(absolutePath), normalized);
   } catch {
@@ -38,7 +35,7 @@ export async function recordFileSnapshot(
   }
 }
 
-/** Record already-known normalized text, bypassing the read-size guard. */
+/** Record already-known normalized text (read/write/edit paths). */
 export function recordNormalizedSnapshot(
   snapshots: InMemorySnapshotStore,
   absolutePath: string,
