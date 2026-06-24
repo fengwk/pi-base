@@ -4,204 +4,82 @@ import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";
 
-function getAnchor(text: string, lineContent: string): string {
-  const line = text.split("\n").find((entry) => entry.includes(`|${lineContent}`));
-  if (!line) throw new Error(`No anchor for line containing ${JSON.stringify(lineContent)} in:\n${text}`);
-  return line.split("|")[0]!;
+function extractHeader(text: string): string {
+  const header = text.split("\n").find((line) => /^\[[^#\r\n]+#[0-9A-F]{4}\]$/i.test(line));
+  if (!header) throw new Error(`No hashline header found in:\n${text}`);
+  return header;
 }
 
-function getTotalLines(text: string): number {
-  const match = text.match(/totalLines: (\d+)/);
-  if (!match) throw new Error(`No totalLines in:\n${text}`);
-  return Number(match[1]);
-}
-
-describe("edit: line-oriented insert and raw replace semantics", () => {
-  it("replace_lines with new_text \"\" blanks the line in place (does not delete it)", async () => {
+describe("hashline explicit-range semantics", () => {
+  it("SWAP with a lone '+' blanks the addressed line in place", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "alpha\nbeta\ngamma\n", "utf8");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
-
-    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    const initialText = getText(initialRead);
-    expect(getTotalLines(initialText)).toBe(4);
-
-    const anchor = getAnchor(initialText, "beta");
-    const edit = await registry.getTool("edit").execute(
-      "2",
-      { workdir: ".", path: "f.txt", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "" } }] },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
+    const header = extractHeader(getText(readResult));
+    const edit = await registry.getTool("edit").execute("2", { workdir: ".", input: `${header}\nSWAP 2.=2:\n+` }, undefined, undefined, { cwd: root });
     expect(edit.isError).not.toBe(true);
-
-    const afterRead = await registry.getTool("read").execute("3", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    const afterText = getText(afterRead);
-    expect(getTotalLines(afterText)).toBe(4);
-    const lines = afterText.split("\n");
-    const line2 = lines.find((line) => /^ 2#[0-9a-f]{4}\|/.test(line) || /^2#[0-9a-f]{4}\|/.test(line));
-    expect(line2).toBeDefined();
-    // The body of line 2 must be empty: anchor followed by `|` and nothing else.
-    expect(line2!.match(/^.*2#[0-9a-f]{4}\|(\s*)$/)).not.toBeNull();
+    expect(await readFile(join(root, "f.txt"), "utf8")).toBe("alpha\n\ngamma\n");
   });
 
-  it("insert_before_lines with new_text \"\" inserts one empty line before the anchor", async () => {
+  it("INS.PRE with a lone '+' inserts one empty line before the anchor", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "aa\nbb\n", "utf8");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
-
-    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    const anchor = getAnchor(getText(initialRead), "aa");
-
-    const edit = await registry.getTool("edit").execute(
-      "2",
-      { workdir: ".", path: "f.txt", edits: [{ insert_before_lines: { anchor, new_text: "" } }] },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
+    const header = extractHeader(getText(readResult));
+    const edit = await registry.getTool("edit").execute("2", { workdir: ".", input: `${header}\nINS.PRE 1:\n+` }, undefined, undefined, { cwd: root });
     expect(edit.isError).not.toBe(true);
     expect(await readFile(join(root, "f.txt"), "utf8")).toBe("\naa\nbb\n");
   });
 
-  it("insert_after_lines with new_text \"\" inserts one empty line after the anchor", async () => {
+  it("INS.POST with a lone '+' inserts one empty line after the anchor", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "aa\nbb\n", "utf8");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
-
-    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    const anchor = getAnchor(getText(initialRead), "aa");
-
-    const edit = await registry.getTool("edit").execute(
-      "2",
-      { workdir: ".", path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "" } }] },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
+    const header = extractHeader(getText(readResult));
+    const edit = await registry.getTool("edit").execute("2", { workdir: ".", input: `${header}\nINS.POST 1:\n+` }, undefined, undefined, { cwd: root });
     expect(edit.isError).not.toBe(true);
     expect(await readFile(join(root, "f.txt"), "utf8")).toBe("aa\n\nbb\n");
   });
 
-  it("insert_after_lines with new_text \"\" can add a missing EOF newline", async () => {
-    const root = await createTempWorkspace();
-    await writeFile(join(root, "f.txt"), "aa", "utf8");
-    const registry = createToolRegistry();
-    piBaseExtension(registry.pi as any);
-
-    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    const anchor = getAnchor(getText(initialRead), "aa");
-
-    const edit = await registry.getTool("edit").execute(
-      "2",
-      { workdir: ".", path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "" } }] },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-
-    expect(edit.isError).not.toBe(true);
-    expect(await readFile(join(root, "f.txt"), "utf8")).toBe("aa\n");
-  });
-
-  it("preserves trailing newline in replace_lines new_text", async () => {
-    const root = await createTempWorkspace();
-    await writeFile(join(root, "f.txt"), "aa", "utf8");
-    const registry = createToolRegistry();
-    piBaseExtension(registry.pi as any);
-
-    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    const anchor = getAnchor(getText(initialRead), "aa");
-
-    const edit = await registry.getTool("edit").execute(
-      "2",
-      { workdir: ".", path: "f.txt", edits: [{ replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "aa\n" } }] },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    expect(edit.isError).not.toBe(true);
-
-    const afterRead = await registry.getTool("read").execute("3", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    expect(getTotalLines(getText(afterRead))).toBe(2);
-  });
-
-  it("insert_after_lines inserts complete lines without requiring an explicit leading newline", async () => {
-    const root = await createTempWorkspace();
-    await writeFile(join(root, "f.txt"), "aa", "utf8");
-    const registry = createToolRegistry();
-    piBaseExtension(registry.pi as any);
-
-    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    const anchor = getAnchor(getText(initialRead), "aa");
-
-    const edit = await registry.getTool("edit").execute(
-      "2",
-      { workdir: ".", path: "f.txt", edits: [{ insert_after_lines: { anchor, new_text: "bb" } }] },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    expect(edit.isError).not.toBe(true);
-
-    const afterRead = await registry.getTool("read").execute("3", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    expect(getText(afterRead)).toMatch(/2#[0-9a-f]{4}\|bb/);
-  });
-
-  it("keeps insert_before_lines and insert_after_lines at replacement boundaries semantic regardless of request order", async () => {
-    const root = await createTempWorkspace();
-    await writeFile(join(root, "f.txt"), "aa\nbb\n", "utf8");
-    const registry = createToolRegistry();
-    piBaseExtension(registry.pi as any);
-
-    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    const anchor = getAnchor(getText(initialRead), "bb");
-
-    const edit = await registry.getTool("edit").execute(
-      "2",
-      {
-        workdir: ".",
-        path: "f.txt",
-        edits: [
-          { replace_lines: { start_anchor: anchor, end_anchor: anchor, new_text: "BB" } },
-          { insert_before_lines: { anchor, new_text: "before" } },
-          { insert_after_lines: { anchor, new_text: "after" } },
-        ],
-      },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    expect(edit.isError).not.toBe(true);
-    expect(await readFile(join(root, "f.txt"), "utf8")).toBe("aa\nbefore\nBB\nafter\n");
-  });
-
-  it("delete_lines is the only way to remove lines (replace with \"\" does NOT remove)", async () => {
+  it("DEL is the only way to remove addressed lines", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "f.txt"), "alpha\nbeta\ngamma\n", "utf8");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
-
-    const initialRead = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    const anchor = getAnchor(getText(initialRead), "beta");
-
-    const edit = await registry.getTool("edit").execute(
-      "2",
-      { workdir: ".", path: "f.txt", edits: [{ delete_lines: { start_anchor: anchor, end_anchor: anchor } }] },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
+    const header = extractHeader(getText(readResult));
+    const edit = await registry.getTool("edit").execute("2", { workdir: ".", input: `${header}\nDEL 2` }, undefined, undefined, { cwd: root });
     expect(edit.isError).not.toBe(true);
+    expect(await readFile(join(root, "f.txt"), "utf8")).toBe("alpha\ngamma\n");
+  });
 
-    const afterRead = await registry.getTool("read").execute("3", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
-    expect(getTotalLines(getText(afterRead))).toBe(3);
+  it("rejects bare body rows without '+'", async () => {
+    const root = await createTempWorkspace();
+    await writeFile(join(root, "f.txt"), "alpha\n", "utf8");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
+    const header = extractHeader(getText(readResult));
+    const edit = await registry.getTool("edit").execute("2", { workdir: ".", input: `${header}\nSWAP 1.=1:\nalpha` }, undefined, undefined, { cwd: root });
+    expect(edit.isError).toBe(true);
+    expect(getText(edit)).toContain("Body rows must start with `+`");
+  });
+
+  it("rejects blank body rows that are not authored as a lone '+'", async () => {
+    const root = await createTempWorkspace();
+    await writeFile(join(root, "f.txt"), "alpha\n", "utf8");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "f.txt" }, undefined, undefined, { cwd: root });
+    const header = extractHeader(getText(readResult));
+    const edit = await registry.getTool("edit").execute("2", { workdir: ".", input: `${header}\nSWAP 1.=1:\n` }, undefined, undefined, { cwd: root });
+    expect(edit.isError).toBe(true);
   });
 });
 
@@ -233,24 +111,19 @@ describe("find: path is required", () => {
     expect(getText(result)).toMatch(/find requires an explicit `path`/);
   });
 
-  it("accepts an explicit \".\" path", async () => {
+  it("accepts an explicit '.' path", async () => {
     const root = await createTempWorkspace();
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
-    // We only assert that the call does not produce the "requires path" error;
-    // whether matches are returned depends on upstream fd, which is irrelevant
-    // for this test of the required-path contract.
     const result = await registry.getTool("find").execute("1", { workdir: ".", pattern: "*.ts", path: "." }, undefined, undefined, { cwd: root });
     expect(result.isError).not.toBe(true);
-    const text = getText(result);
-    expect(text).not.toMatch(/find requires an explicit `path`/);
+    expect(getText(result)).not.toMatch(/find requires an explicit `path`/);
   });
 });
 
 describe("grep: binary files are rejected before upstream runs", () => {
   it("returns isError for a binary file path", async () => {
     const root = await createTempWorkspace();
-    // Build a small binary file (null bytes).
     const fs = await import("node:fs/promises");
     await fs.writeFile(join(root, "definitely.bin"), Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
     const registry = createToolRegistry();
@@ -270,7 +143,6 @@ describe("grep: binary files are rejected before upstream runs", () => {
     const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "a", path: "definitely.bin", timeout_seconds: 5 }, undefined, undefined, { cwd: root });
     const elapsed = Date.now() - start;
     expect(result.isError).toBe(true);
-    // The check is in-process and synchronous-ish; it must NOT take the full timeout.
     expect(elapsed).toBeLessThan(2000);
   });
 });

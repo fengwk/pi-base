@@ -57,7 +57,7 @@ describe("write extra coverage", () => {
     );
 
     expect(getText(result)).toContain("Overwrote src/existing.ts.");
-    expect(anchored[0]?.lines).toEqual(["new", "content", ""]);
+    expect(anchored[0]?.lines).toEqual(["new", "content"]);
     expect(writes[0]).toContain("src/existing.ts");
   });
 });

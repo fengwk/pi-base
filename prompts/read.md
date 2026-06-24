@@ -2,8 +2,11 @@ Read a text file, directory, or supported image by path.
 
 Usage:
 - Use `read` before editing an existing text file.
-- Text file output prefixes each displayed line with a `LINE#HASH|` anchor prefix, for example `1#7936|export const value = 1;`. Use only the `LINE#HASH` part as an edit anchor.
-- Use `offset` and `limit` to read large files in chunks.
+- For text files, the result is emitted in hashline mode:
+  - header: `[path#TAG]`
+  - numbered body lines: `LINE:TEXT`
+- Use the exact `[path#TAG]` header from the latest `read`, `write`, or successful `edit` result when authoring a hashline patch.
+- Use `offset` and `limit` to read large files in chunks. Only the lines that were actually displayed are authorized for follow-up `SWAP` / `DEL` / `INS.PRE` / `INS.POST` anchors under that tag.
 - Use `read` on directories instead of `bash ls`.
 
 Parameters:
@@ -15,6 +18,6 @@ Parameters:
 Examples use pseudo-code tool calls:
 - `read({ path: "src/example.ts", workdir: "packages/web" })`
 - `read({ path: "src/example.ts", workdir: "services/api", offset: 120, limit: 40 })`
-- `read({ path: "." })`             // list directory (replaces `ls .`)
-- `read({ path: "src/" })`          // list directory (replaces `ls src/`)
+- `read({ path: "." })`             // list directory
+- `read({ path: "src/" })`          // list directory
 - `read({ path: "screenshot.png", workdir: "/tmp/agent-artifacts" })`

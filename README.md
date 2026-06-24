@@ -190,7 +190,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 - `offset` 默认 `1`
 - `limit` 默认 `200`，最大 `2000`
-- 每行会带 `LINE#HASH|` 锚点，例如 `12#7ac1|const value = 1;`
+- 文本读取以 hashline 模式返回：`[path#TAG]` 头部 + `LINE:TEXT` 编号正文
 - 单行显示超过 `2000` 字符时会在显示层截断，并标记该行被截断
 - 返回头部会包含 `path`、`kind`、`mediaType`、`offset`、`limit`、`totalLines`、`hasMore`、`nextOffset`、`lsp` 支持状态
 
@@ -224,19 +224,19 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 ### `edit`
 
-- 只适合小范围、基于锚点的修改
-- 必须先从同一 session 的 `read`、`write` 或之前的 `edit` 结果中拿到新鲜锚点
-- 支持四种操作：`replace_lines`、`delete_lines`、`insert_before_lines`、`insert_after_lines`
-- 每个 edit item 必须且只能包含一种操作
+- 只适合小范围、显式行范围的 hashline 修改
+- 参数是 `workdir?` + `input`（完整 patch 文本），不是 `path` + `edits[]`
+- 必须先从同一 session 的 `read`、`write` 或之前的 `edit` 结果中拿到新鲜 `[path#TAG]`
+- 支持六种操作：`SWAP`、`DEL`、`INS.PRE`、`INS.POST`、`INS.HEAD`、`INS.TAIL`
+- `.BLK` / recovery / 隐式块扩展已移除；stale tag 直接失败，要求重新 `read`
 - 会保留原文件 BOM 和行尾风格
-- 修改成功后返回 diff
-- 后续继续编辑时，只能复用 diff 中 `+` 或 `|` 前缀行的锚点；`-` 行是旧内容，故意不提供可复用锚点
+- 修改成功后返回新的 `[path#TAG]` 头部和紧凑 diff 预览
 
 ### `write`
 
 - 适合新文件或整文件覆盖
 - 会自动创建父目录
-- 成功后返回完整文件内容，并带新的 `LINE#HASH` 锚点
+- 成功后返回完整文件快照，并带新的 `[path#TAG]` 头部与编号正文
 
 ### `bash`
 
@@ -412,6 +412,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `retainedUserMessageRounds`
 - `retainedAssistantTurns`
 - `tools`
+- `disabledProviders`（按 provider id 跳过压缩，用于避免破坏 prompt cache，例如 xAI）
 
 行为规则：
 
@@ -422,6 +423,9 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 如果配置了 `tools` 但没写保留策略，默认是 `retainedUserMessageRounds: 2` 和 `retainedAssistantTurns: 4`
 - `read` 到当前 prompt 中已注入 skill 路径下的文件时，不参与普通的 age compression；只有在同文件后来被改动且 `anchorHygiene` 生效时才会被折叠
 - 不会额外写 session marker，也不会显示长期 UI 标记
+- 当 `ctx.model.provider` 命中 `disabledProviders`（不区分大小写）时，**本次 LLM 调用不做任何 context 投影**（消息原样发送）
+- hashline 下 `anchorHygiene` 折叠的是带 `[path#TAG]` / `N:` 的旧 `read`/`write`/`edit` 成功结果；**文件级 TAG + seen-lines 仍在内存里约束 edit**，与是否压缩历史 tool 输出是两件事
+
 
 示例：
 
@@ -431,10 +435,8 @@ You are a planning-focused agent. Break work into clear steps before editing.
     "anchorHygiene": true,
     "retainedUserMessageRounds": 2,
     "retainedAssistantTurns": 4,
-    "tools": [
-      "bash",
-      "custom_tool"
-    ]
+    "tools": ["bash", "grep", "find", "read", "write", "edit"],
+    "disabledProviders": ["xai"]
   }
 }
 ```

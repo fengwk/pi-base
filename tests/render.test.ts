@@ -51,8 +51,8 @@ describe("render helpers", () => {
     const raw = [
       "path: /tmp/demo.txt",
       "status: ok",
-      "updatedAnchors:",
-      " 1#abcd|hello",
+      "[src/demo.ts#A1B2]",
+      "1:hello",
       "diff:",
       "- 1 old line",
       "+ 1 new line",
@@ -62,8 +62,8 @@ describe("render helpers", () => {
     const rendered = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: true }, theme, { lastComponent: undefined }));
     expect(rendered).toContain("<muted>path:</muted> <accent>/tmp/demo.txt</accent>");
     expect(rendered).toContain("<muted>status:</muted> <success>ok</success>");
-    expect(rendered).toContain("<toolTitle><b>updatedAnchors:</b></toolTitle>");
-    expect(rendered).toContain("<muted> 1#abcd|</muted><toolOutput>hello</toolOutput>");
+    expect(rendered).toContain("<accent>[src/demo.ts#A1B2]</accent>");
+    expect(rendered).toContain("<muted>1:</muted><toolOutput>hello</toolOutput>");
     expect(rendered).toContain("<toolDiffRemoved>- 1 old line</toolDiffRemoved>");
     expect(rendered).toContain("<toolDiffAdded>+ 1 new line</toolDiffAdded>");
     expect(rendered).toContain("<toolDiffContext>  2 unchanged line</toolDiffContext>");
@@ -72,15 +72,15 @@ describe("render helpers", () => {
   it("colorizes natural-language write success guidance", () => {
     const raw = [
       "Created src/demo.ts.",
-      "Review the written file content below. Lines prefixed with digits carry LINE#HASH anchors for follow-up edits.",
+      "Review the current file snapshot below and reuse its header for follow-up hashline edits.",
       "",
-      "1#abcd|hello",
+      "1:hello",
     ].join("\n");
 
     const rendered = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: true }, theme, { lastComponent: undefined }));
     expect(rendered).toContain("<success>Created src/demo.ts.</success>");
-    expect(rendered).toContain("<warning>Review the written file content below. Lines prefixed with digits carry LINE#HASH anchors for follow-up edits.</warning>");
-    expect(rendered).toContain("<muted>1#abcd|</muted><toolOutput>hello</toolOutput>");
+    expect(rendered).toContain("<warning>Review the current file snapshot below and reuse its header for follow-up hashline edits.</warning>");
+    expect(rendered).toContain("<muted>1:</muted><toolOutput>hello</toolOutput>");
   });
   it("colorizes status states and explicit error fields", () => {
     const raw = [

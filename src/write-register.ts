@@ -3,10 +3,11 @@ import { renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCo
 import { writeSchema } from "./schemas/write.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { executeWrite, formatWriteCall, WRITE_COLLAPSED_PREVIEW_LINES } from "./write-core.js";
+import type { InMemorySnapshotStore } from "./hashline/index.js";
 
 export function registerWriteTool(
   pi: ExtensionAPI,
-  options: { onFileAnchored?: (absolutePath: string, lines?: string[]) => void; onSuccessfulWrite?: (absolutePath: string) => void; getCollapsedResultLines?: CollapsedResultLinesResolver; getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver } = {},
+  options: { onFileAnchored?: (absolutePath: string, lines?: string[]) => void; onSuccessfulWrite?: (absolutePath: string) => void; getCollapsedResultLines?: CollapsedResultLinesResolver; getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver; snapshots?: InMemorySnapshotStore } = {},
 ) {
   const tool = {
     name: "write",

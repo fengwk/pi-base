@@ -2,7 +2,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 
 const DEFAULT_COLLAPSED_RESULT_LINES = 20;
-const HASHLINE_RE = /^(\s*\d+#[0-9a-fA-F]{4}\|)(.*)$/;
+const HASHLINE_HEADER_RE = /^(\[[^\r\n]+#[0-9A-F]{4}\])$/;
 const KEY_VALUE_RE = /^([A-Za-z][A-Za-z0-9]*):(?!\/\/)(?:\s*(.*))?$/;
 const SECTION_HEADER_RE = /^([A-Za-z][A-Za-z0-9 ]*):$/;
 
@@ -187,15 +187,19 @@ function colorizeResultLine(line: string, theme: any, state: { inDiff: boolean }
   if (line.startsWith("Edit applied to ")) return paint(theme, "success", line);
   if (line.startsWith("Created ") || line.startsWith("Overwrote ")) return paint(theme, "success", line);
   if (line.startsWith("Verify that the result matches the intended change.")) return paint(theme, "warning", line);
-  if (line.startsWith("Review the written file content below.")) return paint(theme, "warning", line);
+  if (line.startsWith("Review the current file snapshot below")) return paint(theme, "warning", line);
   if (line.startsWith("Edit failed")) return paint(theme, "error", line);
-  if (line.startsWith("Use the refreshed anchors ")) return paint(theme, "warning", line);
-  if (line.startsWith("Use these LINE#HASH anchors ")) return paint(theme, "warning", line);
+  if (line.startsWith("Use the refreshed ") && line.includes("[path#TAG]")) return paint(theme, "warning", line);
   if (isError && line.startsWith("Validation failed")) return paint(theme, "error", line);
 
-  const hashlineMatch = line.match(HASHLINE_RE);
-  if (hashlineMatch) {
-    return `${paint(theme, "muted", hashlineMatch[1] ?? "")}${paint(theme, "toolOutput", hashlineMatch[2] ?? "")}`;
+  const hashlineHeaderMatch = line.match(HASHLINE_HEADER_RE);
+  if (hashlineHeaderMatch) {
+    return paint(theme, "accent", hashlineHeaderMatch[1] ?? line);
+  }
+
+  const numberedLineMatch = line.match(/^(\d+):(.*)$/);
+  if (numberedLineMatch) {
+    return `${paint(theme, "muted", `${numberedLineMatch[1]}:`)}${paint(theme, "toolOutput", numberedLineMatch[2] ?? "")}`;
   }
 
   if (SECTION_HEADER_RE.test(line) && !KEY_VALUE_RE.test(line.slice(0, -1))) {

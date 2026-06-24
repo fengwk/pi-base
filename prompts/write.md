@@ -2,9 +2,9 @@ Create a text file or intentionally overwrite a whole text file.
 
 Usage:
 - Use `write` for new files or intentional whole-file replacement only.
-- For existing files, prefer `edit`; use `write` only for whole-file replacement or roughly 70%+ file-wide rewrites, never for localized edits that small `edit` operations can handle.
+- For existing files, prefer `edit`; use `write` only for whole-file replacement or roughly 70%+ file-wide rewrites, never for localized edits that an explicit-range hashline patch can handle safely.
 - Provide complete content without placeholders such as `...` or omitted sections.
-- After a successful write, the result includes the current file content with fresh `LINE#HASH` anchors.
+- After a successful write, the result includes the current file snapshot in hashline mode so you can reuse the fresh `[path#TAG]` header in a follow-up `edit` call.
 
 Parameters:
 - `path` (required)

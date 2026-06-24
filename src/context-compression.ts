@@ -39,7 +39,8 @@ interface UserWindow {
   assistantTurns: number;
 }
 
-const HASHLINE_RE = /(?:^|\n)(?:[+|]\s*)?\s*\d+#[0-9a-f]{4}\|/;
+const HASHLINE_HEADER_RE = /(?:^|\n)\[[^#\r\n]+#[0-9A-F]{4}\](?:\n|$)/i;
+const NUMBERED_HASHLINE_BODY_RE = /(?:^|\n)\d+:/;
 
 export const DEFAULT_CONTEXT_COMPRESSION_TOOL_OPTIONS: ToolCompressionOptions = {
   retainedUserMessageRounds: 2,
@@ -73,9 +74,19 @@ function canonicalizePath(path: string): string {
   }
 }
 
+function resolveInputPaths(input: unknown, cwd: string): string[] {
+  if (!isRecord(input)) return [];
+  if (typeof input.path === "string" && input.path.trim().length > 0) {
+    return [canonicalizePath(resolveToCwd(stripAtPrefix(input.path), cwd))];
+  }
+  const inputText = typeof input.input === "string" ? input.input : undefined;
+  if (!inputText) return [];
+  return [...inputText.matchAll(/^\[([^#\r\n]+)#[0-9A-F]{4}\]$/gim)]
+    .map((match) => canonicalizePath(resolveToCwd(stripAtPrefix((match[1] ?? "").trim()), cwd)));
+}
+
 function resolveInputPath(input: unknown, cwd: string): string | undefined {
-  if (!isRecord(input) || typeof input.path !== "string" || input.path.trim().length === 0) return undefined;
-  return canonicalizePath(resolveToCwd(stripAtPrefix(input.path), cwd));
+  return resolveInputPaths(input, cwd)[0];
 }
 
 function resolvePromptPath(path: string, cwd: string): string {
@@ -94,14 +105,12 @@ function extractText(content: unknown): string {
 }
 
 function hasLiveHashlineAnchors(content: unknown): boolean {
-  return HASHLINE_RE.test(extractText(content));
+  const text = extractText(content);
+  return HASHLINE_HEADER_RE.test(text) && NUMBERED_HASHLINE_BODY_RE.test(text);
 }
 
 function isReadTextFileResult(content: unknown): boolean {
-  const text = extractText(content);
-  return /(?:^|\n)kind: file(?:\n|$)/.test(text)
-    && /(?:^|\n)mediaType: text(?:\n|$)/.test(text)
-    && HASHLINE_RE.test(text);
+  return hasLiveHashlineAnchors(content);
 }
 
 function buildToolCallIndex(messages: readonly ToolResultMessageLike[]): Map<string, ToolCallInfo> {
@@ -282,12 +291,28 @@ function maskMessage<T extends ToolResultMessageLike>(message: T, toolName: stri
   };
 }
 
+export function shouldApplyContextCompression(
+  config: ContextCompressionConfig | undefined,
+  providerId: string | undefined,
+): boolean {
+  if (!config) return false;
+  const hasAgeTools = Array.isArray(config.tools) && config.tools.length > 0;
+  const hasAnchorHygiene = config.anchorHygiene === true;
+  if (!hasAgeTools && !hasAnchorHygiene) return false;
+  if (!providerId) return true;
+  const disabled = config.disabledProviders;
+  if (!disabled?.length) return true;
+  const normalized = providerId.trim().toLowerCase();
+  return !disabled.some((entry) => entry.trim().toLowerCase() === normalized);
+}
+
 export function applyContextCompressionToMessages<T extends ToolResultMessageLike>(
   messages: readonly T[],
   cwd: string,
   config?: ContextCompressionConfig,
   options?: ContextCompressionProjectionOptions,
 ): T[] {
+  if (!shouldApplyContextCompression(config, undefined)) return messages as T[];
   const toolCalls = buildToolCallIndex(messages);
   const toolCompressionOptions = resolveToolCompressionOptions(config);
   const ageCompressionEligibility = toolCompressionOptions ? buildAgeCompressionEligibility(messages, toolCompressionOptions) : undefined;
@@ -306,10 +331,11 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
     if (!call) continue;
     const toolName = call.toolName;
     const path = resolveInputPath(call.input, cwd);
-    const skillRead = toolName === "read" && isSkillReadPath(path, skillRoots);
+    const paths = resolveInputPaths(call.input, cwd);
+    const skillRead = toolName === "read" && paths.some((candidate) => isSkillReadPath(candidate, skillRoots));
 
     let reason: CompressionReason | undefined;
-    if (anchorHygieneEnabled && path && isAnchorHygieneToolName(toolName) && isFileContextResult(toolName, message) && dirtyFiles.has(path)) {
+    if (anchorHygieneEnabled && paths.length > 0 && isAnchorHygieneToolName(toolName) && isFileContextResult(toolName, message) && paths.some((candidate) => dirtyFiles.has(candidate))) {
       reason = "file_changed_later";
     } else if (!skillRead && toolCompressionOptions?.toolNames.has(toolName) && ageCompressionEligibility?.[index]) {
       reason = "older_tool_output";
@@ -320,8 +346,8 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
       changed = true;
     }
 
-    if (path && isSuccessfulMutation(toolName, message)) {
-      dirtyFiles.add(path);
+    if (isSuccessfulMutation(toolName, message)) {
+      for (const candidate of paths) dirtyFiles.add(candidate);
     }
   }
 

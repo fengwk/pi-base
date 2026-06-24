@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdir, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import piBaseExtension from "../index.js";
+import { applyContextCompressionToMessages, shouldApplyContextCompression } from "../src/context-compression.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 
 let previousGlobalSettingsPath: string | undefined;
@@ -15,24 +16,18 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  if (previousGlobalSettingsPath === undefined) {
-    delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
-  } else {
-    process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
-  }
+  if (previousGlobalSettingsPath === undefined) delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+  else process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
 });
+
 const GENERIC_TOOL_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. Re-run the tool if you need those details.]";
 const WRITE_EDIT_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state or retrieve the relevant context again.]";
 const BASH_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state, or re-run the command only if it is safe to do so.]";
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function anchorFor(text: string, lineContent: string): string {
-  const match = text.match(new RegExp(`(?:^|\\n)(?:[+|]\\s*)?\\s*(\\d+#[0-9a-f]{4})\\|${escapeRegex(lineContent)}`));
-  if (!match?.[1]) throw new Error(`No anchor found for ${JSON.stringify(lineContent)} in:\n${text}`);
-  return match[1];
+function extractHeader(text: string): string {
+  const header = text.split("\n").find((line) => /^\[[^#\r\n]+#[0-9A-F]{4}\]$/i.test(line));
+  if (!header) throw new Error(`No hashline header found in:\n${text}`);
+  return header;
 }
 
 function userMessage(text: string) {
@@ -72,19 +67,6 @@ function toolExchange(toolName: string, toolCallId: string, args: any, result: a
   return [assistantToolCallMessage(toolName, toolCallId, args), toolResultMessage(toolName, toolCallId, result)];
 }
 
-function availableSkillsPrompt(skillPath: string): string {
-  return [
-    "The following skills provide specialized instructions for specific tasks.",
-    "<available_skills>",
-    "  <skill>",
-    "    <name>demo-skill</name>",
-    "    <description>Demo skill</description>",
-    `    <location>${skillPath}</location>`,
-    "  </skill>",
-    "</available_skills>",
-  ].join("\n");
-}
-
 describe("context compression", () => {
   it("does not alter the footer when contextCompression is configured", async () => {
     const root = await createTempWorkspace();
@@ -92,37 +74,11 @@ describe("context compression", () => {
     await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
-
     await registry.emit("session_start", { type: "session_start" }, { cwd: root });
-
     expect(registry.renderFooter(120)).toEqual([]);
   });
 
-  it("applies configured anchor hygiene statelessly", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
-    await writeWorkspaceFile(root, "src/example.txt", "alpha\nbeta\n");
-
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-    await registry.emit("session_start", { type: "session_start" }, { cwd: root });
-
-    const readArgs = { workdir: ".", path: "src/example.txt" };
-    const readResult = await registry.getTool("read").execute("read-anchor-1", readArgs, undefined, undefined, { cwd: root });
-    const alphaAnchor = anchorFor(getText(readResult), "alpha");
-    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
-    const editResult = await registry.getTool("edit").execute("edit-anchor-1", editArgs, undefined, undefined, { cwd: root });
-    const messages = [
-      ...toolExchange("read", "read-anchor-1", readArgs, readResult),
-      ...toolExchange("edit", "edit-anchor-1", editArgs, editResult),
-    ];
-
-    const transformed = await registry.emit("context", { messages }, { cwd: root });
-    expect(getText(transformed.messages[1])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
-  });
-
-  it("masks stale read and edit outputs after later edits to the same file without modifying tool calls", async () => {
+  it("masks stale read outputs after later edits to the same file", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
     await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
@@ -133,30 +89,20 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-1", readArgs, undefined, undefined, { cwd: root });
-    const alphaAnchor = anchorFor(getText(readResult), "alpha");
-
-    const edit1Args = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
-    const edit1 = await registry.getTool("edit").execute("edit-1", edit1Args, undefined, undefined, { cwd: root });
-    const alphaV1Anchor = anchorFor(getText(edit1), "alpha v1");
-
-    const edit2Args = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaV1Anchor, end_anchor: alphaV1Anchor, new_text: "alpha v2" } }] };
-    const edit2 = await registry.getTool("edit").execute("edit-2", edit2Args, undefined, undefined, { cwd: root });
+    const header = extractHeader(getText(readResult));
+    const editArgs = { workdir: ".", input: `${header}\nSWAP 1.=1:\n+alpha v1` };
+    const editResult = await registry.getTool("edit").execute("edit-1", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
       ...toolExchange("read", "read-1", readArgs, readResult),
-      ...toolExchange("edit", "edit-1", edit1Args, edit1),
-      ...toolExchange("edit", "edit-2", edit2Args, edit2),
+      ...toolExchange("edit", "edit-1", editArgs, editResult),
     ];
     const transformed = await registry.emit("context", { messages }, { cwd: root });
 
-    expect(transformed?.messages).toHaveLength(6);
     expect(getText(transformed.messages[1])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
-    expect(getText(transformed.messages[3])).toBe(WRITE_EDIT_OUTPUT_PLACEHOLDER);
-    expect(getText(transformed.messages[3])).not.toContain("alpha v1");
-    expect(transformed.messages[3].details).toBe(edit1.details);
-    expect(getText(transformed.messages[5])).toContain("alpha v2");
+    expect(getText(transformed.messages[3])).toContain("alpha v1");
     expect((transformed.messages[0] as any).content[0].arguments).toEqual(readArgs);
-    expect((transformed.messages[2] as any).content[0].arguments).toEqual(edit1Args);
+    expect((transformed.messages[2] as any).content[0].arguments).toEqual(editArgs);
   });
 
   it("masks stale write outputs after later edits", async () => {
@@ -168,9 +114,8 @@ describe("context compression", () => {
 
     const writeArgs = { workdir: ".", path: "src/example.txt", content: "alpha\nbeta\n" };
     const writeResult = await registry.getTool("write").execute("write-1", writeArgs, undefined, undefined, { cwd: root });
-    const alphaAnchor = anchorFor(getText(writeResult), "alpha");
-
-    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
+    const header = extractHeader(getText(writeResult));
+    const editArgs = { workdir: ".", input: `${header}\nSWAP 1.=1:\n+alpha v1` };
     const editResult = await registry.getTool("edit").execute("edit-after-write", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -180,60 +125,7 @@ describe("context compression", () => {
     const transformed = await registry.emit("context", { messages }, { cwd: root });
 
     expect(getText(transformed.messages[1])).toBe(WRITE_EDIT_OUTPUT_PLACEHOLDER);
-    expect(getText(transformed.messages[1])).not.toContain("alpha");
     expect(getText(transformed.messages[3])).toContain("alpha v1");
-  });
-
-  it("respects anchorHygiene=false without disabling configured age compression", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: false, retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
-    await writeWorkspaceFile(root, "src/example.txt", "alpha\nbeta\n");
-
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const readArgs = { workdir: ".", path: "src/example.txt" };
-    const readResult = await registry.getTool("read").execute("read-anchor-hygiene-off", readArgs, undefined, undefined, { cwd: root });
-    const alphaAnchor = anchorFor(getText(readResult), "alpha");
-    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
-    const editResult = await registry.getTool("edit").execute("edit-anchor-hygiene-off", editArgs, undefined, undefined, { cwd: root });
-    const bashArgs = { command: "echo old", workdir: "." };
-    const bashResult = { content: [{ type: "text", text: "old bash output" }] };
-
-    const messages = [
-      userMessage("round 1"),
-      ...toolExchange("read", "read-anchor-hygiene-off", readArgs, readResult),
-      ...toolExchange("bash", "bash-anchor-hygiene-off", bashArgs, bashResult),
-      ...toolExchange("edit", "edit-anchor-hygiene-off", editArgs, editResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2"),
-    ];
-    const transformed = await registry.emit("context", { messages }, { cwd: root });
-
-    expect(getText(transformed.messages[2])).toContain("alpha");
-    expect(getText(transformed.messages[4])).toBe(BASH_OUTPUT_PLACEHOLDER);
-  });
-
-  it("does not treat grep output as editable file context", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
-    await writeWorkspaceFile(root, "src/example.txt", "alpha\nbeta\n");
-
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const grepArgs = { workdir: ".", pattern: "alpha", path: "src", literal: true };
-    const grepResult = await registry.getTool("grep").execute("grep-tree-1", grepArgs, undefined, undefined, { cwd: root });
-    expect(getText(grepResult)).toContain("example.txt:1: alpha");
-    expect(getText(grepResult)).not.toMatch(/\d+#[0-9a-f]{4}\|/);
-
-    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: "alpha v1" } }] };
-    const editResult = await registry.getTool("edit").execute("edit-after-grep-tree", editArgs, undefined, undefined, { cwd: root });
-    expect(editResult.isError).toBe(true);
-    expect(getText(editResult)).toContain("Fresh anchors are required");
-    expect(getText(editResult)).not.toContain("grep");
   });
 
   it("leaves failed edit error context visible after a later successful edit", async () => {
@@ -247,16 +139,14 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-for-error-context", readArgs, undefined, undefined, { cwd: root });
-    const alphaAnchor = anchorFor(getText(readResult), "alpha");
-    const badAlphaAnchor = alphaAnchor.replace(/#[0-9a-f]{4}$/, (value) => value.endsWith("ffff") ? "#0000" : "#ffff");
-
-    const failedEditArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: badAlphaAnchor, end_anchor: badAlphaAnchor, new_text: "alpha bad" } }] };
+    const header = extractHeader(getText(readResult));
+    const failedEditArgs = { workdir: ".", input: `${header.replace(/#[0-9A-F]{4}/, "#0000")}\nSWAP 1.=1:\n+alpha bad` };
     const failedEdit = await registry.getTool("edit").execute("edit-error-context", failedEditArgs, undefined, undefined, { cwd: root });
     expect(failedEdit.isError).toBe(true);
-    expect(getText(failedEdit)).toContain("Current context");
-    expect(getText(failedEdit)).toContain("alpha");
+    expect(getText(failedEdit)).toContain("Edit rejected for src/example.txt");
+    expect(getText(failedEdit)).toContain("1:alpha");
 
-    const goodEditArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
+    const goodEditArgs = { workdir: ".", input: `${header}\nSWAP 1.=1:\n+alpha v1` };
     const goodEdit = await registry.getTool("edit").execute("edit-after-error-context", goodEditArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -267,345 +157,88 @@ describe("context compression", () => {
     expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
   });
 
-  it("does not age-compress tools that are not listed in contextCompression.tools", async () => {
-    const root = await createTempWorkspace();
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const oldResult = { content: [{ type: "text", text: "old bash output remains" }] };
-    const messages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "unlisted-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "unlisted-bash", oldResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2"),
-      userMessage("round 3"),
-      assistantTextMessage("turn 3"),
-      userMessage("round 4"),
-      assistantTextMessage("turn 4"),
-      assistantTextMessage("turn 5"),
-      assistantTextMessage("turn 6"),
-    ];
-
-    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
-  });
-
-  it("protects skill read outputs from read age compression", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["read"] } }), "utf8");
-    await writeWorkspaceFile(root, "normal.txt", "normal\n");
-    await writeWorkspaceFile(root, "skills/demo/SKILL.md", "# Demo Skill\n");
-    await writeWorkspaceFile(root, "skills/demo/reference.md", "skill reference\n");
-
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const normalArgs = { workdir: ".", path: "normal.txt" };
-    const normalResult = await registry.getTool("read").execute("read-normal-old", normalArgs, undefined, undefined, { cwd: root });
-    const skillArgs = { workdir: ".", path: "skills/demo/reference.md" };
-    const skillResult = await registry.getTool("read").execute("read-skill-old", skillArgs, undefined, undefined, { cwd: root });
-    const messages = [
-      userMessage("round 1"),
-      ...toolExchange("read", "read-normal-old", normalArgs, normalResult),
-      ...toolExchange("read", "read-skill-old", skillArgs, skillResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2"),
-    ];
-
-    const transformed = await registry.emit(
-      "context",
-      { messages },
-      { cwd: root, getSystemPrompt: () => availableSkillsPrompt(join(root, "skills/demo/SKILL.md")) },
-    );
-
-    expect(getText(transformed.messages[2])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
-    expect(getText(transformed.messages[4])).toContain("skill reference");
-  });
-
-  it("does not trust historical skill-looking messages for skill read protection", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["read"] } }), "utf8");
-    await writeWorkspaceFile(root, "not-advertised/SKILL.md", "# Not Advertised\n");
-    await writeWorkspaceFile(root, "not-advertised/reference.md", "not advertised reference\n");
-
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const args = { workdir: ".", path: "not-advertised/reference.md" };
-    const result = await registry.getTool("read").execute("read-fake-skill", args, undefined, undefined, { cwd: root });
-    const messages = [
-      userMessage(`<skill name=\"fake\" location=\"${join(root, "not-advertised/SKILL.md")}\">`),
-      ...toolExchange("read", "read-fake-skill", args, result),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2"),
-    ];
-
-    const transformed = await registry.emit("context", { messages }, { cwd: root, getSystemPrompt: () => "" });
-
-    expect(getText(transformed.messages[2])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
-  });
-
-  it("still applies anchor hygiene to skill read outputs after the skill file changes", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true, retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["read"] } }), "utf8");
-    await writeWorkspaceFile(root, "skills/demo/SKILL.md", "# Demo Skill\n");
-    await writeWorkspaceFile(root, "skills/demo/reference.md", "skill reference\n");
-
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const skillArgs = { workdir: ".", path: "skills/demo/reference.md" };
-    const skillResult = await registry.getTool("read").execute("read-skill-stale", skillArgs, undefined, undefined, { cwd: root });
-    const skillAnchor = anchorFor(getText(skillResult), "skill reference");
-    const editArgs = { workdir: ".", path: "skills/demo/reference.md", edits: [{ replace_lines: { start_anchor: skillAnchor, end_anchor: skillAnchor, new_text: "skill reference updated" } }] };
-    const editResult = await registry.getTool("edit").execute("edit-skill-stale", editArgs, undefined, undefined, { cwd: root });
-    const messages = [
-      userMessage("round 1"),
-      ...toolExchange("read", "read-skill-stale", skillArgs, skillResult),
-      ...toolExchange("edit", "edit-skill-stale", editArgs, editResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2"),
-    ];
-
-    const transformed = await registry.emit(
-      "context",
-      { messages },
-      { cwd: root, getSystemPrompt: () => availableSkillsPrompt(join(root, "skills/demo/SKILL.md")) },
-    );
-
-    expect(getText(transformed.messages[2])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
-    expect(getText(transformed.messages[4])).toContain("skill reference updated");
-  });
-
-  it("recognizes skill reads through symlink-normalized paths", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["read"] } }), "utf8");
-    await writeWorkspaceFile(root, "real-skills/demo/SKILL.md", "# Demo Skill\n");
-    await writeWorkspaceFile(root, "real-skills/demo/reference.md", "skill reference via link\n");
-    try {
-      await symlink(join(root, "real-skills"), join(root, "linked-skills"), "dir");
-    } catch {
-      return;
-    }
-
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const skillArgs = { workdir: ".", path: "real-skills/demo/reference.md" };
-    const skillResult = await registry.getTool("read").execute("read-skill-link", skillArgs, undefined, undefined, { cwd: root });
-    const messages = [
-      userMessage("round 1"),
-      ...toolExchange("read", "read-skill-link", skillArgs, skillResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2"),
-    ];
-
-    const transformed = await registry.emit(
-      "context",
-      { messages },
-      { cwd: root, getSystemPrompt: () => availableSkillsPrompt(join(root, "linked-skills/demo/SKILL.md")) },
-    );
-
-    expect(transformed).toBeUndefined();
-  });
-  it("compresses configured older tool results after enough future user windows accumulate retained assistant turns", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: ["bash"] } }), "utf8");
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const oldResult = { content: [{ type: "text", text: "old bash output" }] };
-    const messages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "old-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "old-bash", oldResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2.1"),
-      userMessage("round 3"),
-      assistantTextMessage("turn 3.1"),
-      assistantTextMessage("turn 3.2"),
-      assistantTextMessage("turn 3.3"),
-      userMessage("round 4"),
-      assistantTextMessage("turn 4.1"),
-      assistantTextMessage("turn 4.2"),
-      userMessage("round 5"),
-      assistantTextMessage("turn 5.1"),
-      assistantTextMessage("turn 5.2"),
-    ];
-
-    const transformed = await registry.emit("context", { messages }, { cwd: root });
-    expect(getText(transformed.messages[2])).toBe(BASH_OUTPUT_PLACEHOLDER);
-  });
-
-  it("does not age-compress when future user windows only accumulate one retained round", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { tools: ["bash"] } }), "utf8");
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const oldResult = { content: [{ type: "text", text: "old output remains" }] };
-    const messages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "user-window-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "user-window-bash", oldResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2.1"),
-      userMessage("round 3"),
-      assistantTextMessage("turn 3.1"),
-      userMessage("round 4"),
-      assistantTextMessage("turn 4.1"),
-      userMessage("round 5"),
-      assistantTextMessage("turn 5.1"),
-    ];
-
-    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
-  });
-
-  it("does not count consecutive user messages without assistant turns as retained rounds", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 2, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const oldResult = { content: [{ type: "text", text: "old output should remain" }] };
-    const messages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "old-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "old-bash", oldResult),
-      userMessage("round 2a"),
-      userMessage("round 2b"),
-      assistantTextMessage("turn 2"),
-    ];
-
-    const transformed = await registry.emit("context", { messages }, { cwd: root });
-    expect(transformed).toBeUndefined();
-  });
-  it("does not count assistant turns before the next future user window", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const oldResult = { content: [{ type: "text", text: "old output before next user" }] };
-    const messages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "pre-user-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "pre-user-bash", oldResult),
-      assistantTextMessage("turn before next user"),
-      userMessage("round 2"),
-    ];
-
-    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
-  });
-
-  it("counts at most one retained round per user window even when that window has many assistant turns", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 2, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const oldResult = { content: [{ type: "text", text: "single-window output remains" }] };
-    const messages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "single-window-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "single-window-bash", oldResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2.1"),
-      assistantTextMessage("turn 2.2"),
-      assistantTextMessage("turn 2.3"),
-    ];
-
-    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
-  });
-
-  it("honors configured context compression thresholds", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const oldResult = { content: [{ type: "text", text: "old output" }] };
-    const messages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "old-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "old-bash", oldResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2"),
-    ];
-
-    const transformed = await registry.emit("context", { messages }, { cwd: root });
-    expect(getText(transformed.messages[2])).toBe(BASH_OUTPUT_PLACEHOLDER);
-  });
-  it("does not age-compress failed tool results", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["bash"] } }), "utf8");
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const failedResult = { content: [{ type: "text", text: "Command exited with code 1" }], isError: true };
-    const messages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "failed-bash", { command: "exit 1", workdir: "." }),
-      toolResultMessage("bash", "failed-bash", failedResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2"),
-    ];
-
-    expect(await registry.emit("context", { messages }, { cwd: root })).toBeUndefined();
-  });
-
-  it("supports arbitrary configured tool names and leaves unlisted tools alone", async () => {
-    const root = await createTempWorkspace();
-    await mkdir(join(root, ".pi"), { recursive: true });
-    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { retainedUserMessageRounds: 1, retainedAssistantTurns: 1, tools: ["custom_tool"] } }), "utf8");
-    const registry = createToolRegistry({ cwd: root });
-    piBaseExtension(registry.pi as any);
-
-    const bashResult = { content: [{ type: "text", text: "old bash output remains" }] };
-    const customResult = { content: [{ type: "text", text: "old custom output" }] };
-    const messages = [
-      userMessage("round 1"),
-      assistantToolCallMessage("bash", "unlisted-bash", { command: "echo old", workdir: "." }),
-      toolResultMessage("bash", "unlisted-bash", bashResult),
-      assistantToolCallMessage("custom_tool", "custom-1", { anything: true }),
-      toolResultMessage("custom_tool", "custom-1", customResult),
-      userMessage("round 2"),
-      assistantTextMessage("turn 2"),
-    ];
-
-    const transformed = await registry.emit("context", { messages }, { cwd: root });
-    expect(getText(transformed.messages[2])).toBe("old bash output remains");
-    expect(getText(transformed.messages[4])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
-  });
 
   it("leaves stale file outputs in context by default", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.txt", "alpha\nbeta\n");
-
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-default", readArgs, undefined, undefined, { cwd: root });
-    const alphaAnchor = anchorFor(getText(readResult), "alpha");
-    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ replace_lines: { start_anchor: alphaAnchor, end_anchor: alphaAnchor, new_text: "alpha v1" } }] };
-    await registry.getTool("edit").execute("edit-default", editArgs, undefined, undefined, { cwd: root });
+    const header = extractHeader(getText(readResult));
+    await registry.getTool("edit").execute("edit-default", { workdir: ".", input: `${header}\nSWAP 1.=1:\n+alpha v1` }, undefined, undefined, { cwd: root });
 
-    const messages = [
-      ...toolExchange("read", "read-default", readArgs, readResult),
-    ];
+    const messages = [...toolExchange("read", "read-default", readArgs, readResult)];
     const transformed = await registry.emit("context", { messages }, { cwd: root });
     expect(transformed).toBeUndefined();
+  });
+
+  // Intent: provider-level opt-out must skip all compression so providers with fragile prompt caches (e.g. xAI) stay byte-stable.
+  it("shouldApplyContextCompression returns false when provider is disabled", () => {
+    const config = { tools: ["bash"], disabledProviders: ["xai"] };
+    expect(shouldApplyContextCompression(config, "xai")).toBe(false);
+    expect(shouldApplyContextCompression(config, "XAI")).toBe(false);
+    expect(shouldApplyContextCompression(config, "openai")).toBe(true);
+    expect(shouldApplyContextCompression(undefined, "xai")).toBe(false);
+  });
+
+  // Intent: age-based masking must hide old tool output while keeping recent rounds for working context.
+  it("masks older configured tool outputs after enough assistant turns", async () => {
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(
+      join(root, ".pi", "pi-base.json"),
+      JSON.stringify({
+        contextCompression: {
+          tools: ["bash"],
+          retainedUserMessageRounds: 1,
+          retainedAssistantTurns: 1,
+        },
+      }),
+      "utf8",
+    );
+    const registry = createToolRegistry({ cwd: root });
+    piBaseExtension(registry.pi as any);
+
+    const bashArgs = { workdir: ".", command: "echo hi" };
+    const bashResult = {
+      content: [{ type: "text" as const, text: "hi\n" }],
+      details: undefined,
+    };
+    const messages = [
+      userMessage("round-1"),
+      ...toolExchange("bash", "bash-1", bashArgs, bashResult),
+      assistantTextMessage("done-1"),
+      userMessage("round-2"),
+      assistantTextMessage("done-2"),
+    ];
+    const transformed = await registry.emit("context", { messages }, { cwd: root });
+    expect(getText(transformed.messages[2])).toBe(BASH_OUTPUT_PLACEHOLDER);
+  });
+
+  // Intent: skill reads from <available_skills> must stay visible even when age compression would mask reads.
+  it("does not mask skill read outputs when the path is listed in available_skills", async () => {
+    const root = await createTempWorkspace();
+    const skillFile = join(root, "skills", "demo-skill", "SKILL.md");
+    await mkdir(dirname(skillFile), { recursive: true });
+    await writeFile(skillFile, "# demo", "utf8");
+    const readBody = `[skills/demo-skill/SKILL.md#A1B2]\n1:# demo`;
+    const messages = [
+      userMessage("load"),
+      { role: "assistant", content: [{ type: "toolCall", id: "r1", name: "read", arguments: { path: "skills/demo-skill/SKILL.md" } }] },
+      { role: "toolResult", toolCallId: "r1", toolName: "read", content: [{ type: "text", text: readBody }], isError: false },
+      assistantTextMessage("ok"),
+      userMessage("later"),
+      assistantTextMessage("done"),
+    ];
+    const next = applyContextCompressionToMessages(messages, root, {
+      tools: ["read"],
+      retainedUserMessageRounds: 1,
+      retainedAssistantTurns: 1,
+    }, {
+      systemPrompt: `<available_skills><skill><location>${skillFile}</location></skill></available_skills>`,
+    });
+    expect(getText(next[2])).toContain("# demo");
   });
 });

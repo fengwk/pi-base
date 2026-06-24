@@ -17,7 +17,7 @@ import { findSchema } from "./schemas/find.js";
 import { inferToolResultIsError } from "./tool-result.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, resolveToolPatternValue, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./render.js";
-import { applyContextCompressionToMessages } from "./context-compression.js";
+import { applyContextCompressionToMessages, shouldApplyContextCompression } from "./context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./anthropic-cache-boundary.js";
 import { registerResumeAllCommand } from "./resume-all.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
@@ -25,6 +25,8 @@ import { describeToolWorkdirForDisplay, resolveToolWorkdir } from "./path-utils.
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.js";
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
 import { registerAgentSupport } from "./agent-support.js";
+import { InMemorySnapshotStore } from "./hashline/index.js";
+import { createNoopLoopGuard } from "./hashline-noop-guard.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
@@ -175,20 +177,16 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   const resolverFactory = createResolverFactory(loadSettings);
   const getCollapsedResultLines = createCollapsedResultLinesResolver(loadSettings);
   const getCollapsedResultMaxChars = createCollapsedResultMaxCharsResolver(loadSettings);
-  const filesWithFreshAnchors = new Set<string>();
-  const cachedFileLines = new Map<string, string[]>();
-  const noteAnchorsAndSnapshot = (absolutePath: string, lines?: string[]) => {
-    filesWithFreshAnchors.add(absolutePath);
-    if (lines) cachedFileLines.set(absolutePath, [...lines]);
-  };
-  const hasFreshAnchors = (absolutePath: string) => filesWithFreshAnchors.has(absolutePath);
-  const getCachedLines = (absolutePath: string) => cachedFileLines.get(absolutePath);
+  const snapshots = new InMemorySnapshotStore();
+  const noopLoopGuard = createNoopLoopGuard();
   const syncLsp = (absolutePath: string) => {
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
   pi.on("session_start", async (event) => {
     if (event.reason === "reload") reloadRuntimePiBaseSettings();
     resolverFactory.clear();
+    snapshots.clear();
+    noopLoopGuard.entries.clear();
     await lspManager.shutdownAll();
     const activeTools = pi.getActiveTools();
     if (activeTools.length === 0) {
@@ -200,7 +198,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
 
   registerReadTool(pi, {
-    onSuccessfulRead: noteAnchorsAndSnapshot,
+    snapshots,
     createResolver: resolverFactory,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
@@ -212,14 +210,14 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   registerFindTool(pi, createFindToolDefinition, { getCollapsedResultLines, getCollapsedResultMaxChars });
   registerBashRendererTool(pi, { getCollapsedResultLines, getCollapsedResultMaxChars });
   registerEditTool(pi, {
-    wasReadInSession: hasFreshAnchors,
-    getCachedLines,
+    snapshots,
+    noopLoopGuard,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
-    onSuccessfulEdit: (absolutePath, lines) => { noteAnchorsAndSnapshot(absolutePath, lines); syncLsp(absolutePath); },
+    onSuccessfulEdit: (absolutePath) => { syncLsp(absolutePath); },
   });
   registerWriteTool(pi, {
-    onFileAnchored: noteAnchorsAndSnapshot,
+    snapshots,
     onSuccessfulWrite: syncLsp,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
@@ -247,7 +245,9 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
 
   (pi as any).on("context", async (event: any, ctx: ExtensionContext) => {
     if (!Array.isArray(event.messages)) return undefined;
-    const messages = applyContextCompressionToMessages(event.messages, ctx.cwd, loadSettings(ctx.cwd).settings.contextCompression, { systemPrompt: ctx.getSystemPrompt?.() });
+    const compressionConfig = loadSettings(ctx.cwd).settings.contextCompression;
+    if (!shouldApplyContextCompression(compressionConfig, ctx.model?.provider)) return undefined;
+    const messages = applyContextCompressionToMessages(event.messages, ctx.cwd, compressionConfig, { systemPrompt: ctx.getSystemPrompt?.() });
     return messages === event.messages ? undefined : { messages };
   });
   (pi as any).on("before_provider_payload", async (event: any) => {

@@ -39,6 +39,8 @@ export interface ContextCompressionConfig {
   retainedUserMessageRounds?: number;
   retainedAssistantTurns?: number;
   tools?: string[];
+  /** When the active model's provider id is listed here, pi-base skips context compression for that LLM call (messages are left unchanged). Use for providers whose prompt cache breaks when tool results are replaced with placeholders (e.g. some xAI setups). */
+  disabledProviders?: string[];
 }
 
 export type YoloMode = boolean;
@@ -312,6 +314,13 @@ function sanitizeContextCompressionToolsConfig(value: unknown): string[] {
   return output;
 }
 
+function sanitizeContextCompressionDisabledProviders(value: unknown): string[] {
+  const providers = requireStringArray(value, "contextCompression.disabledProviders");
+  const normalized = providers.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  if (normalized.length === 0) throw new Error("contextCompression.disabledProviders must contain at least one provider id.");
+  return normalized;
+}
+
 function sanitizeContextCompressionConfig(value: unknown): ContextCompressionConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("contextCompression must be an object.");
@@ -326,6 +335,7 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
     output.retainedAssistantTurns = sanitizePositiveInteger(input.retainedAssistantTurns, "contextCompression.retainedAssistantTurns");
   }
   if (input.tools !== undefined) output.tools = sanitizeContextCompressionToolsConfig(input.tools);
+  if (input.disabledProviders !== undefined) output.disabledProviders = sanitizeContextCompressionDisabledProviders(input.disabledProviders);
   return output;
 }
 
@@ -558,6 +568,9 @@ function mergeContextCompression(
       ? { retainedAssistantTurns: override?.retainedAssistantTurns ?? base?.retainedAssistantTurns }
       : {}),
     ...(tools !== undefined ? { tools } : {}),
+    ...(base?.disabledProviders || override?.disabledProviders
+      ? { disabledProviders: override?.disabledProviders ?? base?.disabledProviders }
+      : {}),
   };
   return Object.keys(output).length > 0 ? output : undefined;
 }

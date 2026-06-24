@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
-import { createTempWorkspace, createToolRegistry, writeWorkspaceFile } from "./helpers.js";
+import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 function render(component: any): string {
   return component.render(200).join("\n");
@@ -17,11 +17,8 @@ async function withTempGlobalPiBaseConfig<T>(content: unknown, run: (root: strin
     await writeFile(globalPath, JSON.stringify(content), "utf8");
     return await run(root);
   } finally {
-    if (previous === undefined) {
-      delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
-    } else {
-      process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previous;
-    }
+    if (previous === undefined) delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+    else process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previous;
   }
 }
 
@@ -31,8 +28,6 @@ describe("tool renderers", () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
 
-      // pi-base wraps call/result previews for these tools to keep a consistent
-      // opencode-style display, including effective cwd rendering for cwd-scoped tools.
       const cases = [
         { name: "read", args: { path: "src/example.ts", workdir: "packages/web", offset: 2, limit: 5 } },
         { name: "grep", args: { pattern: "demo", path: "src", workdir: "services/api", include: "*.ts" } },
@@ -40,15 +35,8 @@ describe("tool renderers", () => {
         {
           name: "edit",
           args: {
-            path: "src/example.ts",
             workdir: "packages/app",
-            edits: [
-              { replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: "const a = 1;" } },
-              { delete_lines: { start_anchor: "2#def0", end_anchor: "3#0123" } },
-              { insert_before_lines: { anchor: "4#4567", new_text: "before" } },
-              { insert_after_lines: { anchor: "5#89ab", new_text: "after" } },
-              { unexpected: true },
-            ],
+            input: "[src/example.ts#A1B2]\nSWAP 1.=1:\n+const a = 1;",
           },
         },
         { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" } },
@@ -66,45 +54,6 @@ describe("tool renderers", () => {
         expect(result).toContain("line-1");
       }
     });
-  });
-  it("evicts old edit call preview snapshots after the cache cap", async () => {
-    const root = await createTempWorkspace();
-    await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
-    const registry = createToolRegistry();
-    piBaseExtension(registry.pi as any);
-    const tool = registry.getTool("edit");
-
-    for (let index = 0; index < 102; index++) {
-      const rendered = render(tool.renderCall(
-        {
-          path: "src/example.ts",
-          workdir: ".",
-          edits: [{ replace_lines: { start_anchor: "1#abcd", end_anchor: "1#abcd", new_text: `alpha-${index}` } }],
-        },
-        {} as any,
-        { lastComponent: undefined, cwd: root, argsComplete: true, state: {} },
-      ));
-      expect(rendered).toContain(`alpha-${index}`);
-    }
-  });
-  it("renders invalid anchor warnings when a file preview is available", async () => {
-    const root = await createTempWorkspace();
-    await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
-    const registry = createToolRegistry();
-    piBaseExtension(registry.pi as any);
-    const tool = registry.getTool("edit");
-
-    const rendered = render(tool.renderCall(
-      {
-        workdir: ".",
-        path: "src/example.ts",
-        edits: [{ delete_lines: { start_anchor: "bad", end_anchor: "bad" } }],
-      },
-      {} as any,
-      { lastComponent: undefined, cwd: root, argsComplete: true, state: {} },
-    ));
-
-    expect(rendered).toContain("invalid anchor in delete_lines");
   });
 
   it("honors per-tool collapsed result line overrides from pi-base.json", async () => {
@@ -164,6 +113,54 @@ describe("tool renderers", () => {
       }
     });
   });
+  // Intent: edit success output should expose diff: so render.ts can color +/- lines for humans.
+  it("colors edit diff lines in renderResult when output includes diff:", async () => {
+    await withTempGlobalPiBaseConfig({}, async () => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const body = [
+        "[src/a.ts#B1C2]",
+        "1:const x = 1;",
+        "",
+        "diff:",
+        "-1|const x = 1;",
+        "+1|const x = 2;",
+      ].join("\n");
+      const rendered = render(registry.getTool("edit").renderResult(
+        { content: [{ type: "text", text: body }] },
+        { expanded: true, isPartial: false },
+        { fg: (role: string, text: string) => `<${role}>${text}</${role}>` } as any,
+        { lastComponent: undefined },
+      ));
+      expect(rendered).toContain("<accent>[src/a.ts#B1C2]</accent>");
+      expect(rendered).toContain("<toolDiffRemoved>-1|const x = 1;</toolDiffRemoved>");
+      expect(rendered).toContain("<toolDiffAdded>+1|const x = 2;</toolDiffAdded>");
+    });
+  });
+
+  // Intent: write/edit renderCall should show full patch or content for human review (not streaming, but readable).
+  it("renderCall shows full edit input and write content", async () => {
+    await withTempGlobalPiBaseConfig({}, async () => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const editCall = render(registry.getTool("edit").renderCall(
+        { workdir: "pkg", input: "[a.ts#ABCD]\nSWAP 1.=1:\n+new" },
+        { fg: (role: string, text: string) => text } as any,
+        { cwd: "/tmp/ws" },
+      ));
+      expect(editCall).toContain("edit");
+      expect(editCall).toContain("SWAP 1.=1:");
+      expect(editCall).toContain("+new");
+      const writeCall = render(registry.getTool("write").renderCall(
+        { path: "b.ts", content: "line1\nline2" },
+        { fg: (role: string, text: string) => text } as any,
+        { cwd: "/tmp/ws" },
+      ));
+      expect(writeCall).toContain("line1");
+      expect(writeCall).toContain("line2");
+    });
+  });
+
   it("applies wildcard collapsed result line overrides", async () => {
     await withTempGlobalPiBaseConfig({ render: { collapsedToolResultLines: { "lsp_*": 1, "*_diagnostics": 2, "*": 4 } } }, async (root) => {
       const registry = createToolRegistry();
@@ -217,6 +214,7 @@ describe("tool renderers", () => {
       { name: "grep", args: { pattern: "demo", path: "src", workdir: "packages/web", include: "*.ts", multiline: true }, expected: "grep \"demo\" in src from packages/web [include=*.ts, multiline=true]" },
       { name: "find", args: { pattern: "*.ts", path: "src", workdir: "packages/web" }, expected: "find *.ts in src from packages/web" },
       { name: "bash", args: { command: "npm test", workdir: "packages/web", timeout_seconds: 5 }, expected: "$ npm test (timeout 5s) in packages/web" },
+      { name: "edit", args: { workdir: "services/api", input: "[src/example.ts#A1B2]\nSWAP 1.=1:\n+beta" }, expected: "edit (hashline patch) in services/api" },
       { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" }, expected: "write src/example.ts in services/api" },
       { name: "lsp_diagnostics", args: { path: "src/example.ts", workdir: "packages/web", severity: "error" }, expected: "lsp_diagnostics src/example.ts in packages/web [severity=error]" },
       { name: "lsp_goto_definition", args: { path: "src/example.ts", workdir: "services/api", line: 2 }, expected: "lsp_goto_definition src/example.ts in services/api [line=2, character=0]" },

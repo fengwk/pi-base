@@ -1,0 +1,17 @@
+start: file_patch+
+
+file_patch: file_header hunk+
+file_header: "[" filename "#" file_hash "]" LF?
+file_hash: /[0-9A-F]{4}/
+filename: /[^#\r\n]+/
+
+hunk: swap_hunk | delete_hunk | insert_hunk
+swap_hunk: "SWAP " LID ".=" LID ":" LF body_row+
+delete_hunk: "DEL " LID (".=" LID)? LF?
+insert_hunk: insert_header LF body_row+
+insert_header: "INS.PRE " LID ":" | "INS.POST " LID ":" | "INS.HEAD:" | "INS.TAIL:"
+body_row: "+" /(.*)/ LF?
+
+LID: /[1-9]\d*/
+
+%import common.LF

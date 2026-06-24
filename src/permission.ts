@@ -6,6 +6,7 @@ import { describeToolWorkdirForDisplay, expandHomePath, normalizeSlashes, resolv
 import { PI_BASE_INLINE_STATUS_KEYS, PI_BASE_PERMISSION_STATUS_KEY, syncYoloFooter } from "./yolo-footer.js";
 import { loadRuntimePiBaseSettings, toggleRuntimeYolo } from "./runtime-settings.js";
 
+import { Patch } from "./hashline/index.js";
 const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
 const ALLOW_LABEL = "Yes";
 const DENY_LABEL = "No";
@@ -103,10 +104,32 @@ function buildGenericTargetDescriptor(_toolName: string): TargetDescriptor {
   };
 }
 
+function buildHashlinePatchTargetDescriptor(inputText: string, cwd: string, loaded: LoadedPiBaseSettings): TargetDescriptor | undefined {
+  try {
+    const patch = Patch.parse(inputText, { cwd });
+    if (patch.sections.length === 0) return undefined;
+    return {
+      candidates: uniqueStrings(
+        patch.sections.flatMap((section) => buildPathTargetDescriptor(section.path, cwd, loaded).candidates),
+      ),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function describeTarget(toolName: string, input: Record<string, unknown>, cwd: string, loaded: LoadedPiBaseSettings): TargetDescriptor {
   if (typeof input.path === "string" && input.path.trim().length > 0) {
     const { cwd: targetCwd } = resolveToolWorkdir(input.workdir, cwd);
     return buildPathTargetDescriptor(input.path, targetCwd, loaded);
+  }
+  if (toolName === "edit") {
+    const inputText = typeof input.input === "string" ? input.input : undefined;
+    if (inputText && inputText.trim().length > 0) {
+      const { cwd: targetCwd } = resolveToolWorkdir(input.workdir, cwd);
+      const target = buildHashlinePatchTargetDescriptor(inputText, targetCwd, loaded);
+      if (target) return target;
+    }
   }
   if (typeof input.command === "string") {
     return buildCommandTargetDescriptor(input.command);
