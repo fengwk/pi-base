@@ -29,7 +29,7 @@ function getDefaultSessionDir(cwd: string): string {
   return join(getAgentDir(), "sessions", safePath);
 }
 
-export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?: MockUiOverrides } = {}) {
+export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?: MockUiOverrides; model?: any; models?: any[] } = {}) {
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const events = new Map<string, Function[]>();
@@ -43,6 +43,8 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
   let defaultCwd = options.cwd ?? process.cwd();
   let uiOverrides: MockUiOverrides = { ...(options.ui ?? {}) };
   let thinkingLevel = "off";
+  let currentModel: any = undefined;
+  const models = new Map<string, any>();
   let footerFactory: ((tui: any, theme: any, footerData: any) => any) | undefined;
   let footerComponent: any;
   const theme = createTheme();
@@ -63,6 +65,22 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       return () => {};
     },
   };
+
+  const registerModel = (model: any) => {
+    if (!model?.provider || !model?.id) return;
+    models.set(`${model.provider}/${model.id}`, model);
+    if (!currentModel) {
+      currentModel = model;
+    }
+  };
+
+  for (const model of options.models ?? []) {
+    registerModel(model);
+  }
+  if (options.model) {
+    registerModel(options.model);
+    currentModel = options.model;
+  }
 
   const buildContext = (overrides: any = {}) => {
     const ui = {
@@ -160,9 +178,12 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       cwd: overrides.cwd ?? defaultCwd,
       sessionManager,
       modelRegistry: {
+        find(provider: string, modelId: string) {
+          return models.get(`${provider}/${modelId}`);
+        },
         isUsingOAuth: () => false,
       } as any,
-      model: undefined,
+      model: currentModel,
       isIdle: () => true,
       signal: overrides.signal,
       abort() {},
@@ -257,6 +278,14 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       getThinkingLevel() {
         return thinkingLevel;
       },
+      setThinkingLevel(level: string) {
+        thinkingLevel = level;
+      },
+      async setModel(model: any) {
+        currentModel = model;
+        registerModel(model);
+        return true;
+      },
       on(name: string, handler: Function) {
         const list = events.get(name) ?? [];
         list.push(handler);
@@ -314,6 +343,10 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
     setThinkingLevel(next: string) {
       thinkingLevel = next;
     },
+    getCurrentModel() {
+      return currentModel;
+    },
+    registerModel,
     renderFooter(width = 120) {
       if (!footerFactory) return [];
       if (!footerComponent) {

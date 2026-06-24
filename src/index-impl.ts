@@ -24,6 +24,7 @@ import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
 import { describeToolWorkdirForDisplay, resolveToolWorkdir } from "./path-utils.js";
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.js";
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
+import { registerAgentSupport } from "./agent-support.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
@@ -240,6 +241,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     onPermissionAsked: notifyHooks.onPermissionAsked,
     onPermissionRejected: notifyHooks.onPermissionRejected,
   });
+  registerAgentSupport(pi, { baseToolGuide: BASE_TOOL_GUIDE });
   registerResumeAllCommand(pi);
 
 
@@ -271,9 +273,4 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     };
   });
 
-  pi.on("before_agent_start", async (event, ctx: ExtensionContext) => {
-    return {
-      systemPrompt: `${event.systemPrompt}\n\n${BASE_TOOL_GUIDE}`,
-    };
-  });
 }

@@ -1,158 +1,369 @@
 # pi-base
 
-`pi-base` is a minimal Pi extension that provides a stable local coding toolset built around hash-anchored text editing.
+`pi-base` 是一个给 Pi 用的基础扩展包，不是独立应用，也不是新的 agent runtime。它的目标很简单：给 Pi 提供一套稳定、可配置、适合本地代码仓开发的 baseline，包括文件工具、`bash`、`LSP`、`MCP`、权限控制、通知，以及基于 Markdown 的 agent 切换。
 
-## Jump to
+## 目录
 
-- [Quick start](#quick-start)
-- [Included tools](#included-tools)
-- [Configuration](#configuration)
-- [Slash commands](#slash-commands)
-- [Validation](#validation)
+- [它是什么](#它是什么)
+- [安装与启用](#安装与启用)
+- [快速开始](#快速开始)
+- [Agent](#agent)
+- [工具与工作流](#工具与工作流)
+- [配置总览](#配置总览)
+- [配置参考](#配置参考)
+- [命令](#命令)
+- [运行时行为](#运行时行为)
+- [开发](#开发)
 
-## Quick start
+## 它是什么
 
-For most setups, you only need four things:
+`pi-base` 解决的是“把 Pi 调成一个顺手的本地 coding baseline”这件事。当前实现覆盖这些能力：
 
-1. Put your global config in `~/.pi/agent/pi-base.json`.
-2. Optionally add a project override in `<repo>/.pi/pi-base.json`.
-3. After editing either file, run `/reload` in Pi.
-4. Use the built-in file, shell, LSP, and MCP tools as needed.
+- 本地工具：`read`、`grep`、`find`、`edit`、`write`、`bash`
+- 语言能力：`lsp_diagnostics`、`lsp_goto_definition`、`lsp_workspace_symbols`、`lsp_java_decompile`
+- 外部工具：通过 `mcp.servers` 接入本地或远程 MCP server
+- 运行时控制：`permission`、`notify`、`yolo`、`contextCompression`
+- agent 系统：`~/.pi/agent/agents/**/*.md` 中定义 agent，通过 `/agent` 动态切换 prompt、model、thinking、tools、skills
 
-Typical workflow:
+启动时，`pi-base` 会确保基础工具集可用：
 
-1. Discover with `read`, `grep`, `find`, and `lsp_*`.
-2. Modify files with `edit` or `write`.
-3. Run commands with `bash` when you need tests, builds, git, or external CLIs.
-4. Add MCP servers when you want extra tools such as search, scraping, or internal platform integrations.
+- `read`
+- `grep`
+- `find`
+- `bash`
+- `edit`
+- `write`
+- `lsp_diagnostics`
+- `lsp_goto_definition`
+- `lsp_workspace_symbols`
+- `lsp_java_decompile`
 
-If you just want to get started, create `~/.pi/agent/pi-base.json` with `{}` first, then add only the sections you actually need.
+如果当前 active tools 里还残留已退役的 `task`，启动时也会自动移除。
 
-### What to use when
+## 安装与启用
 
-- Need to read a file or directory? Use `read`.
-- Need to search text across files? Use `grep`.
-- Need to locate files by name or glob? Use `find`.
-- Need to make a small change to an existing file? Use `edit`.
-- Need to create a new file or replace a whole file? Use `write`.
-- Need to run tests, builds, git, or external CLIs? Use `bash`.
-- Need IDE-style diagnostics or symbol navigation? Use `lsp_*`.
-- Changed `pi-base.json` and want the running process to pick it up? Use `/reload`.
-- Want to inspect MCP server/tool state? Use `/mcp-status`.
+长期使用时，建议把 `pi-base` 作为 Pi package 安装，让它跟随 Pi 一起自动加载并支持 `/reload`。开发或临时验证时，也可以直接从源码入口加载：
 
-## Included tools
+```bash
+pi -e /path/to/pi-base/index.ts
+```
 
-Built-in tools:
+`pi-base` 自己不额外发明配置入口，仍然使用 Pi 的扩展加载机制。
 
-- `read` — read files, directories, and supported images; when the model has no image input, image reads return text-only guidance with the `image-understanding` skill name and `skillDoc` path (use `read` on that file for full instructions)
-- `grep` — search file contents and return matching lines
-- `find` — discover files by glob pattern
-- `bash` — run commands such as tests, builds, git, or external CLIs
-- `edit` — make small, anchor-based edits to existing files
-- `write` — create a new text file or intentionally replace a whole file
-- `lsp_diagnostics` — get diagnostics from a configured LSP server
-- `lsp_goto_definition` — jump to a symbol definition
-- `lsp_workspace_symbols` — search symbols across the workspace
-- `lsp_java_decompile` — inspect external Java classes through `jdtls`
+## 快速开始
 
-Dynamic tools:
+### 1. 准备 `pi-base.json`
 
-- configured MCP tools — any tools exposed by enabled MCP servers in `pi-base.json`
+`pi-base` 只认这两个配置文件位置：
 
-## Quick examples
+- 全局：`~/.pi/agent/pi-base.json`
+- 项目：最近祖先目录中的 `<repo>/.pi/pi-base.json`
 
-### Minimal `pi-base.json`
+最小可用配置是：
 
 ```json
 {}
 ```
 
-### Minimal MCP config
+如果只想做隔离测试，也可以用环境变量覆盖全局配置路径：
+
+```bash
+export PI_BASE_GLOBAL_SETTINGS_PATH=/tmp/pi-base.json
+```
+
+### 2. 可选：准备默认 agent
+
+默认 agent 复用 Pi 现有的默认资源：
+
+- `~/.pi/agent/SYSTEM.md`
+- `~/.pi/agent/settings.json`
+- `<workspace-cwd>/.pi/settings.json`
+
+`pi-base` 只读取 `settings.json` 里的这三个默认字段：
 
 ```json
 {
-  "mcp": {
-    "servers": {
-      "mm": {
-        "type": "local",
-        "command": ["my-mcp", "serve"],
-        "toolPrefix": ""
-      }
-    }
-  }
+  "defaultProvider": "provider",
+  "defaultModel": "model-id",
+  "defaultThinkingLevel": "medium"
 }
 ```
 
-After editing config files, run `/reload` in Pi.
+当前 workspace cwd 下的 `.pi/settings.json` 优先于全局 `~/.pi/agent/settings.json`。
 
-### Minimal project override
+### 3. 启动后重载
 
-Create `<repo>/.pi/pi-base.json` when one repository needs different policy or integrations than your global defaults.
+修改 `pi-base.json`、`SYSTEM.md`、`settings.json` 或 agent Markdown 后，在 Pi 中执行：
+
+```text
+/reload
+```
+
+`pi-base` 会重新读取配置、重新扫描 agent 文件，并重新建立运行时状态。
+
+### 4. 日常使用
+
+典型工作流就是：
+
+1. 用 `read`、`grep`、`find`、`lsp_*` 看代码和定位问题。
+2. 用 `edit` 做小范围修改，用 `write` 新建或整体覆盖文件。
+3. 用 `bash` 跑测试、构建、git 或外部 CLI。
+4. 用 `/agent` 在不同工作模式之间切换。
+5. 需要额外工具时，通过 `mcp.servers` 接入 MCP。
+
+## Agent
+
+### 定义位置
+
+命名 agent 放在：
+
+```text
+~/.pi/agent/agents/**/*.md
+```
+
+`pi-base` 会递归扫描这个目录。`~/.pi/agent/SYSTEM.md` 被视为默认 agent 的 prompt 来源，默认 agent 名固定为 `default`。
+
+### Frontmatter 字段
+
+每个 agent Markdown 支持这些 frontmatter 字段：
+
+- `name`
+- `description`
+- `model`，格式必须是 `provider/modelId`
+- `thinkingLevel`
+- `tools`
+- `skills`
+
+示例：
+
+```md
+---
+name: planner
+description: Planning-focused agent
+model: provider/model-id
+thinkingLevel: high
+tools:
+  - read
+  - grep
+skills:
+  - spec
+---
+
+You are a planning-focused agent. Break work into clear steps before editing.
+```
+
+### 行为规则
+
+- `default` 是保留名，agent 文件不能使用这个名字。
+- `tools` 未配置或配置为 `[]`：所有工具可用。
+- `tools` 配置为非空数组：作为 allowlist，`pi-base` 会调用 `pi.setActiveTools()`，未列出的工具对 agent 不可见。
+- `skills` 未配置或配置为 `[]`：在 `read` 工具可用时，所有 skills 都会注入 prompt。
+- `skills` 配置为非空数组：只过滤 system prompt 中注入的 `<available_skills>` 列表。
+- `skills` 过滤只影响 prompt 注入，不会额外隐藏用户侧显式输入的 `/skill:name`。
+- skills 注入本身仍然遵循 Pi 默认行为：只有 `read` 工具可用时才会注入 `<available_skills>`。
+- Markdown 正文非空：正文作为该 agent 的 system prompt 主体，再继续追加原本的 `appendSystemPrompt`、context files、日期、cwd、skills 注入和 `BASE_TOOL_GUIDE`。
+- Markdown 正文为空：沿用当前默认 system prompt，只切换 model / thinking / tools / skills。
+- `model` 或 `thinkingLevel` 未配置时，回退到 `settings.json` 中的默认值。
+- 最近一次显式 `/agent xxx` 切换会写入 session entry；后续 `session_start` 会自动恢复。
+- 如果当前 session 里从未持久化过 agent，启动时不会强制重置当前 model / thinking / active tools，只更新默认状态显示。
+- 启动或 `/reload` 时，格式错误、重名或非法 agent 会被忽略，并输出 warning。
+
+### 切换方式
+
+- `/agent planner`
+- `/agent default`
+- `/agent`
+
+`/agent` 无参数时，如果当前有 UI，会弹选择器；无 UI 时需要显式带名字。
+
+## 工具与工作流
+
+### `read`
+
+`read` 支持：
+
+- 文本文件
+- 目录
+- 图片：`.jpg`、`.jpeg`、`.png`、`.gif`、`.webp`
+
+文本读取行为：
+
+- `offset` 默认 `1`
+- `limit` 默认 `200`，最大 `2000`
+- 每行会带 `LINE#HASH|` 锚点，例如 `12#7ac1|const value = 1;`
+- 单行显示超过 `2000` 字符时会在显示层截断，并标记该行被截断
+- 返回头部会包含 `path`、`kind`、`mediaType`、`offset`、`limit`、`totalLines`、`hasMore`、`nextOffset`、`lsp` 支持状态
+
+其它行为：
+
+- 目录读取会列出排序后的成员
+- 二进制文件会直接报错
+- 当前模型不支持图片输入时，不会内联图片，而是返回 `image-understanding` skill 的 `skillDoc` 路径提示
+- 当前模型支持图片输入时，会把图片作为附件返回，并补一段文本说明
+
+### `grep`
+
+- `pattern` 必填
+- `path` 必填
+- `workdir` 默认当前 agent cwd
+- `timeout_seconds` 默认 `15`
+- `limit` 默认 `100`
+- 支持 `include`、`ignoreCase`、`literal`、`multiline`
+- 搜索单个文件时会先探测二进制内容，二进制文件直接报错
+- 输出是候选位置，不是编辑锚点；编辑前先 `read`
+- 行过长时会截断到 `500` 字符，并在结果末尾给出提示
+
+### `find`
+
+- `pattern` 必填
+- `path` 必填，没有隐式默认搜索根；如果就是要搜当前目录，请显式写 `"."`
+- `workdir` 默认当前 agent cwd
+- `limit` 默认 `1000`
+- `timeout_seconds` 可选，默认不设超时
+- 底层仍使用 Pi 内置的 `find` / `fd` 能力，但 `pi-base` 强制要求显式 `path`
+
+### `edit`
+
+- 只适合小范围、基于锚点的修改
+- 必须先从同一 session 的 `read`、`write` 或之前的 `edit` 结果中拿到新鲜锚点
+- 支持四种操作：`replace_lines`、`delete_lines`、`insert_before_lines`、`insert_after_lines`
+- 每个 edit item 必须且只能包含一种操作
+- 会保留原文件 BOM 和行尾风格
+- 修改成功后返回 diff
+- 后续继续编辑时，只能复用 diff 中 `+` 或 `|` 前缀行的锚点；`-` 行是旧内容，故意不提供可复用锚点
+
+### `write`
+
+- 适合新文件或整文件覆盖
+- 会自动创建父目录
+- 成功后返回完整文件内容，并带新的 `LINE#HASH` 锚点
+
+### `bash`
+
+- `command` 必填
+- `workdir` 默认当前 agent cwd
+- `timeout_seconds` 默认 `120`
+- 非 Windows 平台会优先使用宿主机 `$SHELL` 指向的 `bash` 或 `zsh`
+- 如果是宿主 `bash` / `zsh`，会在执行前加载常见启动文件，再回到原始 cwd
+- 优先通过 `workdir` 切换目录，不要在 `command` 中写 `cd ... &&`
+
+### `lsp_*`
+
+`pi-base` 不内置任何 LSP server 表，全部由 `lsp.servers` 显式声明。
+
+支持的工具：
+
+- `lsp_diagnostics`
+- `lsp_goto_definition`
+- `lsp_workspace_symbols`
+- `lsp_java_decompile`
+
+参数要点：
+
+- `lsp_diagnostics` 支持 `severity`，默认 `all`
+- `lsp_goto_definition` 需要 `line`，`character` 默认 `0`
+- `lsp_workspace_symbols` 需要 `query`，`limit` 默认 `50`
+- `lsp_java_decompile` 需要任意一个目标 workspace 里的本地 `.java` 文件作为 `path`，`target` 可以是 `jdt://` URI、workspace symbol 输出中的目标，或 `file://` / `.class` 路径
+
+行为要点：
+
+- 文件后缀未命中任何 `lsp.servers` 时，直接返回 `No LSP server configured for ...`
+- `lsp_goto_definition` 会先检查 server 是否声明了 `textDocument/definition`
+- `lsp_workspace_symbols` 会先检查 server 是否声明了 `workspace/symbol`
+- `lsp_java_decompile` 只在支持 `java/classFileContents` 的 server 上可用，通常就是 `jdtls`
+- `lsp_diagnostics` 不做同样的能力前置检查，因为有些 server 的 diagnostics 能力声明并不可靠
+
+### MCP 工具
+
+`mcp.servers` 中已连接的 server 会自动注册工具：
+
+- 默认工具名格式是 `<serverKey>_<toolName>`
+- `toolPrefix: ""` 时保留远端原始 tool 名
+- 动态注册的 MCP 工具会自动加入 active tools
+- 同名冲突时，该工具不会注册，并在 `/mcp-status` 中显示冲突原因
+
+## 配置总览
+
+`pi-base.json` 顶层支持这些字段：
+
+| 字段 | 作用 |
+| --- | --- |
+| `permission` | 工具执行策略，支持 `allow` / `ask` / `deny` |
+| `lsp` | 定义 LSP server 列表 |
+| `render` | 控制工具结果折叠预览 |
+| `notify` | 控制权限请求和 agent 完成通知 |
+| `yolo` | 设置默认 YOLO 模式 |
+| `mcp` | 定义本地或远程 MCP server |
+| `contextCompression` | 压缩旧工具输出，减少上下文噪音 |
+
+一个常见起点：
 
 ```json
 {
   "permission": {
-    "bash": "ask"
+    "edit": "ask",
+    "write": "ask",
+    "bash": {
+      "*": "ask",
+      "git *": "allow"
+    }
+  },
+  "lsp": {
+    "servers": {
+      "ts": {
+        "command": ["typescript-language-server", "--stdio"],
+        "extensions": [".ts", ".tsx", ".js", ".jsx"]
+      }
+    }
+  },
+  "notify": {
+    "permissionAsked": true,
+    "agentEnd": true
   }
 }
 ```
 
-## Core ideas
+### 配置查找和缓存
 
-- Text reads prefix each displayed line with a `LINE#HASH|` anchor prefix, for example `1#7936|export const value = 1;`; use only the `LINE#HASH` part as an edit anchor.
-- `edit` works from fresh anchors and fails clearly on stale anchors.
-- `write` returns fresh anchors for follow-up edits.
-- Context compression can be enabled to prune stale file outputs and bulky historical tool results; when `anchorHygiene` is enabled, obsolete `LINE#HASH` anchors from `read` / `write` / `edit` are replaced with concise placeholders before model calls.
-- `grep` requires an explicit `path`, defaults `workdir` to the agent's current working directory, defaults to a 15s timeout, fails fast on single-file binary inputs, and returns candidate locations rather than edit anchors; use `read` after `grep` before editing.
-- `find` is delegated to Pi's built-in implementation. `pi-base` still requires an explicit `path`, while `workdir` defaults to the agent's current working directory.
-- `bash`, `read`, `edit`, `write`, `grep`, `find`, and `lsp_*` default `workdir` to the agent's current working directory. If `workdir` is provided, path resolution or command execution uses that directory; for `bash`, prefer `workdir` over embedding `cd ... &&` in `command`.
-- On Linux, WSL, and macOS, `bash` prefers the host `bash` or `zsh` shell from `$SHELL` and loads common startup files to better match the terminal environment.
-- `permission` rules can require approval for selected tools such as `edit`, `write`, and `bash`; `/yolo` temporarily bypasses those checks, and `/resume-all` opens a session picker across all known project directories.
-- Tool output is wrapped by a global truncation layer (`MAX_LINES=2000`, `MAX_BYTES=50KB`); full output is saved under `os.tmpdir()/pi-base-truncation/` and re-exposed via `details.truncation`.
-- When a tool result indicates a failure (text starts with `Error:` / `Edit failed` / `Command exited with code N`), the global `tool_result` hook repairs the missing `isError` flag so downstream code (session logs, renderers, orchestration) can react correctly.
-- LSP servers are **fully user-defined** in the unified `pi-base` config under `lsp.servers`. `pi-base` ships no built-in server table.
-- MCP servers are configured in the same unified `pi-base` config under `mcp.servers`. `pi-base` connects to them asynchronously, auto-registers their tools, shows `MCP: x/y servers` in the second footer line, and exposes `/mcp-status` for a tree view of server/tool state.
-- `notify` can mirror OpenCode-style desktop notifications for permission prompts and completed agent turns. By default it uses `$HOME/.config/opencode/scripts/notify.sh` when that script exists, and otherwise stays silent.
+- 全局配置默认路径：`~/.pi/agent/pi-base.json`
+- 项目配置路径：从当前 cwd 向上查找最近的 `.pi/pi-base.json`
+- 运行时会按 workspace 缓存配置
+- 修改配置后要执行 `/reload`
 
-If you only need daily usage, you can usually stop reading after this section. The rest of the document is reference material for specific config areas and behaviors.
+### 配置合并语义
 
-## Configuration
+不是所有字段都做同一种 merge，代码里的规则如下：
 
-`pi-base` uses a unified config file:
+- `lsp.servers`
+  项目配置一旦出现 `servers`，会整体替换全局 `servers` map，不做逐个 server 深合并。
+- `permission`
+  全局规则和项目规则按 tool 名追加合并，后出现的规则继续参与匹配；最终仍然是“最后一个匹配规则生效”。
+- `render`
+  全局和项目配置会合并；如果全局是单个数字，会被当作 `"*"` 默认值，再叠加项目里的细粒度规则。
+- `notify`
+  浅覆盖合并，项目配置只覆盖自己声明的字段。
+- `yolo`
+  项目值直接覆盖全局值。
+- `mcp.servers`
+  server map 按 key 合并；同 key 的项目配置覆盖同 key 的全局配置。
+- `contextCompression`
+  各标量字段逐个覆盖；`tools` 数组是替换，不是追加。
 
-- Global: `~/.pi/agent/pi-base.json`
-- Project: `<repo>/.pi/pi-base.json`
+## 配置参考
 
-The same file contains LSP, permission, render preview config, MCP config, context compression config, and optional default YOLO mode.
-A completely valid starting point is:
+### `render`
 
-```json
-{}
-```
+`render.collapsedToolResultLines`：
 
-Then add only the sections you need, for example `permission`, `lsp`, `mcp`, `notify`, `render`, or `contextCompression`.
+- 可以是单个非负整数
+- 也可以是按工具名或通配符配置的对象
+- 只影响工具结果折叠预览，不影响工具调用预览
+- `0` 表示折叠态不显示结果正文，只保留展开提示
+- 当未显式配置时，当前默认值是：`read=10`、`grep=15`、`find=20`、`bash=20`
+- 其它工具未配置时沿用各自 renderer 当前默认值
+- 匹配优先级：精确工具名 > 更具体的通配符 > `*`
 
-For isolated tests or temporary runs, `PI_BASE_GLOBAL_SETTINGS_PATH` can override the global `pi-base` config path.
-
-Config is loaded into the current Pi process and cached by workspace. If you edit either config file while pi is running, run `/reload` for the latest `pi-base.json` values to replace the in-memory policy.
-
-Precedence:
-
-```text
-project JSON > global JSON > built-in defaults
-```
-
-### Example: tool result preview lines
-
-`render.collapsedToolResultLines` accepts either:
-
-- a single non-negative integer, applied to every tool result, or
-- an object keyed by exact tool name or `*` wildcard pattern, with optional `"*"` as the fallback default.
-
-- `0` hides a collapsed result body entirely and shows only the expand hint.
-- When omitted, `pi-base` keeps the existing per-tool defaults (`read=10`, `grep=15`, `find=20`, `bash=20`, others use their current renderer defaults).
-- This only affects **tool result** folding, not tool call previews.
-- Exact tool names win over wildcard patterns. When multiple wildcard patterns match, the most specific pattern wins.
+示例：
 
 ```json
 {
@@ -168,15 +379,15 @@ project JSON > global JSON > built-in defaults
   }
 }
 ```
-### Example: tool result preview max characters
 
-`render.collapsedToolResultMaxChars` accepts either:
+`render.collapsedToolResultMaxChars`：
 
-- a single non-negative integer, applied to every tool result, or
-- an object keyed by exact tool name or `*` wildcard pattern, with optional `"*"` as the fallback default.
+- 可以是单个非负整数
+- 也可以是按工具名或通配符配置的对象
+- 只影响折叠态的字符数，不影响展开态
+- 匹配优先级和 `collapsedToolResultLines` 一样
 
-This limit only affects the **collapsed** result preview. Expanded tool results still render the full content. It is useful for very large single-line outputs or huge JSON payloads.
-Wildcard precedence matches `collapsedToolResultLines`: exact tool names win first, then the most specific wildcard pattern, then `"*"`.
+示例：
 
 ```json
 {
@@ -191,16 +402,28 @@ Wildcard precedence matches `collapsedToolResultLines`: exact tool names win fir
 }
 ```
 
-### Example: context compression
+### `contextCompression`
 
-`contextCompression` is the only context-pruning config. It is opt-in: when omitted, pi-base does not compress context.
-It is a stateless projection over the current message list. It does not keep a runtime tracker, delete assistant tool calls, modify tool call arguments, or change tool result metadata; only selected successful `toolResult.content` is replaced.
+`contextCompression` 是唯一的上下文裁剪配置，默认关闭。它只会投影当前消息列表，不会修改工具调用参数，也不会删除 assistant 的 toolCall block。
 
-`anchorHygiene` controls whether earlier file outputs from `read` / `write` / `edit` are omitted after the same file changes later. It defaults to `false`.
+支持字段：
 
-Age compression uses one shared retention policy for every tool name listed under `tools`. Configure `retainedUserMessageRounds` and `retainedAssistantTurns` once at `contextCompression`, then list the tool names to match. Tool names are matched directly against `toolCall.name`; tools not listed are not age-compressed. When the shared retention fields are omitted, pi-base defaults to `retainedUserMessageRounds: 2` and `retainedAssistantTurns: 4`. Future conversation is grouped into user-message windows: each window starts at a user message and ends at the next user message or the current end of the transcript. Whole windows are accumulated until they contribute at least `retainedAssistantTurns` assistant turns; that accumulated set counts as one retained user round. A tool result is age-compressed only after at least `retainedUserMessageRounds` such retained user rounds appear after it. Failed tool results are never compressed.
+- `anchorHygiene`
+- `retainedUserMessageRounds`
+- `retainedAssistantTurns`
+- `tools`
 
-Skill reads are protected from `tools` age compression. pi-base detects reads under currently advertised skill locations and keeps those outputs unless anchor hygiene later proves the same file changed. No separate `readSkill` config key is needed.
+行为规则：
+
+- `anchorHygiene` 默认 `false`
+- `tools` 是需要做“旧输出压缩”的 tool name 列表，按 `toolCall.name` 精确匹配
+- 只会压缩成功的 `toolResult.content`
+- 失败的工具结果永远不会被压缩
+- 如果配置了 `tools` 但没写保留策略，默认是 `retainedUserMessageRounds: 2` 和 `retainedAssistantTurns: 4`
+- `read` 到当前 prompt 中已注入 skill 路径下的文件时，不参与普通的 age compression；只有在同文件后来被改动且 `anchorHygiene` 生效时才会被折叠
+- 不会额外写 session marker，也不会显示长期 UI 标记
+
+示例：
 
 ```json
 {
@@ -216,26 +439,27 @@ Skill reads are protected from `tools` age compression. pi-base detects reads un
 }
 ```
 
-Placeholders stay short and vary only by tool category:
+### `notify`
 
-```text
-[context compression: older tool output omitted. Re-run the tool if you need those details.]
-[context compression: older tool output omitted. If you need those details, re-check the current state or retrieve the relevant context again.]
-[context compression: older tool output omitted. If you need those details, re-check the current state, or re-run the command only if it is safe to do so.]
-```
+`notify` 控制 `pi-base` 自己发出的桌面通知，只在有 UI 时生效。
 
-Context compression does not add session-history messages or a persistent UI marker; the configured behavior is driven entirely by `pi-base.json`.
+支持字段：
 
-### Example: notifications
+- `permissionAsked`
+- `agentEnd`
+- `suppressCompletedAfterRejectionMs`
 
-`notify` controls desktop notifications emitted by `pi-base` itself.
+行为规则：
 
-- When omitted, notifications stay disabled.
-- Notifications are enabled per event: set `permissionAsked` and/or `agentEnd` to `true`.
-- `pi-base` uses its bundled Pi notifier script from `scripts/notify.sh` automatically; no command path is required in config.
-- `permissionAsked` controls approval-request notifications.
-- `agentEnd` controls completion notifications emitted on `agent_end`.
-- `suppressCompletedAfterRejectionMs` (default `5000`, set `0` to disable) is the time window after a permission is rejected during which a follow-up `agent_end` completion notification is suppressed. The window prevents the "Pi - Permission" toast from being followed immediately by a "Pi - Completed" toast for the same session, which would be noise. Lower it (or set to `0`) if you want every completion to surface.
+- 省略 `notify` 时默认不通知
+- `permissionAsked: true` 时，在权限确认前发通知
+- `agentEnd: true` 时，在 `agent_end` 后发完成通知
+- `suppressCompletedAfterRejectionMs` 默认 `5000`
+- `suppressCompletedAfterRejectionMs: 0` 表示关闭抑制窗口
+- 通知脚本固定使用包内的 `scripts/notify.sh`
+- 没有单独的自定义命令路径配置
+
+示例：
 
 ```json
 {
@@ -246,37 +470,53 @@ Context compression does not add session-history messages or a persistent UI mar
   }
 }
 ```
-### Example: permission guard
 
-`permission` follows an OpenCode-style `allow` / `ask` / `deny` model. Put it in the unified `pi-base` config file (`~/.pi/agent/pi-base.json` or `.pi/pi-base.json`). Top-level strings apply to all tools, and per-tool objects can override them with ordered wildcard rules (`*` and `?`, last match wins).
+### `permission`
+
+`permission` 使用 `allow` / `ask` / `deny` 三态模型。
+
+支持三种写法：
+
+- 整个 `permission` 直接写成一个字符串，作用于所有工具
+- 直接给某个 tool 一个字符串
+- 给某个 tool 一个 pattern -> action 的对象
+
+示例：
 
 ```json
 {
   "permission": {
+    "*": "allow",
     "edit": "ask",
     "write": "ask",
     "bash": {
       "*": "ask",
-      "git *": "allow"
+      "git *": "allow",
+      "npm test": "deny"
     }
   }
 }
 ```
 
-Behavior notes:
+行为规则：
 
-- `ask` prompts in interactive mode before the tool runs.
-- The prompt shows the tool name, explicit `Workdir: ...`, and a compact one-line `Arguments: ...` preview; long previews are truncated with `...`.
-- The only choices are `Yes` or `No`.
-- Future automatic allowance comes only from config pattern matches; there is no in-session "always allow this file/command" shortcut.
-- For path-based tools (`read`, `edit`, `write`, and similar tools that expose `path`), patterns are matched against the given path, the workdir-relative path, the project-relative path, and the absolute path.
-- For `bash`, patterns are matched against static surface command segments. The matcher is quote/escape-aware for top-level `&&`, `||`, `|`, `|&`, `;`, and newline separators, but it does not expand variables, read scripts, or recursively inspect runtime content inside `bash -c`, command substitutions, `eval`, `source`, functions, or aliases.
-- In non-interactive mode, `ask` blocks the tool call because there is no UI to confirm it.
-- `/yolo` toggles a runtime bypass mode that disables all permission checks for the current Pi process and workspace, and shows `YOLO` inline in the footer while it is active. It does not take subcommands; use `/yolo` again to switch back.
+- `ask` 会在交互模式下弹出确认框
+- 确认框只提供 `Yes` / `No`
+- 提示里会显示 `Tool`、`Workdir` 和单行压缩后的 `Arguments`
+- 无 UI 时，`ask` 直接拦截调用
+- 没有会话内的“永久允许这类调用”快捷方式，后续自动放行只能靠配置规则
+- 对路径类工具，会匹配：
+  - 原始传入路径
+  - 相对 `workdir` 的路径
+  - 相对项目根的路径
+  - 绝对路径
+- 对 `bash`，会对顶层静态 surface command 段做匹配，能识别 `&&`、`||`、`|`、`|&`、`;` 和换行
+- `bash` 规则不会展开变量，不会深入解析 `bash -c`、命令替换、`eval`、`source`、函数或 alias
+- 如果 `bash` 命令表面结构无法安全分析，则静态规则只要没有命中 `deny`，结果会退回到 `ask`
 
-### Example: default YOLO mode
+### `yolo`
 
-Set `yolo` to a boolean:
+`yolo` 是一个布尔值：
 
 ```json
 {
@@ -284,13 +524,18 @@ Set `yolo` to a boolean:
 }
 ```
 
-When omitted, the default is `false`. When present, it seeds the in-memory YOLO mode when pi-base first loads the workspace settings. `/yolo` changes only the current Pi process state; it is not persisted into session history or written back to `pi-base.json`.
+行为规则：
 
-### Example: MCP servers
+- 默认 `false`
+- 只在 workspace 首次载入配置时为运行时状态设初值
+- `/yolo` 只切换当前 Pi 进程里的运行时状态
+- `/yolo` 不会回写 `pi-base.json`
 
-`mcp.servers` defines MCP connections by server key. `toolPrefix` defaults to the server key; set it to `""` to expose the raw MCP tool names.
+### `mcp`
 
-Remote servers must declare their transport explicitly. Supported values are `"websocket"`, `"sse"`, and `"streamable-http"`.
+`mcp.servers` 支持本地和远程两类 server。
+
+本地 server：
 
 ```json
 {
@@ -299,18 +544,30 @@ Remote servers must declare their transport explicitly. Supported values are `"w
       "mm": {
         "type": "local",
         "command": ["my-mcp", "serve"],
+        "cwd": "~/work/mm",
         "env": {
-          "MINIMAX_API_HOST": "https://api.minimaxi.com",
-          "MINIMAX_API_KEY": "${MINIMAX_API_KEY}"
+          "API_KEY": "${API_KEY}"
         },
         "toolPrefix": "",
-      },
+        "startupTimeoutMs": 60000
+      }
+    }
+  }
+}
+```
+
+远程 server：
+
+```json
+{
+  "mcp": {
+    "servers": {
       "docs": {
         "type": "remote",
         "transport": "streamable-http",
         "url": "https://example.com/mcp",
         "headers": {
-          "Authorization": "Bearer <token>"
+          "Authorization": "${DOCS_TOKEN}"
         },
         "toolPrefix": "docs"
       }
@@ -319,28 +576,31 @@ Remote servers must declare their transport explicitly. Supported values are `"w
 }
 ```
 
-Behavior notes:
+支持字段：
 
-- MCP startup is asynchronous and does not block session startup.
-- `toolPrefix: ""` keeps the original MCP tool names.
-- When omitted, `toolPrefix` falls back to the server key, for example `mm_scrape`.
-- `env` and `headers` values support exact `$VAR` and `${VAR}` environment variable references. Literal strings remain unchanged.
-- Connection summary is shown in the second footer line as `MCP: connected/enabled servers`.
-- `/mcp-status` prints the full server/tool tree, including reconnect state and name conflicts.
-## Slash commands
+- 本地：`command`、`env`、`cwd`、`enabled`、`toolPrefix`、`startupTimeoutMs`
+- 远程：`transport`、`url`、`headers`、`enabled`、`toolPrefix`、`startupTimeoutMs`
 
-- `/yolo`
-  - Toggles permission bypass for the current Pi process and workspace.
-- `/resume-all`
-  - Opens a picker for sessions across all project directories known to Pi, unlike the built-in `/resume` flow that stays focused on the current project/session directory.
-  - In TUI mode it opens directly in the all-project view with recent sorting.
-  - Takes no arguments.
-- `/mcp-status`
-  - Prints the current MCP server summary and a tree of discovered tools, reconnect state, and any name conflicts.
+行为规则：
 
-### Example: LSP servers for a Java + Go + TS + Python workspace
+- `enabled: false` 时该 server 处于禁用状态
+- `toolPrefix` 默认等于 server key
+- `toolPrefix: ""` 时暴露原始远端 tool 名
+- 本地 `command[0]` 可以是 PATH 中的命令，或绝对路径；如果写成路径形式，也支持 `~/...`、`$HOME/...`、`${HOME}/...`
+- 本地 `cwd` 必须是绝对路径，但支持 `~/...`、`$HOME/...`、`${HOME}/...`
+- `env` 和 `headers` 只支持“整个值恰好是 `$VAR` 或 `${VAR}`”的环境变量引用，不支持字符串内插值
+- 引用的环境变量不存在时，连接会失败
+- 远程 transport 只支持：`websocket`、`sse`、`streamable-http`
+- 由于底层 SDK 限制，`websocket` transport 不支持自定义 headers
+- `startupTimeoutMs` 默认 `60000`
+- MCP 启动是异步的，不阻塞 session 启动
+- `pi-base` 会维护重连和 heartbeat，并把状态显示到 footer
 
-`command[0]` is either a bare executable resolved from `PATH`, or an explicit executable path. Path-like entries must be absolute; `~/...`, `$HOME/...`, and `${HOME}/...` are expanded before launch.
+### `lsp`
+
+`lsp.servers` 是完全用户定义的映射，`pi-base` 不内置任何 server 表。
+
+示例：
 
 ```json
 {
@@ -362,77 +622,97 @@ Behavior notes:
         "extensions": [".go"],
         "firstMatchMarkers": [".git", "go.mod", "go.work"],
         "requestTimeoutMs": 60000
-      },
-      "pylsp": {
-        "command": ["pylsp"],
-        "extensions": [".py", ".pyi"],
-        "firstMatchMarkers": [".git", "pyproject.toml", "setup.py", "requirements.txt", "Pipfile"]
       }
     }
   }
 }
 ```
 
-### LSP server entry fields
+字段说明：
 
-| Field | Required | Description |
-|---|---|---|
-| `command` | yes | Executable + args. `command[0]` must be either a command available on `PATH` or an absolute executable path; `~/...`, `$HOME/...`, and `${HOME}/...` are supported. |
-| `extensions` | yes | File extensions this server handles, e.g. `[".ts", ".tsx"]`. |
-| `rootMarkers` | no | Workspace root markers for multi-module projects (topmost wins). |
-| `firstMatchMarkers` | no | Alternative workspace root markers (first match wins). |
-| `requestTimeoutMs` | no | Per-request timeout. Defaults to `60000`. Increase further for very slow servers like `gopls` on large workspaces. |
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `command` | 是 | 可执行文件和参数。`command[0]` 必须是 PATH 中的命令，或绝对路径。支持 `~/...`、`$HOME/...`、`${HOME}/...`。 |
+| `extensions` | 是 | 此 server 负责的文件后缀列表。 |
+| `rootMarkers` | 否 | 多模块项目根标记，采用“最顶层匹配优先”。 |
+| `firstMatchMarkers` | 否 | 备选根标记，采用“第一次匹配优先”。 |
+| `requestTimeoutMs` | 否 | 每个请求的超时，默认 `60000`。 |
 
-To "disable" a server, omit it from the map. There is no `disabledServers` list.
+行为规则：
 
-For server-specific runtime tuning, put the extra flags directly in `command`. Example for `jdtls` on a host JDK that supports ZGC:
+- 相对路径形式的 `command[0]` 会被拒绝
+- 只支持 `HOME` 相关路径展开，不支持像 `$JAVA_HOME/...` 这样的任意环境变量路径展开
+- 要“禁用”一个 server，直接从 map 中去掉；没有 `disabledServers`
+- `rootMarkers` 和 `firstMatchMarkers` 都存在时，优先使用 `rootMarkers` 的最顶层结果，否则退回 `firstMatchMarkers`
+- 缺失可执行文件时，会返回带具体 `pi-base.json` 片段的错误提示
+- `pi-base` 不额外提供 `jvmArgs` 字段；所有 server 特定参数都直接写在 `command` 里
 
-```json
-{
-  "lsp": {
-    "servers": {
-      "jdtls": {
-        "command": [
-          "jdtls",
-          "--jvm-arg=-XX:+UseZGC",
-          "--jvm-arg=-XX:+ZUncommit"
-        ],
-        "extensions": [".java"]
-      }
-    }
-  }
-}
-```
+## 命令
 
-`pi-base` intentionally does not add a separate `jvmArgs` field; `command` is the single source of truth.
+`pi-base` 自己注册这些命令：
 
-When a tool is called and the file extension is not in any `lsp.servers` entry, the tool returns a clear "No LSP server configured for ..." error.
+- `/agent`
+  - `/agent <name>` 切换到指定 agent
+  - `/agent default` 切回默认 agent
+  - `/agent` 在有 UI 时弹选择器
+- `/yolo`
+  - 切换当前进程的权限绕过状态
+  - 不接受参数
+- `/mcp-status`
+  - 输出当前 MCP server 摘要和工具树
+  - 显示连接状态、重连状态、冲突和 stale 工具
+- `/resume-all`
+  - 跨项目恢复 session
+  - 需要交互式 UI
+  - TUI 模式下直接进入 all-project 视图
 
-### Capability pre-check
+此外，Pi 自带的 `/reload` 对 `pi-base` 很关键，因为它会重载配置、扩展资源和 agent 定义。
 
-For `lsp_workspace_symbols` and `lsp_goto_definition`, the LSP client inspects the server's `initialize` response and short-circuits with a clear, actionable error before sending the request when the server did not advertise support. `lsp_java_decompile` is additionally gated on running `jdtls`. Examples:
+## 运行时行为
 
-- `pylsp` does not implement `workspace/symbol` → "LSP server 'pylsp' does not advertise workspace/symbol support. Try grep, find, or read with offset/limit instead."
-- `pylsp` does not implement `go-to-definition` → "LSP server 'pylsp' does not advertise go-to-definition. Try grep or read to locate definitions manually."
-- `lsp_java_decompile` on a non-jdtls server → "lsp_java_decompile is only supported by jdtls; current server is 'X'."
+### 输出截断
 
-`lsp_diagnostics` does not pre-check because servers like `jdtls` push diagnostics in practice even when their advertised capability is missing or uses a non-standard field. For most servers the client tries `textDocument/diagnostic` first and falls back to waiting for pushed diagnostics; for `jdtls` it skips the pull request, waits for `publishDiagnostics` directly, and serializes same-workspace cold-start diagnostics until the first publish result arrives to avoid startup races.
+所有工具结果都会经过统一截断层：
 
-## Output truncation
+- 最大行数：`2000`
+- 最大字节数：`50KB`
+- 完整输出保存到：`os.tmpdir()/pi-base-truncation/`
+- 旧截断文件会做 best-effort 清理，保留期约 `7` 天
 
-Tool results that exceed `MAX_LINES=2000` or `MAX_BYTES=50KB` are truncated. The full output is persisted to `os.tmpdir()/pi-base-truncation/`, and `details.truncation` on the tool result includes:
+`details.truncation` 里会暴露：
 
-| Field | Meaning |
-|---|---|
-| `truncated` | `true` if the output was reduced. |
-| `alreadyTruncated` | `true` if an upstream layer (e.g. built-in bash) already truncated and saved the full output. |
-| `outputPath` | Path to the full output (from upstream or from `pi-base`). |
-| `totalLines` | Line count of the original (or upstream-truncated) output. |
-| `totalBytes` | Byte count of the original output. |
+| 字段 | 含义 |
+| --- | --- |
+| `truncated` | 是否发生截断 |
+| `alreadyTruncated` | 是否上游已经截断过 |
+| `outputPath` | 完整输出路径 |
+| `totalLines` | 原始总行数 |
+| `totalBytes` | 原始总字节数 |
 
-When an upstream tool already truncated (e.g. Pi's built-in bash writes to `/tmp/pi-bash-*.log`), `pi-base` does not duplicate the full output but does preserve the upstream path in `details.truncation.outputPath`.
+如果上游工具已经截断，`pi-base` 会复用上游 `outputPath`，不会重复落盘。
 
-## Validation
+### 错误标记修复
+
+有些工具实现只返回了 `Error: ...` 文本，但没有带 `isError: true`。`pi-base` 会在全局 `tool_result` hook 中补齐这些错误标记，覆盖范围包括：
+
+- `edit`
+- `bash`
+- `read`
+- `write`
+- `grep`
+- `lsp_*`
+
+### 状态栏
+
+有 UI 时，`pi-base` 会在状态栏里展示：
+
+- `YOLO`
+- `MCP: x/y servers`
+- `agent:<name>`
+
+默认 agent 时不会显示 agent 状态。
+
+## 开发
 
 ```bash
 npm run typecheck
@@ -440,10 +720,4 @@ npm test
 npm run test:coverage
 ```
 
-## Non-interactive `pi -p` note
-
-When invoking `pi -p` from a shell, quote the prompt or pass it through a heredoc / file. Otherwise shell features such as `$(...)`, backticks, `$VAR`, and globs may expand before Pi sees the prompt text.
-
-## Coverage status
-
-Coverage is intentionally kept high, but the exact numbers change as tests evolve. Check the latest `npm test` / `npm run test:coverage` output for current counts.
+如果从 shell 用 `pi -p` 调试，记得对 prompt 做引用，避免 shell 先展开 `$(...)`、反引号、`$VAR` 或 glob。
