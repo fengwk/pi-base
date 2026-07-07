@@ -134,28 +134,34 @@ describe("tool renderers", () => {
       }
     });
   });
-  // Intent: edit success output should expose diff: so render.ts can color +/- lines for humans.
-  it("colors edit diff lines in renderResult when output includes diff:", async () => {
+  // Intent: edit should show the final diff in renderCall, while renderResult stays concise.
+  it("shows completed edit diff in renderCall and keeps renderResult concise", async () => {
     await withTempGlobalPiBaseConfig({}, async () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
-      const body = [
-        "Edited src/a.ts successfully.",
-        "Replacements: 1",
-        "",
-        "diff:",
+      const sharedState = {};
+      const diff = [
         "-1|const x = 1;",
         "+1|const x = 2;",
       ].join("\n");
       const rendered = render(registry.getTool("edit").renderResult(
-        { content: [{ type: "text", text: body }] },
+        { content: [{ type: "text", text: `Edited src/a.ts successfully.\nReplacements: 1\n\ndiff:\n${diff}` }], details: { diff, replacements: 1, path: "/tmp/ws/src/a.ts" } },
         { expanded: true, isPartial: false },
         { fg: (role: string, text: string) => `<${role}>${text}</${role}>` } as any,
-        { lastComponent: undefined },
+        { lastComponent: undefined, state: sharedState, args: { path: "src/a.ts" } },
       ));
       expect(rendered).toContain("<success>Edited src/a.ts successfully.</success>");
-      expect(rendered).toContain("<toolDiffRemoved>-1|const x = 1;</toolDiffRemoved>");
-      expect(rendered).toContain("<toolDiffAdded>+1|const x = 2;</toolDiffAdded>");
+      expect(rendered).toContain("<muted>Replacements: 1</muted>");
+      expect(rendered).not.toContain("-1|const x = 1;");
+      expect(rendered).not.toContain("+1|const x = 2;");
+
+      const callRendered = render(registry.getTool("edit").renderCall(
+        { path: "src/a.ts", old_string: "const x = 1;", new_string: "const x = 2;" },
+        { fg: (role: string, text: string) => `<${role}>${text}</${role}>` } as any,
+        { lastComponent: undefined, state: sharedState, executionStarted: true, argsComplete: true, cwd: "/tmp/ws" },
+      ));
+      expect(callRendered).toContain("<toolDiffRemoved>-1|const x = 1;</toolDiffRemoved>");
+      expect(callRendered).toContain("<toolDiffAdded>+1|const x = 2;</toolDiffAdded>");
     });
   });
 
@@ -194,6 +200,36 @@ describe("tool renderers", () => {
       ));
       expect(rendered).toContain("<toolDiffRemoved>-old</toolDiffRemoved>");
       expect(rendered).toContain("<toolDiffAdded>+new</toolDiffAdded>");
+    });
+  });
+
+  it("shows edit working state in renderCall while execution is in progress", async () => {
+    await withTempGlobalPiBaseConfig({}, async () => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const rendered = render(registry.getTool("edit").renderCall(
+        { path: "src/example.ts", old_string: "alpha\nbeta", new_string: "alpha\nbeta\ngamma" },
+        {} as any,
+        { lastComponent: undefined, state: {}, executionStarted: true, argsComplete: true, cwd: "/tmp/ws" },
+      ));
+      expect(rendered).toContain("working");
+      expect(rendered).toContain("old 2L/10C");
+      expect(rendered).toContain("new 3L/16C");
+    });
+  });
+
+  it("does not keep showing edit working state after a failed result arrives", async () => {
+    await withTempGlobalPiBaseConfig({}, async () => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const rendered = render(registry.getTool("edit").renderCall(
+        { path: "src/example.ts", old_string: "old", new_string: "new" },
+        {} as any,
+        { lastComponent: undefined, state: {}, executionStarted: true, argsComplete: true, isPartial: false, cwd: "/tmp/ws" },
+      ));
+      expect(rendered).toContain("-old");
+      expect(rendered).toContain("+new");
+      expect(rendered).not.toContain("working");
     });
   });
 

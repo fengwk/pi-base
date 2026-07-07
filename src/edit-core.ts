@@ -16,6 +16,7 @@ import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from 
 import {
   type CollapsedResultLinesResolver,
   type CollapsedResultMaxCharsResolver,
+  renderCallText,
   renderStreamingCallText,
   renderRawResult,
   resolveCollapsedResultLines,
@@ -23,6 +24,7 @@ import {
   shortenHomePath,
   styleAccent,
   styleDiffAdded,
+  styleDiffContext,
   styleDiffRemoved,
   styleMuted,
   styleToolTitle,
@@ -34,6 +36,15 @@ import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
 const EDIT_ARGUMENT_VALIDATION_HINT = "Hint: Adjust the input parameters and re-run the `edit` command.";
+const EDIT_WORKING_FRAMES = ["-", "\\", "|", "/"] as const;
+const EDIT_WORKING_FRAME_INTERVAL_MS = 120;
+
+interface EditRenderState {
+  completedDiff: string | undefined;
+  completedKey: string | undefined;
+  spinnerIndex: number;
+  spinnerTimer: ReturnType<typeof setTimeout> | undefined;
+}
 
 function prepareEditArguments(args: unknown, validationTool: any): any {
   try {
@@ -78,6 +89,77 @@ function countDisplayedLines(text: string): number {
   const lines = text.split("\n");
   if (text.endsWith("\n") && lines[lines.length - 1] === "") lines.pop();
   return lines.length;
+}
+
+function getEditRenderState(context: any): EditRenderState {
+  const sharedState = context && typeof context === "object"
+    ? (context.state ??= {})
+    : {};
+  const state = sharedState.__piBaseEditRenderState as EditRenderState | undefined;
+  if (state) return state;
+
+  const nextState: EditRenderState = {
+    completedDiff: undefined,
+    completedKey: undefined,
+    spinnerIndex: 0,
+    spinnerTimer: undefined,
+  };
+  sharedState.__piBaseEditRenderState = nextState;
+  return nextState;
+}
+
+function stopEditWorkingSpinner(state: EditRenderState): void {
+  if (state.spinnerTimer !== undefined) {
+    clearTimeout(state.spinnerTimer);
+    state.spinnerTimer = undefined;
+  }
+}
+
+function scheduleEditWorkingSpinner(state: EditRenderState, invalidate: (() => void) | undefined): void {
+  if (state.spinnerTimer !== undefined || typeof invalidate !== "function") return;
+  state.spinnerTimer = setTimeout(() => {
+    state.spinnerTimer = undefined;
+    state.spinnerIndex = (state.spinnerIndex + 1) % EDIT_WORKING_FRAMES.length;
+    invalidate();
+  }, EDIT_WORKING_FRAME_INTERVAL_MS);
+}
+
+function formatEditWorkingLine(args: any, theme: any, spinnerIndex: number): string {
+  const oldText = String(args?.old_string ?? "");
+  const newText = String(args?.new_string ?? "");
+  const oldLines = countDisplayedLines(normalizeToLF(oldText));
+  const newLines = countDisplayedLines(normalizeToLF(newText));
+  const frame = EDIT_WORKING_FRAMES[spinnerIndex % EDIT_WORKING_FRAMES.length] ?? "-";
+  return [
+    styleMuted(theme, `${frame} working`),
+    `${styleMuted(theme, "old ")}${styleAccent(theme, `${oldLines}L/${oldText.length}C`)}`,
+    styleMuted(theme, "->"),
+    `${styleMuted(theme, "new ")}${styleAccent(theme, `${newLines}L/${newText.length}C`)}`,
+  ].join(" ");
+}
+
+function colorizeCompletedEditDiff(diff: string, theme: any): string {
+  return diff
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("+")) return styleDiffAdded(theme, line);
+      if (line.startsWith("-")) return styleDiffRemoved(theme, line);
+      if (line === "...") return styleMuted(theme, line);
+      return styleDiffContext(theme, line);
+    })
+    .join("\n");
+}
+
+function formatCompletedEditCall(header: string, diff: string | undefined, theme: any): string {
+  if (!diff?.trim()) return header;
+  return `${header}\n\n${colorizeCompletedEditDiff(diff, theme)}`;
+}
+
+function formatSuccessfulEditResult(context: any, theme: any, replacements: number): string {
+  const rawPath = String(context?.args?.path ?? "<unknown-path>");
+  const successText = theme?.fg ? theme.fg("success", `Edited ${rawPath} successfully.`) : `Edited ${rawPath} successfully.`;
+  const replacementsText = styleMuted(theme, `Replacements: ${replacements}`);
+  return `${successText}\n${replacementsText}`;
 }
 
 function formatDiffLine(prefix: " " | "+" | "-", lineNumber: number, lineNumberWidth: number, line: string): string {
@@ -308,10 +390,35 @@ export function registerEditTool(
     renderShell: "default" as const,
     renderCall(args: any, theme: any, context: any) {
       const header = formatEditCall(args, theme, context?.cwd);
+      const state = getEditRenderState(context);
+      if (state.completedKey !== undefined) {
+        stopEditWorkingSpinner(state);
+        return renderCallText(formatCompletedEditCall(header, state.completedDiff, theme), context?.lastComponent);
+      }
+      if (context?.executionStarted && context?.isPartial !== false) {
+        scheduleEditWorkingSpinner(state, context?.invalidate);
+        return renderCallText(`${header}\n\n${formatEditWorkingLine(args, theme, state.spinnerIndex)}`, context?.lastComponent);
+      }
+      stopEditWorkingSpinner(state);
       const preview = formatEditCallPreview(args, theme);
       return renderStreamingCallText(preview ? `${header}\n\n${preview}` : header, theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
+      const state = getEditRenderState(context);
+      stopEditWorkingSpinner(state);
+      if (!context?.isError) {
+        const diff = typeof result?.details?.diff === "string" ? result.details.diff : undefined;
+        const replacements = typeof result?.details?.replacements === "number" ? result.details.replacements : undefined;
+        const completedKey = JSON.stringify([context?.args?.path ?? "", replacements ?? -1, diff ?? ""]);
+        if (state.completedKey !== completedKey) {
+          state.completedKey = completedKey;
+          state.completedDiff = diff;
+          queueMicrotask(() => context?.invalidate?.());
+        }
+        if (typeof replacements === "number") {
+          return renderCallText(formatSuccessfulEditResult(context, theme, replacements), context?.lastComponent);
+        }
+      }
       const collapsedLines = resolveCollapsedResultLines("edit", undefined, context, options.getCollapsedResultLines);
       const maxCollapsedChars = resolveCollapsedResultMaxChars("edit", undefined, context, options.getCollapsedResultMaxChars);
       return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, theme, context);
@@ -423,7 +530,7 @@ export function registerEditTool(
 
         return {
           content: [{ type: "text" as const, text: outputTextResult }],
-          details: { diff, firstChangedLine, path: absolutePath, oldText: computation.fileText, newText: computation.replacedText },
+          details: { diff, firstChangedLine, path: absolutePath, oldText: computation.fileText, newText: computation.replacedText, replacements },
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
