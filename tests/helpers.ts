@@ -23,6 +23,13 @@ function createTheme() {
   };
 }
 
+function truncateFooterLine(text: string, width: number): string {
+  if (text.length <= width) return text;
+  if (width <= 0) return "";
+  if (width <= 3) return ".".repeat(width);
+  return `${text.slice(0, width - 3)}...`;
+}
+
 function getDefaultSessionDir(cwd: string): string {
   const resolvedCwd = join(cwd).replace(/\\/g, "/");
   const safePath = `--${resolvedCwd.replace(/^\//, "").replace(/[/:]/g, "-")}--`;
@@ -348,11 +355,25 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
     },
     registerModel,
     renderFooter(width = 120) {
-      if (!footerFactory) return [];
-      if (!footerComponent) {
-        footerComponent = footerFactory(tui, theme, footerData);
+      if (footerFactory) {
+        if (!footerComponent) {
+          footerComponent = footerFactory(tui, theme, footerData);
+        }
+        return footerComponent.render(width);
       }
-      return footerComponent.render(width);
+
+      const lines = [
+        truncateFooterLine(defaultCwd, width),
+        truncateFooterLine(`0.0%/0 (auto) ${currentModel ? `${currentModel.provider}/${currentModel.id}` : "no-model"}`, width),
+      ];
+      const extensionStatuses = Array.from(statuses.entries())
+        .filter(([, text]) => text)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([, text]) => text as string);
+      if (extensionStatuses.length > 0) {
+        lines.push(truncateFooterLine(extensionStatuses.join(" "), width));
+      }
+      return lines;
     },
     async emit(name: string, event: any, ctx: any = {}) {
       const handlers = events.get(name) ?? [];

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import { basename, extname, join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { formatSkillsForPrompt, getAgentDir, parseFrontmatter, type BuildSystemPromptOptions, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
-import { PI_BASE_AGENT_STATUS_KEY, syncInlineStatusFooter } from "./yolo-footer.js";
+import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
 
 const DEFAULT_AGENT_NAME = "default";
 const AGENT_STATE_ENTRY = "pi-base-agent-state";
@@ -90,7 +90,6 @@ export function registerAgentSupport(
 
   const updateStatus = (ctx: ExtensionContext, agentName: string): void => {
     if (!ctx.hasUI) return;
-    syncInlineStatusFooter(ctx, pi);
     ctx.ui.setStatus(
       PI_BASE_AGENT_STATUS_KEY,
       ctx.ui.theme.fg("accent", `agent:${agentName === DEFAULT_AGENT_NAME ? DEFAULT_AGENT_NAME : agentName}`),

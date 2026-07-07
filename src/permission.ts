@@ -3,7 +3,7 @@ import { analyzeBashSurfaceCommand, buildBashSurfaceCandidates } from "./bash-co
 import { dirname, relative } from "node:path";
 import { type LoadedPiBaseSettings, type PermissionAction, type PermissionRuleEntry } from "./config.js";
 import { describeToolWorkdirForDisplay, expandHomePath, normalizeSlashes, resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
-import { PI_BASE_INLINE_STATUS_KEYS, PI_BASE_PERMISSION_STATUS_KEY, syncYoloFooter } from "./yolo-footer.js";
+import { PI_BASE_PERMISSION_STATUS_KEY } from "./yolo-footer.js";
 import { loadRuntimePiBaseSettings, toggleRuntimeYolo } from "./runtime-settings.js";
 
 const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
@@ -150,9 +150,8 @@ function updateYoloStatus(ctx: ExtensionContext, enabled: boolean): void {
   ctx.ui.setStatus(STATUS_KEY, enabled ? ctx.ui.theme.fg("warning", "YOLO") : undefined);
 }
 
-function syncYoloStatusFooter(ctx: ExtensionContext, pi: Pick<ExtensionAPI, "getThinkingLevel">, enabled: boolean): void {
+function syncYoloStatusFooter(ctx: ExtensionContext, _pi: Pick<ExtensionAPI, "getThinkingLevel">, enabled: boolean): void {
   updateYoloStatus(ctx, enabled);
-  if (enabled) syncYoloFooter(ctx, pi, { statusKey: STATUS_KEY, extraStatusKeys: PI_BASE_INLINE_STATUS_KEYS });
 }
 
 function stringifyPromptArguments(input: unknown): string {

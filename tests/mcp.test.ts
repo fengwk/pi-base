@@ -599,7 +599,7 @@ describe("mcp support", () => {
     await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers");
 
     const footerLines = registry.renderFooter(120);
-    expect(footerLines.length).toBeGreaterThanOrEqual(2);
+    expect(footerLines.length).toBeGreaterThanOrEqual(3);
     expect(footerLines.at(-1) ?? "").toContain("agent:default");
     expect((footerLines.at(-1) ?? "").indexOf("agent:default")).toBe(0);
     expect(footerLines.at(-1) ?? "").toContain("YOLO");

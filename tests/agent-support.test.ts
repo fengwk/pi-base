@@ -256,7 +256,7 @@ thinkingLevel: low
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
     const defaultFooterLines = registry.renderFooter(120);
-    expect(defaultFooterLines.length).toBeGreaterThanOrEqual(2);
+    expect(defaultFooterLines.length).toBeGreaterThanOrEqual(3);
     expect(defaultFooterLines.at(-1) ?? "").toContain("agent:default");
     expect((defaultFooterLines.at(-1) ?? "").indexOf("agent:default")).toBe(0);
 
@@ -279,7 +279,7 @@ Named prompt.
       );
       await registry.runCommand("agent", "named", { cwd: root });
       const namedFooterLines = registry.renderFooter(120);
-      expect(namedFooterLines.length).toBeGreaterThanOrEqual(2);
+      expect(namedFooterLines.length).toBeGreaterThanOrEqual(3);
       expect(namedFooterLines.at(-1) ?? "").toContain("agent:named");
       expect((namedFooterLines.at(-1) ?? "").indexOf("agent:named")).toBe(0);
     } finally {
