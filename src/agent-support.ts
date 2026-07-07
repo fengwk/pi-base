@@ -5,7 +5,8 @@ import { formatSkillsForPrompt, getAgentDir, parseFrontmatter, type BuildSystemP
 import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
 
 const DEFAULT_AGENT_NAME = "default";
-const AGENT_STATE_ENTRY = "pi-base-agent-state";
+/** Custom session entry naming the active agent; also written into subagent sessions at spawn. */
+export const AGENT_STATE_ENTRY = "pi-base-agent-state";
 const PROJECT_CONFIG_DIR = ".pi";
 const AGENTS_DIR = "agents";
 const SETTINGS_FILE = "settings.json";
@@ -31,6 +32,7 @@ interface AgentFrontmatter {
   thinkingLevel?: unknown;
   tools?: unknown;
   skills?: unknown;
+  subagents?: unknown;
   [key: string]: unknown;
 }
 
@@ -48,6 +50,8 @@ interface AgentDefinition {
   thinkingLevel?: ThinkingLevel;
   tools?: string[];
   skills?: string[];
+  /** Agent names this agent may delegate to via the `task` tool. Empty/absent => cannot delegate. */
+  subagents?: string[];
 }
 
 interface AgentCatalog {
@@ -61,15 +65,56 @@ interface MergedSettingsDefaults {
   thinkingLevel?: ThinkingLevel;
 }
 
+export interface SubagentControls {
+  taskToolName: string;
+  getMaxDepth: (cwd: string) => number;
+  readDepth: (ctx: ExtensionContext) => number;
+}
+
+export interface AgentSupportHandle {
+  /** Names the currently-active agent may delegate to (empty when it cannot delegate). */
+  getActiveAgentSubagents: () => string[];
+  getActiveAgentName: () => string;
+}
+
 export function registerAgentSupport(
   pi: Pick<
     ExtensionAPI,
     "appendEntry" | "getActiveTools" | "getAllTools" | "getThinkingLevel" | "on" | "registerCommand" | "setActiveTools" | "setModel" | "setThinkingLevel"
   >,
-  options: { baseToolGuide: string },
-): void {
+  options: { baseToolGuide: string; subagentControls?: SubagentControls },
+): AgentSupportHandle {
   let catalog = loadAgentCatalog();
   let activeAgentName = DEFAULT_AGENT_NAME;
+  const subagentControls = options.subagentControls;
+
+  // Add/remove the `task` delegation tool for the active agent: present only when the agent
+  // declares a non-empty `subagents` list and this session is still below maxDepth.
+  const applyTaskInjection = (tools: string[], agent: AgentDefinition, ctx: ExtensionContext): string[] => {
+    if (!subagentControls) return tools;
+    const withoutTask = tools.filter((name) => name !== subagentControls.taskToolName);
+    const registered = allRegisteredToolNames().includes(subagentControls.taskToolName);
+    const canDelegate =
+      registered &&
+      (agent.subagents?.length ?? 0) > 0 &&
+      subagentControls.readDepth(ctx) < subagentControls.getMaxDepth(ctx.cwd);
+    return canDelegate ? [...withoutTask, subagentControls.taskToolName] : withoutTask;
+  };
+
+  // System-prompt section listing the subagents the active agent may delegate to (name +
+  // description). Gated on `task` being active this turn — applyTaskInjection already encoded
+  // the depth/subagents decision into the active tool set, so this stays a single source of truth.
+  const buildSubagentSection = (agent: AgentDefinition, activeTools: string[]): string => {
+    if (!subagentControls || !activeTools.includes(subagentControls.taskToolName)) return "";
+    const names = agent.subagents ?? [];
+    if (names.length === 0) return "";
+    const lines = names.map((name) => {
+      const sub = resolveAgent(name);
+      const description = sub?.description?.trim();
+      return `- ${name}: ${description || (sub ? "(no description)" : "(agent not found)")}`;
+    });
+    return `## Subagents\nYou can delegate a self-contained task to a subagent with the \`task\` tool by setting \`subagent_type\` to one of:\n${lines.join("\n")}`;
+  };
 
   const refreshCatalog = (): AgentCatalog => {
     catalog = loadAgentCatalog();
@@ -171,7 +216,7 @@ export function registerAgentSupport(
       }
     }
 
-    pi.setActiveTools(validTools);
+    pi.setActiveTools(applyTaskInjection(validTools, agent, ctx));
 
     activeAgentName = agent.name;
     updateStatus(ctx, agent.name);
@@ -297,10 +342,17 @@ export function registerAgentSupport(
       event.systemPrompt,
     );
 
+    const subagentSection = buildSubagentSection(activeAgent, selectedTools);
+    const guide = subagentSection ? `${options.baseToolGuide}\n\n${subagentSection}` : options.baseToolGuide;
     return {
-      systemPrompt: `${systemPrompt}\n\n${options.baseToolGuide}`,
+      systemPrompt: `${systemPrompt}\n\n${guide}`,
     };
   });
+
+  return {
+    getActiveAgentSubagents: () => resolveAgent(activeAgentName)?.subagents ?? [],
+    getActiveAgentName: () => activeAgentName,
+  };
 }
 
 function findModel(ctx: ExtensionContext, ref: AgentModelRef): Model<Api> | undefined {
@@ -546,6 +598,7 @@ function loadAgentFile(filePath: string): AgentDefinition {
   const thinkingLevel = normalizeThinkingLevel(frontmatter.thinkingLevel, filePath);
   const tools = normalizeStringListField(frontmatter.tools, "tools", filePath);
   const skills = normalizeStringListField(frontmatter.skills, "skills", filePath);
+  const subagents = normalizeStringListField(frontmatter.subagents, "subagents", filePath);
   if (name === DEFAULT_AGENT_NAME) {
     throw new Error(`agent file ${filePath} uses reserved name "${DEFAULT_AGENT_NAME}"`);
   }
@@ -559,6 +612,7 @@ function loadAgentFile(filePath: string): AgentDefinition {
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(tools ? { tools } : {}),
     ...(skills ? { skills } : {}),
+    ...(subagents ? { subagents } : {}),
   };
 }
 
@@ -605,7 +659,7 @@ function normalizeThinkingLevel(value: unknown, filePath?: string): ThinkingLeve
   return level as ThinkingLevel;
 }
 
-function normalizeStringListField(value: unknown, fieldName: "tools" | "skills", filePath: string): string[] | undefined {
+function normalizeStringListField(value: unknown, fieldName: "tools" | "skills" | "subagents", filePath: string): string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
     throw new Error(`agent file ${filePath} field "${fieldName}" must be an array of strings`);

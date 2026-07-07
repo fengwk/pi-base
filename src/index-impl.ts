@@ -26,8 +26,18 @@ import { describeToolWorkdirForDisplay, resolveToolWorkdir } from "./path-utils.
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.js";
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
 import { registerAgentSupport } from "./agent-support.js";
+import { TASK_TOOL_NAME } from "./subagent/constants.js";
+import { resolveSubagentConfig } from "./subagent/config.js";
+import { isRootSession, readDepth, ROOT_DEPTH } from "./subagent/depth.js";
+import {
+  clearSubagentPermissionHost,
+  setSubagentPermissionHost,
+  type SubagentPermissionHost,
+} from "./subagent/permission-host.js";
+import { createRealSubagentFactory } from "./subagent/runner.js";
+import { registerSubagentTaskTool } from "./subagent/task-tool.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
-export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig } from "./config.js";
+export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
 export type { LocalMcpServerConfig, McpConfig, McpRemoteTransport, McpServerConfig, McpSnapshot, McpToolSnapshot, RemoteMcpServerConfig } from "./mcp/types.js";
 
@@ -184,9 +194,12 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     const activeTools = pi.getActiveTools();
     if (activeTools.length === 0) {
       pi.setActiveTools([...BASE_TOOL_NAMES]);
-    } else if (activeTools.includes("task")) {
-      const activeToolsWithoutRetiredTask = activeTools.filter((name) => name !== "task");
-      pi.setActiveTools(activeToolsWithoutRetiredTask.length > 0 ? activeToolsWithoutRetiredTask : [...BASE_TOOL_NAMES]);
+    } else if (activeTools.includes(TASK_TOOL_NAME)) {
+      // Baseline (default agent) never delegates, so `task` is not part of the default active set.
+      // A delegating agent re-adds `task` via agent-support's task injection. This also cleans up
+      // any retired core `task` left in a resumed session.
+      const withoutTask = activeTools.filter((name) => name !== TASK_TOOL_NAME);
+      pi.setActiveTools(withoutTask.length > 0 ? withoutTask : [...BASE_TOOL_NAMES]);
     }
   });
   pi.on("session_shutdown", async () => {
@@ -225,15 +238,54 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getCollapsedResultMaxChars,
     ...options.mcp,
   });
+  const subagentControls = {
+    taskToolName: TASK_TOOL_NAME,
+    getMaxDepth: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxDepth,
+    readDepth,
+  };
+  const agentHandle = registerAgentSupport(pi, { baseToolGuide: BASE_TOOL_GUIDE, subagentControls });
+  registerSubagentTaskTool(pi, {
+    getActiveAgentSubagents: agentHandle.getActiveAgentSubagents,
+    getMaxConcurrency: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxConcurrency,
+    factory: createRealSubagentFactory(),
+  });
   registerPermissionGuard(pi, {
     loadSettings,
     toggleYolo: toggleRuntimeYolo,
     onPermissionAsked: notifyHooks.onPermissionAsked,
     onPermissionRejected: notifyHooks.onPermissionRejected,
+    resolveSubagentInfo: (ctx) => {
+      const depth = readDepth(ctx);
+      if (depth <= ROOT_DEPTH) return undefined;
+      return { agentType: agentHandle.getActiveAgentName(), depth };
+    },
   });
-  registerAgentSupport(pi, { baseToolGuide: BASE_TOOL_GUIDE });
   registerResumeAllCommand(pi);
 
+  // Only the root (UI-owning) session hosts subagent permission prompts. Headless subagent
+  // sessions relay their `ask` prompts here via the module-level permission host.
+  let registeredHost: SubagentPermissionHost | null = null;
+  let hostChain: Promise<unknown> = Promise.resolve();
+  pi.on("session_start", async (_event, ctx?: ExtensionContext) => {
+    if (!ctx?.hasUI || !isRootSession(ctx)) return;
+    const host: SubagentPermissionHost = async (req) => {
+      const run = hostChain.then(async () => {
+        const title = `⟳ subagent「${req.agentType}」(depth ${req.depth}) requests permission\n\n${req.prompt}`;
+        const choice = await ctx.ui.select(title, ["Allow", "Deny"]);
+        return choice === "Allow";
+      });
+      hostChain = run.catch(() => undefined);
+      return run;
+    };
+    registeredHost = host;
+    setSubagentPermissionHost(host);
+  });
+  pi.on("session_shutdown", async () => {
+    if (registeredHost) {
+      clearSubagentPermissionHost(registeredHost);
+      registeredHost = null;
+    }
+  });
 
   (pi as any).on("context", async (event: any, ctx: ExtensionContext) => {
     if (!Array.isArray(event.messages)) return undefined;

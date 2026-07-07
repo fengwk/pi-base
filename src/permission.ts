@@ -5,6 +5,7 @@ import { type LoadedPiBaseSettings, type PermissionAction, type PermissionRuleEn
 import { describeToolWorkdirForDisplay, expandHomePath, normalizeSlashes, resolveToCwd, resolveToolWorkdir, stripAtPrefix } from "./path-utils.js";
 import { PI_BASE_PERMISSION_STATUS_KEY } from "./yolo-footer.js";
 import { loadRuntimePiBaseSettings, toggleRuntimeYolo } from "./runtime-settings.js";
+import { askSubagentPermissionHost } from "./subagent/permission-host.js";
 
 const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
 const ALLOW_LABEL = "Yes";
@@ -223,12 +224,15 @@ export function registerPermissionGuard(
     toggleYolo?: (cwd: string) => boolean;
     onPermissionAsked?: (input: { ctx: ExtensionContext }) => Promise<void>;
     onPermissionRejected?: (input: { ctx: ExtensionContext }) => void;
+    /** Resolve the delegating agent/depth of a headless subagent session, for the relayed prompt label. */
+    resolveSubagentInfo?: (ctx: ExtensionContext) => { agentType: string; depth: number } | undefined;
   } = {},
 ): void {
   const loadSettings = options.loadSettings ?? loadRuntimePiBaseSettings;
   const toggleYolo = options.toggleYolo ?? toggleRuntimeYolo;
   const onPermissionAsked = options.onPermissionAsked;
   const onPermissionRejected = options.onPermissionRejected;
+  const resolveSubagentInfo = options.resolveSubagentInfo;
 
   pi.registerCommand("yolo", {
     description: "Toggle yolo mode (bypass permission checks)",
@@ -266,6 +270,22 @@ export function registerPermissionGuard(
       return { block: true, reason: buildDeniedReason(event.toolName, loaded) };
     }
     if (!ctx.hasUI) {
+      // Only genuine subagent sessions (identified by resolveSubagentInfo) relay to the root
+      // UI-host; any other headless session (e.g. print/CI top-level) blocks as before.
+      const info = resolveSubagentInfo?.(ctx);
+      if (info) {
+        const decision = await askSubagentPermissionHost({
+          agentType: info.agentType,
+          depth: info.depth,
+          prompt: buildPrompt(event.toolName, event.input, ctx.cwd),
+          signal: (event as { signal?: AbortSignal }).signal,
+        });
+        if (decision !== null) {
+          if (decision) return undefined;
+          onPermissionRejected?.({ ctx });
+          return { block: true, reason: buildRejectedReason(event.toolName) };
+        }
+      }
       return { block: true, reason: buildAskWithoutUiReason(event.toolName, loaded) };
     }
 

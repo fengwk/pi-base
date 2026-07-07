@@ -45,6 +45,13 @@ export interface ContextCompressionConfig {
 
 export type YoloMode = boolean;
 
+export interface SubagentConfig {
+  /** Max delegation depth. Root session is depth 1; the `task` tool is injected only while depth < maxDepth. Default 2. */
+  maxDepth?: number;
+  /** Max number of subagents a single session may run concurrently. Excess `task` calls are rejected. Default 10. */
+  maxConcurrency?: number;
+}
+
 export interface PiBaseSettings {
   lsp?: LspDiscoveryConfig;
   permission?: PermissionConfig;
@@ -53,6 +60,7 @@ export interface PiBaseSettings {
   yolo?: YoloMode;
   mcp?: McpConfig;
   contextCompression?: ContextCompressionConfig;
+  subagent?: SubagentConfig;
 }
 
 export interface LoadedPiBaseSettings {
@@ -316,6 +324,17 @@ function sanitizePositiveInteger(value: unknown, path: string): number {
   return Number(value);
 }
 
+function sanitizeSubagentConfig(value: unknown): SubagentConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("subagent must be a JSON object.");
+  }
+  const input = value as Record<string, unknown>;
+  const output: SubagentConfig = {};
+  if (input.maxDepth !== undefined) output.maxDepth = sanitizePositiveInteger(input.maxDepth, "subagent.maxDepth");
+  if (input.maxConcurrency !== undefined) output.maxConcurrency = sanitizePositiveInteger(input.maxConcurrency, "subagent.maxConcurrency");
+  return output;
+}
+
 function sanitizeOptionalBoolean(value: unknown, path: string): boolean {
   if (typeof value !== "boolean") throw new Error(`${path} must be a boolean.`);
   return value;
@@ -447,6 +466,7 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
     yolo: input.yolo === undefined ? undefined : sanitizeYoloMode(input.yolo),
     mcp: input.mcp === undefined ? undefined : sanitizeMcpConfig(input.mcp),
     contextCompression: input.contextCompression === undefined ? undefined : sanitizeContextCompressionConfig(input.contextCompression),
+    subagent: input.subagent === undefined ? undefined : sanitizeSubagentConfig(input.subagent),
   };
 }
 
@@ -513,6 +533,7 @@ function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
     ...(settings.yolo !== undefined ? { yolo: settings.yolo } : {}),
     ...(settings.mcp ? { mcp: normalizeMcpConfigPaths(settings.mcp) } : {}),
     ...(settings.contextCompression ? { contextCompression: settings.contextCompression } : {}),
+    ...(settings.subagent ? { subagent: settings.subagent } : {}),
   };
 }
 
@@ -572,6 +593,15 @@ function mergeMcp(base: McpConfig | undefined, override: McpConfig | undefined):
   return Object.keys(servers).length > 0 ? { servers } : undefined;
 }
 
+function mergeSubagent(base: SubagentConfig | undefined, override: SubagentConfig | undefined): SubagentConfig | undefined {
+  if (!base && !override) return undefined;
+  const output: SubagentConfig = {
+    ...(base?.maxDepth !== undefined || override?.maxDepth !== undefined ? { maxDepth: override?.maxDepth ?? base?.maxDepth } : {}),
+    ...(base?.maxConcurrency !== undefined || override?.maxConcurrency !== undefined ? { maxConcurrency: override?.maxConcurrency ?? base?.maxConcurrency } : {}),
+  };
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
 
 function cloneContextCompressionTools(value: string[] | undefined): string[] | undefined {
   return value === undefined ? undefined : [...value];
@@ -615,6 +645,7 @@ export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSet
       yolo: mergeYolo(globalSettings.yolo, projectSettings.yolo),
       mcp: mergeMcp(globalSettings.mcp, projectSettings.mcp),
       contextCompression: mergeContextCompression(globalSettings.contextCompression, projectSettings.contextCompression),
+      subagent: mergeSubagent(globalSettings.subagent, projectSettings.subagent),
     },
   };
 }
