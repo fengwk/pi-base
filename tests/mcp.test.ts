@@ -176,11 +176,11 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
 
     const result = await registry.getTool("echo").execute("1", { text: "hello" }, undefined, undefined, { cwd: root });
     expect(getText(result)).toContain("echo:hello");
-    expect(registry.getStatuses().get("pi-base-mcp")).toBe("MCP: 1/1 servers");
+    expect(registry.getStatuses().get("02-pi-base-mcp")).toBe("MCP: 1/1 servers");
     const parameters = registry.getTool("echo").parameters as { description?: string; properties?: Record<string, { description?: string }> };
     expect(parameters.description).toBe("Echo input arguments.");
     expect(parameters.properties?.text?.description).toBe("Text to echo back.");
@@ -370,10 +370,10 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers");
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers");
 
     await registry.runCommand("mcp-status", "", { cwd: root });
     const message = String(registry.getMessages().at(-1)?.content ?? "");
@@ -419,12 +419,12 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
     expect(registry.getTool("echo").description).toBe("Echo input text");
 
     await registry.emit("session_shutdown", { reason: "quit" }, { cwd: root });
     await registry.emit("session_start", { reason: "resume" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && registry.getTool("echo").description === "Echo input text v2");
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers" && registry.getTool("echo").description === "Echo input text v2");
 
     await registry.runCommand("mcp-status", "", { cwd: root });
     const message = String(registry.getMessages().at(-1)?.content ?? "");
@@ -473,7 +473,7 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && registry.getTool("echo").description === "Echo input text");
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers" && registry.getTool("echo").description === "Echo input text");
     const firstResult = await registry.getTool("echo").execute("1", { text: "hello" }, undefined, undefined, { cwd: root });
     expect(getText(firstResult)).toContain("old-server");
 
@@ -489,7 +489,7 @@ describe("mcp support", () => {
       },
     });
     await registry.emit("session_start", { reason: "reload" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && registry.getTool("echo").description === "Echo input text from new server");
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers" && registry.getTool("echo").description === "Echo input text from new server");
 
     const result = await registry.getTool("echo").execute("2", { text: "hello" }, undefined, undefined, { cwd: root });
     expect(getText(result)).toContain("new-server");
@@ -596,7 +596,7 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers");
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers");
 
     const footerLines = registry.renderFooter(120);
     expect(footerLines.length).toBeGreaterThanOrEqual(3);
@@ -630,8 +630,8 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 0/1 servers connecting");
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers");
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 0/1 servers connecting");
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers");
   });
 
   it("shows a failed suffix after a connection attempt fails", async () => {
@@ -658,7 +658,7 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 0/1 servers connection failed");
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 0/1 servers connection failed");
   });
   it("treats MCP status UI updates as best-effort", async () => {
     const manager = createMcpManager({
@@ -709,9 +709,9 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "mm_echo"), 1_500);
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "mm_echo"), 1_500);
 
-    expect(registry.getStatuses().get("pi-base-mcp")).toBe("MCP: 1/1 servers");
+    expect(registry.getStatuses().get("02-pi-base-mcp")).toBe("MCP: 1/1 servers");
   });
 
   it("reconnects after a recoverable MCP tool-call transport error", async () => {
@@ -762,7 +762,7 @@ describe("mcp support", () => {
     expect(failed.isError).toBe(true);
     expect(getText(failed)).toContain("socket closed");
 
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers");
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers");
     const recovered = await registry.getTool("echo").execute("2", { text: "hello" }, undefined, undefined, { cwd: root });
     expect(recovered.isError).not.toBe(true);
     expect(getText(recovered)).toContain("recovered:hello");
@@ -793,7 +793,7 @@ describe("mcp support", () => {
     });
 
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
 
     await registry.runCommand("mcp-status", "", { cwd: root });
 

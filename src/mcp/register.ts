@@ -5,7 +5,7 @@ import type { CollapsedResultLinesResolver, CollapsedResultMaxCharsResolver } fr
 import { createMcpManager, type McpManagerOptions } from "./manager.js";
 import { renderMcpFooterStatus, renderMcpStatusTree } from "./status.js";
 
-export const PI_BASE_MCP_STATUS_KEY = "pi-base-mcp";
+export const PI_BASE_MCP_STATUS_KEY = "02-pi-base-mcp";
 const MCP_STATUS_MESSAGE_TYPE = "pi-base-mcp-status";
 
 export interface RegisterMcpSupportOptions extends Pick<McpManagerOptions, "clientFactory" | "heartbeatIntervalMs" | "retryDelaysMs" | "callWaitTimeoutMs"> {

@@ -88,13 +88,13 @@ You are the planner.
       piBaseExtension(registry.pi as any);
 
       await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-      expect(registry.getStatuses().get("pi-base-agent")).toContain("agent:default");
+      expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
 
       await registry.runCommand("agent", "planner", { cwd: root });
       expect(registry.getActiveTools()).toEqual(["read", "grep"]);
       expect(registry.getCurrentModel()).toEqual(plannerModel);
       expect(registry.pi.getThinkingLevel()).toBe("high");
-      expect(registry.getStatuses().get("pi-base-agent")).toContain("agent:planner");
+      expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:planner");
 
       const specSkill = makeSkill("spec", "Spec workflow");
       const otherSkill = makeSkill("other", "Other workflow");
@@ -134,7 +134,7 @@ You are the planner.
       expect(registry.getCurrentModel()).toEqual(defaultModel);
       expect(registry.getActiveTools()).toEqual(BASE_TOOL_NAMES.slice());
       expect(registry.pi.getThinkingLevel()).toBe("medium");
-      expect(registry.getStatuses().get("pi-base-agent")).toContain("agent:default");
+      expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
 
       const defaultPrompt = await registry.emit(
         "before_agent_start",
@@ -448,7 +448,7 @@ model: missing-provider/missing-model
         message: 'Agent "missing-model": model missing-provider/missing-model not found. Check the provider name, model ID, and enabled models configuration.',
         variant: "error",
       });
-      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
+      expect(registry.getStatuses().get("00-pi-base-agent")).toBeUndefined();
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -493,7 +493,7 @@ model: ${model.provider}/${model.id}
       await registry.runCommand("agent", "bound-model", { cwd: root });
 
       expect(registry.getCurrentModel()).toEqual(model);
-      expect(registry.getStatuses().get("pi-base-agent")).toBe("agent:bound-model");
+      expect(registry.getStatuses().get("00-pi-base-agent")).toBe("agent:bound-model");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -534,7 +534,7 @@ model: ${model.provider}/${model.id}
         message: 'Agent "broken-model": failed to activate model provider-b/model-b. Check the provider, model ID, and auth configuration.',
         variant: "error",
       });
-      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
+      expect(registry.getStatuses().get("00-pi-base-agent")).toBeUndefined();
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -576,7 +576,7 @@ thinkingLevel: high
         message: 'Agent "broken-thinking": failed to apply thinking level high. Check the selected model and provider configuration.',
         variant: "error",
       });
-      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
+      expect(registry.getStatuses().get("00-pi-base-agent")).toBeUndefined();
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -615,7 +615,7 @@ name: broken-tools
         message: 'Agent "broken-tools": activation failed: Cannot read properties of undefined (reading \'models\')',
         variant: "error",
       });
-      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
+      expect(registry.getStatuses().get("00-pi-base-agent")).toBeUndefined();
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -821,7 +821,7 @@ Simple prompt.
       const registry = createToolRegistry();
       expect(() => piBaseExtension(registry.pi as any)).not.toThrow();
       await registry.runCommand("agent", "simple", {});
-      expect(registry.getStatuses().get("pi-base-agent")).toContain("agent:simple");
+      expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:simple");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

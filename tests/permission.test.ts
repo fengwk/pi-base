@@ -62,7 +62,7 @@ describe("permission guard", () => {
     expect(prompts[0]!.title).toContain("\"path\":\"src/allowed.ts\"");
     expect(prompts[0]!.title).toContain("\"content\":\"export const allowed = true;\\n\"");
     expect(prompts[0]!.items).toEqual(["Yes", "No"]);
-    expect(registry.getStatuses().get("pi-base-permission")).toBeUndefined();
+    expect(registry.getStatuses().get("01-pi-base-permission")).toBeUndefined();
     expect(await readFile(join(root, "src/allowed.ts"), "utf8")).toBe("export const allowed = true;\n");
   });
 
@@ -249,7 +249,7 @@ describe("permission guard", () => {
     expect(getText(blocked)).toContain("Permission denied by user for write");
 
     await registry.runCommand("yolo", "", { cwd: root });
-    expect(registry.getStatuses().get("pi-base-permission")).toBe("YOLO");
+    expect(registry.getStatuses().get("01-pi-base-permission")).toBe("YOLO");
     const footerLines = registry.renderFooter(120);
     expect(footerLines).toHaveLength(3);
     expect(footerLines.at(-1) ?? "").toContain("agent:default");
@@ -273,7 +273,7 @@ describe("permission guard", () => {
     expect(await readFile(join(root, "src/yolo.ts"), "utf8")).toBe("export const yolo = true;\n");
 
     await registry.runCommand("yolo", "", { cwd: root });
-    expect(registry.getStatuses().get("pi-base-permission")).toBeUndefined();
+    expect(registry.getStatuses().get("01-pi-base-permission")).toBeUndefined();
     expect(registry.renderFooter(120).join("\n")).not.toContain("YOLO");
   });
 
@@ -292,7 +292,7 @@ describe("permission guard", () => {
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
-    expect(registry.getStatuses().get("pi-base-permission")).toBe("YOLO");
+    expect(registry.getStatuses().get("01-pi-base-permission")).toBe("YOLO");
     const footerLines = registry.renderFooter(120);
     expect(footerLines).toHaveLength(3);
     expect(footerLines.at(-1) ?? "").toContain("agent:default");
@@ -361,11 +361,11 @@ describe("permission guard", () => {
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
     await registry.runCommand("yolo", "", { cwd: root });
-    expect(registry.getStatuses().get("pi-base-permission")).toBe("YOLO");
+    expect(registry.getStatuses().get("01-pi-base-permission")).toBe("YOLO");
 
     await writeProjectSettings(root, { permission: { write: "ask" }, yolo: false });
     await registry.emit("session_start", { reason: "reload" }, { cwd: root });
-    expect(registry.getStatuses().get("pi-base-permission")).toBeUndefined();
+    expect(registry.getStatuses().get("01-pi-base-permission")).toBeUndefined();
 
     const blocked = await registry.getTool("write").execute(
       "1",
