@@ -113,7 +113,7 @@ describe("render helpers", () => {
     expect(resolveCollapsedResultLines("lsp_diagnostics", undefined, undefined)).toBe(20);
   });
 
-  it("annotates and truncates call text while args are still streaming", () => {
+  it("annotates call text while args are still streaming without collapsing it", () => {
     const raw = ["write <missing-path>", "", ...Array.from({ length: 15 }, (_, index) => `line-${index + 1}`)].join("\n");
 
     const rendered = render(renderStreamingCallText(raw, theme, {
@@ -125,8 +125,8 @@ describe("render helpers", () => {
     expect(rendered).toContain("write ...");
     expect(rendered).toContain("streaming args");
     expect(rendered).toContain("line-10");
-    expect(rendered).not.toContain("line-15");
-    expect(rendered).toContain("more lines while args are streaming");
+    expect(rendered).toContain("line-15");
+    expect(rendered).not.toContain("more lines while args are streaming");
   });
 
   it("leaves completed call text unchanged", () => {

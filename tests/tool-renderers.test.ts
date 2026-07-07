@@ -159,7 +159,7 @@ describe("tool renderers", () => {
     });
   });
 
-  // Intent: write/edit renderCall should show full input for human review (not streaming, but readable).
+  // Intent: write/edit renderCall should show full input for human review when expanded or already short enough.
   it("renderCall shows full edit input and write content", async () => {
     await withTempGlobalPiBaseConfig({}, async () => {
       const registry = createToolRegistry();
@@ -180,6 +180,20 @@ describe("tool renderers", () => {
       ));
       expect(writeCall).toContain("line1");
       expect(writeCall).toContain("line2");
+    });
+  });
+
+  it("colors edit call previews like diff hunks", async () => {
+    await withTempGlobalPiBaseConfig({}, async () => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const rendered = render(registry.getTool("edit").renderCall(
+        { path: "src/example.ts", old_string: "old", new_string: "new" },
+        { fg: (role: string, text: string) => `<${role}>${text}</${role}>` } as any,
+        { lastComponent: undefined, argsComplete: true, cwd: "/tmp/ws" },
+      ));
+      expect(rendered).toContain("<toolDiffRemoved>-old</toolDiffRemoved>");
+      expect(rendered).toContain("<toolDiffAdded>+new</toolDiffAdded>");
     });
   });
 
@@ -271,16 +285,16 @@ describe("tool renderers", () => {
         streamingContext as any,
       ));
       expect(writeRendered).toContain("line-10");
-      expect(writeRendered).not.toContain("line-14");
+      expect(writeRendered).toContain("line-14");
 
       const editRendered = render(registry.getTool("edit").renderCall(
         { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" },
         {} as any,
         streamingContext as any,
       ));
-      expect(editRendered).toContain("-old-6");
-      expect(editRendered).toContain("-...");
-      expect(editRendered).not.toContain("old-14");
+      expect(editRendered).toContain("-old-14");
+      expect(editRendered).toContain("streaming args");
+      expect(editRendered).not.toContain("more lines while args are streaming");
     });
   });
 

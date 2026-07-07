@@ -22,6 +22,8 @@ import {
   resolveCollapsedResultMaxChars,
   shortenHomePath,
   styleAccent,
+  styleDiffAdded,
+  styleDiffRemoved,
   styleMuted,
   styleToolTitle,
 } from "./render.js";
@@ -51,23 +53,24 @@ function formatEditCall(args: any, theme: any, cwd?: string): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
   const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
-  const oldText = String(args?.old_string ?? "");
-  const newText = String(args?.new_string ?? "");
   const allMatchesTag = args?.replace_all === true ? " [replace_all]" : "";
-  return `${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}${allMatchesTag}\n\n${formatEditPreview(oldText, newText)}`;
+  return `${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}${allMatchesTag}`;
 }
 
-function formatEditPreview(oldText: string, newText: string): string {
-  const oldPreview = previewLines(oldText, "-");
-  const newPreview = previewLines(newText, "+");
+function formatEditCallPreview(args: any, theme: any): string {
+  const oldText = String(args?.old_string ?? "");
+  const newText = String(args?.new_string ?? "");
+  return formatEditPreview(oldText, newText, theme);
+}
+
+function formatEditPreview(oldText: string, newText: string, theme: any): string {
+  const oldPreview = previewLines(oldText, "-", (line) => styleDiffRemoved(theme, line));
+  const newPreview = previewLines(newText, "+", (line) => styleDiffAdded(theme, line));
   return [...oldPreview, ...newPreview].join("\n");
 }
 
-function previewLines(value: string, prefix: "+" | "-"): string[] {
-  const lines = normalizeToLF(value).split("\n");
-  const shown = lines.slice(0, 6).map((line) => `${prefix}${line.length > 240 ? `${line.slice(0, 240)}...` : line}`);
-  if (lines.length > shown.length) shown.push(`${prefix}...`);
-  return shown;
+function previewLines(value: string, prefix: "+" | "-", styleLine: (line: string) => string): string[] {
+  return normalizeToLF(value).split("\n").map((line) => styleLine(`${prefix}${line}`));
 }
 
 function countDisplayedLines(text: string): number {
@@ -304,7 +307,9 @@ export function registerEditTool(
     parameters: editSchema,
     renderShell: "default" as const,
     renderCall(args: any, theme: any, context: any) {
-      return renderStreamingCallText(formatEditCall(args, theme, context?.cwd), theme, context);
+      const header = formatEditCall(args, theme, context?.cwd);
+      const preview = formatEditCallPreview(args, theme);
+      return renderStreamingCallText(preview ? `${header}\n\n${preview}` : header, theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("edit", undefined, context, options.getCollapsedResultLines);

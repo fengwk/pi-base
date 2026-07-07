@@ -8,7 +8,6 @@ const INTERNAL_DEFAULT_COLLAPSED_RESULT_LINES = {
   read: 10,
   write: 10,
 } as const;
-const DEFAULT_STREAMING_CALL_PREVIEW_LINES = 12;
 const MISSING_CALL_ARG_RE = /<missing-[^>]+>/g;
 const KEY_VALUE_RE = /^([A-Za-z][A-Za-z0-9]*):(?!\/\/)(?:\s*(.*))?$/;
 const SECTION_HEADER_RE = /^([A-Za-z][A-Za-z0-9 ]*):$/;
@@ -174,23 +173,9 @@ function injectStreamingCallLabel(textValue: string, theme: any): string {
   return `${textValue.slice(0, firstNewline)}${label}${textValue.slice(firstNewline)}`;
 }
 
-function collapseStreamingCallPreview(textValue: string, theme: any, expanded: boolean | undefined): string {
-  if (expanded) return textValue;
-  const lines = textValue.split("\n");
-  if (lines.length <= DEFAULT_STREAMING_CALL_PREVIEW_LINES) return textValue;
-  const visible = lines.slice(0, DEFAULT_STREAMING_CALL_PREVIEW_LINES);
-  visible.push(styleMuted(theme, `... (${lines.length - DEFAULT_STREAMING_CALL_PREVIEW_LINES} more lines while args are streaming)`));
-  return visible.join("\n");
-}
-
 export function renderStreamingCallText(textValue: string, theme: any, context: CallRenderContextLike | undefined) {
   if (!isStreamingCall(context)) return renderCallText(textValue, context?.lastComponent);
-  const streamingText = collapseStreamingCallPreview(
-    injectStreamingCallLabel(normalizeStreamingCallPlaceholders(textValue), theme),
-    theme,
-    context?.expanded,
-  );
-  return renderCallText(streamingText, context?.lastComponent);
+  return renderCallText(injectStreamingCallLabel(normalizeStreamingCallPlaceholders(textValue), theme), context?.lastComponent);
 }
 
 export function withLeadingResultNewline(textValue: string): string {
