@@ -146,7 +146,7 @@ function compareToolPatternSpecificity(
 }
 
 
-const STREAMING_CALL_PREVIEW_LINES = 5;
+const STREAMING_CALL_PREVIEW_LINES = 10;
 
 interface StreamingCallWindowState {
   text: string;
