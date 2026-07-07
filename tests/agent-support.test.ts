@@ -269,6 +269,17 @@ description: ${longDescription}
 Verbose prompt.
 `,
       );
+      await writeAgentFile(
+        agentDir,
+        "verbose-copy.md",
+        `---
+name: verbose-copy
+description: ${longDescription}
+---
+
+Verbose prompt.
+`,
+      );
 
       const registry = createToolRegistry({
         ui: {
@@ -281,7 +292,7 @@ Verbose prompt.
       piBaseExtension(registry.pi as any);
 
       const completions = registry.getCommand("agent").getArgumentCompletions("ver");
-      expect(completions).toHaveLength(1);
+      expect(completions).toHaveLength(2);
       expect(completions[0]?.description).not.toBe(longDescription);
       expect(completions[0]?.description).not.toContain("CRITICAL:");
       expect(completions[0]?.description).toMatch(/…$/);
@@ -289,10 +300,14 @@ Verbose prompt.
       await registry.runCommand("agent", "", { cwd: root });
       expect(selectedItems).toHaveLength(1);
       const verboseItem = selectedItems[0]?.find((item) => item.startsWith("verbose - "));
+      const duplicateItem = selectedItems[0]?.find((item) => item.startsWith("verbose-copy - "));
       expect(verboseItem).toBeDefined();
+      expect(duplicateItem).toBeDefined();
       expect(verboseItem).not.toContain(longDescription);
       expect(verboseItem).not.toContain("CRITICAL:");
       expect(verboseItem).toMatch(/…$/);
+      expect(duplicateItem).not.toContain(longDescription);
+      expect(duplicateItem).not.toContain("CRITICAL:");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

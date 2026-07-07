@@ -199,8 +199,12 @@ export function registerAgentSupport(
 
   const selectAgent = async (ctx: ExtensionContext): Promise<string | undefined> => {
     const itemToAgentName = new Map<string, string>();
+    const seenItems = new Map<string, number>();
     const items = catalog.agents.map((agent) => {
-      const item = buildAgentSelectorItem(agent);
+      const baseItem = buildAgentSelectorItem(agent);
+      const occurrence = (seenItems.get(baseItem) ?? 0) + 1;
+      seenItems.set(baseItem, occurrence);
+      const item = occurrence === 1 ? baseItem : appendSelectorSuffix(baseItem, ` [${occurrence}]`);
       itemToAgentName.set(item, agent.name);
       return item;
     });
@@ -337,6 +341,12 @@ function buildAgentSelectorItem(agent: AgentDefinition): string {
   if (!summary) return agent.name;
   const prefix = `${agent.name} - `;
   return `${prefix}${truncateDisplayWidth(summary, Math.max(0, AGENT_SELECTOR_ITEM_MAX_COLUMNS - stringDisplayWidth(prefix)))}`;
+}
+
+function appendSelectorSuffix(value: string, suffix: string): string {
+  const suffixWidth = stringDisplayWidth(suffix);
+  const base = truncateDisplayWidth(value, Math.max(0, AGENT_SELECTOR_ITEM_MAX_COLUMNS - suffixWidth));
+  return `${base}${suffix}`;
 }
 
 function truncateDisplayWidth(value: string, maxColumns: number): string {
