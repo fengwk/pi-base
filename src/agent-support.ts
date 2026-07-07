@@ -236,7 +236,7 @@ export function registerAgentSupport(
       return matches.map((agent) => ({
         value: agent.name,
         label: agent.name,
-        description: truncateDisplayWidth(agent.description ?? buildAgentSummary(agent), AGENT_COMPLETION_DESCRIPTION_MAX_COLUMNS),
+        description: truncateDisplayWidth(buildAgentSummary(agent), AGENT_COMPLETION_DESCRIPTION_MAX_COLUMNS),
       }));
     },
     handler: async (args, ctx) => {
@@ -312,8 +312,9 @@ function buildUnknownAgentMessage(name: string, availableAgents: string[]): stri
 
 function buildAgentSummary(agent: AgentDefinition): string {
   const parts: string[] = [];
-  if (agent.description) {
-    parts.push(agent.description);
+  const singleLineDescription = toSingleLine(agent.description);
+  if (singleLineDescription) {
+    parts.push(singleLineDescription);
   }
   if (agent.model) {
     parts.push(`${agent.model.provider}/${agent.model.modelId}`);
@@ -322,6 +323,13 @@ function buildAgentSummary(agent: AgentDefinition): string {
     parts.push(`thinking:${agent.thinkingLevel}`);
   }
   return parts.join(" | ");
+}
+
+function toSingleLine(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const firstLine = value.split(/\r?\n/, 1)[0]?.trim();
+  if (!firstLine) return undefined;
+  return firstLine.replace(/\s+/g, " ");
 }
 
 function buildAgentSelectorItem(agent: AgentDefinition): string {

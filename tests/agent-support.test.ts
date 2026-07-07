@@ -253,7 +253,7 @@ thinkingLevel: low
     const root = await createTempWorkspace();
     const agentDir = await createTempWorkspace();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    const longDescription = "长".repeat(60);
+    const longDescription = `${"长".repeat(60)}\nCRITICAL: this second line must never appear in selector items.`;
     const selectedItems: string[][] = [];
 
     process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -283,6 +283,7 @@ Verbose prompt.
       const completions = registry.getCommand("agent").getArgumentCompletions("ver");
       expect(completions).toHaveLength(1);
       expect(completions[0]?.description).not.toBe(longDescription);
+      expect(completions[0]?.description).not.toContain("CRITICAL:");
       expect(completions[0]?.description).toMatch(/…$/);
 
       await registry.runCommand("agent", "", { cwd: root });
@@ -290,6 +291,7 @@ Verbose prompt.
       const verboseItem = selectedItems[0]?.find((item) => item.startsWith("verbose - "));
       expect(verboseItem).toBeDefined();
       expect(verboseItem).not.toContain(longDescription);
+      expect(verboseItem).not.toContain("CRITICAL:");
       expect(verboseItem).toMatch(/…$/);
     } finally {
       if (previousAgentDir === undefined) {
