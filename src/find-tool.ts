@@ -115,9 +115,10 @@ export function createFindToolDefinition(cwd: string): any {
                 const line = rawLine.replace(/\r$/, "").trim();
                 if (!line) continue;
                 const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
-                let relativePath = line;
-                if (line.startsWith(searchPath)) relativePath = line.slice(searchPath.length + 1);
-                else relativePath = path.relative(searchPath, line);
+                // Always compute the relative path lexically. A `startsWith(searchPath)`
+                // prefix check is wrong at the filesystem root (off-by-one) and for
+                // sibling paths that merely share a string prefix (e.g. "/a/bc" vs "/a/bcd").
+                let relativePath = path.relative(searchPath, line);
                 if (hadTrailingSlash && !relativePath.endsWith("/")) relativePath += "/";
                 relativized.push(toPosixPath(relativePath));
               }
