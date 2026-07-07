@@ -45,6 +45,8 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
   const messages: any[] = [];
   const messageRenderers = new Map<string, any>();
   const statuses = new Map<string, string | undefined>();
+  const flags = new Map<string, { type: "boolean" | "string"; default?: boolean | string }>();
+  const flagValues = new Map<string, boolean | string>();
   let activeTools: string[] = [];
   let defaultHasUI = options.hasUI ?? true;
   let defaultCwd = options.cwd ?? process.cwd();
@@ -270,6 +272,16 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       registerCommand(name: string, command: any) {
         commands.set(name, command);
       },
+      registerFlag(name: string, options: { description?: string; type: "boolean" | "string"; default?: boolean | string }) {
+        flags.set(name, { type: options.type, default: options.default });
+        if (options.default !== undefined && !flagValues.has(name)) {
+          flagValues.set(name, options.default);
+        }
+      },
+      getFlag(name: string) {
+        if (!flags.has(name)) return undefined;
+        return flagValues.get(name);
+      },
       appendEntry(customType: string, data?: unknown) {
         entries.push({ type: "custom", customType, data });
       },
@@ -346,6 +358,9 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
     },
     setCwd(next: string) {
       defaultCwd = next;
+    },
+    setFlag(name: string, value: boolean | string) {
+      flagValues.set(name, value);
     },
     setThinkingLevel(next: string) {
       thinkingLevel = next;

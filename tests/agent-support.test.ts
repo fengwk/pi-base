@@ -164,6 +164,71 @@ You are the planner.
     }
   });
 
+  it("activates the agent named by the --agent startup flag when the session has none", async () => {
+    // Intent: pi lets extensions register CLI flags; pi-base exposes `--agent <name>` so a session
+    // can start in a specific agent non-interactively. It must apply only on fresh sessions (root),
+    // fall back gracefully on unknown names, and never override an already-persisted agent (resume).
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const defaultModel = { provider: "provider-a", id: "model-a" };
+    const plannerModel = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeFile(
+        join(agentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: defaultModel.provider, defaultModel: defaultModel.id, defaultThinkingLevel: "medium" }),
+        "utf8",
+      );
+      await writeFile(join(agentDir, "SYSTEM.md"), "Default system prompt.", "utf8");
+      await writeAgentFile(
+        agentDir,
+        "planner.md",
+        `---
+name: planner
+description: Planning mode
+model: ${plannerModel.provider}/${plannerModel.id}
+tools:
+  - read
+  - grep
+---
+You are the planner.
+`,
+      );
+
+      // Case 1: --agent planner on a fresh session activates planner.
+      const r1 = createToolRegistry({ model: defaultModel, models: [defaultModel, plannerModel] });
+      r1.setFlag("agent", "planner");
+      piBaseExtension(r1.pi as any);
+      await r1.emit("session_start", { reason: "startup" }, { cwd: root });
+      expect(r1.getStatuses().get("00-pi-base-agent")).toContain("agent:planner");
+      expect(r1.getActiveTools()).toEqual(["read", "grep"]);
+
+      // Case 2: unknown --agent name falls back to the default agent without throwing.
+      const r2 = createToolRegistry({ model: defaultModel, models: [defaultModel, plannerModel] });
+      r2.setFlag("agent", "does-not-exist");
+      piBaseExtension(r2.pi as any);
+      await r2.emit("session_start", { reason: "startup" }, { cwd: root });
+      expect(r2.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
+
+      // Case 3: a session that already persisted an agent ignores the flag (resume semantics).
+      const r3 = createToolRegistry({ model: defaultModel, models: [defaultModel, plannerModel] });
+      r3.setFlag("agent", "planner");
+      piBaseExtension(r3.pi as any);
+      r3.pi.appendEntry("pi-base-agent-state", { name: "default" });
+      await r3.emit("session_start", { reason: "startup" }, { cwd: root });
+      expect(r3.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
+      expect(r3.getActiveTools()).not.toEqual(["read", "grep"]);
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("warns about malformed agent files and ignores them", async () => {
     const root = await createTempWorkspace();
     const agentDir = await createTempWorkspace();

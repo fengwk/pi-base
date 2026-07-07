@@ -243,7 +243,18 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getMaxDepth: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxDepth,
     readDepth,
   };
-  const agentHandle = registerAgentSupport(pi, { baseToolGuide: BASE_TOOL_GUIDE, subagentControls });
+  pi.registerFlag("agent", {
+    type: "string",
+    description: "Start in a specific pi-base agent by name (e.g. --agent reviewer). Ignored if the resumed session already has an agent.",
+  });
+  const agentHandle = registerAgentSupport(pi, {
+    baseToolGuide: BASE_TOOL_GUIDE,
+    subagentControls,
+    getStartupAgentName: () => {
+      const value = pi.getFlag("agent");
+      return typeof value === "string" && value.length > 0 ? value : undefined;
+    },
+  });
   registerSubagentTaskTool(pi, {
     getActiveAgentSubagents: agentHandle.getActiveAgentSubagents,
     getMaxConcurrency: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxConcurrency,

@@ -82,7 +82,7 @@ export function registerAgentSupport(
     ExtensionAPI,
     "appendEntry" | "getActiveTools" | "getAllTools" | "getThinkingLevel" | "on" | "registerCommand" | "setActiveTools" | "setModel" | "setThinkingLevel"
   >,
-  options: { baseToolGuide: string; subagentControls?: SubagentControls },
+  options: { baseToolGuide: string; subagentControls?: SubagentControls; getStartupAgentName?: () => string | undefined },
 ): AgentSupportHandle {
   let catalog = loadAgentCatalog();
   let activeAgentName = DEFAULT_AGENT_NAME;
@@ -311,6 +311,19 @@ export function registerAgentSupport(
     warnDiagnostics(ctx, nextCatalog.diagnostics);
     const requested = pickAgentFromEntries(ctx);
     if (!requested.persisted) {
+      // No agent persisted in this session: honor a `--agent <name>` startup flag when present.
+      // Subagent children never reach here (they always carry a persisted agent-state entry and
+      // start with empty flag values), so this only affects the root session; the applied agent
+      // is persisted so it survives subsequent turns and resume.
+      const startupName = options.getStartupAgentName?.()?.trim();
+      if (startupName) {
+        if (nextCatalog.byName.has(startupName)) {
+          const applied = await safeApplyAgent(startupName, ctx, { persist: true, notify: false });
+          if (applied) return;
+        } else if (ctx.hasUI) {
+          ctx.ui.notify(`Agent "${startupName}" (from --agent) not found; using the default agent.`, "error");
+        }
+      }
       activeAgentName = DEFAULT_AGENT_NAME;
       updateStatus(ctx, DEFAULT_AGENT_NAME);
       return;
