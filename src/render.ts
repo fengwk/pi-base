@@ -146,8 +146,75 @@ function compareToolPatternSpecificity(
 }
 
 
+const STREAMING_CALL_PREVIEW_LINES = 5;
+
+interface StreamingCallWindowState {
+  text: string;
+  theme: any;
+  cachedWidth: number | undefined;
+  cachedLines: string[] | undefined;
+  cachedSkipped: number | undefined;
+}
+
+/**
+ * Rolling-window component for streaming tool calls.
+ *
+ * While the model is still emitting arguments (argsComplete === false), the call
+ * preview can grow very long (e.g. write content, edit diff preview). Instead of
+ * letting the call block expand unbounded, this component keeps the first line
+ * (tool title + streaming label) pinned and shows only the last few lines of the
+ * body, with a truncation hint in between. Once argsComplete becomes true the
+ * caller switches back to a plain Text for full rendering.
+ */
+class StreamingCallWindowComponent {
+  private state: StreamingCallWindowState;
+
+  constructor(text: string, theme: any) {
+    this.state = { text, theme, cachedWidth: undefined, cachedLines: undefined, cachedSkipped: undefined };
+  }
+
+  update(text: string, theme: any): void {
+    if (text !== this.state.text) {
+      this.state.text = text;
+      this.state.cachedWidth = undefined;
+    }
+    this.state.theme = theme;
+  }
+
+  render(width: number): string[] {
+    const s = this.state;
+    if (s.cachedLines === undefined || s.cachedWidth !== width) {
+      const allLines = new Text(s.text, 0, 0).render(width);
+      if (allLines.length <= STREAMING_CALL_PREVIEW_LINES) {
+        s.cachedLines = allLines;
+        s.cachedSkipped = 0;
+      } else {
+        // Pin the first line (tool title + streaming label) so the user always
+        // knows which tool and target are active, then show the trailing lines.
+        const headerLine = allLines[0] ?? "";
+        const tailCount = STREAMING_CALL_PREVIEW_LINES - 1;
+        const tail = allLines.slice(-tailCount);
+        s.cachedLines = [headerLine, ...tail];
+        s.cachedSkipped = allLines.length - 1 - tailCount;
+      }
+      s.cachedWidth = width;
+    }
+    if (s.cachedSkipped && s.cachedSkipped > 0) {
+      const hint = styleMuted(s.theme, `... (${s.cachedSkipped} earlier lines, streaming)`);
+      return [s.cachedLines[0] ?? "", hint, ...(s.cachedLines ?? []).slice(1)];
+    }
+    return s.cachedLines ?? [];
+  }
+
+  invalidate(): void {
+    this.state.cachedWidth = undefined;
+    this.state.cachedLines = undefined;
+    this.state.cachedSkipped = undefined;
+  }
+}
+
 export function renderCallText(textValue: string, lastComponent?: unknown) {
-  const text = (lastComponent as Text | undefined) ?? new Text("", 0, 0);
+  const text = (lastComponent instanceof Text) ? lastComponent : new Text("", 0, 0);
   text.setText(textValue);
   return text;
 }
@@ -175,7 +242,13 @@ function injectStreamingCallLabel(textValue: string, theme: any): string {
 
 export function renderStreamingCallText(textValue: string, theme: any, context: CallRenderContextLike | undefined) {
   if (!isStreamingCall(context)) return renderCallText(textValue, context?.lastComponent);
-  return renderCallText(injectStreamingCallLabel(normalizeStreamingCallPlaceholders(textValue), theme), context?.lastComponent);
+  const normalized = injectStreamingCallLabel(normalizeStreamingCallPlaceholders(textValue), theme);
+  const last = context?.lastComponent;
+  if (last instanceof StreamingCallWindowComponent) {
+    last.update(normalized, theme);
+    return last;
+  }
+  return new StreamingCallWindowComponent(normalized, theme);
 }
 
 export function withLeadingResultNewline(textValue: string): string {

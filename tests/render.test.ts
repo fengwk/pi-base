@@ -133,7 +133,7 @@ describe("render helpers", () => {
     expect(resolveCollapsedResultLines("lsp_diagnostics", undefined, undefined)).toBe(20);
   });
 
-  it("annotates call text while args are still streaming without collapsing it", () => {
+  it("collapses streaming call text to a rolling window while args are still streaming", () => {
     const raw = ["write <missing-path>", "", ...Array.from({ length: 15 }, (_, index) => `line-${index + 1}`)].join("\n");
 
     const rendered = render(renderStreamingCallText(raw, theme, {
@@ -142,11 +142,14 @@ describe("render helpers", () => {
       expanded: false,
     }));
 
+    // First line (tool title + streaming label) is always pinned
     expect(rendered).toContain("write ...");
     expect(rendered).toContain("streaming args");
-    expect(rendered).toContain("line-10");
+    // Last few lines of the body are visible
     expect(rendered).toContain("line-15");
-    expect(rendered).not.toContain("more lines while args are streaming");
+    // Earlier lines are hidden behind the rolling window
+    expect(rendered).not.toContain("line-3");
+    expect(rendered).toContain("earlier lines");
   });
 
   it("leaves completed call text unchanged", () => {

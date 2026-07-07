@@ -331,8 +331,9 @@ describe("tool renderers", () => {
         {} as any,
         streamingContext as any,
       ));
-      expect(writeRendered).toContain("line-10");
       expect(writeRendered).toContain("line-14");
+      expect(writeRendered).not.toContain("line-3");
+      expect(writeRendered).toContain("earlier lines");
 
       const editRendered = render(registry.getTool("edit").renderCall(
         { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" },
@@ -341,7 +342,8 @@ describe("tool renderers", () => {
       ));
       expect(editRendered).toContain("-old-14");
       expect(editRendered).toContain("streaming args");
-      expect(editRendered).not.toContain("more lines while args are streaming");
+      expect(editRendered).toContain("earlier lines");
+      expect(editRendered).not.toContain("-old-3");
     });
   });
 
