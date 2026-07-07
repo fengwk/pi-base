@@ -152,7 +152,9 @@ interface StreamingCallWindowState {
   text: string;
   theme: any;
   cachedWidth: number | undefined;
-  cachedLines: string[] | undefined;
+  cachedFull: string[] | undefined;
+  cachedTitle: string | undefined;
+  cachedTail: string[] | undefined;
   cachedSkipped: number | undefined;
 }
 
@@ -161,16 +163,24 @@ interface StreamingCallWindowState {
  *
  * While the model is still emitting arguments (argsComplete === false), the call
  * preview can grow very long (e.g. write content, edit diff preview). Instead of
- * letting the call block expand unbounded, this component keeps the first line
- * (tool title + streaming label) pinned and shows only the last few lines of the
- * body, with a truncation hint in between. Once argsComplete becomes true the
- * caller switches back to a plain Text for full rendering.
+ * letting the call block expand unbounded, this component pins the title line
+ * (tool title + streaming label), inserts a blank separator line, then shows a
+ * truncation hint followed by the last few body lines. Once the arguments are
+ * final the caller switches back to a plain Text for full rendering.
  */
 class StreamingCallWindowComponent {
   private state: StreamingCallWindowState;
 
   constructor(text: string, theme: any) {
-    this.state = { text, theme, cachedWidth: undefined, cachedLines: undefined, cachedSkipped: undefined };
+    this.state = {
+      text,
+      theme,
+      cachedWidth: undefined,
+      cachedFull: undefined,
+      cachedTitle: undefined,
+      cachedTail: undefined,
+      cachedSkipped: undefined,
+    };
   }
 
   update(text: string, theme: any): void {
@@ -183,35 +193,39 @@ class StreamingCallWindowComponent {
 
   render(width: number): string[] {
     const s = this.state;
-    if (s.cachedLines === undefined || s.cachedWidth !== width) {
+    if (s.cachedSkipped === undefined || s.cachedWidth !== width) {
       const allLines = new Text(s.text, 0, 0).render(width);
       if (allLines.length <= STREAMING_CALL_PREVIEW_LINES) {
-        s.cachedLines = allLines;
+        s.cachedFull = allLines;
+        s.cachedTitle = undefined;
+        s.cachedTail = undefined;
         s.cachedSkipped = 0;
       } else {
-        // Pin the first line (tool title + streaming label) so the user always
-        // knows which tool and target are active, then show the trailing lines.
-        const headerLine = allLines[0] ?? "";
-        const tailCount = STREAMING_CALL_PREVIEW_LINES - 1;
-        const tail = allLines.slice(-tailCount);
-        s.cachedLines = [headerLine, ...tail];
-        s.cachedSkipped = allLines.length - 1 - tailCount;
+        // Pin the title, drop the original body lines, and keep only the last
+        // few. Reserve 3 lines for title + blank separator + hint.
+        const title = allLines[0] ?? "";
+        const body = allLines.slice(1);
+        const tailCount = Math.max(1, STREAMING_CALL_PREVIEW_LINES - 3);
+        const tail = body.slice(-tailCount);
+        s.cachedFull = undefined;
+        s.cachedTitle = title;
+        s.cachedTail = tail;
+        s.cachedSkipped = body.length - tail.length;
       }
       s.cachedWidth = width;
     }
     if (s.cachedSkipped && s.cachedSkipped > 0) {
-      // Keep the pinned title + trailing body together, and place the
-      // truncation hint at the very bottom so the block reads top-to-bottom
-      // without a divider wedged between the title and the content.
       const hint = styleMuted(s.theme, `... (${s.cachedSkipped} earlier lines)`);
-      return [...(s.cachedLines ?? []), hint];
+      return [s.cachedTitle ?? "", "", hint, ...(s.cachedTail ?? [])];
     }
-    return s.cachedLines ?? [];
+    return s.cachedFull ?? [];
   }
 
   invalidate(): void {
     this.state.cachedWidth = undefined;
-    this.state.cachedLines = undefined;
+    this.state.cachedFull = undefined;
+    this.state.cachedTitle = undefined;
+    this.state.cachedTail = undefined;
     this.state.cachedSkipped = undefined;
   }
 }
