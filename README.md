@@ -155,9 +155,11 @@ You are a planning-focused agent. Break work into clear steps before editing.
 ### 行为规则
 
 - `default` 是保留名，agent 文件不能使用这个名字。
-- `tools` 未配置或配置为 `[]`：所有工具可用。
+- `tools` 未配置：所有工具可用。
+- `tools: []`：显式禁用所有工具。
 - `tools` 配置为非空数组：作为 allowlist，`pi-base` 会调用 `pi.setActiveTools()`，未列出的工具对 agent 不可见。
-- `skills` 未配置或配置为 `[]`：在 `read` 工具可用时，所有可见 skills 都会注入 prompt。
+- `skills` 未配置：在 `read` 工具可用时，所有可见 skills 都会注入 prompt。
+- `skills: []`：显式禁用所有 skills 注入。
 - `skills` 配置为非空数组：`pi-base` 先按 allowlist 过滤 skills，再统一重建 system prompt。
 - skills 过滤只影响 prompt 注入，不会额外隐藏用户侧显式输入的 `/skill:name`。
 - skills 注入本身仍然遵循 Pi 默认行为：只有 `read` 工具可用时才会注入 `<available_skills>`，且 `disable-model-invocation` 的 skill 不会暴露给模型。

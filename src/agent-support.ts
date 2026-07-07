@@ -10,6 +10,8 @@ const PROJECT_CONFIG_DIR = ".pi";
 const AGENTS_DIR = "agents";
 const SETTINGS_FILE = "settings.json";
 const SYSTEM_PROMPT_FILE = "SYSTEM.md";
+const AGENT_SELECTOR_ITEM_MAX_CHARS = 120;
+const AGENT_COMPLETION_DESCRIPTION_MAX_CHARS = 96;
 
 const VALID_THINKING_LEVELS = new Set<ReturnType<ExtensionAPI["getThinkingLevel"]>>([
   "off",
@@ -124,12 +126,26 @@ export function registerAgentSupport(
     if (effectiveModel) {
       const model = findModel(ctx, effectiveModel);
       if (model) {
-        const success = await pi.setModel(model);
-        if (!success && options.notify && ctx.hasUI) {
-          ctx.ui.notify(`Agent "${agent.name}": no auth configured for ${effectiveModel.provider}/${effectiveModel.modelId}.`, "warning");
+        try {
+          const success = await pi.setModel(model);
+          if (!success && options.notify && ctx.hasUI) {
+            ctx.ui.notify(`Agent "${agent.name}": no auth configured for ${effectiveModel.provider}/${effectiveModel.modelId}.`, "warning");
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`Agent "${agent.name}": failed to activate model ${effectiveModel.provider}/${effectiveModel.modelId}: ${message}`);
+          if (options.notify && ctx.hasUI) {
+            ctx.ui.notify(
+              `Agent "${agent.name}": failed to activate model ${effectiveModel.provider}/${effectiveModel.modelId}. Check the provider, model ID, and auth configuration.`,
+              "warning",
+            );
+          }
         }
       } else if (options.notify && ctx.hasUI) {
-        ctx.ui.notify(`Agent "${agent.name}": model ${effectiveModel.provider}/${effectiveModel.modelId} not found.`, "warning");
+        ctx.ui.notify(
+          `Agent "${agent.name}": model ${effectiveModel.provider}/${effectiveModel.modelId} not found. Check the provider name, model ID, and enabled models configuration.`,
+          "warning",
+        );
       }
     }
 
@@ -163,13 +179,15 @@ export function registerAgentSupport(
   };
 
   const selectAgent = async (ctx: ExtensionContext): Promise<string | undefined> => {
+    const itemToAgentName = new Map<string, string>();
     const items = catalog.agents.map((agent) => {
-      const summary = buildAgentSummary(agent);
-      return summary ? `${agent.name} - ${summary}` : agent.name;
+      const item = buildAgentSelectorItem(agent);
+      itemToAgentName.set(item, agent.name);
+      return item;
     });
     const selected = await ctx.ui.select("Select agent", items);
     if (!selected) return undefined;
-    return selected.split(" - ")[0]?.trim() || undefined;
+    return itemToAgentName.get(selected);
   };
 
   pi.registerCommand("agent", {
@@ -182,7 +200,7 @@ export function registerAgentSupport(
       return matches.map((agent) => ({
         value: agent.name,
         label: agent.name,
-        description: agent.description ?? buildAgentSummary(agent),
+        description: truncateText(agent.description ?? buildAgentSummary(agent), AGENT_COMPLETION_DESCRIPTION_MAX_CHARS),
       }));
     },
     handler: async (args, ctx) => {
@@ -270,14 +288,27 @@ function buildAgentSummary(agent: AgentDefinition): string {
   return parts.join(" | ");
 }
 
+function buildAgentSelectorItem(agent: AgentDefinition): string {
+  const summary = buildAgentSummary(agent);
+  if (!summary) return agent.name;
+  const prefix = `${agent.name} - `;
+  return `${prefix}${truncateText(summary, Math.max(0, AGENT_SELECTOR_ITEM_MAX_CHARS - prefix.length))}`;
+}
+
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= 1) return "…";
+  return `${value.slice(0, maxChars - 1)}…`;
+}
+
 function filterKnownTools(toolNames: string[] | undefined, allToolNames: string[]): string[] {
-  if (!toolNames || toolNames.length === 0) return [...allToolNames];
+  if (toolNames === undefined) return [...allToolNames];
   const known = new Set(allToolNames);
   return toolNames.filter((toolName) => known.has(toolName));
 }
 
 function filterVisibleSkills(skills: Skill[], allowedSkillNames: string[] | undefined): Skill[] {
-  if (!allowedSkillNames || allowedSkillNames.length === 0) return skills;
+  if (allowedSkillNames === undefined) return skills;
   const allowed = new Set(allowedSkillNames);
   return skills.filter((skill) => allowed.has(skill.name));
 }
@@ -490,7 +521,7 @@ function normalizeStringListField(value: unknown, fieldName: "tools" | "skills",
     output.push(next);
   }
 
-  return output.length > 0 ? output : undefined;
+  return output;
 }
 
 function asTrimmedString(value: unknown): string | undefined {

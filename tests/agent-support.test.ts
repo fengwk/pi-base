@@ -247,6 +247,195 @@ thinkingLevel: low
     }
   });
 
+  it("truncates long agent summaries in selector items and command completions", async () => {
+    // Intent: very long descriptions should not blow up the /agent selector or
+    // completion UI; keep them bounded with a visible ellipsis.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const longDescription = "Long description ".repeat(20).trim();
+    const selectedItems: string[][] = [];
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "verbose.md",
+        `---
+name: verbose
+description: ${longDescription}
+---
+
+Verbose prompt.
+`,
+      );
+
+      const registry = createToolRegistry({
+        ui: {
+          select: async (_title: string, items: string[]) => {
+            selectedItems.push(items);
+            return items.find((item) => item.startsWith("verbose - ")) ?? items[0];
+          },
+        },
+      });
+      piBaseExtension(registry.pi as any);
+
+      const completions = registry.getCommand("agent").getArgumentCompletions("ver");
+      expect(completions).toHaveLength(1);
+      expect(completions[0]?.description?.length).toBeLessThanOrEqual(96);
+      expect(completions[0]?.description).toMatch(/…$/);
+
+      await registry.runCommand("agent", "", { cwd: root });
+      expect(selectedItems).toHaveLength(1);
+      const verboseItem = selectedItems[0]?.find((item) => item.startsWith("verbose - "));
+      expect(verboseItem?.length).toBeLessThanOrEqual(120);
+      expect(verboseItem).toMatch(/…$/);
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("treats explicit empty tool and skill arrays as disabled instead of inheriting all", async () => {
+    // Intent: omitted fields mean "all", while an explicit empty array must
+    // remain a real empty allowlist so users can disable tools and skills.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const model = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "locked.md",
+        `---
+name: locked
+model: ${model.provider}/${model.id}
+tools: []
+skills: []
+---
+
+Locked prompt.
+`,
+      );
+
+      const registry = createToolRegistry({ models: [model] });
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "locked", { cwd: root });
+
+      expect(registry.getActiveTools()).toEqual([]);
+
+      const specSkill = makeSkill("spec", "Spec workflow");
+      const otherSkill = makeSkill("other", "Other workflow");
+      const rebuiltPrompt = await registry.emit(
+        "before_agent_start",
+        {
+          systemPrompt: "Incoming prompt should be ignored.",
+          systemPromptOptions: {
+            cwd: root,
+            customPrompt: "Default system prompt.",
+            selectedTools: registry.getActiveTools(),
+            skills: [specSkill, otherSkill],
+          },
+        },
+        { cwd: root },
+      );
+
+      expect(rebuiltPrompt.systemPrompt).toContain("Locked prompt.");
+      expect(rebuiltPrompt.systemPrompt).not.toContain("Incoming prompt should be ignored.");
+      expect(rebuiltPrompt.systemPrompt).not.toContain("<name>spec</name>");
+      expect(rebuiltPrompt.systemPrompt).not.toContain("<name>other</name>");
+      expect(rebuiltPrompt.systemPrompt).not.toContain("The following skills provide specialized instructions for specific tasks.");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("shows a friendly warning when an agent references an unknown model", async () => {
+    // Intent: a bad provider/modelId should not fail silently; the user should
+    // get a concrete hint that the frontmatter or enabled model config is wrong.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "missing-model.md",
+        `---
+name: missing-model
+model: missing-provider/missing-model
+---
+`,
+      );
+
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "missing-model", { cwd: root });
+
+      expect(registry.getNotifications()).toContainEqual({
+        message: 'Agent "missing-model": model missing-provider/missing-model not found. Check the provider name, model ID, and enabled models configuration.',
+        variant: "warning",
+      });
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("keeps /agent usable when model activation throws and shows a friendly warning", async () => {
+    // Intent: runtime/provider bugs inside pi.setModel should not crash the
+    // /agent command; keep the switch alive and surface a configuration hint.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const model = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "broken-model.md",
+        `---
+name: broken-model
+model: ${model.provider}/${model.id}
+---
+`,
+      );
+
+      const registry = createToolRegistry({ models: [model] });
+      registry.pi.setModel = async () => {
+        throw new Error("Cannot read properties of undefined (reading 'models')");
+      };
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "broken-model", { cwd: root });
+
+      expect(registry.getNotifications()).toContainEqual({
+        message: 'Agent "broken-model": failed to activate model provider-b/model-b. Check the provider, model ID, and auth configuration.',
+        variant: "warning",
+      });
+      expect(registry.getStatuses().get("pi-base-agent")).toBe("agent:broken-model");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("rebuilds empty-body agent prompts from structured options instead of patching the incoming prompt", async () => {
     // Intent: empty-body agents should inherit the Pi-loaded custom prompt and
     // let pi-base rebuild the full prompt from structured options. The incoming
