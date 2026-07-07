@@ -105,14 +105,14 @@ describe("Anthropic compression boundary cache marker", () => {
     expect((payload.tools[0] as any).cache_control).toEqual({ type: "ephemeral" });
   });
 
-  it("is applied through pi's before_provider_payload hook", async () => {
+  it("is applied through pi's before_provider_request hook", async () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const payload = basePayload();
 
-    const result = await registry.emit("before_provider_payload", { payload }, {});
+    const result = await registry.emit("before_provider_request", { payload }, {});
 
-    expect(result).toEqual({ payload });
+    expect(result).toBe(payload);
     expect((payload.messages[1].content[0] as any).cache_control).toEqual({ type: "ephemeral", ttl: "5m" });
   });
 });

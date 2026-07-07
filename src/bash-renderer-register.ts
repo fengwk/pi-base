@@ -13,6 +13,7 @@ import {
 } from "./bash-renderer-core.js";
 import { resolveToolWorkdir } from "./path-utils.js";
 import { parsePositiveNumber } from "./timeout.js";
+import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 
 const BASH_DEFAULT_TIMEOUT_SECONDS = 120;
 
@@ -104,6 +105,7 @@ export function registerBashRendererTool(
       }
     },
   };
-  pi.registerTool(tool as any);
-  return tool;
+  const markedTool = withPiBaseErrorMarker(tool);
+  pi.registerTool(markedTool as any);
+  return markedTool;
 }

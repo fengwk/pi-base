@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { findBestJavaHome, LspDiscoveryResolver, type LspServerConfig } from "./discovery.js";
+import { findBestJavaHome, LspDiscoveryResolver, type LspServerConfig, type LspWorkspaceDataConfig } from "./discovery.js";
 
 const EXT_TO_LANG: Record<string, string> = {
   ".ts": "typescript",
@@ -80,7 +80,15 @@ function estimateJdtlsHeapSize(root: string): string {
   }
 }
 
-function enhanceJdtlsCommand(command: string[], root: string): string[] {
+export function buildJdtlsWorkspaceDataDir(root: string, config: LspWorkspaceDataConfig | undefined): string | null {
+  const mode = config?.mode ?? "stable";
+  if (mode === "disabled") return null;
+  const hash = createHash("md5").update(root).digest("hex");
+  const suffix = mode === "process" ? `${hash}-${process.pid}` : hash;
+  return join(config?.baseDir ?? join(homedir(), ".cache", "jdtls-workspace"), suffix);
+}
+
+function enhanceJdtlsCommand(command: string[], root: string, workspaceData?: LspWorkspaceDataConfig): string[] {
   if (!isJdtlsCommand(command)) return command;
   const updated = [...command];
   const lombok = findLombokJar();
@@ -88,9 +96,8 @@ function enhanceJdtlsCommand(command: string[], root: string): string[] {
     updated.push(`--jvm-arg=-javaagent:${lombok}`);
   }
   if (!updated.includes("-data")) {
-    const hash = createHash("md5").update(root).digest("hex");
-    const dataDir = join(homedir(), ".cache", "jdtls-workspace", hash);
-    updated.push("-data", dataDir);
+    const dataDir = buildJdtlsWorkspaceDataDir(root, workspaceData);
+    if (dataDir) updated.push("-data", dataDir);
   }
   if (!updated.some((arg) => arg.startsWith("--jvm-arg=-Xmx") || arg.startsWith("-Xmx"))) {
     updated.push(`--jvm-arg=-Xmx${estimateJdtlsHeapSize(root)}`);
@@ -110,6 +117,7 @@ function enhanceJdtlsEnv(command: string[], baseEnv: NodeJS.ProcessEnv | undefin
 }
 
 type PendingHandler = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
+type DiagnosticsWaiter = { resolve: (diagnostics: unknown[]) => void; reject: (error: Error) => void };
 
 function abortError(): Error {
   return new Error("Operation aborted");
@@ -133,7 +141,7 @@ export class LspClient {
   private fileMtimes = new Map<string, number>();
   private fileContents = new Map<string, string>();
   private diagnosticsStore = new Map<string, unknown[]>();
-  private diagnosticsWaiters = new Map<string, Array<(diagnostics: unknown[]) => void>>();
+  private diagnosticsWaiters = new Map<string, DiagnosticsWaiter[]>();
   private positionEncoding: "utf-8" | "utf-16" | "utf-32" = "utf-16";
   private serverCapabilities: Record<string, unknown> = {};
   private requestTimeoutMs: number;
@@ -147,15 +155,23 @@ export class LspClient {
   }
 
   async start(): Promise<void> {
-    const jdtlsEnhancedCommand = isJdtlsCommand(this.server.command) ? enhanceJdtlsCommand(this.server.command, this.root) : this.server.command;
+    const jdtlsEnhancedCommand = isJdtlsCommand(this.server.command) ? enhanceJdtlsCommand(this.server.command, this.root, this.server.workspaceData) : this.server.command;
     const jdtlsEnv = enhanceJdtlsEnv(jdtlsEnhancedCommand, process.env);
     this.proc = spawn(jdtlsEnhancedCommand[0], jdtlsEnhancedCommand.slice(1), {
       cwd: this.root,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...jdtlsEnv },
     });
-    this.proc.on("error", (err) => this.rejectAllPending(`LSP server failed to start: ${err.message}`));
-    this.proc.on("exit", (code) => this.rejectAllPending(`LSP server exited (code: ${code ?? "null"})`));
+    this.proc.on("error", (err) => {
+      const reason = `LSP server failed to start: ${err.message}`;
+      this.rejectAllPending(reason);
+      this.rejectAllDiagnosticsWaiters(reason);
+    });
+    this.proc.on("exit", (code) => {
+      const reason = `LSP server exited (code: ${code ?? "null"})`;
+      this.rejectAllPending(reason);
+      this.rejectAllDiagnosticsWaiters(reason);
+    });
     this.proc.stdout.on("data", (chunk) => this.onData(chunk as Buffer));
     this.proc.stderr?.on("data", () => undefined);
     // Wait briefly for the process to either die (e.g. missing binary) or survive.
@@ -366,6 +382,7 @@ export class LspClient {
   }
 
   async stop(): Promise<void> {
+    this.rejectAllDiagnosticsWaiters("LSP client stopped");
     try {
       await this.send("shutdown", null);
     } catch {
@@ -384,6 +401,7 @@ export class LspClient {
     this.fileContents.clear();
     this.diagnosticsStore.clear();
     this.rejectAllPending("LSP client stopped");
+    this.rejectAllDiagnosticsWaiters("LSP client stopped");
     this.publishedDiagnosticsWarm = false;
     this.coldStartDiagnosticsQueueTail = Promise.resolve();
   }
@@ -405,7 +423,12 @@ export class LspClient {
     let release!: () => void;
     const current = new Promise<void>((resolve) => { release = resolve; });
     this.coldStartDiagnosticsQueueTail = previous.then(() => current, () => current);
-    await this.waitForColdStartDiagnosticsTurn(previous, signal);
+    try {
+      await this.waitForColdStartDiagnosticsTurn(previous, signal);
+    } catch (error) {
+      release();
+      throw error;
+    }
     try {
       return await task();
     } finally {
@@ -431,33 +454,40 @@ export class LspClient {
     });
   }
   private waitForPublishedDiagnostics(uri: string, timeoutMs: number, signal?: AbortSignal): Promise<unknown[]> {
+    if (signal?.aborted) return Promise.reject(abortError());
     if (this.diagnosticsStore.has(uri)) return Promise.resolve(this.diagnosticsStore.get(uri) ?? []);
     return new Promise((resolve, reject) => {
       let settled = false;
       let timer: NodeJS.Timeout | undefined;
+      let waiter: DiagnosticsWaiter;
+      const removeWaiter = () => {
+        const waiters = this.diagnosticsWaiters.get(uri) ?? [];
+        const idx = waiters.indexOf(waiter);
+        if (idx !== -1) waiters.splice(idx, 1);
+        if (waiters.length === 0) this.diagnosticsWaiters.delete(uri);
+        else this.diagnosticsWaiters.set(uri, waiters);
+      };
       const finishReject = (error: Error) => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
+        removeWaiter();
         reject(error);
       };
       const finish = (diagnostics: unknown[]) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
+        removeWaiter();
         resolve(diagnostics);
       };
+      waiter = { resolve: finish, reject: finishReject };
       const list = this.diagnosticsWaiters.get(uri) ?? [];
-      list.push(finish);
+      list.push(waiter);
       this.diagnosticsWaiters.set(uri, list);
       const onAbort = () => {
-        const waiters = this.diagnosticsWaiters.get(uri) ?? [];
-        const idx = waiters.indexOf(finish);
-        if (idx !== -1) waiters.splice(idx, 1);
-        if (waiters.length === 0) this.diagnosticsWaiters.delete(uri);
-        else this.diagnosticsWaiters.set(uri, waiters);
         finishReject(abortError());
       };
       if (signal?.aborted) {
@@ -467,18 +497,11 @@ export class LspClient {
       signal?.addEventListener("abort", onAbort, { once: true });
       timer = setTimeout(() => {
         if (settled) return;
-        settled = true;
-        signal?.removeEventListener("abort", onAbort);
-        const waiters = this.diagnosticsWaiters.get(uri) ?? [];
-        const idx = waiters.indexOf(finish);
-        if (idx !== -1) waiters.splice(idx, 1);
-        if (waiters.length === 0) this.diagnosticsWaiters.delete(uri);
-        else this.diagnosticsWaiters.set(uri, waiters);
         if (this.diagnosticsStore.has(uri)) {
-          resolve(this.diagnosticsStore.get(uri) ?? []);
+          finish(this.diagnosticsStore.get(uri) ?? []);
           return;
         }
-        reject(new Error(`LSP diagnostics timeout after ${timeoutMs}ms. The server did not return diagnostics for this file. Increase lsp.servers.${this.server.id}.requestTimeoutMs if this server is legitimately slow, then run /reload for the change to take effect.`));
+        finishReject(new Error(`LSP diagnostics timeout after ${timeoutMs}ms. The server did not return diagnostics for this file. Increase lsp.servers.${this.server.id}.requestTimeoutMs if this server is legitimately slow, then run /reload for the change to take effect.`));
       }, timeoutMs);
     });
   }
@@ -556,7 +579,7 @@ export class LspClient {
           this.diagnosticsStore.set(message.params.uri, diagnostics);
           const waiters = this.diagnosticsWaiters.get(message.params.uri) ?? [];
           this.diagnosticsWaiters.delete(message.params.uri);
-          for (const waiter of waiters) waiter(diagnostics);
+          for (const waiter of waiters) waiter.resolve(diagnostics);
           continue;
         }
         if (typeof message.id !== "undefined") {
@@ -593,6 +616,14 @@ export class LspClient {
       clearTimeout(handler.timer);
       handler.reject(new Error(reason));
       this.pending.delete(id);
+    }
+  }
+
+  private rejectAllDiagnosticsWaiters(reason: string): void {
+    const waiters = Array.from(this.diagnosticsWaiters.values()).flat();
+    this.diagnosticsWaiters.clear();
+    for (const waiter of waiters) {
+      waiter.reject(new Error(reason));
     }
   }
 }

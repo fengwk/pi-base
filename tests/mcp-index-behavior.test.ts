@@ -6,7 +6,7 @@ function render(component: any): string {
   return component.render(120).join("\n");
 }
 
-describe("mcp index extra coverage", () => {
+describe("mcp index behavior", () => {
   it("requires loadSettings", () => {
     const registry = createToolRegistry();
     expect(() => registerMcpSupport(registry.pi as any)).toThrow("registerMcpSupport requires loadSettings");

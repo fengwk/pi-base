@@ -45,7 +45,7 @@ export function registerNotifySupport(
   const suppressCompletedUntil = new Map<string, number>();
 
   pi.on("agent_end", async (event: AgentEndEvent, ctx) => {
-    if (!shouldNotifyForAgentEnd(loadSettings?.(ctx.cwd).settings.notify, ctx, event)) return;
+    if (!shouldNotifyForAgentEnd(loadSettings?.(ctx.cwd)?.settings.notify, ctx, event)) return;
 
     const payload = buildPayload("session.completed", ctx);
     if (!payload.sessionID) return;
@@ -57,11 +57,13 @@ export function registerNotifySupport(
 
   return {
     async onPermissionAsked({ ctx }) {
-      if (!shouldNotifyForPermissionAsk(loadSettings?.(ctx.cwd).settings.notify, ctx)) return;
+      if (!shouldNotifyForPermissionAsk(loadSettings?.(ctx.cwd)?.settings.notify, ctx)) return;
       await sendNotification(buildPayload("permission.requested", ctx), ctx);
     },
     onPermissionRejected({ ctx }) {
-      const window = suppressCompletedWindowMs(loadSettings?.(ctx.cwd).settings.notify);
+      const notify = loadSettings?.(ctx.cwd)?.settings.notify;
+      if (!notify) return;
+      const window = suppressCompletedWindowMs(notify);
       if (window <= 0) return;
       const payload = buildPayload("session.completed", ctx);
       if (!payload.sessionID) return;
@@ -74,7 +76,7 @@ function createShellNotificationSender(
   loadSettings: ((cwd: string) => LoadedPiBaseSettings) | undefined,
 ): (payload: PiBaseNotifyPayload, ctx: ExtensionContext) => Promise<void> {
   return async (payload, ctx) => {
-    const notify = loadSettings?.(ctx.cwd).settings.notify;
+    const notify = loadSettings?.(ctx.cwd)?.settings.notify;
     if (!notify) return;
 
     const command = getNotifyCommand();

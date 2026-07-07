@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { LspClient, LspManager, lspManager } from "../src/lsp/client.js";
+import { buildJdtlsWorkspaceDataDir, LspClient, LspManager, lspManager } from "../src/lsp/client.js";
 import { LspDiscoveryResolver } from "../src/lsp/discovery.js";
 import { registerLspTools } from "../src/lsp/tools.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
@@ -21,6 +23,30 @@ function mockToolLspClient(overrides: Record<string, unknown> = {}): any {
 }
 
 describe("LspClient internals", () => {
+  describe("jdtls workspace data", () => {
+    it("builds the stable default workspace data directory", () => {
+      // Intent: the default mode must preserve the old deterministic jdtls
+      // workspace path so existing users do not lose their indexes.
+      const root = "/tmp/pi-base-java-project";
+      const hash = createHash("md5").update(root).digest("hex");
+      expect(buildJdtlsWorkspaceDataDir(root, undefined)).toBe(join(homedir(), ".cache", "jdtls-workspace", hash));
+    });
+
+    it("builds a process-scoped workspace data directory", () => {
+      // Intent: process mode must isolate concurrent Pi processes while still
+      // keeping the project-derived hash for debuggability.
+      const root = "/tmp/pi-base-java-project";
+      const hash = createHash("md5").update(root).digest("hex");
+      expect(buildJdtlsWorkspaceDataDir(root, { mode: "process", baseDir: "/tmp/jdtls-data" })).toBe(join("/tmp/jdtls-data", `${hash}-${process.pid}`));
+    });
+
+    it("can disable automatic jdtls workspace data injection", () => {
+      // Intent: disabled mode lets users fully own `-data` handling in custom
+      // launchers, so command enhancement must have no generated path.
+      expect(buildJdtlsWorkspaceDataDir("/tmp/pi-base-java-project", { mode: "disabled" })).toBeNull();
+    });
+  });
+
   it("encodes utf16 character offsets from code point offsets", () => {
     const client = new LspClient("/tmp/demo", { id: "typescript", command: ["tsserver"], extensions: [".ts"] } as any);
     (client as any).fileContents.set("/tmp/demo/a.ts", "a😀b\n");
@@ -206,6 +232,120 @@ describe("LspClient internals", () => {
     });
   });
 
+  describe("file synchronization and request helpers", () => {
+    it("sends didChange/didSave for changed open files and closes missing files", async () => {
+      // Intent: diagnostics and definition requests depend on the LSP client
+      // keeping the server synchronized with local edits and deleted files.
+      const root = await createTempWorkspace();
+      const filePath = await writeWorkspaceFile(root, "src/example.ts", "first\n");
+      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      const notifySpy = vi.spyOn(client as any, "notify").mockImplementation(() => undefined);
+      await client.openFile(filePath);
+
+      const uri = pathToFileURL(filePath).href;
+      (client as any).diagnosticsStore.set(uri, [{ message: "stale" }]);
+      await writeFile(filePath, "second\n");
+      client.syncFile(filePath);
+
+      expect(notifySpy).toHaveBeenCalledWith("textDocument/didChange", {
+        textDocument: { uri, version: 2 },
+        contentChanges: [{ text: "second\n" }],
+      });
+      expect(notifySpy).toHaveBeenCalledWith("textDocument/didSave", { textDocument: { uri } });
+      expect((client as any).diagnosticsStore.has(uri)).toBe(false);
+      expect((client as any).fileContents.get(filePath)).toBe("second\n");
+
+      const missingPath = join(root, "src", "missing.ts");
+      (client as any).openedFiles.add(missingPath);
+      (client as any).fileVersions.set(missingPath, 1);
+      (client as any).fileMtimes.set(missingPath, 1);
+      (client as any).fileContents.set(missingPath, "gone\n");
+      client.syncExternalChanges();
+
+      expect(notifySpy).toHaveBeenCalledWith("textDocument/didClose", {
+        textDocument: { uri: pathToFileURL(missingPath).href },
+      });
+      expect((client as any).openedFiles.has(missingPath)).toBe(false);
+      expect((client as any).fileContents.has(missingPath)).toBe(false);
+    });
+
+    it("maps high-level helper methods to the expected JSON-RPC requests", async () => {
+      // Intent: LSP tools rely on these helpers to translate user-facing
+      // arguments into protocol requests, including encoded character offsets.
+      const root = await createTempWorkspace();
+      const filePath = await writeWorkspaceFile(root, "src/example.ts", "a😀b\n");
+      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      (client as any).positionEncoding = "utf-16";
+      vi.spyOn(client, "openFile").mockImplementation(async (path: string) => {
+        (client as any).fileContents.set(path, "a😀b\n");
+      });
+      const sendSpy = vi.spyOn(client as any, "send")
+        .mockImplementationOnce(async () => [{ uri: "definition" }])
+        .mockImplementationOnce(async () => [{ name: "Symbol" }])
+        .mockImplementationOnce(async () => "class bytes")
+        .mockImplementationOnce(async () => ({ not: "text" }))
+        .mockImplementationOnce(async () => "decompiled");
+
+      await expect(client.definition(filePath, 1, 2)).resolves.toEqual([{ uri: "definition" }]);
+      expect(sendSpy).toHaveBeenNthCalledWith(1, "textDocument/definition", {
+        textDocument: { uri: pathToFileURL(filePath).href },
+        position: { line: 0, character: 3 },
+      }, undefined);
+
+      await expect(client.workspaceSymbols("Example")).resolves.toEqual([{ name: "Symbol" }]);
+      expect(sendSpy).toHaveBeenNthCalledWith(2, "workspace/symbol", { query: "Example" }, undefined);
+
+      await expect(client.classFileContents("jdt://demo")).resolves.toBe("class bytes");
+      await expect(client.classFileContents("jdt://demo")).resolves.toBeNull();
+      await expect(client.decompileClass("jdt://demo")).resolves.toBe("decompiled");
+      expect(sendSpy).toHaveBeenNthCalledWith(5, "workspace/executeCommand", {
+        command: "java.decompile",
+        arguments: ["jdt://demo"],
+      }, undefined);
+    });
+  });
+
+  describe("initialize", () => {
+    it("sends standard capabilities plus jdtls extended capabilities and records server capabilities", async () => {
+      // Intent: initialization is the LSP compatibility boundary; jdtls needs
+      // extra client capabilities while generic servers should expose returned
+      // capabilities to later tool checks.
+      const client = new LspClient("/tmp/demo", { id: "jdtls", command: ["jdtls"], extensions: [".java"] } as any);
+      const notifySpy = vi.spyOn(client as any, "notify").mockImplementation(() => undefined);
+      const sendSpy = vi.spyOn(client as any, "send").mockImplementation(async (...args: unknown[]) => {
+        const [_method, params] = args as [string, any];
+        expect(params.rootUri).toBe(pathToFileURL("/tmp/demo").href);
+        expect(params.capabilities.general.positionEncodings).toEqual(["utf-32", "utf-16", "utf-8"]);
+        expect(params.initializationOptions.extendedClientCapabilities.classFileContentsSupport).toBe(true);
+        return { capabilities: { positionEncoding: "utf-8", workspaceSymbolProvider: true } };
+      });
+
+      await client.initialize();
+
+      expect(sendSpy).toHaveBeenCalledWith("initialize", expect.any(Object));
+      expect((client as any).positionEncoding).toBe("utf-8");
+      expect(client.supportsMethod("workspace/symbol")).toBe(true);
+      expect(notifySpy).toHaveBeenCalledWith("initialized", {});
+    });
+
+    it("retries initialize failures and reports the final error", async () => {
+      // Intent: transient startup failures are retried, but persistent failures
+      // must produce an actionable error containing the server command.
+      vi.useFakeTimers();
+      try {
+        const client = new LspClient("/tmp/demo", { id: "mock", command: ["mock-lsp"], extensions: [".x"] } as any);
+        const sendSpy = vi.spyOn(client as any, "send").mockRejectedValue(new Error("booting"));
+        const pending = client.initialize();
+        const assertion = expect(pending).rejects.toThrow("LSP initialize failed for mock-lsp: booting");
+        await vi.advanceTimersByTimeAsync(2_000);
+        await assertion;
+        expect(sendSpy).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("LspManager", () => {
     it("deduplicates concurrent client boot for the same workspace and server", async () => {
       const root = await createTempWorkspace();
@@ -321,6 +461,55 @@ describe("LspClient internals", () => {
         `wait:${pathToFileURL(firstPath).href}`,
         `open:${secondPath}`,
         `wait:${pathToFileURL(secondPath).href}`,
+      ]);
+    });
+
+    it("does not poison the jdtls cold-start queue when a queued diagnostics call is aborted", async () => {
+      // Intent: aborting while waiting for the previous cold-start diagnostics
+      // must release that queue slot so later diagnostics can still run.
+      const root = await createTempWorkspace();
+      const firstPath = await writeWorkspaceFile(root, "src/First.java", "class First {}\n");
+      const secondPath = await writeWorkspaceFile(root, "src/Second.java", "class Second {}\n");
+      const thirdPath = await writeWorkspaceFile(root, "src/Third.java", "class Third {}\n");
+      const client = new LspClient(root, { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 200 } as any);
+      const sequence: string[] = [];
+      let rejectFirst!: (error: Error) => void;
+      const firstWait = new Promise<never>((_resolve, reject) => { rejectFirst = reject; });
+      vi.spyOn(client, "openFile").mockImplementation(async (path: string) => {
+        sequence.push(`open:${path}`);
+      });
+      vi.spyOn(client as any, "waitForPublishedDiagnostics")
+        .mockImplementationOnce(async (...args: any[]) => {
+          sequence.push(`wait:${args[0] as string}`);
+          return firstWait;
+        })
+        .mockImplementationOnce(async (...args: any[]) => {
+          sequence.push(`wait:${args[0] as string}`);
+          return [];
+        });
+
+      const firstPromise = client.diagnostics(firstPath);
+      await vi.waitFor(() => {
+        expect(sequence).toEqual([
+          `open:${firstPath}`,
+          `wait:${pathToFileURL(firstPath).href}`,
+        ]);
+      });
+
+      const controller = new AbortController();
+      const secondPromise = client.diagnostics(secondPath, controller.signal);
+      controller.abort();
+      await expect(secondPromise).rejects.toThrow(/Operation aborted/);
+
+      rejectFirst(new Error("first failed"));
+      await expect(firstPromise).rejects.toThrow("first failed");
+
+      await expect(client.diagnostics(thirdPath)).resolves.toEqual([]);
+      expect(sequence).toEqual([
+        `open:${firstPath}`,
+        `wait:${pathToFileURL(firstPath).href}`,
+        `open:${thirdPath}`,
+        `wait:${pathToFileURL(thirdPath).href}`,
       ]);
     });
 
@@ -443,6 +632,18 @@ describe("LspClient internals", () => {
       const result = await client.diagnostics(filePath);
       expect(sendSpy).toHaveBeenCalledTimes(1);
       expect(result).toEqual([{ message: "boom" }]);
+    });
+
+    it("rejects publishDiagnostics waiters when the client stops", async () => {
+      // Intent: stop/reload should fail pending diagnostics immediately instead
+      // of waiting for the full requestTimeoutMs.
+      const client = new LspClient("/tmp/demo", { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 60_000 } as any);
+      const pending = (client as any).waitForPublishedDiagnostics("file:///tmp/demo/App.java", 60_000);
+      await Promise.resolve();
+
+      await client.stop();
+
+      await expect(pending).rejects.toThrow("LSP client stopped");
     });
 
     it("surfaces a generic actionable hint when transient Internal error fallback times out", async () => {

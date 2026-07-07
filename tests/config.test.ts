@@ -135,6 +135,99 @@ describe("pi-base config", () => {
     });
   });
 
+  it("normalizes jdtls workspaceData baseDir and validates mode", async () => {
+    // Intent: workspaceData is passed to jdtls command enhancement, so config
+    // loading must normalize HOME shortcuts before the resolver sees it.
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(
+        join(projectDir, "pi-base.json"),
+        JSON.stringify({
+          lsp: {
+            servers: {
+              java: {
+                command: ["jdtls"],
+                extensions: [".java"],
+                workspaceData: { mode: "process", baseDir: "$HOME/.cache/pi-base-jdtls" },
+              },
+            },
+          },
+        }),
+        "utf8",
+      );
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.lsp?.servers?.java?.workspaceData).toEqual({
+        mode: "process",
+        baseDir: join(homedir(), ".cache", "pi-base-jdtls"),
+      });
+    });
+  });
+
+  it("rejects invalid jdtls workspaceData values", async () => {
+    // Intent: invalid modes would silently pick an unsafe workspace strategy;
+    // rejecting at config load keeps the LSP lifecycle deterministic.
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(
+        join(projectDir, "pi-base.json"),
+        JSON.stringify({ lsp: { servers: { java: { command: ["jdtls"], extensions: [".java"], workspaceData: { mode: "session" } } } } }),
+        "utf8",
+      );
+      expect(() => loadPiBaseSettings(root)).toThrowError(/workspaceData\.mode/);
+    });
+  });
+
+  it.each([
+    ["non-object root", null, /settings must be a JSON object/],
+    ["invalid lsp shape", { lsp: [] }, /lsp must be an object/],
+    ["invalid lsp servers shape", { lsp: { servers: [] } }, /lsp\.servers must be an object keyed by server id/],
+    ["invalid lsp entry", { lsp: { servers: { ts: [] } } }, /lsp\.servers\.ts must be an object/],
+    ["invalid lsp command", { lsp: { servers: { ts: { command: "ts", extensions: [".ts"] } } } }, /command must be an array of strings/],
+    ["invalid lsp timeout", { lsp: { servers: { ts: { command: ["ts"], extensions: [".ts"], requestTimeoutMs: 0 } } } }, /requestTimeoutMs/],
+    ["invalid workspaceData object", { lsp: { servers: { ts: { command: ["ts"], extensions: [".ts"], workspaceData: [] } } } }, /workspaceData must be an object/],
+    ["invalid workspaceData baseDir", { lsp: { servers: { ts: { command: ["ts"], extensions: [".ts"], workspaceData: { baseDir: "" } } } } }, /workspaceData\.baseDir/],
+    ["invalid permission shape", { permission: [] }, /permission must be/],
+    ["invalid permission rule", { permission: { bash: { "*": "maybe" } } }, /permission\.bash\.\*/],
+    ["invalid render shape", { render: [] }, /render must be an object/],
+    ["invalid render lines", { render: { collapsedToolResultLines: -1 } }, /collapsedToolResultLines/],
+    ["invalid render line map", { render: { collapsedToolResultLines: { read: 1.5 } } }, /collapsedToolResultLines\.read/],
+    ["invalid render chars", { render: { collapsedToolResultMaxChars: { read: -1 } } }, /collapsedToolResultMaxChars\.read/],
+    ["invalid notify boolean", { notify: { permissionAsked: "yes" } }, /notify\.permissionAsked/],
+    ["invalid notify suppression", { notify: { suppressCompletedAfterRejectionMs: -1 } }, /suppressCompletedAfterRejectionMs/],
+    ["invalid context compression shape", { contextCompression: [] }, /contextCompression must be an object/],
+    ["invalid context compression rounds", { contextCompression: { retainedUserMessageRounds: 0 } }, /retainedUserMessageRounds/],
+    ["invalid context compression tools", { contextCompression: { tools: [""] } }, /empty tool name/],
+    ["invalid disabled providers", { contextCompression: { disabledProviders: ["  "] } }, /disabledProviders/],
+    ["invalid mcp shape", { mcp: [] }, /mcp must be an object/],
+    ["missing mcp servers", { mcp: {} }, /mcp\.servers must be an object/],
+    ["empty mcp server key", { mcp: { servers: { "": { type: "local", command: ["x"] } } } }, /empty server name/],
+    ["invalid mcp server type", { mcp: { servers: { x: { type: "stdio", command: ["x"] } } } }, /type must be either/],
+    ["empty local command", { mcp: { servers: { x: { type: "local", command: [] } } } }, /command must contain at least one entry/],
+    ["invalid local env", { mcp: { servers: { x: { type: "local", command: ["x"], env: { A: 1 } } } } }, /env\.A must be a string/],
+    ["invalid local cwd", { mcp: { servers: { x: { type: "local", command: ["x"], cwd: 1 } } } }, /cwd must be a string/],
+    ["invalid local startup timeout", { mcp: { servers: { x: { type: "local", command: ["x"], startupTimeoutMs: 0 } } } }, /startupTimeoutMs/],
+    ["invalid remote url type", { mcp: { servers: { x: { type: "remote", transport: "sse", url: 1 } } } }, /url must be a string/],
+    ["invalid remote transport", { mcp: { servers: { x: { type: "remote", transport: "http", url: "https://example.com" } } } }, /transport/],
+    ["invalid remote url", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "not a url" } } } }, /url must be a valid URL/],
+    ["invalid remote headers", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "https://example.com", headers: [] } } } }, /headers must be an object/],
+    ["invalid yolo", { yolo: "yes" }, /yolo must be a boolean/],
+  ])("rejects invalid config: %s", async (_name, settings, expected) => {
+    // Intent: invalid pi-base.json files should fail at load time with
+    // actionable paths, because users otherwise only see extension startup
+    // failures after /reload.
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify(settings), "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(expected);
+    });
+  });
+
   it("loads permission rules from unified pi-base config and merges global/project entries", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");

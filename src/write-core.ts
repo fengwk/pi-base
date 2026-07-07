@@ -1,22 +1,16 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { formatHashlineHeader, formatNumberedLines, InMemorySnapshotStore, normalizeToLF, splitDisplayedLines, stripBom } from "./hashline/index.js";
-import { recordNormalizedSnapshot } from "./hashline-session.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { shortenHomePath, styleAccent, styleMuted, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
+import { bomKindForEncoding, defaultTextEncoding, detectTextFileEncoding, encodeTextFile, textStartsWithBomMarker } from "./text-codec.js";
 
 export const WRITE_COLLAPSED_PREVIEW_LINES = 10;
 
-function normalizeWrittenText(content: string): string {
-  return normalizeToLF(stripBom(content).text);
-}
-
-export function formatWriteSuccess(rawPath: string, existed: boolean, normalizedContent: string, tag: string | undefined): string {
+export function formatWriteSuccess(rawPath: string, existed: boolean): string {
   const action = existed ? "Overwrote" : "Created";
-  const header = tag ? `${formatHashlineHeader(rawPath, tag)}\n` : "";
-  return `${action} ${rawPath}.\nReview the current file snapshot below and reuse its header for follow-up hashline edits.\n\n${header}${formatNumberedLines(normalizedContent)}`;
+  return `${action} ${rawPath} successfully.`;
 }
 
 export function formatWriteCall(args: any, theme: any, cwd?: string): string {
@@ -24,7 +18,7 @@ export function formatWriteCall(args: any, theme: any, cwd?: string): string {
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
   const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   const content = String(args?.content ?? "");
-  return `${styleToolTitle(theme, "write")} ${styleAccent(theme, path)}${workdir}\n\n${content.split("\n").join("\n")}`;
+  return `${styleToolTitle(theme, "write")} ${styleAccent(theme, path)}${workdir}\n\n${content}`;
 }
 
 export async function executeWrite(
@@ -32,34 +26,39 @@ export async function executeWrite(
   signal?: AbortSignal,
   ctx: any = {},
   options: {
-    onFileAnchored?: (absolutePath: string, lines?: string[]) => void;
     onSuccessfulWrite?: (absolutePath: string) => void;
-    snapshots?: InMemorySnapshotStore;
   } = {},
 ): Promise<any> {
   try {
     throwIfAborted(signal);
     const rawPath = String(params.path ?? "").replace(/^@/, "");
     if (!rawPath) throw new Error("path is required.");
-    const content = String(params.content ?? "");
+    if (!Object.prototype.hasOwnProperty.call(params ?? {}, "content") || typeof params.content !== "string") {
+      throw new Error("content is required and must be a string.");
+    }
+    const content = params.content;
     const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
     const absolutePath = resolveToCwd(rawPath, cwd);
-    return withFileMutationQueue(absolutePath, async () => {
+    return await withFileMutationQueue(absolutePath, async () => {
       throwIfAborted(signal);
       let existed = true;
+      let outputEncoding = defaultTextEncoding();
+      let outputBom = textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none";
       try {
         await throwIfAbortedAfter(stat(absolutePath), signal);
+        const currentBytes = await throwIfAbortedAfter(readFile(absolutePath), signal);
+        const detected = detectTextFileEncoding(currentBytes);
+        outputEncoding = detected.encoding;
+        outputBom = detected.bom !== "none" ? detected.bom : (textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none");
       } catch {
         existed = false;
       }
+      const output = encodeTextFile(content, outputEncoding, outputBom);
       await throwIfAbortedAfter(mkdir(dirname(absolutePath), { recursive: true }), signal);
-      await throwIfAbortedAfter(writeFile(absolutePath, content, "utf8"), signal);
-      const normalized = normalizeWrittenText(content);
-      const tag = options.snapshots ? recordNormalizedSnapshot(options.snapshots, absolutePath, normalized) : undefined;
-      options.onFileAnchored?.(absolutePath, splitDisplayedLines(normalized));
+      await throwIfAbortedAfter(writeFile(absolutePath, output), signal);
       options.onSuccessfulWrite?.(absolutePath);
       return {
-        content: [{ type: "text" as const, text: formatWriteSuccess(rawPath, existed, normalized, tag) }],
+        content: [{ type: "text" as const, text: formatWriteSuccess(rawPath, existed) }],
       };
     });
   } catch (error) {

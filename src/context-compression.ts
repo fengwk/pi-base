@@ -39,9 +39,6 @@ interface UserWindow {
   assistantTurns: number;
 }
 
-const HASHLINE_HEADER_RE = /(?:^|\n)\[[^#\r\n]+#[0-9A-F]{4}\](?:\n|$)/i;
-const NUMBERED_HASHLINE_BODY_RE = /(?:^|\n)\d+:/;
-
 export const DEFAULT_CONTEXT_COMPRESSION_TOOL_OPTIONS: ToolCompressionOptions = {
   retainedUserMessageRounds: 2,
   retainedAssistantTurns: 4,
@@ -79,10 +76,7 @@ function resolveInputPaths(input: unknown, cwd: string): string[] {
   if (typeof input.path === "string" && input.path.trim().length > 0) {
     return [canonicalizePath(resolveToCwd(stripAtPrefix(input.path), cwd))];
   }
-  const inputText = typeof input.input === "string" ? input.input : undefined;
-  if (!inputText) return [];
-  return [...inputText.matchAll(/^\[([^#\r\n]+)#[0-9A-F]{4}\]$/gim)]
-    .map((match) => canonicalizePath(resolveToCwd(stripAtPrefix((match[1] ?? "").trim()), cwd)));
+  return [];
 }
 
 function resolveInputPath(input: unknown, cwd: string): string | undefined {
@@ -92,25 +86,6 @@ function resolveInputPath(input: unknown, cwd: string): string | undefined {
 function resolvePromptPath(path: string, cwd: string): string {
   const stripped = stripAtPrefix(path.trim());
   return canonicalizePath(isAbsolute(stripped) ? stripped : resolveToCwd(stripped, cwd));
-}
-
-function extractText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((item): item is { type: string; text: string } =>
-      isRecord(item) && item.type === "text" && typeof item.text === "string",
-    )
-    .map((item) => item.text)
-    .join("\n");
-}
-
-function hasLiveHashlineAnchors(content: unknown): boolean {
-  const text = extractText(content);
-  return HASHLINE_HEADER_RE.test(text) && NUMBERED_HASHLINE_BODY_RE.test(text);
-}
-
-function isReadTextFileResult(content: unknown): boolean {
-  return hasLiveHashlineAnchors(content);
 }
 
 function buildToolCallIndex(messages: readonly ToolResultMessageLike[]): Map<string, ToolCallInfo> {
@@ -269,8 +244,10 @@ function buildAgeCompressionEligibility(
 }
 
 function isFileContextResult(toolName: string, message: ToolResultMessageLike): boolean {
-  if (toolName === "read") return isReadTextFileResult(message.content);
-  if (toolName === "write" || toolName === "edit") return hasLiveHashlineAnchors(message.content);
+  // read/write/edit results all describe file state that becomes stale after a mutation.
+  // read carries file content; write/edit carry success messages/diffs that reference
+  // a file version that may no longer be current.
+  if (toolName === "read" || toolName === "write" || toolName === "edit") return message.isError !== true;
   return false;
 }
 

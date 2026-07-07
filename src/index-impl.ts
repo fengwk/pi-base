@@ -21,13 +21,12 @@ import { applyContextCompressionToMessages, shouldApplyContextCompression } from
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./anthropic-cache-boundary.js";
 import { registerResumeAllCommand } from "./resume-all.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
+import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { describeToolWorkdirForDisplay, resolveToolWorkdir } from "./path-utils.js";
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.js";
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
 import { registerAgentSupport } from "./agent-support.js";
-import { InMemorySnapshotStore } from "./hashline/index.js";
-import { createNoopLoopGuard } from "./hashline-noop-guard.js";
-export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry } from "./lsp/discovery.js";
+export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
 export type { LocalMcpServerConfig, McpConfig, McpRemoteTransport, McpServerConfig, McpSnapshot, McpToolSnapshot, RemoteMcpServerConfig } from "./mcp/types.js";
@@ -113,7 +112,7 @@ export function registerFindTool(
   options: { getCollapsedResultLines?: CollapsedResultLinesResolver; getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver } = {},
 ): void {
   const template = createToolDefinition(process.cwd());
-  pi.registerTool({
+  const tool = withPiBaseErrorMarker({
     ...template,
     parameters: findSchema,
     description: loadToolDescription("find"),
@@ -169,7 +168,8 @@ export function registerFindTool(
         return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
       }
     },
-  } as any);
+  });
+  pi.registerTool(tool as any);
 }
 
 export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensionOptions = {}): void {
@@ -177,16 +177,12 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   const resolverFactory = createResolverFactory(loadSettings);
   const getCollapsedResultLines = createCollapsedResultLinesResolver(loadSettings);
   const getCollapsedResultMaxChars = createCollapsedResultMaxCharsResolver(loadSettings);
-  const snapshots = new InMemorySnapshotStore();
-  const noopLoopGuard = createNoopLoopGuard();
   const syncLsp = (absolutePath: string) => {
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
   pi.on("session_start", async (event) => {
     if (event.reason === "reload") reloadRuntimePiBaseSettings();
     resolverFactory.clear();
-    snapshots.clear();
-    noopLoopGuard.entries.clear();
     await lspManager.shutdownAll();
     const activeTools = pi.getActiveTools();
     if (activeTools.length === 0) {
@@ -196,9 +192,11 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       pi.setActiveTools(activeToolsWithoutRetiredTask.length > 0 ? activeToolsWithoutRetiredTask : [...BASE_TOOL_NAMES]);
     }
   });
+  pi.on("session_shutdown", async () => {
+    await lspManager.shutdownAll();
+  });
 
   registerReadTool(pi, {
-    snapshots,
     createResolver: resolverFactory,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
@@ -210,14 +208,11 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   registerFindTool(pi, createFindToolDefinition, { getCollapsedResultLines, getCollapsedResultMaxChars });
   registerBashRendererTool(pi, { getCollapsedResultLines, getCollapsedResultMaxChars });
   registerEditTool(pi, {
-    snapshots,
-    noopLoopGuard,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
     onSuccessfulEdit: (absolutePath) => { syncLsp(absolutePath); },
   });
   registerWriteTool(pi, {
-    snapshots,
     onSuccessfulWrite: syncLsp,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
@@ -250,9 +245,9 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     const messages = applyContextCompressionToMessages(event.messages, ctx.cwd, compressionConfig, { systemPrompt: ctx.getSystemPrompt?.() });
     return messages === event.messages ? undefined : { messages };
   });
-  (pi as any).on("before_provider_payload", async (event: any) => {
+  pi.on("before_provider_request", async (event) => {
     if (!applyAnthropicCompressionBoundaryCacheMarker(event.payload)) return undefined;
-    return { payload: event.payload };
+    return event.payload;
   });
 
   // Global output guard: applies to every tool result that flows through Pi, including third-party tools.

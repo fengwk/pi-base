@@ -133,8 +133,8 @@ describe("permission guard", () => {
     expect(prompts[0]).toContain("Arguments: ");
     expect(prompts[0]).toContain("\"path\":\"notes.txt\"");
   });
-  // Intent: edit permission must resolve targets from hashline section headers, not only input.path.
-  it("asks for edit when hashline patch paths do not match allow rules", async () => {
+  // Intent: edit permission must resolve targets from the path parameter
+  it("asks for edit when path does not match allow rules", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, "src"), { recursive: true });
     await writeFile(join(root, "src", "secret.ts"), "old\n", "utf8");
@@ -154,23 +154,29 @@ describe("permission guard", () => {
         return "No";
       },
     });
+    let aborted = false;
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-    const readResult = await registry.getTool("read").execute("1", { workdir: ".", path: "src/secret.ts" }, undefined, undefined, { cwd: root });
-    const header = getText(readResult).split("\n").find((line) => /^\[[^#\r\n]+#[0-9A-F]{4}\]$/i.test(line));
-    expect(header).toBeTruthy();
     const result = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", input: `${header}\nSWAP 1.=1:\n+new` },
+      { workdir: ".", path: "src/secret.ts", oldString: "old", newString: "new" },
       undefined,
       undefined,
-      { cwd: root },
+      {
+        cwd: root,
+        abort() {
+          aborted = true;
+        },
+      },
     );
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("Permission denied by user");
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Tool: edit");
     expect(prompts[0]).toContain("src/secret.ts");
+    // Intent: rejecting one tool call should surface an error result without
+    // aborting the whole agent turn.
+    expect(aborted).toBe(false);
   });
   it("matches path permission rules relative to the explicit workdir", async () => {
     const root = await createTempWorkspace();

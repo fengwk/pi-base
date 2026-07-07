@@ -3,9 +3,9 @@ Go to the definition of a symbol at a given position.
 Usage:
 - Use `line` to identify the target line.
 - `character` is optional. Default: `0`.
-- `path` is required because the LSP client uses it to infer the workspace root and choose the correct server.
+- `path` is required and should be a file path inside the target project/workspace, usually the file containing the symbol reference; it selects the relevant workspace/server.
 - Prefer this for known-symbol navigation and third-party API inspection, not for broad repository text search.
-- If the server does not advertise `definitionProvider`, the call fails fast with a clear "does not advertise go-to-definition" message — use `grep` or `read` to locate definitions manually.
+- If definition lookup is unavailable for the selected server, the call fails clearly; use `grep` or `read` to locate definitions manually.
 
 Parameters:
 - `path` (required)

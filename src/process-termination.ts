@@ -17,6 +17,7 @@ export interface GracefulTerminator {
 function spawnTaskkill(args: string[]) {
   try {
     const killer = spawn("taskkill", args, { stdio: "ignore", detached: true });
+    killer.on("error", () => undefined);
     killer.unref();
   } catch {
     // Ignore failures while attempting best-effort termination.

@@ -1,18 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createReadTool } from "@earendil-works/pi-coding-agent";
+import { createReadTool, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, extname } from "node:path";
-import { looksLikeBinary } from "./binary-detect.js";
 import { buildImageReadDowngradeMessage, modelSupportsImages } from "./image-fallback.js";
-import {
-  formatHashlineHeader,
-  formatNumberedLine,
-  InMemorySnapshotStore,
-  normalizeToLF,
-  splitDisplayedLines,
-  stripBom,
-} from "./hashline/index.js";
-import { LARGE_FILE_NOTICE_BYTES, recordNormalizedSnapshot } from "./hashline-session.js";
+import { detectLineEnding, formatLineEndingStyle, normalizeToLF } from "./line-endings.js";
 import { LspDiscoveryResolver, type LspSupportInfo } from "./lsp/discovery.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import {
@@ -30,6 +21,8 @@ import {
 } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { readSchema } from "./schemas/read.js";
+import { decodeTextFile } from "./text-codec.js";
+import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
 const DEFAULT_LIMIT = 200;
@@ -58,6 +51,13 @@ function formatLine(content: string): { display: string; truncated: boolean } {
   return { display, truncated: false };
 }
 
+/**
+ * Format a line with its 1-based line number: `LINE: TEXT`.
+ */
+function formatNumberedLine(line: number, display: string): string {
+  return `${line}: ${display}`;
+}
+
 function formatReadCall(args: any, theme: any, cwd?: string): string {
   const rawPath = String(args?.path ?? "<missing-path>");
   const path = shortenHomePath(rawPath);
@@ -78,7 +78,6 @@ function buildReadNotices(args: {
   totalLines: number;
   hasMore: boolean;
   upstreamTextTruncated: boolean;
-  largeFile: boolean;
   lsp: LspSupportInfo;
 }): string[] {
   const notices: string[] = [];
@@ -87,9 +86,6 @@ function buildReadNotices(args: {
   }
   if (args.upstreamTextTruncated) {
     notices.push(`[Some displayed lines were truncated to ${MAX_LINE_CHARS} characters. Re-read a smaller window if you need the full line text.]`);
-  }
-  if (args.largeFile) {
-    notices.push("[Large file: hashline edit is allowed only on line numbers shown in this read (or a later read window). Read other regions before editing there.]");
   }
   notices.push(`[${formatLspStatus(args.lsp)}]`);
   return notices;
@@ -100,12 +96,11 @@ export type ReadLspResolverFactory = (cwd: string) => LspDiscoveryResolver;
 export function registerReadTool(
   pi: ExtensionAPI,
   options: {
-    onSuccessfulRead?: (absolutePath: string, lines?: string[], meta?: { tag?: string; displayedLines?: number[]; rawPath?: string }) => void;
+    onSuccessfulRead?: (absolutePath: string, lines?: string[]) => void;
     createBuiltInReadTool?: ReadFactory;
     createResolver?: ReadLspResolverFactory;
     getCollapsedResultLines?: CollapsedResultLinesResolver;
     getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
-    snapshots?: InMemorySnapshotStore;
   } = {},
 ) {
   const tool = {
@@ -146,7 +141,7 @@ export function registerReadTool(
           };
           const builtInParams = { ...params, path: rawPath };
           delete builtInParams.workdir;
-          const result = await builtIn.execute(toolCallId, builtInParams, signal, onUpdate, ctx);
+          const result = await withFileMutationQueue(absolutePath, () => builtIn.execute(toolCallId, builtInParams, signal, onUpdate, ctx));
           const note = (result.content ?? [])
             .filter((item: any) => item.type === "text" && typeof item.text === "string")
             .map((item: any) => item.text)
@@ -162,7 +157,7 @@ export function registerReadTool(
                   `path: ${rawPath}`,
                   "kind: file",
                   "mediaType: image",
-                  `message: Image returned as attachment. Hashline anchors are not available for images.${note ? ` ${note}` : ""}`,
+                  `message: Image returned as attachment.${note ? ` ${note}` : ""}`,
                 ].join("\n"),
               },
               ...attachments,
@@ -170,8 +165,9 @@ export function registerReadTool(
           };
         }
 
-        const buffer = await throwIfAbortedAfter(readFile(absolutePath), signal);
-        if (looksLikeBinary(buffer)) {
+        const buffer = await withFileMutationQueue(absolutePath, () => throwIfAbortedAfter(readFile(absolutePath), signal));
+        const decodedFile = decodeTextFile(buffer);
+        if (decodedFile === null) {
           return {
             content: [{ type: "text" as const, text: `Error: ${rawPath} appears to be a binary file. read supports text files, directories, and supported images.` }],
             isError: true,
@@ -182,9 +178,15 @@ export function registerReadTool(
         const limit = parsePositiveInteger(params.limit, "limit", DEFAULT_LIMIT);
         if (limit > MAX_LIMIT) throw new Error(`limit must be <= ${MAX_LIMIT}.`);
 
-        const { text } = stripBom(buffer.toString("utf8"));
+        const { text } = decodedFile;
+        const endingStyle = detectLineEnding(text);
         const normalizedText = normalizeToLF(text);
-        const displayedFileLines = splitDisplayedLines(normalizedText);
+        const finalNewline = text.endsWith("\n") || text.endsWith("\r");
+        const displayedFileLines = normalizedText.length === 0 ? [] : normalizedText.split("\n");
+        // Drop the trailing empty element produced by a final newline so line counts match user expectations.
+        if (finalNewline && displayedFileLines.length > 0 && displayedFileLines[displayedFileLines.length - 1] === "") {
+          displayedFileLines.pop();
+        }
         const resolverBaseDir = dirname(absolutePath);
         const lsp: LspSupportInfo = options.createResolver
           ? options.createResolver(resolverBaseDir).supportsLsp(absolutePath)
@@ -192,7 +194,6 @@ export function registerReadTool(
         const start = Math.min(offset, displayedFileLines.length + 1);
         const end = Math.min(displayedFileLines.length, start + limit - 1);
         const body: string[] = [];
-        const displayedLines: number[] = [];
         let upstreamTextTruncated = false;
         for (let line = start; line <= end; line++) {
           throwIfAborted(signal);
@@ -200,30 +201,36 @@ export function registerReadTool(
           const formatted = formatLine(rawLine);
           if (formatted.truncated) upstreamTextTruncated = true;
           body.push(formatNumberedLine(line, formatted.display));
-          displayedLines.push(line);
         }
-        const tag = options.snapshots
-          ? recordNormalizedSnapshot(options.snapshots, absolutePath, normalizedText, displayedLines)
-          : undefined;
-        const contentLines: string[] = [];
-        if (tag) contentLines.push(formatHashlineHeader(rawPath, tag));
-        contentLines.push(...body);
+        const contentLines: string[] = [
+          `path: ${rawPath}`,
+          "kind: file",
+          `encoding: ${decodedFile.encoding}`,
+          `bom: ${decodedFile.bom}`,
+          `line_endings: ${formatLineEndingStyle(endingStyle)}`,
+          `final_newline: ${finalNewline ? "yes" : "no"}`,
+          "",
+          ...body,
+        ];
         contentLines.push(...buildReadNotices({
           start,
           end,
           totalLines: displayedFileLines.length,
           hasMore: end < displayedFileLines.length,
           upstreamTextTruncated,
-          largeFile: buffer.byteLength > LARGE_FILE_NOTICE_BYTES,
           lsp,
         }));
-        options.onSuccessfulRead?.(absolutePath, displayedFileLines, { tag, displayedLines, rawPath });
-        return { content: [{ type: "text" as const, text: contentLines.join("\n") }] };
+        options.onSuccessfulRead?.(absolutePath, displayedFileLines);
+        return {
+          content: [{ type: "text" as const, text: contentLines.join("\n") }],
+          ...(upstreamTextTruncated ? { details: { upstreamTextTruncated: true } } : {}),
+        };
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
       }
     },
   };
-  pi.registerTool(tool as any);
-  return tool;
+  const markedTool = withPiBaseErrorMarker(tool);
+  pi.registerTool(markedTool as any);
+  return markedTool;
 }

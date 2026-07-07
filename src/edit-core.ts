@@ -1,19 +1,18 @@
 import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import * as Diff from "diff";
+import { readFile, writeFile } from "node:fs/promises";
 import {
-  buildCompactDiffPreview,
-  InMemorySnapshotStore,
-  MismatchError as HashlineMismatchError,
-  Patch,
-  Patcher,
-  type PatchSectionResult,
-  type PreparedSection,
-} from "./hashline/index.js";
-import { PiBaseHashlineFilesystem } from "./hashline-filesystem.js";
-import { type NoopLoopGuard, hashPatchInput, recordNoopEdit, resetNoopEdit } from "./hashline-noop-guard.js";
-import { canonicalSnapshotKey } from "./hashline-session.js";
-import { resolveToolWorkdir, resolveToCwd } from "./path-utils.js";
+  detectLineEnding,
+  normalizeToLF,
+  parseLineEndingDocument,
+  serializeLineEndingDocument,
+  serializeNormalizedDocument,
+  type ConcreteLineEnding,
+  type LineEndingStyle,
+  type ParsedLineEndingDocument,
+} from "./line-endings.js";
+import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import {
   type CollapsedResultLinesResolver,
   type CollapsedResultMaxCharsResolver,
@@ -26,13 +25,13 @@ import {
   styleMuted,
   styleToolTitle,
 } from "./render.js";
-import { throwIfAborted } from "./runtime.js";
+import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { editSchema } from "./schemas/edit.js";
+import { decodeTextFile, encodeTextFile } from "./text-codec.js";
+import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
 const EDIT_ARGUMENT_VALIDATION_HINT = "Hint: Adjust the input parameters and re-run the `edit` command.";
-const NOOP_HARD_LIMIT = 3;
-
 
 function prepareEditArguments(args: unknown, validationTool: any): any {
   try {
@@ -48,54 +47,166 @@ function prepareEditArguments(args: unknown, validationTool: any): any {
   }
 }
 
-function resolveToolWorkdirForDisplay(workdir: unknown, cwd?: string): { rawWorkdir: string; usedDefault: boolean } {
-  const base = cwd ?? process.cwd();
-  if (typeof workdir !== "string" || workdir.trim() === "") return { rawWorkdir: base, usedDefault: true };
-  return { rawWorkdir: workdir, usedDefault: false };
-}
-
 function formatEditCall(args: any, theme: any, cwd?: string): string {
-  const { rawWorkdir, usedDefault } = resolveToolWorkdirForDisplay(args?.workdir, cwd);
+  const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
+  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
   const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
-  const input = String(args?.input ?? "");
-  return `${styleToolTitle(theme, "edit")} ${styleMuted(theme, "(hashline patch)")}${workdir}\n\n${input}`;
+  const oldString = String(args?.oldString ?? "");
+  const newString = String(args?.newString ?? "");
+  const replaceAllTag = args?.replaceAll === true ? " [replaceAll]" : "";
+  return `${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}${replaceAllTag}\n\n${formatEditPreview(oldString, newString)}`;
 }
 
-function noChangeDiagnostic(path: string): string {
-  return (
-    `Edits to ${path} parsed and applied cleanly, but produced no change. ` +
-    `Re-read the file and verify both the targeted lines and the replacement body before retrying.`
-  );
+function formatEditPreview(oldString: string, newString: string): string {
+  const oldPreview = previewLines(oldString, "-");
+  const newPreview = previewLines(newString, "+");
+  return [...oldPreview, ...newPreview].join("\n");
 }
 
-function noChangeLoopDiagnostic(path: string, count: number): string {
-  return (
-    `STOP. Edits to ${path} have been a byte-identical no-op ${count} times in a row. ` +
-    `Do not repeat this same patch. Either the intended change is already on disk, or you are targeting the wrong lines. ` +
-    `Read the file again, copy the fresh header, and author a different explicit patch.`
-  );
+function previewLines(value: string, prefix: "+" | "-"): string[] {
+  const lines = normalizeToLF(value).split("\n");
+  const shown = lines.slice(0, 6).map((line) => `${prefix}${line.length > 240 ? `${line.slice(0, 240)}...` : line}`);
+  if (lines.length > shown.length) shown.push(`${prefix}...`);
+  return shown;
 }
 
-function assertUniqueCanonicalPaths(prepared: readonly PreparedSection[]): void {
-  const seen = new Map<string, string>();
-  for (const entry of prepared) {
-    const previous = seen.get(entry.canonicalPath);
-    if (previous !== undefined) {
-      throw new Error(`Multiple hashline sections resolve to the same file (${previous} and ${entry.section.path}). Use one section header per file.`);
-    }
-    seen.set(entry.canonicalPath, entry.section.path);
+interface DocumentCursor {
+  lineIndex: number;
+  column: number;
+}
+
+interface ReplacementOccurrence {
+  startIndex: number;
+  endIndex: number;
+  start: DocumentCursor;
+  end: DocumentCursor;
+  consumedEndings: ConcreteLineEnding[];
+  trailingEnding: ConcreteLineEnding | null;
+}
+
+type EditComputationResult =
+  | { kind: "error"; text: string }
+  | {
+      kind: "success";
+      fileText: string;
+      replacedText: string;
+      replacements: number;
+    };
+
+function hasStringProperty(value: any, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value ?? {}, key) && typeof value[key] === "string";
+}
+
+function findOccurrenceStarts(content: string, search: string): number[] {
+  if (search === "") return [];
+  const starts: number[] = [];
+  let offset = 0;
+  while ((offset = content.indexOf(search, offset)) !== -1) {
+    starts.push(offset);
+    offset += 1;
   }
+  return starts;
 }
 
-function withFileMutationQueues<T>(paths: readonly string[], run: () => Promise<T>): Promise<T> {
-  const uniqueSorted = [...new Set(paths)].sort();
-  const enter = (index: number): Promise<T> => {
-    if (index >= uniqueSorted.length) return run();
-    return withFileMutationQueue(uniqueSorted[index]!, () => enter(index + 1));
+function hasOverlappingOccurrences(occurrences: readonly ReplacementOccurrence[]): boolean {
+  for (let index = 1; index < occurrences.length; index++) {
+    if (occurrences[index]!.startIndex < occurrences[index - 1]!.endIndex) return true;
+  }
+  return false;
+}
+
+function cursorFromNormalizedIndex(document: Pick<ParsedLineEndingDocument, "lines" | "eolAfter">, index: number): DocumentCursor {
+  let offset = 0;
+  for (let lineIndex = 0; lineIndex < document.lines.length; lineIndex++) {
+    const line = document.lines[lineIndex] ?? "";
+    if (index <= offset + line.length) {
+      return { lineIndex, column: index - offset };
+    }
+    offset += line.length;
+    if (document.eolAfter[lineIndex] !== null) {
+      if (index === offset + 1) {
+        return { lineIndex: Math.min(lineIndex + 1, document.lines.length - 1), column: 0 };
+      }
+      offset += 1;
+    }
+  }
+  if (document.lines.length === 0 && index === 0) return { lineIndex: 0, column: 0 };
+  const lastLineIndex = Math.max(0, document.lines.length - 1);
+  const lastLine = document.lines[lastLineIndex] ?? "";
+  if (index === offset) return { lineIndex: lastLineIndex, column: lastLine.length };
+  throw new Error("line ending document index is out of range.");
+}
+
+function buildReplacementOccurrences(document: ParsedLineEndingDocument, search: string): ReplacementOccurrence[] {
+  const normalizedText = serializeNormalizedDocument(document);
+  const starts = findOccurrenceStarts(normalizedText, search);
+  return starts.map((startIndex) => {
+    const endIndex = startIndex + search.length;
+    const start = cursorFromNormalizedIndex(document, startIndex);
+    const end = cursorFromNormalizedIndex(document, endIndex);
+    return {
+      startIndex,
+      endIndex,
+      start,
+      end,
+      consumedEndings: document.eolAfter.slice(start.lineIndex, end.lineIndex).filter((ending): ending is ConcreteLineEnding => ending !== null),
+      trailingEnding: document.eolAfter[end.lineIndex] ?? null,
+    };
+  });
+}
+
+function chooseAmbiguousEnding(): ConcreteLineEnding {
+  return "\n";
+}
+
+function resolveInsertedEnding(
+  style: LineEndingStyle,
+  index: number,
+  consumedEndings: readonly ConcreteLineEnding[],
+): ConcreteLineEnding {
+  if (style !== "mixed") return style;
+  return consumedEndings[index] ?? chooseAmbiguousEnding();
+}
+
+function applyOccurrenceToDocument(
+  document: ParsedLineEndingDocument,
+  occurrence: ReplacementOccurrence,
+  replacement: string,
+  style: LineEndingStyle,
+): ParsedLineEndingDocument {
+  const prefix = (document.lines[occurrence.start.lineIndex] ?? "").slice(0, occurrence.start.column);
+  const suffix = (document.lines[occurrence.end.lineIndex] ?? "").slice(occurrence.end.column);
+  const replacementDocument = parseLineEndingDocument(replacement);
+  const replacementLines = [...replacementDocument.lines];
+  const replacementEolAfter = [...replacementDocument.eolAfter];
+  const lastReplacementIndex = replacementLines.length - 1;
+  replacementLines[0] = `${prefix}${replacementLines[0] ?? ""}`;
+  replacementLines[lastReplacementIndex] = `${replacementLines[lastReplacementIndex] ?? ""}${suffix}`;
+  for (let index = 0; index < replacementEolAfter.length; index++) {
+    if (index === replacementEolAfter.length - 1) {
+      replacementEolAfter[index] = occurrence.trailingEnding;
+      continue;
+    }
+    replacementEolAfter[index] = resolveInsertedEnding(style, index, occurrence.consumedEndings);
+  }
+  return {
+    lines: [
+      ...document.lines.slice(0, occurrence.start.lineIndex),
+      ...replacementLines,
+      ...document.lines.slice(occurrence.end.lineIndex + 1),
+    ],
+    eolAfter: [
+      ...document.eolAfter.slice(0, occurrence.start.lineIndex),
+      ...replacementEolAfter,
+      ...document.eolAfter.slice(occurrence.end.lineIndex + 1),
+    ],
+    defaultEnding: document.defaultEnding,
   };
-  return enter(0);
 }
 
+/**
+ * Generate a display-oriented diff with line numbers and context.
+ */
 function generateNumberedDiff(oldContent: string, newContent: string, contextLines = 4): { diff: string; firstChangedLine: number | undefined } {
   const parts = Diff.diffLines(oldContent, newContent);
   const output: string[] = [];
@@ -159,28 +270,12 @@ function generateNumberedDiff(oldContent: string, newContent: string, contextLin
   return { diff: output.join("\n"), firstChangedLine };
 }
 
-function renderSection(result: PatchSectionResult): { contentText: string; diff: string; firstChangedLine?: number } {
-  if (result.op === "noop") return { contentText: noChangeDiagnostic(result.path), diff: "" };
-  const numberedDiff = generateNumberedDiff(result.before, result.after);
-  const preview = buildCompactDiffPreview(numberedDiff.diff);
-  const warningsBlock = result.warnings.length > 0 ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
-  const previewBlock = preview.preview ? `\n${preview.preview}` : "";
-  const diffBlock = numberedDiff.diff.trim() ? `\n\ndiff:\n${numberedDiff.diff}` : "";
-  return {
-    contentText: `${result.header}${previewBlock}${diffBlock}${warningsBlock}`,
-    diff: numberedDiff.diff,
-    firstChangedLine: result.firstChangedLine ?? numberedDiff.firstChangedLine,
-  };
-}
-
 export function registerEditTool(
   pi: ExtensionAPI,
   options: {
     getCollapsedResultLines?: CollapsedResultLinesResolver;
     getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
-    onSuccessfulEdit?: (absolutePath: string, lines?: string[]) => void;
-    snapshots?: InMemorySnapshotStore;
-    noopLoopGuard?: NoopLoopGuard;
+    onSuccessfulEdit?: (absolutePath: string) => void;
   } = {},
 ) {
   const description = loadToolDescription("edit");
@@ -207,97 +302,119 @@ export function registerEditTool(
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {
         throwIfAborted(signal);
-        const input = String(params.input ?? "");
-        if (!input.trim()) throw new Error("input is required.");
+
+        const rawPath = String(params.path ?? "").replace(/^@/, "");
+        if (!rawPath) throw new Error("path is required.");
+        if (!hasStringProperty(params, "oldString")) {
+          return { content: [{ type: "text" as const, text: "oldString is required and must be a string." }], isError: true };
+        }
+        if (!hasStringProperty(params, "newString")) {
+          return { content: [{ type: "text" as const, text: "newString is required and must be a string." }], isError: true };
+        }
+
+        const oldString = params.oldString;
+        const newString = params.newString;
+        const replaceAll = params.replaceAll === true;
+
+        if (oldString === newString) {
+          return { content: [{ type: "text" as const, text: "No changes to apply: oldString and newString are identical." }], isError: true };
+        }
+        if (oldString === "") {
+          return { content: [{ type: "text" as const, text: "oldString must not be empty. Use write to create or overwrite a file." }], isError: true };
+        }
+        const normalizedOld = normalizeToLF(oldString);
+        const normalizedNew = normalizeToLF(newString);
+        if (normalizedOld === normalizedNew) {
+          return { content: [{ type: "text" as const, text: "No changes to apply: oldString and newString are identical after line-ending normalization." }], isError: true };
+        }
+
         const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
-        const patch = Patch.parse(input, { cwd });
-        const lockedPaths = patch.sections.map((section) => canonicalSnapshotKey(resolveToCwd(section.path, cwd)));
-        return await withFileMutationQueues(lockedPaths, async () => {
-          const filesystem = new PiBaseHashlineFilesystem({ cwd, signal });
-          const patcher = new Patcher({
-            fs: filesystem,
-            snapshots: options.snapshots ?? new InMemorySnapshotStore(),
-          });
-          const inputHash = hashPatchInput(input);
+        const absolutePath = resolveToCwd(rawPath, cwd);
 
-          if (patch.sections.length === 1) {
-            try {
-              const prepared = await patcher.prepare(patch.sections[0]!);
-              const sectionResult = await patcher.commit(prepared);
-              if (sectionResult.op === "noop") {
-                if (options.noopLoopGuard) {
-                  const { count, escalate } = recordNoopEdit(options.noopLoopGuard, sectionResult.canonicalPath, inputHash);
-                  if (escalate) {
-                    return { content: [{ type: "text" as const, text: noChangeLoopDiagnostic(sectionResult.path, count) }], isError: true };
-                  }
-                }
-                return { content: [{ type: "text" as const, text: noChangeDiagnostic(sectionResult.path) }], isError: true };
-              }
-              if (options.noopLoopGuard) resetNoopEdit(options.noopLoopGuard, sectionResult.canonicalPath);
-              options.onSuccessfulEdit?.(filesystem.resolveAbsolute(sectionResult.path), sectionResult.after.length === 0 ? [] : sectionResult.after.split("\n").filter((line, index, lines) => !(index === lines.length - 1 && line === "")));
-              const rendered = renderSection(sectionResult);
-              return {
-                content: [{ type: "text" as const, text: rendered.contentText }],
-                details: {
-                  diff: rendered.diff,
-                  firstChangedLine: rendered.firstChangedLine,
-                  path: filesystem.resolveAbsolute(sectionResult.path),
-                  oldText: sectionResult.before,
-                  newText: sectionResult.after,
-                },
-              };
-            } catch (error) {
-              if (error instanceof HashlineMismatchError) {
-                return { content: [{ type: "text" as const, text: error.displayMessage }], isError: true };
-              }
-              throw error;
-            }
+        // Serialize the full read-match-write cycle so concurrent edits/writes on the
+        // same file cannot compute from the same stale bytes and clobber each other.
+        const computation = await withFileMutationQueue(absolutePath, async (): Promise<EditComputationResult> => {
+          throwIfAborted(signal);
+          const rawBytes = await throwIfAbortedAfter(readFile(absolutePath), signal);
+          const decodedFile = decodeTextFile(rawBytes);
+          if (decodedFile === null) {
+            return { kind: "error", text: `Error: ${rawPath} appears to be a binary file. edit supports text files only.` };
           }
 
-          const prepared: PreparedSection[] = [];
-          try {
-            for (const section of patch.sections) prepared.push(await patcher.prepare(section));
-            assertUniqueCanonicalPaths(prepared);
-          } catch (error) {
-            if (error instanceof HashlineMismatchError) {
-              return { content: [{ type: "text" as const, text: error.displayMessage }], isError: true };
-            }
-            throw error;
+          const endingStyle = detectLineEnding(decodedFile.text);
+          const originalDocument = parseLineEndingDocument(decodedFile.text);
+          const fileText = serializeNormalizedDocument(originalDocument);
+          const occurrences = buildReplacementOccurrences(originalDocument, normalizedOld);
+
+          if (occurrences.length === 0) {
+            return { kind: "error", text: `Could not find oldString in ${rawPath}. It must match exactly, including whitespace and indentation.` };
+          }
+          if (occurrences.length > 1 && !replaceAll) {
+            return {
+              kind: "error",
+              text: `Found ${occurrences.length} exact matches for oldString in ${rawPath}. Provide more surrounding context to make the match unique, or set replaceAll to true.`,
+            };
+          }
+          if (replaceAll && hasOverlappingOccurrences(occurrences)) {
+            return {
+              kind: "error",
+              text: `Found overlapping exact matches for oldString in ${rawPath}. replaceAll cannot safely apply overlapping replacements; provide a more specific oldString.`,
+            };
           }
 
-          for (const entry of prepared) {
-            if (!entry.isNoop) continue;
-            if (options.noopLoopGuard) {
-              const { count, escalate } = recordNoopEdit(options.noopLoopGuard, entry.canonicalPath, inputHash);
-              const text = escalate ? noChangeLoopDiagnostic(entry.section.path, count) : noChangeDiagnostic(entry.section.path);
-              return { content: [{ type: "text" as const, text }], isError: true };
-            }
-            return { content: [{ type: "text" as const, text: noChangeDiagnostic(entry.section.path) }], isError: true };
+          let nextDocument = originalDocument;
+          const pendingOccurrences = replaceAll ? [...occurrences] : [occurrences[0]!];
+          for (const occurrence of pendingOccurrences.reverse()) {
+            nextDocument = applyOccurrenceToDocument(nextDocument, occurrence, normalizedNew, endingStyle);
           }
 
-          const sections: string[] = [];
-          const diffs: string[] = [];
-          let firstChangedLine: number | undefined;
-          for (const entry of prepared) {
-            const sectionResult = await patcher.commit(entry);
-            if (options.noopLoopGuard) resetNoopEdit(options.noopLoopGuard, entry.canonicalPath);
-            options.onSuccessfulEdit?.(filesystem.resolveAbsolute(sectionResult.path), sectionResult.after.length === 0 ? [] : sectionResult.after.split("\n").filter((line, index, lines) => !(index === lines.length - 1 && line === "")));
-            const rendered = renderSection(sectionResult);
-            sections.push(rendered.contentText);
-            if (rendered.diff) diffs.push(rendered.diff);
-            if (firstChangedLine === undefined) firstChangedLine = rendered.firstChangedLine;
+          const replacedText = serializeNormalizedDocument(nextDocument);
+          const serializedOutput = serializeLineEndingDocument(nextDocument);
+          const outputBytes = encodeTextFile(serializedOutput, decodedFile.encoding, decodedFile.bom);
+          if (outputBytes.equals(rawBytes)) {
+            return { kind: "error", text: "No changes to apply: edit would not change the file." };
           }
 
+          await writeFile(absolutePath, outputBytes);
           return {
-            content: [{ type: "text" as const, text: sections.join("\n\n") }],
-            details: { diff: diffs.join("\n"), firstChangedLine },
+            kind: "success",
+            fileText,
+            replacedText,
+            replacements: replaceAll ? occurrences.length : 1,
           };
         });
+        if (computation.kind === "error") {
+          return { content: [{ type: "text" as const, text: computation.text }], isError: true };
+        }
+
+        // --- Phase 3: Post-write work (outside the lock) ---
+        // At this point the file is written. Don't let abort or callback errors
+        // turn a successful edit into an error result.
+        try {
+          options.onSuccessfulEdit?.(absolutePath);
+        } catch {
+          // Swallow callback errors — the edit itself succeeded.
+        }
+
+        // Generate diff for display.
+        const { diff, firstChangedLine } = generateNumberedDiff(computation.fileText, computation.replacedText);
+        const replacements = computation.replacements;
+
+        const outputTextResult = diff.trim()
+          ? `Edited ${rawPath} successfully.\nReplacements: ${replacements}\n\ndiff:\n${diff}`
+          : `Edited ${rawPath} successfully.\nReplacements: ${replacements}`;
+
+        return {
+          content: [{ type: "text" as const, text: outputTextResult }],
+          details: { diff, firstChangedLine, path: absolutePath, oldText: computation.fileText, newText: computation.replacedText },
+        };
       } catch (error) {
-        return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
+        const message = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Error: ${message}` }], isError: true };
       }
     },
   };
-  pi.registerTool(tool as any);
-  return tool;
+  const markedTool = withPiBaseErrorMarker(tool);
+  pi.registerTool(markedTool as any);
+  return markedTool;
 }

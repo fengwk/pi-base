@@ -179,7 +179,12 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
   if (textParts.length === 0) return { result, truncated: false };
 
   const combined = textParts.join("\n\n");
-  const declaredUpstreamTruncation = (toolName === "read" || toolName === "grep") && Boolean((result as any)?.details?.upstreamTextTruncated === true);
+  const details = (result as any)?.details;
+  const declaredUpstreamTruncation = (toolName === "read" || toolName === "grep") && Boolean(
+    details?.upstreamTextTruncated === true
+      || details?.linesTruncated === true
+      || details?.truncation,
+  );
   const truncated = await truncateTextOutput(combined, toolName, declaredUpstreamTruncation);
   if (!truncated.truncated) return { result, truncated: false };
 

@@ -2,10 +2,10 @@ Search symbols across the workspace by name.
 
 Usage:
 - Use this for known-symbol lookup when LSP is available.
-- `path` is required because the LSP client uses it to infer the workspace root and choose the correct server.
+- `path` is required and should be a file path inside the target project/workspace, usually the file you are currently working from; it selects the relevant workspace/server.
 - Prefer this when you already know or strongly suspect the symbol name.
 - For broad repository source search, prefer `grep` because it is simpler and usually faster.
-- If the server does not advertise `workspaceSymbolProvider` (e.g. `pylsp`), the call fails fast with a clear "does not advertise workspace/symbol support" message — use `grep` or `find` instead.
+- If workspace symbol search is unavailable for the selected server, the call fails clearly; use `grep` or `find` instead.
 
 Parameters:
 - `path` (required)

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { Skill } from "@earendil-works/pi-coding-agent";
@@ -195,6 +195,148 @@ Broken agent.
       expect(registry.getNotifications().at(-1)?.message).toContain('Unknown agent "broken"');
     } finally {
       warn.mockRestore();
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("uses summaries for completions and defaults agents without a tool allowlist to all base tools", async () => {
+    // Intent: /agent completion is the discoverability surface for agents, and
+    // omitting `tools` should not accidentally disable the baseline toolset.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const model = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "modeler.md",
+        `---
+name: modeler
+model: ${model.provider}/${model.id}
+thinkingLevel: low
+---
+`,
+      );
+
+      const registry = createToolRegistry({ models: [model] });
+      piBaseExtension(registry.pi as any);
+
+      const completions = registry.getCommand("agent").getArgumentCompletions("mod");
+      expect(completions).toEqual([{
+        value: "modeler",
+        label: "modeler",
+        description: `${model.provider}/${model.id} | thinking:low`,
+      }]);
+
+      await registry.runCommand("agent", "modeler", { cwd: root });
+      expect(registry.getActiveTools()).toEqual(BASE_TOOL_NAMES.slice());
+      expect(registry.getCurrentModel()).toEqual(model);
+      expect(registry.pi.getThinkingLevel()).toBe("low");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("filters the inherited system prompt skill block for agents without a custom prompt", async () => {
+    // Intent: an agent may restrict visible skills without replacing the base
+    // system prompt; that filter must preserve surrounding prompt text.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "skill-filter.md",
+        `---
+name: skill-filter
+skills:
+  - spec
+---
+`,
+      );
+
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "skill-filter", { cwd: root });
+
+      const specSkill = makeSkill("spec", "Spec workflow");
+      const otherSkill = makeSkill("other", "Other workflow");
+      const filtered = await registry.emit(
+        "before_agent_start",
+        {
+          systemPrompt: `Before.${formatSkillsForPrompt([specSkill, otherSkill])}\nAfter.`,
+          systemPromptOptions: {
+            cwd: root,
+            selectedTools: ["read"],
+            skills: [specSkill, otherSkill],
+          },
+        },
+        { cwd: root },
+      );
+
+      expect(filtered.systemPrompt).toContain("Before.");
+      expect(filtered.systemPrompt).toContain("After.");
+      expect(filtered.systemPrompt).toContain("<name>spec</name>");
+      expect(filtered.systemPrompt).not.toContain("<name>other</name>");
+      expect(filtered.systemPrompt).toContain("Base Tool Usage Guidance");
+
+      const noMarker = await registry.emit(
+        "before_agent_start",
+        {
+          systemPrompt: "Prompt without a skills block.",
+          systemPromptOptions: {
+            cwd: root,
+            selectedTools: ["read"],
+            skills: [specSkill, otherSkill],
+          },
+        },
+        { cwd: root },
+      );
+      expect(noMarker.systemPrompt).toContain("Prompt without a skills block.");
+      expect(noMarker.systemPrompt).not.toContain("<name>spec</name>");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("does not recurse forever through symlinked agent directories", async () => {
+    // Intent: agent directories may contain symlinks; a symlink cycle must not
+    // make catalog loading recurse until the process crashes.
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await mkdir(join(agentDir, "agents"), { recursive: true });
+      await symlink(join(agentDir, "agents"), join(agentDir, "agents", "self"));
+      await writeAgentFile(agentDir, "simple.md", `---
+name: simple
+description: Simple agent
+---
+
+Simple prompt.
+`);
+
+      const registry = createToolRegistry();
+      expect(() => piBaseExtension(registry.pi as any)).not.toThrow();
+      await registry.runCommand("agent", "simple", {});
+      expect(registry.getStatuses().get("pi-base-agent")).toContain("agent:simple");
+    } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
       } else {

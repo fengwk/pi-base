@@ -2,12 +2,10 @@ Read a text file, directory, or supported image by path.
 
 Usage:
 - Use `read` before editing an existing text file.
-- For text files, the result is emitted in hashline mode:
-  - header: `[path#TAG]`
-  - numbered body lines: `LINE:TEXT`
-- Use the exact `[path#TAG]` header from the latest `read`, `write`, or successful `edit` result when authoring a hashline patch.
-- Use `offset` and `limit` to read large files in chunks. Only the lines that were actually displayed are authorized for follow-up `SWAP` / `DEL` / `INS.PRE` / `INS.POST` anchors under that tag.
-- File size does not disable `[path#TAG]`. Large files still get a tag bound to the full file; only the lines shown in this read are authorized for the next `edit` under that tag. Use `offset` / `limit` to read other regions before editing there.
+- For text files, the result starts with metadata lines (`path`, `kind`, `encoding`, `bom`, `line_endings`, `final_newline`), then a blank line, then numbered lines: `<line>: <content>`.
+- Only the numbered body is file content; the metadata lines are not part of the file.
+- Use the metadata when BOM, line-ending style, or whether the file ends with a newline matters.
+- Use `offset` and `limit` to read large files in chunks. Re-read with a wider window to see more lines.
 - Use `read` on directories instead of `bash ls`.
 
 Parameters:

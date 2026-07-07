@@ -3,6 +3,7 @@ import { renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCo
 import { grepSchema } from "./schemas/grep.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { executeGrep, formatGrepCall, GREP_COLLAPSED_PREVIEW_LINES, type GrepFactory } from "./grep-core.js";
+import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 
 export function registerGrepTool(
   pi: ExtensionAPI,
@@ -22,10 +23,11 @@ export function registerGrepTool(
       const maxCollapsedChars = resolveCollapsedResultMaxChars("grep", undefined, context, options.getCollapsedResultMaxChars);
       return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, theme, context);
     },
-    async execute(_toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}) {
-      return executeGrep(params, signal, onUpdate, ctx, options.createBuiltInGrepTool);
+    async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}) {
+      return executeGrep(toolCallId, params, signal, onUpdate, ctx, options.createBuiltInGrepTool);
     },
   };
-  pi.registerTool(tool as any);
-  return tool;
+  const markedTool = withPiBaseErrorMarker(tool);
+  pi.registerTool(markedTool as any);
+  return markedTool;
 }

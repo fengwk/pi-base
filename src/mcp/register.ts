@@ -47,6 +47,7 @@ export function registerMcpSupport(
   });
   let started = false;
   let startPromise: Promise<void> | undefined;
+  let generation = 0;
 
   pi.registerMessageRenderer(MCP_STATUS_MESSAGE_TYPE, (message) => new Text(String(message.content ?? ""), 0, 0));
   pi.registerCommand("mcp-status", {
@@ -65,19 +66,23 @@ export function registerMcpSupport(
     },
   });
 
-  pi.on("session_start", async (_event, ctx) => {
-    if (started) return;
-    if (startPromise) return startPromise;
+  pi.on("session_start", async (event, ctx) => {
+    const isReload = event.reason === "reload";
+    if (!isReload && started) return;
+    if (!isReload && startPromise) return startPromise;
+    const startGeneration = ++generation;
+    started = false;
     startPromise = manager.start(ctx, pi)
       .then(() => {
-        started = true;
+        if (generation === startGeneration) started = true;
       })
       .finally(() => {
-        startPromise = undefined;
+        if (generation === startGeneration) startPromise = undefined;
       });
     return startPromise;
   });
   pi.on("session_shutdown", async () => {
+    generation++;
     started = false;
     startPromise = undefined;
     await manager.shutdown();

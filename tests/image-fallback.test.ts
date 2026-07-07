@@ -20,8 +20,8 @@ describe("modelSupportsImages", () => {
     expect(modelSupportsImages({})).toBe(false);
   });
 
-  it("returns true when model is undefined (unknown capability)", () => {
-    expect(modelSupportsImages(undefined)).toBe(true);
+  it("returns false when model is undefined (unknown capability)", () => {
+    expect(modelSupportsImages(undefined)).toBe(false);
   });
 });
 

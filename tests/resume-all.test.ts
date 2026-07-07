@@ -1,8 +1,15 @@
 import { mkdir } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager, SessionSelectorComponent } from "@earendil-works/pi-coding-agent";
 import piBaseExtension from "../index.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
+
+const ORIGINAL_LIST_ALL = SessionManager.listAll;
+
+afterEach(() => {
+  (SessionManager as unknown as { listAll: typeof ORIGINAL_LIST_ALL }).listAll = ORIGINAL_LIST_ALL;
+});
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T> | T): Promise<T> {
   const previous = process.env.PI_CODING_AGENT_DIR;
@@ -123,5 +130,59 @@ describe("resume-all command", () => {
     await registry.runCommand("resume-all", "extra", {});
 
     expect(registry.getNotifications()).toContainEqual({ message: "Usage: /resume-all", variant: "warning" });
+  });
+
+  it("uses a picker outside TUI mode and reports cancelled switches", async () => {
+    // Intent: non-TUI interactive contexts use a plain select picker; selected
+    // labels must resolve back to the underlying session path.
+    const root = await createTempWorkspace();
+    const selectedPath = join(root, "sessions", "b.jsonl");
+    (SessionManager as unknown as { listAll: typeof ORIGINAL_LIST_ALL }).listAll = (async () => [
+      { path: join(root, "sessions", "a.jsonl"), cwd: root, name: "Alpha Session", firstMessage: "alpha" },
+      { path: selectedPath, cwd: join(root, "other"), name: "Beta Session", firstMessage: "beta" },
+    ]) as any;
+
+    const selectedLabels: string[] = [];
+    const switched: string[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    registry.setUI({
+      select: async (_title, items) => {
+        selectedLabels.push(...items);
+        return items.find((item) => item.includes("Beta Session"));
+      },
+    });
+    piBaseExtension(registry.pi as any);
+
+    await registry.runCommand("resume-all", "", {
+      cwd: root,
+      mode: "cli",
+      switchSession: async (sessionPath: string) => {
+        switched.push(sessionPath);
+        return { cancelled: true };
+      },
+    });
+
+    expect(selectedLabels.some((label) => label.includes("Alpha Session"))).toBe(true);
+    expect(selectedLabels.some((label) => label.includes("Beta Session"))).toBe(true);
+    expect(switched).toEqual([selectedPath]);
+    expect(registry.getNotifications()).toContainEqual({ message: "Resume cancelled.", variant: "info" });
+  });
+
+  it("reports missing UI and empty session lists", async () => {
+    // Intent: /resume-all should fail safely when it cannot present a picker or
+    // when there are no sessions to resume.
+    const root = await createTempWorkspace();
+    const noUiRegistry = createToolRegistry({ hasUI: false, cwd: root });
+    piBaseExtension(noUiRegistry.pi as any);
+
+    await noUiRegistry.runCommand("resume-all", "", { cwd: root, hasUI: false });
+    expect(noUiRegistry.getNotifications()).toContainEqual({ message: "/resume-all requires interactive UI.", variant: "warning" });
+
+    (SessionManager as unknown as { listAll: typeof ORIGINAL_LIST_ALL }).listAll = (async () => []) as any;
+    const emptyRegistry = createToolRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(emptyRegistry.pi as any);
+
+    await emptyRegistry.runCommand("resume-all", "", { cwd: root, mode: "cli" });
+    expect(emptyRegistry.getNotifications()).toContainEqual({ message: "No sessions found.", variant: "info" });
   });
 });

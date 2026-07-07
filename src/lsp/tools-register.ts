@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
+import { withPiBaseErrorMarker } from "../tool-error-marker.js";
 import { lspDiagnosticsSchema, lspGotoDefinitionSchema, lspJavaDecompileSchema, lspWorkspaceSymbolsSchema } from "../schemas/lsp.js";
 import { lspManager } from "./client.js";
 import {
@@ -19,7 +20,7 @@ import {
 export type { LspResolverFactory } from "./tool-helpers.js";
 
 export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: LspResolverFactory; getCollapsedResultLines?: any; getCollapsedResultMaxChars?: any } = {}) {
-  pi.registerTool({
+  pi.registerTool(withPiBaseErrorMarker({
     name: "lsp_diagnostics",
     label: "lsp_diagnostics",
     description: loadToolDescription("lsp_diagnostics"),
@@ -34,9 +35,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       return executeLspDiagnostics(params, signal, ctx, options.resolverFactory, lspManager);
     },
-  } as any);
+  }) as any);
 
-  pi.registerTool({
+  pi.registerTool(withPiBaseErrorMarker({
     name: "lsp_goto_definition",
     label: "lsp_goto_definition",
     description: loadToolDescription("lsp_goto_definition"),
@@ -51,9 +52,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       return executeLspGotoDefinition(params, signal, ctx, options.resolverFactory, lspManager);
     },
-  } as any);
+  }) as any);
 
-  pi.registerTool({
+  pi.registerTool(withPiBaseErrorMarker({
     name: "lsp_workspace_symbols",
     label: "lsp_workspace_symbols",
     description: loadToolDescription("lsp_workspace_symbols"),
@@ -68,9 +69,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       return executeLspWorkspaceSymbols(params, signal, ctx, options.resolverFactory, lspManager);
     },
-  } as any);
+  }) as any);
 
-  pi.registerTool({
+  pi.registerTool(withPiBaseErrorMarker({
     name: "lsp_java_decompile",
     label: "lsp_java_decompile",
     description: loadToolDescription("lsp_java_decompile"),
@@ -85,5 +86,5 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       return executeLspJavaDecompile(params, signal, ctx, options.resolverFactory, lspManager);
     },
-  } as any);
+  }) as any);
 }

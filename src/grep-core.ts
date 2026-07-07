@@ -4,10 +4,10 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { createGrepTool, DEFAULT_MAX_BYTES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import { ensureTool } from "./internal/pi-coding-agent-utils.js";
-import { looksLikeBinary } from "./binary-detect.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
 import { formatOptionalArgs, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
+import { decodeTextFile } from "./text-codec.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
 
 const DEFAULT_LIMIT = 100;
@@ -17,7 +17,7 @@ const BINARY_PROBE_CHUNK_BYTES = 64 * 1024;
 const GREP_MAX_LINE_LENGTH = 500;
 
 export const GREP_COLLAPSED_PREVIEW_LINES = 15;
-export type GrepFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any) => Promise<any> };
+export type GrepFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
 function formatGrepPattern(value: unknown): string {
   if (value === undefined || value === null) return "<missing-pattern>";
@@ -378,7 +378,7 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
   });
 }
 
-export async function executeGrep(params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}, createBuiltInGrepTool?: GrepFactory): Promise<any> {
+export async function executeGrep(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}, createBuiltInGrepTool?: GrepFactory): Promise<any> {
   try {
     const pattern = String(params.pattern ?? "");
     const rawPath = String(params.path ?? "").replace(/^@/, "");
@@ -401,7 +401,7 @@ export async function executeGrep(params: any, signal?: AbortSignal, onUpdate?: 
       if (!searchPathIsDirectory) {
         try {
           const buffer = await readBinaryProbeBuffer(absolutePath, timeout.signal);
-          if (looksLikeBinary(buffer)) {
+          if (decodeTextFile(buffer) === null) {
             return {
               content: [{ type: "text" as const, text: `Error: ${rawPath} appears to be a binary file. grep only supports searching text files or directories.` }],
               isError: true,
@@ -438,7 +438,7 @@ export async function executeGrep(params: any, signal?: AbortSignal, onUpdate?: 
       }
 
       const builtIn = createBuiltInGrepTool(cwd);
-      return await builtIn.execute(toolCallIdPlaceholder, {
+      return await builtIn.execute(toolCallId || toolCallIdPlaceholder, {
         path: rawPath,
         pattern,
         glob: params.include,
@@ -447,7 +447,7 @@ export async function executeGrep(params: any, signal?: AbortSignal, onUpdate?: 
         timeout: timeoutSeconds,
         limit,
         ...(params.multiline === true ? { multiline: true } : {}),
-      } as any, timeout.signal, onUpdate);
+      } as any, timeout.signal, onUpdate, ctx);
     } catch (error) {
       if (timeout.didTimeout()) {
         return { content: [{ type: "text" as const, text: `Error: Search timed out after ${timeoutSeconds}s.` }], isError: true };

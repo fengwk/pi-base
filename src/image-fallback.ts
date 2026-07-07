@@ -9,7 +9,7 @@ export const IMAGE_UNDERSTANDING_SKILL_DOC = join(IMAGE_UNDERSTANDING_SKILL_DIR,
 
 /** Pi model registry uses `input: ("text" | "image")[]`. Missing `input` is treated as text-only for read fallback. */
 export function modelSupportsImages(model: { input?: readonly string[] } | undefined | null): boolean {
-  if (!model) return true;
+  if (!model) return false;
   const input = model.input;
   if (!Array.isArray(input)) return false;
   return input.includes("image");

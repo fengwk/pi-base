@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { formatSkillsForPrompt, getAgentDir, parseFrontmatter, type BuildSystemPromptOptions, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
@@ -503,24 +503,32 @@ function asTrimmedString(value: unknown): string | undefined {
 function listMarkdownFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const output: string[] = [];
-  walkMarkdownFiles(dir, output);
+  walkMarkdownFiles(dir, output, new Set());
   output.sort((left, right) => left.localeCompare(right));
   return output;
 }
 
-function walkMarkdownFiles(dir: string, output: string[]): void {
+function walkMarkdownFiles(dir: string, output: string[], visited: Set<string>): void {
+  let realDir: string;
+  try {
+    realDir = realpathSync(dir);
+  } catch {
+    return;
+  }
+  if (visited.has(realDir)) return;
+  visited.add(realDir);
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
-      walkMarkdownFiles(fullPath, output);
+      walkMarkdownFiles(fullPath, output, visited);
       continue;
     }
     if (entry.isSymbolicLink()) {
       try {
         const stats = statSync(fullPath);
         if (stats.isDirectory()) {
-          walkMarkdownFiles(fullPath, output);
+          walkMarkdownFiles(fullPath, output, visited);
           continue;
         }
         if (stats.isFile() && fullPath.endsWith(".md")) {

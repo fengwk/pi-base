@@ -6,7 +6,7 @@ function render(component: any): string {
   return component.render(200).join("\n");
 }
 
-describe("bash renderer extra coverage", () => {
+describe("bash renderer behavior", () => {
   it("renders concise calls without default workdir noise and with timeout", () => {
     const registry = createToolRegistry();
     registerBashRendererTool(registry.pi as any, {

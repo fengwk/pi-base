@@ -5,10 +5,14 @@ import { createSdkMcpClient, resolveConfigString, resolveConfigStringMap } from 
 const ORIGINAL_EXAMPLE = process.env.PI_BASE_MCP_TEST_VALUE;
 const ORIGINAL_CLIENT_CONNECT = Client.prototype.connect;
 const ORIGINAL_CLIENT_CLOSE = Client.prototype.close;
+const ORIGINAL_CLIENT_LIST_TOOLS = Client.prototype.listTools;
+const ORIGINAL_CLIENT_CALL_TOOL = Client.prototype.callTool;
 
 afterEach(() => {
   Client.prototype.connect = ORIGINAL_CLIENT_CONNECT;
   Client.prototype.close = ORIGINAL_CLIENT_CLOSE;
+  Client.prototype.listTools = ORIGINAL_CLIENT_LIST_TOOLS;
+  Client.prototype.callTool = ORIGINAL_CLIENT_CALL_TOOL;
   if (ORIGINAL_EXAMPLE === undefined) {
     delete process.env.PI_BASE_MCP_TEST_VALUE;
   } else {
@@ -69,5 +73,77 @@ describe("mcp client config resolution", () => {
     await expect(connectPromise).rejects.toBeInstanceOf(Error);
     expect(closeCalls).toBe(1);
     expect(client.isConnected()).toBe(false);
+  });
+
+  it("connects once, lists tools, calls tools, and disconnects cleanly", async () => {
+    // Intent: SdkMcpClient is the boundary around the MCP SDK; once connected it
+    // must delegate listTools/callTool while tracking connection state.
+    let connectCalls = 0;
+    let closeCalls = 0;
+    let seenCall: unknown;
+
+    Client.prototype.connect = (async () => {
+      connectCalls += 1;
+    }) as any;
+    Client.prototype.close = (async () => {
+      closeCalls += 1;
+    }) as any;
+    Client.prototype.listTools = (async () => ({
+      tools: [{ name: "echo", description: "Echo" }],
+    })) as any;
+    Client.prototype.callTool = (async (...args: unknown[]) => {
+      seenCall = args;
+      return { content: [{ type: "text", text: "ok" }] };
+    }) as any;
+
+    const client = createSdkMcpClient("mm", { type: "local", command: ["mock-mcp"], env: { TOKEN: "literal" } });
+    await client.connect(1_000);
+    await client.connect(1_000);
+
+    expect(client.isConnected()).toBe(true);
+    expect(connectCalls).toBe(1);
+    await expect(client.listTools()).resolves.toEqual([{ name: "echo", description: "Echo" }]);
+    await expect(client.callTool("echo", { text: "hello" })).resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
+    expect(seenCall).toEqual([{ name: "echo", arguments: { text: "hello" } }, undefined, undefined]);
+
+    await client.disconnect();
+    expect(client.isConnected()).toBe(false);
+    expect(closeCalls).toBe(1);
+    await expect(client.listTools()).rejects.toThrow("MCP client is not connected");
+  });
+
+  it("times out slow SDK connections and closes the pending client", async () => {
+    // Intent: startupTimeoutMs should not leave a half-open SDK client behind
+    // when the underlying transport never completes its handshake.
+    let closeCalls = 0;
+    Client.prototype.connect = (() => new Promise(() => undefined)) as any;
+    Client.prototype.close = (async () => {
+      closeCalls += 1;
+    }) as any;
+
+    const client = createSdkMcpClient("mm", { type: "local", command: ["mock-mcp"] });
+    await expect(client.connect(10)).rejects.toThrow("Connection timeout");
+    expect(client.isConnected()).toBe(false);
+    expect(closeCalls).toBe(1);
+  });
+
+  it("rejects websocket transports with custom headers", async () => {
+    // Intent: the MCP SDK cannot attach custom headers to websocket transport;
+    // pi-base should fail early instead of pretending the auth config works.
+    let closeCalls = 0;
+    Client.prototype.close = (async () => {
+      closeCalls += 1;
+    }) as any;
+
+    const client = createSdkMcpClient("docs", {
+      type: "remote",
+      transport: "websocket",
+      url: "wss://example.com/mcp",
+      headers: { Authorization: "Bearer token" },
+    });
+
+    await expect(client.connect(1_000)).rejects.toThrow("websocket transport does not support custom headers");
+    expect(client.isConnected()).toBe(false);
+    expect(closeCalls).toBe(0);
   });
 });

@@ -8,7 +8,7 @@ function render(component: any): string {
   return component.render(200).join("\n");
 }
 
-describe("lsp tool render and branch coverage", () => {
+describe("lsp tool render behavior", () => {
   it("renders call previews without default workdir noise", () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);

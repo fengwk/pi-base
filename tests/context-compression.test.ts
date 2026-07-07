@@ -24,12 +24,6 @@ const GENERIC_TOOL_OUTPUT_PLACEHOLDER = "[context compression: older tool output
 const WRITE_EDIT_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state or retrieve the relevant context again.]";
 const BASH_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state, or re-run the command only if it is safe to do so.]";
 
-function extractHeader(text: string): string {
-  const header = text.split("\n").find((line) => /^\[[^#\r\n]+#[0-9A-F]{4}\]$/i.test(line));
-  if (!header) throw new Error(`No hashline header found in:\n${text}`);
-  return header;
-}
-
 function userMessage(text: string) {
   return { role: "user", content: [{ type: "text", text }], timestamp: Date.now() };
 }
@@ -89,8 +83,7 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-1", readArgs, undefined, undefined, { cwd: root });
-    const header = extractHeader(getText(readResult));
-    const editArgs = { workdir: ".", input: `${header}\nSWAP 1.=1:\n+alpha v1` };
+    const editArgs = { workdir: ".", path: "src/example.txt", oldString: "alpha", newString: "alpha v1" };
     const editResult = await registry.getTool("edit").execute("edit-1", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -114,8 +107,7 @@ describe("context compression", () => {
 
     const writeArgs = { workdir: ".", path: "src/example.txt", content: "alpha\nbeta\n" };
     const writeResult = await registry.getTool("write").execute("write-1", writeArgs, undefined, undefined, { cwd: root });
-    const header = extractHeader(getText(writeResult));
-    const editArgs = { workdir: ".", input: `${header}\nSWAP 1.=1:\n+alpha v1` };
+    const editArgs = { workdir: ".", path: "src/example.txt", oldString: "alpha", newString: "alpha v1" };
     const editResult = await registry.getTool("edit").execute("edit-after-write", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -139,14 +131,12 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-for-error-context", readArgs, undefined, undefined, { cwd: root });
-    const header = extractHeader(getText(readResult));
-    const failedEditArgs = { workdir: ".", input: `${header.replace(/#[0-9A-F]{4}/, "#0000")}\nSWAP 1.=1:\n+alpha bad` };
+    const failedEditArgs = { workdir: ".", path: "src/example.txt", oldString: "nonexistent", newString: "replacement" };
     const failedEdit = await registry.getTool("edit").execute("edit-error-context", failedEditArgs, undefined, undefined, { cwd: root });
     expect(failedEdit.isError).toBe(true);
-    expect(getText(failedEdit)).toContain("Edit rejected for src/example.txt");
-    expect(getText(failedEdit)).toContain("1:alpha");
+    expect(getText(failedEdit)).toContain("Could not find oldString");
 
-    const goodEditArgs = { workdir: ".", input: `${header}\nSWAP 1.=1:\n+alpha v1` };
+    const goodEditArgs = { workdir: ".", path: "src/example.txt", oldString: "alpha", newString: "alpha v1" };
     const goodEdit = await registry.getTool("edit").execute("edit-after-error-context", goodEditArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -166,8 +156,7 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-default", readArgs, undefined, undefined, { cwd: root });
-    const header = extractHeader(getText(readResult));
-    await registry.getTool("edit").execute("edit-default", { workdir: ".", input: `${header}\nSWAP 1.=1:\n+alpha v1` }, undefined, undefined, { cwd: root });
+    await registry.getTool("edit").execute("edit-default", { workdir: ".", path: "src/example.txt", oldString: "alpha", newString: "alpha v1" }, undefined, undefined, { cwd: root });
 
     const messages = [...toolExchange("read", "read-default", readArgs, readResult)];
     const transformed = await registry.emit("context", { messages }, { cwd: root });

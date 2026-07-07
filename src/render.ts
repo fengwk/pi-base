@@ -2,7 +2,6 @@ import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 
 const DEFAULT_COLLAPSED_RESULT_LINES = 20;
-const HASHLINE_HEADER_RE = /^(\[[^\r\n]+#[0-9A-F]{4}\])$/;
 const KEY_VALUE_RE = /^([A-Za-z][A-Za-z0-9]*):(?!\/\/)(?:\s*(.*))?$/;
 const SECTION_HEADER_RE = /^([A-Za-z][A-Za-z0-9 ]*):$/;
 
@@ -184,18 +183,9 @@ function colorizeResultLine(line: string, theme: any, state: { inDiff: boolean }
 
   if (line.startsWith("Error:")) return paint(theme, "error", line);
   if (line.startsWith("Hint:")) return paint(theme, "warning", line);
-  if (line.startsWith("Edit applied to ")) return paint(theme, "success", line);
-  if (line.startsWith("Created ") || line.startsWith("Overwrote ")) return paint(theme, "success", line);
-  if (line.startsWith("Verify that the result matches the intended change.")) return paint(theme, "warning", line);
-  if (line.startsWith("Review the current file snapshot below")) return paint(theme, "warning", line);
-  if (line.startsWith("Edit failed")) return paint(theme, "error", line);
-  if (line.startsWith("Use the refreshed ") && line.includes("[path#TAG]")) return paint(theme, "warning", line);
+  if (line.startsWith("Edited ") || line.startsWith("Created ") || line.startsWith("Overwrote ")) return paint(theme, "success", line);
+  if (line.startsWith("Replacements:")) return paint(theme, "muted", line);
   if (isError && line.startsWith("Validation failed")) return paint(theme, "error", line);
-
-  const hashlineHeaderMatch = line.match(HASHLINE_HEADER_RE);
-  if (hashlineHeaderMatch) {
-    return paint(theme, "accent", hashlineHeaderMatch[1] ?? line);
-  }
 
   const numberedLineMatch = line.match(/^(\d+):(.*)$/);
   if (numberedLineMatch) {

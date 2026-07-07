@@ -10,6 +10,16 @@ export interface LspServerConfig {
   rootMarkers?: string[];
   firstMatchMarkers?: string[];
   requestTimeoutMs?: number;
+  workspaceData?: LspWorkspaceDataConfig;
+}
+
+export type LspWorkspaceDataMode = "stable" | "process" | "disabled";
+
+export interface LspWorkspaceDataConfig {
+  /** Controls auto-injected jdtls `-data`. Default is "stable". */
+  mode?: LspWorkspaceDataMode;
+  /** Base directory for generated jdtls workspace data paths. Defaults to ~/.cache/jdtls-workspace. */
+  baseDir?: string;
 }
 
 /**
@@ -31,6 +41,11 @@ export interface LspServerEntry {
    * Increase for slow servers like `gopls` on large workspaces.
    */
   requestTimeoutMs?: number;
+  /**
+   * jdtls-only workspace data policy for auto-injected `-data`.
+   * Existing explicit `-data` command args always win.
+   */
+  workspaceData?: LspWorkspaceDataConfig;
 }
 
 export interface LspDiscoveryConfig {
@@ -232,7 +247,7 @@ export class LspDiscoveryResolver {
           const hint = `Hint: Add to .pi/pi-base.json or ~/.pi/agent/pi-base.json:\n${JSON.stringify({ lsp: { servers: { [id]: buildServerEntryExample(id, config.command) } } }, null, 2)}`;
           throw new Error(`LSP server '${id}' is not installed for ${filePath}. Command '${config.command[0]}' must be available on PATH or be an absolute executable path (~/..., $HOME/..., and \${HOME}/... are supported). Update lsp.servers.${id} in pi-base settings.\n${hint}`);
         }
-        return { id, command, extensions: config.extensions, rootMarkers: config.rootMarkers, firstMatchMarkers: config.firstMatchMarkers, requestTimeoutMs: config.requestTimeoutMs };
+        return { id, command, extensions: config.extensions, rootMarkers: config.rootMarkers, firstMatchMarkers: config.firstMatchMarkers, requestTimeoutMs: config.requestTimeoutMs, workspaceData: config.workspaceData };
       }
     }
     throw new Error(`No LSP server configured for ${filePath}.`);

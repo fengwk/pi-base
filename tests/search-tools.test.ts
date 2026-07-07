@@ -4,6 +4,7 @@ import { registerGrepTool } from "../src/grep.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import iconv from "iconv-lite";
 
 describe("grep", () => {
   it("returns matching lines from builtin output without adding anchors", async () => {
@@ -175,6 +176,44 @@ describe("grep", () => {
     const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "beta", path: "src", include: "**/*.ts" }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).not.toBe(true);
     expect(seenParams.glob).toBe("**/*.ts");
+  });
+  it("passes toolCallId and ctx to builtin grep", async () => {
+    const registry = createToolRegistry();
+    const seen: any = {};
+    const ctx = { cwd: process.cwd(), marker: "ctx" };
+    registerGrepTool(registry.pi as any, {
+      createBuiltInGrepTool: () => ({
+        execute: async (id: string, _params: any, _signal?: AbortSignal, _onUpdate?: any, receivedCtx?: any) => {
+          seen.id = id;
+          seen.ctx = receivedCtx;
+          return { content: [{ type: "text", text: "example.ts:2: beta" }] };
+        },
+      }),
+    });
+    const result = await registry.getTool("grep").execute("grep-call-42", { workdir: ".", pattern: "beta", path: "src" }, undefined, undefined, ctx);
+    expect(result.isError).not.toBe(true);
+    expect(seen.id).toBe("grep-call-42");
+    expect(seen.ctx).toBe(ctx);
+  });
+  it("does not reject legacy-encoded text files as binary before delegating grep", async () => {
+    const root = await createTempWorkspace();
+    await writeFile(join(root, "gbk.txt"), iconv.encode("中文 beta\n", "gbk"));
+    const registry = createToolRegistry();
+    let delegated = false;
+    registerGrepTool(registry.pi as any, {
+      createBuiltInGrepTool: () => ({
+        execute: async () => {
+          delegated = true;
+          return { content: [{ type: "text", text: "gbk.txt:1: beta" }] };
+        },
+      }),
+    });
+
+    const result = await registry.getTool("grep").execute("1", { workdir: ".", pattern: "beta", path: "gbk.txt" }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect(delegated).toBe(true);
+    expect(getText(result)).toContain("gbk.txt:1");
   });
   it("passes multiline to builtin grep when a custom factory is provided", async () => {
     const registry = createToolRegistry();

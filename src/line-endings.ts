@@ -7,6 +7,13 @@ export interface ParsedLineEndingDocument {
   defaultEnding: ConcreteLineEnding;
 }
 
+export function formatLineEndingStyle(style: LineEndingStyle): "crlf" | "lf" | "cr" | "mixed" {
+  if (style === "\r\n") return "crlf";
+  if (style === "\r") return "cr";
+  if (style === "\n") return "lf";
+  return "mixed";
+}
+
 export function detectLineEnding(content: string): LineEndingStyle {
   const hasCRLF = content.includes("\r\n");
   const withoutCRLF = content.replace(/\r\n/g, "");
@@ -21,16 +28,6 @@ export function detectLineEnding(content: string): LineEndingStyle {
 
 export function normalizeToLF(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-export function restoreLineEndings(text: string, ending: ConcreteLineEnding): string {
-  if (ending === "\r\n") return text.replace(/\n/g, "\r\n");
-  if (ending === "\r") return text.replace(/\n/g, "\r");
-  return text;
-}
-
-export function stripBom(content: string): { bom: string; text: string } {
-  return content.startsWith("﻿") ? { bom: "﻿", text: content.slice(1) } : { bom: "", text: content };
 }
 
 export function parseLineEndingDocument(content: string): ParsedLineEndingDocument {
@@ -70,4 +67,11 @@ export function serializeLineEndingDocument(document: Pick<ParsedLineEndingDocum
     throw new Error("Line ending document is inconsistent: lines and eolAfter must have the same length.");
   }
   return document.lines.map((line, index) => `${line}${document.eolAfter[index] ?? ""}`).join("");
+}
+
+export function serializeNormalizedDocument(document: Pick<ParsedLineEndingDocument, "lines" | "eolAfter">): string {
+  if (document.lines.length !== document.eolAfter.length) {
+    throw new Error("Line ending document is inconsistent: lines and eolAfter must have the same length.");
+  }
+  return document.lines.map((line, index) => `${line}${document.eolAfter[index] === null ? "" : "\n"}`).join("");
 }

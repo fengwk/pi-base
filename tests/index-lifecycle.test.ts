@@ -9,7 +9,7 @@ function render(component: any): string {
   return component.render(200).join("\n");
 }
 
-describe("index extra coverage", () => {
+describe("index lifecycle behavior", () => {
   it("reloads runtime settings, clears resolvers, and shuts down lsp on session reload", async () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);

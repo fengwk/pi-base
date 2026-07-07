@@ -6,8 +6,8 @@ Usage:
 - Prefer narrowing the path or pattern before increasing `timeout_seconds`. The default timeout is usually sufficient, and explicitly setting a timeout is not recommended unless a broader scan is truly necessary.
 - Treat `grep` as a candidate locator, not editing context. After `grep`, use `read` with targeted `offset`/`limit` to inspect enough surrounding code before editing.
 - The content search respects `.gitignore`.
-- When `path` is a single binary file, `grep` fails fast with a clear binary-file error instead of delegating to ripgrep.
-- `multiline=true` enables ripgrep multiline mode for patterns that must match across line breaks. Use it when the pattern contains an actual newline or the regex newline escape `\n`; in JSON/tool-call payloads that regex escape is written as `\\n`.
+- When `path` is a single binary file, `grep` fails clearly instead of returning binary output.
+- `multiline=true` enables matching across line breaks. Use it when the pattern contains an actual newline or the regex newline escape `\n`; in JSON/tool-call payloads that regex escape is written as `\\n`.
 
 Parameters:
 - `pattern` (required)

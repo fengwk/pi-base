@@ -2,11 +2,10 @@ Get diagnostics from the language server without running a build.
 
 Usage:
 - Use this for fast single-file checking when LSP is available.
-- `path` is required because the LSP client uses it to infer the workspace root and choose the correct server.
+- `path` is required and should be a file path inside the target project/workspace, usually the file you want diagnostics for; it selects the relevant workspace/server.
 - Prefer this before large builds when you only need current-file errors or warnings.
-- After a successful `edit` or `write`, the LSP layer will sync already-open files before diagnostics are requested again.
-- If a server does not actually support diagnostics, the configured `requestTimeoutMs` will surface that as a timeout error rather than the call returning silently with no data.
-- This tool does not pre-check server capabilities. For most servers it first tries `textDocument/diagnostic`, then falls back to waiting for pushed diagnostics with a configurable timeout; for `jdtls` it waits for `publishDiagnostics` directly and serializes same-workspace cold-start diagnostics until the first publish result arrives because that path is more reliable in practice.
+- Run it again after edits when you need an updated view of the file.
+- If the selected server cannot provide diagnostics, the call fails or times out clearly.
 
 Parameters:
 - `path` (required)

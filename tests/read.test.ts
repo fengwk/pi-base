@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { registerReadTool } from "../src/read.js";
-import { InMemorySnapshotStore } from "../src/hashline.js";
 import { LspDiscoveryResolver } from "../src/lsp/discovery.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 
 describe("read tool", () => {
-  it("reads text files in hashline mode with offset/limit", async () => {
+  it("reads text files with numbered lines and offset/limit", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\nthree\nfour\n");
     const registry = createToolRegistry();
@@ -20,7 +20,6 @@ describe("read tool", () => {
       },
     });
     registerReadTool(registry.pi as any, {
-      snapshots: new InMemorySnapshotStore(),
       createResolver: () => resolver,
     });
 
@@ -32,37 +31,142 @@ describe("read tool", () => {
       { cwd: root },
     );
     const text = getText(result);
-    expect(text).toMatch(/^\[src\/example\.ts#[0-9A-F]{4}\]$/m);
-    expect(text).toContain("2:two");
-    expect(text).toContain("3:three");
+    expect(text).not.toMatch(/\[src\/example\.ts#/);
+    expect(text).toContain("kind: file");
+    expect(text).toContain("encoding: utf-8");
+    expect(text).toContain("bom: none");
+    expect(text).toContain("line_endings: lf");
+    expect(text).toContain("final_newline: yes");
+    expect(text).toContain("2: two");
+    expect(text).toContain("3: three");
     expect(text).toContain("[Showing lines 2-3 of 4. Re-run read with offset=4 to continue.]");
     expect(text).toContain("[lsp: file type supported, but server not installed (typescript)]");
   });
 
-  it("records only the displayed lines for partial reads", async () => {
+  it("does not emit TAG header", async () => {
     const root = await createTempWorkspace();
-    await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\nthree\nfour\n");
+    await writeWorkspaceFile(root, "src/example.ts", "one\ntwo\n");
     const registry = createToolRegistry();
-    const snapshots = new InMemorySnapshotStore();
-    let seenMeta: { tag?: string; displayedLines?: number[] } | undefined;
-    registerReadTool(registry.pi as any, {
-      snapshots,
-      onSuccessfulRead: (_absolutePath, _lines, meta) => {
-        seenMeta = meta;
-      },
-    });
+    registerReadTool(registry.pi as any);
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
+    const text = getText(result);
+    expect(text).not.toMatch(/^\[.*#[0-9A-F]{4}\]$/m);
+    expect(text).toContain("kind: file");
+    expect(text).toContain("encoding: utf-8");
+    expect(text).toContain("1: one");
+    expect(text).toContain("2: two");
+  });
 
-    const result = await registry.getTool("read").execute(
-      "1",
-      { workdir: ".", path: "src/example.ts", offset: 2, limit: 2 },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    expect(result.isError).not.toBe(true);
-    expect(seenMeta?.displayedLines).toEqual([2, 3]);
-    const snapshot = snapshots.head(join(root, "src", "example.ts"));
-    expect(snapshot?.seenLines ? [...snapshot.seenLines].sort((a, b) => a - b) : []).toEqual([2, 3]);
+  it("reports factual metadata while keeping a normalized body view", async () => {
+    const root = await createTempWorkspace();
+    await mkdir(join(root, "src"), { recursive: true });
+    const file = join(root, "src", "mixed.txt");
+    await writeFile(file, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("one\r\ntwo\rthree", "utf8")]));
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any);
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/mixed.txt" }, undefined, undefined, { cwd: root });
+    const text = getText(result);
+    expect(text).toContain("encoding: utf-8");
+    expect(text).toContain("bom: utf-8");
+    expect(text).toContain("line_endings: mixed");
+    expect(text).toContain("final_newline: no");
+    expect(text).toContain("1: one");
+    expect(text).toContain("2: two");
+    expect(text).toContain("3: three");
+  });
+
+  it("detects utf-16le text files and preserves a normal text view", async () => {
+    const root = await createTempWorkspace();
+    await mkdir(join(root, "src"), { recursive: true });
+    const file = join(root, "src", "utf16.txt");
+    await writeFile(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("alpha\r\nbeta\r\n", "utf16le")]));
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any);
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/utf16.txt" }, undefined, undefined, { cwd: root });
+    const text = getText(result);
+    expect(text).toContain("encoding: utf-16le");
+    expect(text).toContain("bom: utf-16le");
+    expect(text).toContain("line_endings: crlf");
+    expect(text).toContain("1: alpha");
+    expect(text).toContain("2: beta");
+  });
+
+  it("detects legacy windows-1252 text files", async () => {
+    const root = await createTempWorkspace();
+    await mkdir(join(root, "src"), { recursive: true });
+    const file = join(root, "src", "legacy.txt");
+    await writeFile(file, Buffer.from("café\nolé\n", "latin1"));
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any);
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/legacy.txt" }, undefined, undefined, { cwd: root });
+    const text = getText(result);
+    expect(text).toContain("encoding: windows-1252");
+    expect(text).toContain("bom: none");
+    expect(text).toContain("1: café");
+    expect(text).toContain("2: olé");
+  });
+
+  it("marks read results whose displayed lines were truncated", async () => {
+    // Intent: the global output guard must know that read only has a display
+    // preview, not the full source line, so it should not claim a full output file.
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/long.txt", `${"x".repeat(2100)}\n`);
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any);
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/long.txt" }, undefined, undefined, { cwd: root });
+    expect(result.details?.upstreamTextTruncated).toBe(true);
+    expect(getText(result)).toContain("line truncated to 2000 chars");
+  });
+
+  it("waits for in-flight file mutations before reading file contents", async () => {
+    // Intent: read must cooperate with edit/write's per-file queue so it never
+    // observes a same-process write in the middle of its critical section.
+    const root = await createTempWorkspace();
+    const absolutePath = await writeWorkspaceFile(root, "src/queued.txt", "stable\n");
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any);
+
+    let releaseMutation!: () => void;
+    let mutationStarted!: () => void;
+    const started = new Promise<void>((resolve) => { mutationStarted = resolve; });
+    const blocker = withFileMutationQueue(absolutePath, async () => {
+      mutationStarted();
+      await new Promise<void>((resolve) => { releaseMutation = resolve; });
+    });
+    await started;
+
+    let settled = false;
+    const pending = registry.getTool("read")
+      .execute("1", { workdir: ".", path: "src/queued.txt" }, undefined, undefined, { cwd: root })
+      .then((result: any) => {
+        settled = true;
+        return result;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+
+    releaseMutation();
+    await blocker;
+    const result = await pending;
+    expect(getText(result)).toContain("1: stable");
+  });
+
+  it("treats an empty file as having zero body lines", async () => {
+    // Intent: empty files must not invent a synthetic `1: ` line, so line counts
+    // and follow-up offsets remain accurate for the agent.
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/empty.txt", "");
+    const seen: Array<string[] | undefined> = [];
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any, {
+      onSuccessfulRead: (_absolutePath, lines) => seen.push(lines),
+    });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/empty.txt" }, undefined, undefined, { cwd: root });
+    const text = getText(result);
+    expect(text).toContain("kind: file");
+    expect(text).toContain("final_newline: no");
+    expect(text).not.toContain("\n1: ");
+    expect(seen).toEqual([[]]);
   });
 
   it("uses the target file directory when building the LSP resolver for absolute paths outside cwd", async () => {
@@ -100,18 +204,17 @@ describe("read tool", () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/hello　world.ts", "alpha\n");
     const registry = createToolRegistry();
-    registerReadTool(registry.pi as any, { snapshots: new InMemorySnapshotStore() });
+    registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/hello　world.ts" }, undefined, undefined, { cwd: root });
     expect(result.isError).not.toBe(true);
-    expect(getText(result)).toMatch(/^\[src\/hello　world\.ts#[0-9A-F]{4}\]$/m);
-    expect(getText(result)).toContain("1:alpha");
+    expect(getText(result)).toContain("1: alpha");
   });
 
   it("truncates very long lines", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "dist/bundle.txt", `${"x".repeat(2500)}\n`);
     const registry = createToolRegistry();
-    registerReadTool(registry.pi as any, { snapshots: new InMemorySnapshotStore() });
+    registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "dist/bundle.txt", limit: 1 }, undefined, undefined, { cwd: root });
     expect(getText(result)).toContain(`line truncated to 2000 chars`);
   });
@@ -129,7 +232,9 @@ describe("read tool", () => {
         },
       }),
     });
-    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "@image.png" }, undefined, undefined, { cwd: root });
+    // Intent: image delegation should only happen when the active model
+    // explicitly advertises image input support.
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "@image.png" }, undefined, undefined, { cwd: root, model: { input: ["text", "image"] } });
     const text = getText(result);
     expect(text).toContain("path: image.png");
     expect(text).toContain("mediaType: image");
@@ -137,17 +242,16 @@ describe("read tool", () => {
     expect(seenPath).toBe("image.png");
   });
 
-  it("marks snapshots only for text file reads", async () => {
+  it("calls onSuccessfulRead only for text file reads", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, "src/dir"), { recursive: true });
     await writeWorkspaceFile(root, "src/file.ts", "alpha\n");
     await writeWorkspaceFile(root, "image.png", "fake");
-    const seen: Array<{ path: string; lines?: string[]; displayedLines?: number[] }> = [];
+    const seen: Array<{ path: string; lines?: string[] }> = [];
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any, {
-      onSuccessfulRead: (absolutePath, lines, meta) => seen.push({ path: absolutePath, lines, displayedLines: meta?.displayedLines }),
+      onSuccessfulRead: (absolutePath, lines) => seen.push({ path: absolutePath, lines }),
       createBuiltInReadTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "image delegated" }] }) }),
-      snapshots: new InMemorySnapshotStore(),
     });
 
     await registry.getTool("read").execute("1", { workdir: ".", path: "src/dir" }, undefined, undefined, { cwd: root });
@@ -157,7 +261,6 @@ describe("read tool", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]?.path.endsWith("src/file.ts")).toBe(true);
     expect(seen[0]?.lines).toEqual(["alpha"]);
-    expect(seen[0]?.displayedLines).toEqual([1]);
   });
 
   it("rejects binary non-image files", async () => {

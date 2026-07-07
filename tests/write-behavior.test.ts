@@ -8,7 +8,7 @@ function render(component: any): string {
   return component.render(200).join("\n");
 }
 
-describe("write extra coverage", () => {
+describe("write behavior", () => {
   it("renders full multi-line write call previews with explicit workdir", () => {
     const registry = createToolRegistry();
     registerWriteTool(registry.pi as any);
@@ -37,14 +37,12 @@ describe("write extra coverage", () => {
     expect(await readFile(join(root, "x.ts"), "utf8")).toBe("x");
   });
 
-  it("calls hooks on successful writes and reports overwrites", async () => {
+  it("calls onSuccessfulWrite hook and reports overwrites", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/existing.ts", "old\n");
-    const anchored: Array<{ path: string; lines: string[] | undefined }> = [];
     const writes: string[] = [];
     const registry = createToolRegistry();
     registerWriteTool(registry.pi as any, {
-      onFileAnchored: (absolutePath, lines) => anchored.push({ path: absolutePath, lines }),
       onSuccessfulWrite: (absolutePath) => writes.push(absolutePath),
     });
 
@@ -56,8 +54,7 @@ describe("write extra coverage", () => {
       { cwd: root },
     );
 
-    expect(getText(result)).toContain("Overwrote src/existing.ts.");
-    expect(anchored[0]?.lines).toEqual(["new", "content"]);
+    expect(getText(result)).toContain("Overwrote src/existing.ts successfully.");
     expect(writes[0]).toContain("src/existing.ts");
   });
 });

@@ -36,11 +36,13 @@ interface FakeClientStep {
   connectDelayMs?: number;
   connectError?: string;
   tools?: McpTool[];
+  toolsSequence?: McpTool[][];
   callResult?: (name: string, args: Record<string, unknown>) => McpToolCallResult;
 }
 
 class FakeMcpClient implements McpProtocolClient {
   private connected = false;
+  private listToolsCalls = 0;
 
   constructor(private readonly step: FakeClientStep) {}
 
@@ -58,6 +60,11 @@ class FakeMcpClient implements McpProtocolClient {
 
   async listTools(): Promise<McpTool[]> {
     if (!this.connected) throw new Error("MCP client is not connected.");
+    if (this.step.toolsSequence) {
+      const index = Math.min(this.listToolsCalls, this.step.toolsSequence.length - 1);
+      this.listToolsCalls += 1;
+      return this.step.toolsSequence[index] ?? [];
+    }
     return this.step.tools ?? [];
   }
 
@@ -347,6 +354,165 @@ describe("mcp support", () => {
     expect(getText(result)).toContain("echo:");
   });
 
+  it("does not report its own MCP tools as conflicts after shutdown and restart", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+
+    const updatedEchoTool: McpTool = {
+      ...echoTool,
+      description: "Echo input text v2",
+    };
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [
+            { tools: [echoTool] },
+            { tools: [updatedEchoTool] },
+          ],
+        }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "echo"));
+    expect(registry.getTool("echo").description).toBe("Echo input text");
+
+    await registry.emit("session_shutdown", { reason: "quit" }, { cwd: root });
+    await registry.emit("session_start", { reason: "resume" }, { cwd: root });
+    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && registry.getTool("echo").description === "Echo input text v2");
+
+    await registry.runCommand("mcp-status", "", { cwd: root });
+    const message = String(registry.getMessages().at(-1)?.content ?? "");
+    expect(message).toContain("echo");
+    expect(message).not.toContain("[conflict");
+  });
+
+  it("reloads MCP config and transfers aliases owned by removed pi-base servers", async () => {
+    // Intent: /reload must rebuild MCP from fresh settings, and a tool alias
+    // previously registered by pi-base should be overwriteable when the owning
+    // server key disappears from the new config.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          old: {
+            type: "local",
+            command: ["mock-mcp-old"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+
+    const newEchoTool: McpTool = {
+      ...echoTool,
+      description: "Echo input text from new server",
+    };
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          old: [{
+            tools: [echoTool],
+            callResult: () => ({ content: [{ type: "text", text: "old-server" }] }),
+          }],
+          next: [{
+            tools: [newEchoTool],
+            callResult: () => ({ content: [{ type: "text", text: "new-server" }] }),
+          }],
+        }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && registry.getTool("echo").description === "Echo input text");
+    const firstResult = await registry.getTool("echo").execute("1", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(getText(firstResult)).toContain("old-server");
+
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          next: {
+            type: "local",
+            command: ["mock-mcp-next"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "reload" }, { cwd: root });
+    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && registry.getTool("echo").description === "Echo input text from new server");
+
+    const result = await registry.getTool("echo").execute("2", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(getText(result)).toContain("new-server");
+    await registry.runCommand("mcp-status", "", { cwd: root });
+    expect(String(registry.getMessages().at(-1)?.content ?? "")).not.toContain("[conflict");
+  });
+
+  it("marks tools stale when heartbeat discovers that the server removed them", async () => {
+    // Intent: MCP servers can change their advertised tools over time; pi-base
+    // should preserve visibility in /mcp-status instead of silently pretending
+    // the old tool is still fresh.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [{
+            toolsSequence: [
+              [echoTool, noArgTool],
+              [echoTool],
+            ],
+          }],
+        }),
+        heartbeatIntervalMs: 20,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "echo") && hasTool(registry, "create_temp_dir"));
+    const deadline = Date.now() + 1_000;
+    let message = "";
+    while (Date.now() < deadline) {
+      await registry.runCommand("mcp-status", "", { cwd: root });
+      message = String(registry.getMessages().at(-1)?.content ?? "");
+      if (message.includes("create_temp_dir [stale]")) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(message).toContain("create_temp_dir [stale]");
+  });
+
   it("converts JSON Schema type arrays into MCP parameter unions", () => {
     const unionSchema: any = convertJsonSchemaToTypeBox({ type: ["string", "null"] });
     expect(Array.isArray(unionSchema.anyOf)).toBe(true);
@@ -513,6 +679,60 @@ describe("mcp support", () => {
     await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers" && hasTool(registry, "mm_echo"), 1_500);
 
     expect(registry.getStatuses().get("pi-base-mcp")).toBe("MCP: 1/1 servers");
+  });
+
+  it("reconnects after a recoverable MCP tool-call transport error", async () => {
+    // Intent: MCP transports can close between heartbeat checks; a tool-call
+    // socket error should trigger reconnect so the next call can recover.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [
+            {
+              tools: [echoTool],
+              callResult: () => {
+                throw new Error("socket closed");
+              },
+            },
+            {
+              tools: [echoTool],
+              callResult: (_name, args) => ({
+                content: [{ type: "text", text: `recovered:${String(args.text ?? "")}` }],
+              }),
+            },
+          ],
+        }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "echo"));
+
+    const failed = await registry.getTool("echo").execute("1", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(failed.isError).toBe(true);
+    expect(getText(failed)).toContain("socket closed");
+
+    await waitFor(() => registry.getStatuses().get("pi-base-mcp") === "MCP: 1/1 servers");
+    const recovered = await registry.getTool("echo").execute("2", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(recovered.isError).not.toBe(true);
+    expect(getText(recovered)).toContain("recovered:hello");
   });
 
   it("prints a tree view for /mcp-status", async () => {

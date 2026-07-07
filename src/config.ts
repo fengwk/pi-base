@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { LspDiscoveryConfig, LspServerEntry } from "./lsp/discovery.js";
+import type { LspDiscoveryConfig, LspServerEntry, LspWorkspaceDataConfig, LspWorkspaceDataMode } from "./lsp/discovery.js";
 import type { LocalMcpServerConfig, McpConfig, McpServerConfig, RemoteMcpServerConfig } from "./mcp/types.js";
 import { expandHomePath, isHomeShortcutPath } from "./path-utils.js";
 
@@ -104,6 +104,26 @@ function requireStringRecord(value: unknown, path: string): Record<string, strin
   return output;
 }
 
+function sanitizeLspWorkspaceDataConfig(value: unknown, path: string): LspWorkspaceDataConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
+  const input = value as Record<string, unknown>;
+  const output: LspWorkspaceDataConfig = {};
+  if (input.mode !== undefined) {
+    const mode = input.mode;
+    if (mode !== "stable" && mode !== "process" && mode !== "disabled") {
+      throw new Error(`${path}.mode must be "stable", "process", or "disabled".`);
+    }
+    output.mode = mode as LspWorkspaceDataMode;
+  }
+  if (input.baseDir !== undefined) {
+    if (typeof input.baseDir !== "string" || input.baseDir.trim().length === 0) {
+      throw new Error(`${path}.baseDir must be a non-empty string.`);
+    }
+    output.baseDir = input.baseDir;
+  }
+  return output;
+}
+
 function sanitizeLspServerEntry(value: unknown, path: string): LspServerEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
   const input = value as Record<string, unknown>;
@@ -113,6 +133,7 @@ function sanitizeLspServerEntry(value: unknown, path: string): LspServerEntry {
   };
   if (input.rootMarkers !== undefined) output.rootMarkers = requireStringArray(input.rootMarkers, `${path}.rootMarkers`);
   if (input.firstMatchMarkers !== undefined) output.firstMatchMarkers = requireStringArray(input.firstMatchMarkers, `${path}.firstMatchMarkers`);
+  if (input.workspaceData !== undefined) output.workspaceData = sanitizeLspWorkspaceDataConfig(input.workspaceData, `${path}.workspaceData`);
   if (input.requestTimeoutMs !== undefined) {
     if (typeof input.requestTimeoutMs !== "number" || !Number.isFinite(input.requestTimeoutMs) || input.requestTimeoutMs <= 0) {
       throw new Error(`${path}.requestTimeoutMs must be a positive finite number.`);
@@ -450,7 +471,10 @@ function normalizeLspConfigPaths(config: LspDiscoveryConfig | undefined): LspDis
       const normalizedCommand = command0
         ? [normalizeCommandExecutable(command0, `lsp.servers.${id}`), ...rest]
         : entry.command;
-      return [id, { ...entry, command: normalizedCommand }];
+      const workspaceData = entry.workspaceData?.baseDir
+        ? { ...entry.workspaceData, baseDir: normalizeDirectoryPath(entry.workspaceData.baseDir, `lsp.servers.${id}.workspaceData.baseDir`) }
+        : entry.workspaceData;
+      return [id, { ...entry, command: normalizedCommand, ...(workspaceData ? { workspaceData } : {}) }];
     })),
   };
 }

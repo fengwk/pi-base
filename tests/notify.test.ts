@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension, { type PiBaseNotifyPayload } from "../index.js";
+import { registerNotifySupport } from "../src/notify.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 async function writeProjectSettings(root: string, settings: unknown): Promise<void> {
@@ -178,5 +179,16 @@ describe("notify support", () => {
       sessionID: "session-3",
       sessionTitle: "Completed Session",
     });
+  });
+
+  it("does not throw when registered without loadSettings", async () => {
+    // Intent: notify support is an exported helper; omitting loadSettings should
+    // make notifications a no-op instead of throwing through optional chaining.
+    const registry = createToolRegistry({ hasUI: true });
+    const hooks = registerNotifySupport(registry.pi as any);
+
+    await expect(registry.emit("agent_end", { type: "agent_end", messages: [] }, {})).resolves.toBeUndefined();
+    await expect(hooks.onPermissionAsked({ ctx: {} as any })).resolves.toBeUndefined();
+    expect(() => hooks.onPermissionRejected({ ctx: {} as any })).not.toThrow();
   });
 });

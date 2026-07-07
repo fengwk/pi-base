@@ -9,12 +9,6 @@ function requiredParams(tool: any): string[] {
   return Array.isArray(tool.parameters?.required) ? tool.parameters.required : [];
 }
 
-function extractHeader(text: string): string {
-  const header = text.split("\n").find((line) => /^\[[^#\r\n]+#[0-9A-F]{4}\]$/i.test(line));
-  if (!header) throw new Error(`No hashline header found in:\n${text}`);
-  return header;
-}
-
 describe("workdir defaults", () => {
   it("declares workdir as optional for all cwd-scoped tools", () => {
     const registry = createToolRegistry();
@@ -50,12 +44,11 @@ describe("workdir defaults", () => {
     const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const readText = getText(readResult);
     expect(readResult.isError).not.toBe(true);
-    expect(readText).toContain("1:alpha");
+    expect(readText).toContain("1: alpha");
 
-    const header = extractHeader(readText);
     const editResult = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", input: `${header}\nSWAP 1.=1:\n+beta` },
+      { workdir: ".", path: "src/example.ts", oldString: "alpha", newString: "beta" },
       undefined,
       undefined,
       { cwd: root },
@@ -93,12 +86,11 @@ describe("workdir defaults", () => {
     const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts", workdir: "repo" }, undefined, undefined, { cwd: root });
     const readText = getText(readResult);
     expect(readResult.isError).not.toBe(true);
-    expect(readText).toContain("1:alpha");
+    expect(readText).toContain("1: alpha");
 
-    const header = extractHeader(readText);
     const editResult = await registry.getTool("edit").execute(
       "2",
-      { workdir: "repo", input: `${header}\nSWAP 1.=1:\n+beta` },
+      { workdir: "repo", path: "src/example.ts", oldString: "alpha", newString: "beta" },
       undefined,
       undefined,
       { cwd: root },

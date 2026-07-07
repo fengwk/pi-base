@@ -8,8 +8,8 @@ Environment:
 Usage:
 - Use `bash` for commands, not as the normal way to read, search, or edit repository files.
 - `workdir` defaults to the agent's current working directory. If `workdir` is provided, the command runs from that directory. Prefer `workdir` over embedding `cd ... &&` inside `command` when you need a different directory.
-- On Linux, WSL, and macOS, `bash` prefers the host shell when `$SHELL` is `bash` or `zsh`, and loads common startup files to better match the terminal environment.
-- Long-running commands (e.g. builds, tests, large migrations, `mvn`, `gradle`, `docker build`) must explicitly pass a larger `timeout_seconds` if they may exceed the default. On timeout the command is asked to terminate first, then force-killed if it does not exit within a short grace period.
+- Commands run in a shell environment intended to be close to the user's terminal.
+- Long-running commands (e.g. builds, tests, large migrations, `mvn`, `gradle`, `docker build`) must explicitly pass a larger `timeout_seconds` if they may exceed the default.
 - If a command will create files or directories, first confirm the target parent location with the file tools.
 - Quote file paths that contain spaces.
 - When commands are independent, prefer separate parallel tool calls. When one shell step depends on a previous step, chain them with `&&`; use `;` only when failure of earlier steps does not matter.

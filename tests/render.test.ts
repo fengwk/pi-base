@@ -62,25 +62,17 @@ describe("render helpers", () => {
     const rendered = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: true }, theme, { lastComponent: undefined }));
     expect(rendered).toContain("<muted>path:</muted> <accent>/tmp/demo.txt</accent>");
     expect(rendered).toContain("<muted>status:</muted> <success>ok</success>");
-    expect(rendered).toContain("<accent>[src/demo.ts#A1B2]</accent>");
     expect(rendered).toContain("<muted>1:</muted><toolOutput>hello</toolOutput>");
     expect(rendered).toContain("<toolDiffRemoved>- 1 old line</toolDiffRemoved>");
     expect(rendered).toContain("<toolDiffAdded>+ 1 new line</toolDiffAdded>");
     expect(rendered).toContain("<toolDiffContext>  2 unchanged line</toolDiffContext>");
   });
 
-  it("colorizes natural-language write success guidance", () => {
-    const raw = [
-      "Created src/demo.ts.",
-      "Review the current file snapshot below and reuse its header for follow-up hashline edits.",
-      "",
-      "1:hello",
-    ].join("\n");
+  it("colorizes write success message", () => {
+    const raw = "Created src/demo.ts successfully.";
 
     const rendered = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: true }, theme, { lastComponent: undefined }));
-    expect(rendered).toContain("<success>Created src/demo.ts.</success>");
-    expect(rendered).toContain("<warning>Review the current file snapshot below and reuse its header for follow-up hashline edits.</warning>");
-    expect(rendered).toContain("<muted>1:</muted><toolOutput>hello</toolOutput>");
+    expect(rendered).toContain("<success>Created src/demo.ts successfully.</success>");
   });
   it("colorizes status states and explicit error fields", () => {
     const raw = [

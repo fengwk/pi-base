@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { hasPiBaseToolErrorMarker } from "./tool-error-marker.js";
 
 function combineTextContent(result: Pick<AgentToolResult<any>, "content">): string {
   return Array.isArray(result?.content)
@@ -14,13 +15,14 @@ function inferBashError(text: string): boolean {
   return false;
 }
 
-export function inferToolResultIsError(toolName: string, result: Pick<AgentToolResult<any>, "content"> & { isError?: boolean }): boolean {
+export function inferToolResultIsError(toolName: string, result: Pick<AgentToolResult<any>, "content" | "details"> & { isError?: boolean }): boolean {
   if (result.isError === true) return true;
+  if (hasPiBaseToolErrorMarker(result.details)) return true;
   const text = combineTextContent(result).trimStart();
   if (!text) return false;
 
   if (toolName === "edit") {
-    return text.startsWith("Edit failed") || text.startsWith("Validation failed") || text.startsWith("Error:");
+    return text.startsWith("Error:") || text.startsWith("Could not find") || text.startsWith("Found ") || text.startsWith("File ") || text.startsWith("No changes") || text.startsWith("oldString");
   }
 
   if (toolName === "bash") {

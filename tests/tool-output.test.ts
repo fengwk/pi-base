@@ -85,6 +85,15 @@ describe("tool output truncation", () => {
     expect((truncated.result as any).details?.truncation?.alreadyTruncated).toBe(true);
   });
 
+  it("recognizes grep's native truncation metadata as upstream truncation", async () => {
+    const truncated = await applyUnifiedOutputTruncation("grep", {
+      content: [{ type: "text", text: "short line" }],
+      details: { linesTruncated: true },
+    } as any);
+    expect(truncated.truncated).toBe(true);
+    expect((truncated.result as any).details?.truncation?.alreadyTruncated).toBe(true);
+  });
+
   it("does not infer read/grep truncation from ordinary content without explicit metadata", async () => {
     const truncated = await applyUnifiedOutputTruncation("grep", {
       content: [{ type: "text", text: "literal text ... (line truncated to 2000 chars)" }],

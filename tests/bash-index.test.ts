@@ -401,7 +401,7 @@ describe("bash tool and index", () => {
       toolName: "edit",
       toolCallId: "2",
       input: { path: "src/example.ts" },
-      content: [{ type: "text", text: "Edit failed for src/example.ts. Fresh anchors are required before editing this file." }],
+      content: [{ type: "text", text: "Error: Could not find oldString in src/example.ts. It must match exactly, including whitespace and indentation." }],
       details: undefined,
       isError: false,
     });

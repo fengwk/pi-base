@@ -8,7 +8,7 @@ export function loadToolDescription(name: string, replacements?: Record<string, 
   if (cached !== undefined) return cached;
   let text = readFileSync(new URL(`../prompts/${name}.md`, import.meta.url), "utf8").trim();
   for (const [placeholder, value] of Object.entries(replacements ?? {})) {
-    text = text.replaceAll(`\${placeholder}`, value);
+    text = text.replaceAll(`\${${placeholder}}`, value);
   }
   cache.set(key, text);
   return text;

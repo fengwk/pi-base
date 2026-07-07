@@ -8,8 +8,15 @@ export function createTimeoutSignal(parent: AbortSignal | undefined, timeoutSeco
   const controller = new AbortController();
   let timedOut = false;
   const forwardAbort = () => controller.abort(parent?.reason);
-  if (parent?.aborted) controller.abort(parent.reason);
-  else parent?.addEventListener("abort", forwardAbort, { once: true });
+  if (parent?.aborted) {
+    controller.abort(parent.reason);
+    return {
+      signal: controller.signal,
+      cleanup: () => undefined,
+      didTimeout: () => false,
+    };
+  }
+  parent?.addEventListener("abort", forwardAbort, { once: true });
 
   const timeout = setTimeout(() => {
     timedOut = true;

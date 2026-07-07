@@ -6,7 +6,7 @@ function render(component: any): string {
   return component.render(200).join("\n");
 }
 
-describe("grep multiline extra coverage", () => {
+describe("grep multiline behavior", () => {
   it("renders grep calls with all optional flags", () => {
     const registry = createToolRegistry();
     registerGrepTool(registry.pi as any);

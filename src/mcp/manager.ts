@@ -3,6 +3,7 @@ import type { LoadedPiBaseSettings } from "../config.js";
 import type { CollapsedResultLinesResolver, CollapsedResultMaxCharsResolver } from "../render.js";
 import { buildMcpToolName, createMcpToolDefinition, resolveMcpToolPrefix } from "./adapter.js";
 import { createSdkMcpClient } from "./client.js";
+import { withPiBaseErrorMarker } from "../tool-error-marker.js";
 import type { McpClientFactory, McpProtocolClient, McpServerConfig, McpServerSnapshot, McpServerState, McpSnapshot, McpTool, McpToolSnapshot } from "./types.js";
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -88,7 +89,6 @@ export class McpManager {
     this.ctx = undefined;
     this.pi = undefined;
     this.runtimes.clear();
-    this.toolOwners.clear();
     await Promise.allSettled(disconnects);
 
     if (ctx) {
@@ -213,7 +213,8 @@ export class McpManager {
       const aliasName = buildMcpToolName(runtime.key, tool.name, runtime.config.toolPrefix);
       const owner = this.toolOwners.get(aliasName);
       const registeredByThisServer = owner === runtime.key;
-      const conflictsWithExistingTool = !registeredByThisServer && existingToolNames.has(aliasName);
+      const ownedByInactiveServer = owner !== undefined && owner !== runtime.key && !this.runtimes.has(owner);
+      const conflictsWithExistingTool = !registeredByThisServer && !ownedByInactiveServer && existingToolNames.has(aliasName);
 
       if (conflictsWithExistingTool) {
         runtime.tools.set(tool.name, {
@@ -226,15 +227,16 @@ export class McpManager {
         continue;
       }
 
+      pi.registerTool(withPiBaseErrorMarker(createMcpToolDefinition({
+        serverKey: runtime.key,
+        serverConfig: runtime.config,
+        tool,
+        callTool: (serverKey, toolName, args, ctx, signal) => this.call(serverKey, toolName, args, ctx, signal),
+        getCollapsedResultLines: this.options.getCollapsedResultLines,
+        getCollapsedResultMaxChars: this.options.getCollapsedResultMaxChars,
+      })));
+
       if (!registeredByThisServer) {
-        pi.registerTool(createMcpToolDefinition({
-          serverKey: runtime.key,
-          serverConfig: runtime.config,
-          tool,
-          callTool: (serverKey, toolName, args, ctx, signal) => this.call(serverKey, toolName, args, ctx, signal),
-          getCollapsedResultLines: this.options.getCollapsedResultLines,
-          getCollapsedResultMaxChars: this.options.getCollapsedResultMaxChars,
-        }));
         this.toolOwners.set(aliasName, runtime.key);
         existingToolNames.add(aliasName);
         if (!activeTools.includes(aliasName)) {

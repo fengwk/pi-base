@@ -190,9 +190,11 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 - `offset` 默认 `1`
 - `limit` 默认 `200`，最大 `2000`
-- 文本读取以 hashline 模式返回：`[path#TAG]` 头部 + `LINE:TEXT` 编号正文
+- 文本读取返回统一的 agent 视图：`path`、`kind`、`encoding`、`bom`、`line_endings`、`final_newline` 元数据 + `<line>: <content>` 编号正文
+- 支持 UTF-8、UTF BOM、UTF-16 启发式和常见 legacy 编码探测；模型看到的是 LF 规范化后的简单文本视图
 - 单行显示超过 `2000` 字符时会在显示层截断，并标记该行被截断
-- 返回头部会包含 `path`、`kind`、`mediaType`、`offset`、`limit`、`totalLines`、`hasMore`、`nextOffset`、`lsp` 支持状态
+- 分页信息通过结果末尾的 `[Showing lines ...]` notice 给出
+- 结果末尾会包含 LSP 支持状态
 
 其它行为：
 
@@ -224,19 +226,20 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 ### `edit`
 
-- 只适合小范围、显式行范围的 hashline 修改
-- 参数是 `workdir?` + `input`（完整 patch 文本），不是 `path` + `edits[]`
-- 必须先从同一 session 的 `read`、`write` 或之前的 `edit` 结果中拿到新鲜 `[path#TAG]`
-- 支持六种操作：`SWAP`、`DEL`、`INS.PRE`、`INS.POST`、`INS.HEAD`、`INS.TAIL`
-- `.BLK` / recovery / 隐式块扩展已移除；stale tag 直接失败，要求重新 `read`
-- 会保留原文件 BOM 和行尾风格
-- 修改成功后返回新的 `[path#TAG]` 头部和紧凑 diff 预览
+- 适合小范围、精确文本替换
+- 参数是 `path`、`oldString`、`newString`，可选 `replaceAll` 和 `workdir`
+- `oldString` 必须与文件当前内容中的文本精确匹配；匹配 0 次或多次时会失败，除非显式 `replaceAll: true`
+- 模型应从最近的 `read` 输出复制真实文件内容，不要包含行号前缀
+- 可以用空字符串 `newString` 表达删除，也可以用空字符串 `oldString` 表达插入到文件开头
+- 编辑时会基于统一 LF 视图匹配，再按文件真实 BOM、编码、换行风格和尾行换行映射回磁盘
+- 修改成功后返回替换次数和编号 diff 预览
 
 ### `write`
 
 - 适合新文件或整文件覆盖
 - 会自动创建父目录
-- 成功后返回完整文件快照，并带新的 `[path#TAG]` 头部与编号正文
+- 对已有文件会尽量沿用原编码、BOM 和换行风格；新文件默认 UTF-8
+- 成功后返回创建或覆盖成功的简短结果
 
 ### `bash`
 
@@ -424,7 +427,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `read` 到当前 prompt 中已注入 skill 路径下的文件时，不参与普通的 age compression；只有在同文件后来被改动且 `anchorHygiene` 生效时才会被折叠
 - 不会额外写 session marker，也不会显示长期 UI 标记
 - 当 `ctx.model.provider` 命中 `disabledProviders`（不区分大小写）时，**本次 LLM 调用不做任何 context 投影**（消息原样发送）
-- hashline 下 `anchorHygiene` 折叠的是带 `[path#TAG]` / `N:` 的旧 `read`/`write`/`edit` 成功结果；**文件级 TAG + seen-lines 仍在内存里约束 edit**，与是否压缩历史 tool 输出是两件事
+- `anchorHygiene` 会折叠已经被后续修改影响的旧 `read`/`write`/`edit` 成功结果，避免历史工具输出误导当前编辑判断
 
 
 示例：
@@ -612,7 +615,10 @@ You are a planning-focused agent. Break work into clear steps before editing.
         "command": ["$HOME/.local/share/nvim/mason/bin/jdtls"],
         "extensions": [".java"],
         "rootMarkers": ["pom.xml", "build.gradle", "settings.gradle"],
-        "firstMatchMarkers": [".git"]
+        "firstMatchMarkers": [".git"],
+        "workspaceData": {
+          "mode": "process"
+        }
       },
       "typescript-language-server": {
         "command": ["typescript-language-server", "--stdio"],
@@ -639,6 +645,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 | `rootMarkers` | 否 | 多模块项目根标记，采用“最顶层匹配优先”。 |
 | `firstMatchMarkers` | 否 | 备选根标记，采用“第一次匹配优先”。 |
 | `requestTimeoutMs` | 否 | 每个请求的超时，默认 `60000`。 |
+| `workspaceData` | 否 | 仅影响 `jdtls` 自动注入的 `-data` 目录；显式写在 `command` 里的 `-data` 优先。 |
 
 行为规则：
 
@@ -648,6 +655,9 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `rootMarkers` 和 `firstMatchMarkers` 都存在时，优先使用 `rootMarkers` 的最顶层结果，否则退回 `firstMatchMarkers`
 - 缺失可执行文件时，会返回带具体 `pi-base.json` 片段的错误提示
 - `pi-base` 不额外提供 `jvmArgs` 字段；所有 server 特定参数都直接写在 `command` 里
+- `jdtls` 默认会自动追加 `-data ~/.cache/jdtls-workspace/<workspace-md5>`，避免不同项目共享同一个 workspace data
+- 多个 Pi 进程并发打开同一个 Java workspace 时，建议配置 `workspaceData: { "mode": "process" }`，生成 `<workspace-md5>-<pid>`，避免 jdtls 文件锁冲突
+- `workspaceData.mode` 支持 `stable`、`process`、`disabled`；`workspaceData.baseDir` 可改写生成目录的父目录，必须是绝对路径或 HOME shortcut
 
 ## 命令
 
@@ -695,14 +705,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 ### 错误标记修复
 
-有些工具实现只返回了 `Error: ...` 文本，但没有带 `isError: true`。`pi-base` 会在全局 `tool_result` hook 中补齐这些错误标记，覆盖范围包括：
-
-- `edit`
-- `bash`
-- `read`
-- `write`
-- `grep`
-- `lsp_*`
+`pi-base` 自己注册的工具会在错误结果的 `details` 中写入内部错误标记。全局 `tool_result` hook 会优先识别这个标记，再对旧结果保留少量文本启发式兜底。这样内置工具、LSP 工具、`find` wrapper 和动态 MCP 工具都能稳定补齐 `isError: true`。
 
 ### 状态栏
 

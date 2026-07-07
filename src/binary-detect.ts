@@ -20,3 +20,20 @@ export function looksLikeBinary(buf: Buffer): boolean {
   // If U+FFFD came from invalid byte sequences, re-encoding will differ.
   return !Buffer.from(decoded, "utf8").equals(buf);
 }
+
+export function looksLikeDecodedBinaryText(text: string): boolean {
+  if (text.length === 0) return false;
+
+  let suspicious = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code === 0xfffd) {
+      suspicious += 2;
+      continue;
+    }
+    if (code === 0x09 || code === 0x0a || code === 0x0d) continue;
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) suspicious++;
+  }
+
+  return suspicious / text.length > 0.1;
+}
