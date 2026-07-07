@@ -323,7 +323,8 @@ describe("tool renderers", () => {
           {} as any,
           streamingContext as any,
         ));
-        expect(rendered, testCase.name).toContain("streaming args");
+        expect(rendered, testCase.name).not.toContain("<missing-");
+        expect(rendered.trim().length, testCase.name).toBeGreaterThan(0);
       }
 
       const writeRendered = render(registry.getTool("write").renderCall(
@@ -341,16 +342,16 @@ describe("tool renderers", () => {
         streamingContext as any,
       ));
       expect(editRendered).toContain("-old-14");
-      expect(editRendered).toContain("streaming args");
 
-      // A write whose path has not streamed in yet must omit the path entirely (no filler
-      // "..."), while still labeling the call as streaming.
+      // A write whose path has not streamed in yet must still render the content that has
+      // arrived, without filler "..." or synthetic missing-path placeholders.
       const pendingPath = render(registry.getTool("write").renderCall(
         { content: "partial" },
         {} as any,
         streamingContext as any,
       ));
-      expect(pendingPath).toContain("streaming args");
+      expect(pendingPath).toContain("write");
+      expect(pendingPath).toContain("partial");
       expect(pendingPath).not.toContain("...");
       expect(pendingPath).not.toContain("<missing-path>");
       expect(editRendered).toContain("earlier lines");
@@ -387,14 +388,13 @@ describe("tool renderers", () => {
 
       // Streaming: rolling window keeps the block bounded
       const streaming = renderOnce(false);
-      expect(streaming).toContain("streaming args");
+      expect(streaming).toContain("novel_opening.txt");
       expect(streaming).toContain("earlier lines");
       expect(streaming).toContain("line-90");
       expect(streaming).not.toContain("line-3");
 
-      // Args complete: full content is rendered, no truncation, no streaming label
+      // Args complete: full content is rendered with no truncation
       const settled = renderOnce(true);
-      expect(settled).not.toContain("streaming args");
       expect(settled).not.toContain("earlier lines");
       expect(settled).toContain("line-1");
       expect(settled).toContain("line-3");
@@ -425,7 +425,6 @@ describe("tool renderers", () => {
 
       // Execution started while argsComplete is still false → must expand fully
       const executing = renderOnce({ argsComplete: false, executionStarted: true, isPartial: true, expanded: false });
-      expect(executing).not.toContain("streaming args");
       expect(executing).not.toContain("earlier lines");
       expect(executing).toContain("line-1");
       expect(executing).toContain("line-3");
@@ -456,7 +455,6 @@ describe("tool renderers", () => {
         state: {},
       } as any));
 
-      expect(restored).not.toContain("streaming args");
       expect(restored).not.toContain("earlier lines");
       expect(restored).toContain("line-1");
       expect(restored).toContain("line-3");

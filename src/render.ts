@@ -260,20 +260,12 @@ function isStreamingCall(context: CallRenderContextLike | undefined): boolean {
 function normalizeStreamingCallPlaceholders(textValue: string): string {
   // Omit not-yet-received argument placeholders (and their leading space) so a streaming
   // call renders only the parts that have actually arrived, instead of a filler "...".
-  // The explicit " [streaming args]" label already signals that arguments are pending.
   return textValue.replace(MISSING_CALL_ARG_RE, "");
-}
-
-function injectStreamingCallLabel(textValue: string, theme: any): string {
-  const label = styleMuted(theme, " [streaming args]");
-  const firstNewline = textValue.indexOf("\n");
-  if (firstNewline === -1) return `${textValue}${label}`;
-  return `${textValue.slice(0, firstNewline)}${label}${textValue.slice(firstNewline)}`;
 }
 
 export function renderStreamingCallText(textValue: string, theme: any, context: CallRenderContextLike | undefined) {
   if (!isStreamingCall(context)) return renderCallText(textValue, context?.lastComponent);
-  const normalized = injectStreamingCallLabel(normalizeStreamingCallPlaceholders(textValue), theme);
+  const normalized = normalizeStreamingCallPlaceholders(textValue);
   const last = context?.lastComponent;
   if (last instanceof StreamingCallWindowComponent) {
     last.update(normalized, theme);

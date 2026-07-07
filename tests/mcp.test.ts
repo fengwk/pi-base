@@ -314,7 +314,7 @@ describe("mcp support", () => {
     );
 
     const rendered = component?.render(200).join("\n") ?? "";
-    expect(rendered).toContain("streaming args");
+    expect(rendered).not.toContain("<missing-");
     expect(rendered).toContain("\"query\": \"hello\"");
   });
 
