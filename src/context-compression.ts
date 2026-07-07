@@ -3,7 +3,7 @@ import { dirname, isAbsolute, relative } from "node:path";
 import { normalizeSlashes, resolveToCwd, stripAtPrefix } from "./path-utils.js";
 import type { ContextCompressionConfig } from "./config.js";
 
-type AnchorHygieneToolName = "read" | "write" | "edit";
+type AnchorHygieneToolName = "read" | "edit";
 
 type CompressionReason = "file_changed_later" | "older_tool_output";
 
@@ -57,7 +57,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isAnchorHygieneToolName(value: unknown): value is AnchorHygieneToolName {
-  return value === "read" || value === "write" || value === "edit";
+  return value === "read" || value === "edit";
 }
 
 
@@ -244,10 +244,10 @@ function buildAgeCompressionEligibility(
 }
 
 function isFileContextResult(toolName: string, message: ToolResultMessageLike): boolean {
-  // read/write/edit results all describe file state that becomes stale after a mutation.
-  // read carries file content; write/edit carry success messages/diffs that reference
-  // a file version that may no longer be current.
-  if (toolName === "read" || toolName === "write" || toolName === "edit") return message.isError !== true;
+  // read carries file content; edit carries a success message + diff that references
+  // a file version that may no longer be current. Both become stale after a later mutation.
+  // write acks are intentionally kept as timeline anchors and never masked here.
+  if (toolName === "read" || toolName === "edit") return message.isError !== true;
   return false;
 }
 

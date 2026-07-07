@@ -21,7 +21,6 @@ afterEach(() => {
 });
 
 const GENERIC_TOOL_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. Re-run the tool if you need those details.]";
-const WRITE_EDIT_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state or retrieve the relevant context again.]";
 const BASH_OUTPUT_PLACEHOLDER = "[context compression: older tool output omitted. If you need those details, re-check the current state, or re-run the command only if it is safe to do so.]";
 
 function userMessage(text: string) {
@@ -62,14 +61,19 @@ function toolExchange(toolName: string, toolCallId: string, args: any, result: a
 }
 
 describe("context compression", () => {
-  it("does not alter the footer when contextCompression is configured", async () => {
+  it("does not introduce dedicated footer markers when contextCompression is configured", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
     await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { type: "session_start" }, { cwd: root });
-    expect(registry.renderFooter(120)).toEqual([]);
+
+    const footerLines = registry.renderFooter(120);
+    expect(footerLines.length).toBeGreaterThanOrEqual(2);
+    expect(footerLines.at(-1) ?? "").toContain("agent:default");
+    expect(footerLines.join("\n")).not.toContain("contextCompression");
+    expect(footerLines.join("\n")).not.toContain("anchorHygiene");
   });
 
   it("masks stale read outputs after later edits to the same file", async () => {
@@ -98,7 +102,7 @@ describe("context compression", () => {
     expect((transformed.messages[2] as any).content[0].arguments).toEqual(editArgs);
   });
 
-  it("masks stale write outputs after later edits", async () => {
+  it("does not mask write acknowledgements as part of anchorHygiene", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
     await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
@@ -116,8 +120,13 @@ describe("context compression", () => {
     ];
     const transformed = await registry.emit("context", { messages }, { cwd: root });
 
-    expect(getText(transformed.messages[1])).toBe(WRITE_EDIT_OUTPUT_PLACEHOLDER);
-    expect(getText(transformed.messages[3])).toContain("alpha v1");
+    // anchorHygiene intentionally excludes `write`: the earlier write ack must stay visible
+    // as a timeline anchor. The later edit is the most recent tool call, so there's no
+    // subsequent mutation to dirty its path either. Net effect: nothing gets masked,
+    // and the context hook returns undefined (no message rewrite happened).
+    expect(transformed).toBeUndefined();
+    expect(getText(messages[1])).toMatch(/^(Created|Overwrote) src\/example\.txt successfully\.$/);
+    expect(getText(messages[3])).toContain("Edited src/example.txt successfully");
   });
 
   it("leaves failed edit error context visible after a later successful edit", async () => {

@@ -434,7 +434,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `read` 到当前 prompt 中已注入 skill 路径下的文件时，不参与普通的 age compression；只有在同文件后来被改动且 `anchorHygiene` 生效时才会被折叠
 - 不会额外写 session marker，也不会显示长期 UI 标记
 - 当 `ctx.model.provider` 命中 `disabledProviders`（不区分大小写）时，**本次 LLM 调用不做任何 context 投影**（消息原样发送）
-- `anchorHygiene` 会折叠已经被后续修改影响的旧 `read`/`write`/`edit` 成功结果，避免历史工具输出误导当前编辑判断
+- `anchorHygiene` 会折叠已经被后续修改影响的旧 `read`/`edit` 成功结果，避免历史工具输出误导当前编辑判断；`write` 的成功 ack 视为时间线锚点，**不参与** anchorHygiene 折叠（它仍会让同路径的旧 `read`/`edit` 失效）
 
 
 示例：
