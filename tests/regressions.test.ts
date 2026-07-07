@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";

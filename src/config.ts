@@ -128,8 +128,8 @@ function sanitizeLspServerEntry(value: unknown, path: string): LspServerEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
   const input = value as Record<string, unknown>;
   const output: LspServerEntry = {
-    command: requireStringArray(input.command, `${path}.command`),
-    extensions: requireStringArray(input.extensions, `${path}.extensions`),
+    command: requireNonEmptyStringArray(input.command, `${path}.command`),
+    extensions: requireNonEmptyStringArray(input.extensions, `${path}.extensions`),
   };
   if (input.rootMarkers !== undefined) output.rootMarkers = requireStringArray(input.rootMarkers, `${path}.rootMarkers`);
   if (input.firstMatchMarkers !== undefined) output.firstMatchMarkers = requireStringArray(input.firstMatchMarkers, `${path}.firstMatchMarkers`);

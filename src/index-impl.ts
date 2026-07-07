@@ -248,7 +248,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
 
   // Global output guard: applies to every tool result that flows through Pi, including third-party tools.
-  pi.on("tool_result", async (event, ctx: any = {}) => {
+  pi.on("tool_result", async (event, _ctx: any = {}) => {
     const original = {
       content: event.content,
       details: event.details,

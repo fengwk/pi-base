@@ -102,6 +102,84 @@ describe("context compression", () => {
     expect((transformed.messages[2] as any).content[0].arguments).toEqual(editArgs);
   });
 
+  it("masks stale reads when workdir and path spellings differ for the same file", async () => {
+    // Intent: a read addressed via `workdir` + relative path and a later edit addressed
+    // via the equivalent path from the root resolve to the same file. anchorHygiene must
+    // recognize them as one file, otherwise the stale read would survive. This regresses
+    // the bug where path resolution ignored `workdir`.
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
+    await writeWorkspaceFile(root, "pkg/example.txt", "alpha\nbeta\n");
+
+    const registry = createToolRegistry({ cwd: root });
+    piBaseExtension(registry.pi as any);
+
+    // Same real file (<root>/pkg/example.txt) referenced two different ways.
+    const readArgs = { workdir: "pkg", path: "example.txt" };
+    const readResult = await registry.getTool("read").execute("read-1", readArgs, undefined, undefined, { cwd: root });
+    const editArgs = { workdir: ".", path: "pkg/example.txt", old_string: "alpha", new_string: "alpha v1" };
+    const editResult = await registry.getTool("edit").execute("edit-1", editArgs, undefined, undefined, { cwd: root });
+
+    const messages = [
+      ...toolExchange("read", "read-1", readArgs, readResult),
+      ...toolExchange("edit", "edit-1", editArgs, editResult),
+    ];
+    const transformed = await registry.emit("context", { messages }, { cwd: root });
+
+    expect(getText(transformed.messages[1])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
+    expect(getText(transformed.messages[3])).toContain("alpha v1");
+
+    // Re-running compression on an already-compressed prefix must be byte-stable
+    // (idempotent), so prompt-prefix caches are not invalidated across turns.
+    const again = await registry.emit("context", { messages: transformed.messages }, { cwd: root });
+    const stable = again === undefined ? transformed.messages : again.messages;
+    expect(stable).toEqual(transformed.messages);
+  });
+
+  it("keeps an already-folded prefix byte-stable as later turns append new tool calls", async () => {
+    // Intent: prompt-prefix caching depends on the compressed prefix not shifting across
+    // turns. anchorHygiene folds a read once its file is edited; appending later unrelated
+    // turns must leave the earlier folded region byte-identical (verifies multi-turn append
+    // stability of the workdir-aware path resolution).
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
+    await writeWorkspaceFile(root, "pkg/a.txt", "alpha\n");
+    await writeWorkspaceFile(root, "pkg/b.txt", "one\n");
+
+    const registry = createToolRegistry({ cwd: root });
+    piBaseExtension(registry.pi as any);
+
+    const readA = { workdir: "pkg", path: "a.txt" };
+    const readAResult = await registry.getTool("read").execute("read-a", readA, undefined, undefined, { cwd: root });
+    const editA = { workdir: ".", path: "pkg/a.txt", old_string: "alpha", new_string: "alpha v1" };
+    const editAResult = await registry.getTool("edit").execute("edit-a", editA, undefined, undefined, { cwd: root });
+
+    const turn1 = [
+      ...toolExchange("read", "read-a", readA, readAResult),
+      ...toolExchange("edit", "edit-a", editA, editAResult),
+    ];
+    const compressed1 = await registry.emit("context", { messages: turn1 }, { cwd: root });
+    expect(getText(compressed1.messages[1])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
+
+    // Append a later, unrelated turn on a different file, then recompress the full history.
+    const readB = { workdir: "pkg", path: "b.txt" };
+    const readBResult = await registry.getTool("read").execute("read-b", readB, undefined, undefined, { cwd: root });
+    const editB = { workdir: ".", path: "pkg/b.txt", old_string: "one", new_string: "one v1" };
+    const editBResult = await registry.getTool("edit").execute("edit-b", editB, undefined, undefined, { cwd: root });
+
+    const turn2 = [
+      ...turn1,
+      ...toolExchange("read", "read-b", readB, readBResult),
+      ...toolExchange("edit", "edit-b", editB, editBResult),
+    ];
+    const compressed2 = await registry.emit("context", { messages: turn2 }, { cwd: root });
+
+    // The earlier (turn 1) portion of the recompressed history stays byte-identical.
+    expect(compressed2.messages.slice(0, turn1.length)).toEqual(compressed1.messages);
+  });
+
   it("does not mask write acknowledgements as part of anchorHygiene", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, ".pi"), { recursive: true });
@@ -138,8 +216,6 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const readArgs = { workdir: ".", path: "src/example.txt" };
-    const readResult = await registry.getTool("read").execute("read-for-error-context", readArgs, undefined, undefined, { cwd: root });
     const failedEditArgs = { workdir: ".", path: "src/example.txt", old_string: "nonexistent", new_string: "replacement" };
     const failedEdit = await registry.getTool("edit").execute("edit-error-context", failedEditArgs, undefined, undefined, { cwd: root });
     expect(failedEdit.isError).toBe(true);

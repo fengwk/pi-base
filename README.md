@@ -722,7 +722,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `MCP: x/y servers`
 - `agent:<name>`
 
-默认 agent 时不会显示 agent 状态。
+默认 agent 也会显示状态，值为 `agent:default`。
 
 ## 开发
 

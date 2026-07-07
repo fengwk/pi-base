@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { open, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { createGrepTool, DEFAULT_MAX_BYTES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import { ensureTool } from "./internal/pi-coding-agent-utils.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
@@ -66,11 +66,7 @@ interface MultilineGrepOptions {
   literal?: boolean;
   limit: number;
 }
-interface StandardGrepOptions extends MultilineGrepOptions {
-  context: number;
-}
-
-async function executeStandardGrep(options: StandardGrepOptions, signal?: AbortSignal): Promise<any> {
+async function executeStandardGrep(options: MultilineGrepOptions, signal?: AbortSignal): Promise<any> {
   if (signal?.aborted) throw new Error("Operation aborted");
   const rgPath = await ensureTool("rg", true);
   if (!rgPath) throw new Error("ripgrep (rg) is not available and could not be downloaded");
@@ -114,21 +110,14 @@ async function executeStandardGrep(options: StandardGrepOptions, signal?: AbortS
       }
       return linesPromise;
     };
-    const formatBlock = async (filePath: string, lineNumber: number) => {
+    const formatSingleLineFromFile = async (filePath: string, lineNumber: number) => {
       const relativePath = formatPath(filePath);
       const lines = await getFileLines(filePath);
-      if (!lines.length) return [`${relativePath}:${lineNumber}: (unable to read file)`];
-      const block: string[] = [];
-      const start = options.context > 0 ? Math.max(1, lineNumber - options.context) : lineNumber;
-      const end = options.context > 0 ? Math.min(lines.length, lineNumber + options.context) : lineNumber;
-      for (let current = start; current <= end; current++) {
-        const lineText = (lines[current - 1] ?? "").replace(/\r/g, "");
-        const { text, wasTruncated } = truncateGrepLine(lineText);
-        if (wasTruncated) linesTruncated = true;
-        if (current === lineNumber) block.push(`${relativePath}:${current}: ${text}`);
-        else block.push(`${relativePath}-${current}- ${text}`);
-      }
-      return block;
+      if (!lines.length) return `${relativePath}:${lineNumber}: (unable to read file)`;
+      const lineText = (lines[lineNumber - 1] ?? "").replace(/\r/g, "");
+      const { text, wasTruncated } = truncateGrepLine(lineText);
+      if (wasTruncated) linesTruncated = true;
+      return `${relativePath}:${lineNumber}: ${text}`;
     };
     const cleanup = () => {
       rl.close();
@@ -193,15 +182,14 @@ async function executeStandardGrep(options: StandardGrepOptions, signal?: AbortS
         return;
       }
       for (const match of matches) {
-        if (options.context === 0 && match.lineText !== undefined) {
+        if (match.lineText !== undefined) {
           const relativePath = formatPath(match.filePath);
           const sanitized = match.lineText.replace(/\r\n/g, "\n").replace(/\r/g, "").replace(/\n$/, "");
           const { text, wasTruncated } = truncateGrepLine(sanitized);
           if (wasTruncated) linesTruncated = true;
           outputLines.push(`${relativePath}:${match.lineNumber}: ${text}`);
         } else {
-          const block = await formatBlock(match.filePath, match.lineNumber);
-          outputLines.push(...block);
+          outputLines.push(await formatSingleLineFromFile(match.filePath, match.lineNumber));
         }
       }
 
@@ -431,7 +419,6 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
           caseInsensitive: params.ignore_case === true,
           literal: params.literal === true,
           limit,
-          context: typeof params.context === "number" ? params.context : Number(params.context ?? 0) || 0,
         }, timeout.signal);
       }
 

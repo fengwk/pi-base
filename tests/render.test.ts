@@ -142,9 +142,11 @@ describe("render helpers", () => {
       expanded: false,
     }));
 
-    // First line (tool title + streaming label) is always pinned
-    expect(rendered).toContain("write ...");
+    // First line (tool title + streaming label) is always pinned. The not-yet-received
+    // path is omitted rather than shown as a filler "...".
+    expect(rendered).toContain("write");
     expect(rendered).toContain("streaming args");
+    expect(rendered).not.toMatch(/write \.\.\./);
     // Last few lines of the body are visible
     expect(rendered).toContain("line-15");
     // Earlier lines are hidden behind the rolling window

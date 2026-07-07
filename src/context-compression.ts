@@ -71,16 +71,22 @@ function canonicalizePath(path: string): string {
   }
 }
 
+function resolveInputBaseCwd(workdir: unknown, cwd: string): string {
+  // Mirror resolveToolWorkdir so a tool call's path resolves to the same absolute
+  // location the tool itself used; tolerate invalid workdir instead of throwing here.
+  if (typeof workdir !== "string") return cwd;
+  const rawWorkdir = stripAtPrefix(workdir);
+  if (rawWorkdir.trim().length === 0) return cwd;
+  return resolveToCwd(rawWorkdir, cwd);
+}
+
 function resolveInputPaths(input: unknown, cwd: string): string[] {
   if (!isRecord(input)) return [];
   if (typeof input.path === "string" && input.path.trim().length > 0) {
-    return [canonicalizePath(resolveToCwd(stripAtPrefix(input.path), cwd))];
+    const baseCwd = resolveInputBaseCwd(input.workdir, cwd);
+    return [canonicalizePath(resolveToCwd(stripAtPrefix(input.path), baseCwd))];
   }
   return [];
-}
-
-function resolveInputPath(input: unknown, cwd: string): string | undefined {
-  return resolveInputPaths(input, cwd)[0];
 }
 
 function resolvePromptPath(path: string, cwd: string): string {
@@ -307,7 +313,6 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
     const call = resolveToolCall(message, toolCalls);
     if (!call) continue;
     const toolName = call.toolName;
-    const path = resolveInputPath(call.input, cwd);
     const paths = resolveInputPaths(call.input, cwd);
     const skillRead = toolName === "read" && paths.some((candidate) => isSkillReadPath(candidate, skillRoots));
 

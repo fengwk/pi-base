@@ -12,11 +12,16 @@ export function formatWriteSuccess(rawPath: string, existed: boolean): string {
 }
 
 export function formatWriteCall(args: any, theme: any, cwd?: string): string {
-  const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
+  const hasPath = typeof args?.path === "string" && args.path.length > 0;
+  const pathSegment = hasPath ? ` ${styleAccent(theme, shortenHomePath(String(args.path)))}` : "";
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
   const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
-  const content = String(args?.content ?? "");
-  return `${styleToolTitle(theme, "write")} ${styleAccent(theme, path)}${workdir}\n\n${content}`;
+  const content = typeof args?.content === "string" ? args.content : "";
+  const body = content.length > 0 ? `\n\n${content}` : "";
+  // Render only the parts that have arrived: the path and content blocks are omitted
+  // entirely until present, so a streaming call grows part-by-part instead of showing
+  // placeholders for arguments that have not streamed in yet.
+  return `${styleToolTitle(theme, "write")}${pathSegment}${workdir}${body}`;
 }
 
 export async function executeWrite(

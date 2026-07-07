@@ -8,7 +8,7 @@ const INTERNAL_DEFAULT_COLLAPSED_RESULT_LINES = {
   read: 10,
   write: 10,
 } as const;
-const MISSING_CALL_ARG_RE = /<missing-[^>]+>/g;
+const MISSING_CALL_ARG_RE = / *<missing-[^>]+>/g;
 const KEY_VALUE_RE = /^([A-Za-z][A-Za-z0-9]*):(?!\/\/)(?:\s*(.*))?$/;
 const SECTION_HEADER_RE = /^([A-Za-z][A-Za-z0-9 ]*):$/;
 
@@ -258,7 +258,10 @@ function isStreamingCall(context: CallRenderContextLike | undefined): boolean {
 }
 
 function normalizeStreamingCallPlaceholders(textValue: string): string {
-  return textValue.replace(MISSING_CALL_ARG_RE, "...");
+  // Omit not-yet-received argument placeholders (and their leading space) so a streaming
+  // call renders only the parts that have actually arrived, instead of a filler "...".
+  // The explicit " [streaming args]" label already signals that arguments are pending.
+  return textValue.replace(MISSING_CALL_ARG_RE, "");
 }
 
 function injectStreamingCallLabel(textValue: string, theme: any): string {

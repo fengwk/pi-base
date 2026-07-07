@@ -918,7 +918,7 @@ describe("LspClient internals", () => {
           // client's deadline is measured from the boot's `finally`
           // (which is the moment activity was actually recorded),
           // not from any earlier time.
-          const client = await manager.getClient(filePath, resolver);
+          await manager.getClient(filePath, resolver);
           // The boot's `finally` recorded activity NOW. Advance
           // less than the idle timeout: client must still be alive.
           await vi.advanceTimersByTimeAsync(500);

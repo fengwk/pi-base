@@ -184,7 +184,7 @@ describe("tool renderers", () => {
       piBaseExtension(registry.pi as any);
       const editCall = render(registry.getTool("edit").renderCall(
         { workdir: "pkg", path: "a.ts", old_string: "old", new_string: "new" },
-        { fg: (role: string, text: string) => text } as any,
+        { fg: (_role: string, text: string) => text } as any,
         { cwd: "/tmp/ws" },
       ));
       expect(editCall).toContain("edit");
@@ -193,7 +193,7 @@ describe("tool renderers", () => {
       expect(editCall).toContain("+new");
       const writeCall = render(registry.getTool("write").renderCall(
         { path: "b.ts", content: "line1\nline2" },
-        { fg: (role: string, text: string) => text } as any,
+        { fg: (_role: string, text: string) => text } as any,
         { cwd: "/tmp/ws" },
       ));
       expect(writeCall).toContain("line1");
@@ -342,6 +342,17 @@ describe("tool renderers", () => {
       ));
       expect(editRendered).toContain("-old-14");
       expect(editRendered).toContain("streaming args");
+
+      // A write whose path has not streamed in yet must omit the path entirely (no filler
+      // "..."), while still labeling the call as streaming.
+      const pendingPath = render(registry.getTool("write").renderCall(
+        { content: "partial" },
+        {} as any,
+        streamingContext as any,
+      ));
+      expect(pendingPath).toContain("streaming args");
+      expect(pendingPath).not.toContain("...");
+      expect(pendingPath).not.toContain("<missing-path>");
       expect(editRendered).toContain("earlier lines");
       expect(editRendered).not.toContain("-old-3");
     });

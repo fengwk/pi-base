@@ -250,10 +250,10 @@ export function registerAgentSupport(
       const requested = args.trim();
       const agentName = requested || (ctx.hasUI ? await selectAgent(ctx) : undefined);
       if (!agentName) {
-        if (requested.length === 0 && ctx.hasUI) return;
-        if (ctx.hasUI) {
-          ctx.ui.notify(`Usage: /agent <name>. Available: ${nextCatalog.agents.map((agent) => agent.name).join(", ")}`, "warning");
-        }
+        // Interactive selector dismissed: stay quiet. Non-interactive callers get an
+        // actionable hint because /agent needs an explicit name without a picker.
+        if (ctx.hasUI) return;
+        ctx.ui.notify(`Usage: /agent <name>. Available: ${nextCatalog.agents.map((agent) => agent.name).join(", ")}`, "warning");
         return;
       }
 

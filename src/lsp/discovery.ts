@@ -58,7 +58,7 @@ export type LspSupportInfo =
   | { supported: true; language: string; available: true }
   | { supported: true; language: string; available: false; reason: "not-installed" };
 
-function buildServerEntryExample(id: string, command: string[]): LspServerEntry {
+function buildServerEntryExample(command: string[]): LspServerEntry {
   if (command.length === 0) return { command: ["/absolute/path/to/lsp-server"], extensions: [] };
   const [binary, ...rest] = command;
   const basename = binary.split(/[\\/]/).filter(Boolean).pop() ?? binary;
@@ -244,7 +244,7 @@ export class LspDiscoveryResolver {
       if (config.extensions.includes(ext)) {
         const command = this.resolveCommand(config.command);
         if (!this.isServerInstalled(command)) {
-          const hint = `Hint: Add to .pi/pi-base.json or ~/.pi/agent/pi-base.json:\n${JSON.stringify({ lsp: { servers: { [id]: buildServerEntryExample(id, config.command) } } }, null, 2)}`;
+          const hint = `Hint: Add to .pi/pi-base.json or ~/.pi/agent/pi-base.json:\n${JSON.stringify({ lsp: { servers: { [id]: buildServerEntryExample(config.command) } } }, null, 2)}`;
           throw new Error(`LSP server '${id}' is not installed for ${filePath}. Command '${config.command[0]}' must be available on PATH or be an absolute executable path (~/..., $HOME/..., and \${HOME}/... are supported). Update lsp.servers.${id} in pi-base settings.\n${hint}`);
         }
         return { id, command, extensions: config.extensions, rootMarkers: config.rootMarkers, firstMatchMarkers: config.firstMatchMarkers, requestTimeoutMs: config.requestTimeoutMs, workspaceData: config.workspaceData };

@@ -187,6 +187,8 @@ describe("pi-base config", () => {
     ["invalid lsp servers shape", { lsp: { servers: [] } }, /lsp\.servers must be an object keyed by server id/],
     ["invalid lsp entry", { lsp: { servers: { ts: [] } } }, /lsp\.servers\.ts must be an object/],
     ["invalid lsp command", { lsp: { servers: { ts: { command: "ts", extensions: [".ts"] } } } }, /command must be an array of strings/],
+    ["empty lsp command", { lsp: { servers: { ts: { command: [], extensions: [".ts"] } } } }, /command must contain at least one entry/],
+    ["empty lsp extensions", { lsp: { servers: { ts: { command: ["ts"], extensions: [] } } } }, /extensions must contain at least one entry/],
     ["invalid lsp timeout", { lsp: { servers: { ts: { command: ["ts"], extensions: [".ts"], requestTimeoutMs: 0 } } } }, /requestTimeoutMs/],
     ["invalid workspaceData object", { lsp: { servers: { ts: { command: ["ts"], extensions: [".ts"], workspaceData: [] } } } }, /workspaceData must be an object/],
     ["invalid workspaceData baseDir", { lsp: { servers: { ts: { command: ["ts"], extensions: [".ts"], workspaceData: { baseDir: "" } } } } }, /workspaceData\.baseDir/],

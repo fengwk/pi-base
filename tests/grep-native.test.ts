@@ -19,6 +19,7 @@ afterEach(() => {
   delete process.env.PI_BASE_FAKE_RG_FILE;
   delete process.env.PI_BASE_FAKE_RG_TEXT;
   delete process.env.PI_BASE_FAKE_RG_COUNT;
+  delete process.env.PI_BASE_FAKE_RG_NO_LINES;
 });
 
 async function installFakeRg(root: string): Promise<string> {
@@ -45,15 +46,11 @@ if (mode === "wait") {
   const file = process.env.PI_BASE_FAKE_RG_FILE;
   const lineText = process.env.PI_BASE_FAKE_RG_TEXT || "beta\\n";
   const count = Number(process.env.PI_BASE_FAKE_RG_COUNT || "1");
+  const includeLines = process.env.PI_BASE_FAKE_RG_NO_LINES !== "1";
   for (let i = 0; i < count; i++) {
-    console.log(JSON.stringify({
-      type: "match",
-      data: {
-        path: { text: file },
-        line_number: i + 2,
-        lines: { text: lineText },
-      },
-    }));
+    const data = { path: { text: file }, line_number: i + 2 };
+    if (includeLines) data.lines = { text: lineText };
+    console.log(JSON.stringify({ type: "match", data }));
   }
 }
 `,
@@ -64,9 +61,10 @@ if (mode === "wait") {
 }
 
 describe("executeGrep native ripgrep path", () => {
-  it("formats standard ripgrep matches with context and relative paths", async () => {
-    // Intent: without the upstream built-in grep wrapper, pi-base owns parsing
-    // rg JSON and context formatting; this verifies that user-visible output.
+  it("skips unparseable ripgrep output lines and formats matches as relative locations", async () => {
+    // Intent: pi-base owns rg JSON parsing; a stray non-JSON line must be ignored while
+    // valid match records still render as `path:line: text` candidate locations only
+    // (grep no longer emits surrounding context lines).
     const root = await createTempWorkspace();
     await installFakeRg(root);
     const filePath = join(root, "src", "example.ts");
@@ -79,13 +77,36 @@ describe("executeGrep native ripgrep path", () => {
       workdir: ".",
       path: "src",
       pattern: "beta",
-      context: 1,
     }, undefined, undefined, { cwd: root });
 
     const text = getText(result);
-    expect(text).toContain("example.ts-1- alpha");
     expect(text).toContain("example.ts:2: beta");
-    expect(text).toContain("example.ts-3- gamma");
+    expect(text).not.toContain("example.ts-1- alpha");
+    expect(text).not.toContain("example.ts-3- gamma");
+    expect(result.isError).not.toBe(true);
+  });
+
+  it("reads the matched line from disk when ripgrep omits line text", async () => {
+    // Intent: some rg outputs omit matched line text; grep must fall back to reading the
+    // single matched line from disk so the location still renders as path:line: text.
+    const root = await createTempWorkspace();
+    await installFakeRg(root);
+    const filePath = join(root, "src", "example.ts");
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(filePath, "alpha\nbeta\ngamma\n", "utf8");
+    process.env.PI_BASE_FAKE_RG_MODE = "match";
+    process.env.PI_BASE_FAKE_RG_FILE = filePath;
+    process.env.PI_BASE_FAKE_RG_NO_LINES = "1";
+
+    const result = await executeGrep("grep-nolines", {
+      workdir: ".",
+      path: "src",
+      pattern: "beta",
+    }, undefined, undefined, { cwd: root });
+
+    const text = getText(result);
+    expect(text).toContain("example.ts:2: beta");
+    expect(text).not.toContain("example.ts-3- gamma");
     expect(result.isError).not.toBe(true);
   });
 

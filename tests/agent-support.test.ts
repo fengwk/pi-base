@@ -247,6 +247,44 @@ thinkingLevel: low
     }
   });
 
+  it("hints usage when /agent runs without a name in a non-interactive context", async () => {
+    // Intent: without a UI there is no picker, so a bare /agent must surface an
+    // actionable usage hint instead of silently doing nothing.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "planner.md",
+        `---
+name: planner
+---
+
+Planner prompt.
+`,
+      );
+
+      const registry = createToolRegistry({ hasUI: false });
+      piBaseExtension(registry.pi as any);
+
+      await registry.runCommand("agent", "", { cwd: root, hasUI: false });
+
+      const notification = registry.getNotifications().at(-1);
+      expect(notification?.variant).toBe("warning");
+      expect(notification?.message).toContain("Usage: /agent <name>");
+      expect(notification?.message).toContain("planner");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("shows the current agent in the footer before other inline statuses", async () => {
     // Intent: the active agent should be visible in the footer as the first
     // inline status so users always know which agent owns the current prompt.

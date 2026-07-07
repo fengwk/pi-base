@@ -546,6 +546,52 @@ describe("mcp support", () => {
     expect(message).toContain("create_temp_dir [stale]");
   });
 
+  it("removes stale tool aliases from the active-tools set so the model cannot pick a dead alias", async () => {
+    // Intent: a tool the server stops advertising must not linger in active tools,
+    // otherwise the model can select an alias that only fails at execution time.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [{
+            toolsSequence: [
+              [echoTool, noArgTool],
+              [echoTool],
+            ],
+          }],
+        }),
+        heartbeatIntervalMs: 20,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => registry.getActiveTools().includes("echo") && registry.getActiveTools().includes("create_temp_dir"));
+
+    // Once the heartbeat sees create_temp_dir removed it must drop from active tools
+    // while the still-advertised echo alias stays selectable.
+    await waitFor(() => !registry.getActiveTools().includes("create_temp_dir"));
+    expect(registry.getActiveTools()).toContain("echo");
+
+    // Tearing MCP down must retire the remaining alias instead of leaving a dead entry.
+    await registry.emit("session_shutdown", {});
+    expect(registry.getActiveTools()).not.toContain("echo");
+  });
+
   it("converts JSON Schema type arrays into MCP parameter unions", () => {
     const unionSchema: any = convertJsonSchemaToTypeBox({ type: ["string", "null"] });
     expect(Array.isArray(unionSchema.anyOf)).toBe(true);

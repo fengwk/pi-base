@@ -80,11 +80,18 @@ export class McpManager {
     const ctx = this.ctx;
     ++this.runId;
     const disconnects: Promise<void>[] = [];
+    const aliasesToDeactivate = new Set<string>();
     for (const runtime of this.runtimes.values()) {
       this.clearRetry(runtime);
       this.clearHeartbeat(runtime);
+      for (const snapshot of runtime.tools.values()) {
+        if (snapshot.state !== "conflict") aliasesToDeactivate.add(snapshot.aliasName);
+      }
       disconnects.push(...collectDisconnects(runtime));
     }
+    // Retire aliases from the active-tools set before dropping runtimes so a torn-down
+    // server never leaves the model a tool it can no longer call.
+    this.reconcileActiveTools(new Set(), aliasesToDeactivate);
 
     this.ctx = undefined;
     this.pi = undefined;
@@ -205,8 +212,8 @@ export class McpManager {
 
     const seenRemoteNames = new Set<string>();
     const existingToolNames = new Set(pi.getAllTools().map((tool: { name: string }) => tool.name));
-    let activeTools = pi.getActiveTools();
-    let activeToolsChanged = false;
+    const aliasesToActivate = new Set<string>();
+    const aliasesToDeactivate = new Set<string>();
 
     for (const tool of [...tools].sort((left, right) => left.name.localeCompare(right.name))) {
       seenRemoteNames.add(tool.name);
@@ -239,11 +246,8 @@ export class McpManager {
       if (!registeredByThisServer) {
         this.toolOwners.set(aliasName, runtime.key);
         existingToolNames.add(aliasName);
-        if (!activeTools.includes(aliasName)) {
-          activeTools = [...activeTools, aliasName];
-          activeToolsChanged = true;
-        }
       }
+      aliasesToActivate.add(aliasName);
 
       runtime.tools.set(tool.name, {
         remoteName: tool.name,
@@ -256,10 +260,32 @@ export class McpManager {
     for (const [remoteName, snapshot] of runtime.tools.entries()) {
       if (seenRemoteNames.has(remoteName) || snapshot.state === "conflict") continue;
       runtime.tools.set(remoteName, { ...snapshot, state: "stale" });
+      // A tool the server no longer advertises must stop being an active tool, so the
+      // model cannot pick an alias that would only fail once it reaches execution.
+      aliasesToDeactivate.add(snapshot.aliasName);
     }
 
-    if (activeToolsChanged) {
-      pi.setActiveTools(activeTools);
+    this.reconcileActiveTools(aliasesToActivate, aliasesToDeactivate);
+  }
+
+  // The host cannot unregister a tool definition, so alias lifecycle is enforced by
+  // adding/removing alias names from the active-tools set that the model can pick from.
+  private reconcileActiveTools(activate: ReadonlySet<string>, deactivate: ReadonlySet<string>): void {
+    const pi = this.pi;
+    if (!pi) return;
+    if (activate.size === 0 && deactivate.size === 0) return;
+
+    const current = pi.getActiveTools();
+    const next = current.filter((name) => !deactivate.has(name));
+    const present = new Set(next);
+    for (const alias of activate) {
+      if (present.has(alias)) continue;
+      next.push(alias);
+      present.add(alias);
+    }
+
+    if (next.length !== current.length || next.some((name, index) => name !== current[index])) {
+      pi.setActiveTools(next);
     }
   }
 
