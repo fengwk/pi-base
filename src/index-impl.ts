@@ -35,6 +35,8 @@ import {
   type SubagentPermissionHost,
 } from "./subagent/permission-host.js";
 import { createRealSubagentFactory } from "./subagent/runner.js";
+import { subagentRegistry } from "./subagent/registry.js";
+import { renderSubagentWidget, SUBAGENT_WIDGET_KEY } from "./subagent/widget.js";
 import { registerSubagentTaskTool } from "./subagent/task-tool.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
@@ -274,9 +276,11 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   registerResumeAllCommand(pi);
 
   // Only the root (UI-owning) session hosts subagent permission prompts. Headless subagent
-  // sessions relay their `ask` prompts here via the module-level permission host.
+  // sessions relay their `ask` prompts here via the module-level permission host. The same root
+  // also owns the live subagent tree widget.
   let registeredHost: SubagentPermissionHost | null = null;
   let hostChain: Promise<unknown> = Promise.resolve();
+  let unsubscribeWidget: (() => void) | null = null;
   pi.on("session_start", async (_event, ctx?: ExtensionContext) => {
     if (!ctx?.hasUI || !isRootSession(ctx)) return;
     const host: SubagentPermissionHost = async (req) => {
@@ -290,11 +294,30 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     };
     registeredHost = host;
     setSubagentPermissionHost(host);
+
+    // Live subagent tree widget: re-render (throttled) whenever the registry changes, so parallel
+    // and nested delegation is visible while a `task` call blocks the parent turn.
+    if (unsubscribeWidget) unsubscribeWidget();
+    let scheduled = false;
+    const render = () => {
+      scheduled = false;
+      ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, renderSubagentWidget(subagentRegistry.all()));
+    };
+    const scheduleRender = () => {
+      if (scheduled) return;
+      scheduled = true;
+      setTimeout(render, 50);
+    };
+    unsubscribeWidget = subagentRegistry.onChange(scheduleRender);
   });
   pi.on("session_shutdown", async () => {
     if (registeredHost) {
       clearSubagentPermissionHost(registeredHost);
       registeredHost = null;
+    }
+    if (unsubscribeWidget) {
+      unsubscribeWidget();
+      unsubscribeWidget = null;
     }
   });
 

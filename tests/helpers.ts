@@ -45,6 +45,7 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
   const messages: any[] = [];
   const messageRenderers = new Map<string, any>();
   const statuses = new Map<string, string | undefined>();
+  const widgets = new Map<string, string[] | undefined>();
   const flags = new Map<string, { type: "boolean" | "string"; default?: boolean | string }>();
   const flagValues = new Map<string, boolean | string>();
   let activeTools: string[] = [];
@@ -114,7 +115,10 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
         if (uiOverrides.confirm) return uiOverrides.confirm(title, message);
         return true;
       },
-      setWidget() {},
+      setWidget(key: string, content: string[] | undefined) {
+        if (content === undefined) widgets.delete(key);
+        else widgets.set(key, content);
+      },
       setFooter(factory: any) {
         footerFactory = factory;
         footerComponent?.dispose?.();
@@ -340,6 +344,9 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
     },
     getStatuses() {
       return new Map(statuses);
+    },
+    getWidget(key: string) {
+      return widgets.get(key);
     },
     getNotifications() {
       return [...notifications];

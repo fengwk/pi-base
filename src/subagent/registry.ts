@@ -27,6 +27,15 @@ const CHANGE_EVENT = "change";
 export class SubagentRegistry extends EventEmitter {
   private readonly nodes = new Map<string, SubagentNode>();
 
+  constructor() {
+    super();
+    // Deliberate process-global bus: one `change` listener is added per UI-owning root session
+    // (added on session_start, removed on session_shutdown). Production has ~1 root at a time, but
+    // multi-session hosts and the test suite create many short-lived subscribers, so the arbitrary
+    // 10-listener cap would false-positive. Disable it; lifecycle-based unsubscribe prevents real leaks.
+    this.setMaxListeners(0);
+  }
+
   upsert(node: SubagentNode): void {
     this.nodes.set(node.sessionId, { ...node });
     this.emit(CHANGE_EVENT);

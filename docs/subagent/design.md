@@ -37,7 +37,10 @@
   - 备注：`applyTaskInjection` 的**正向注入**依赖 `task` 工具已注册（增量 3），故其端到端测试随增量 3 落地。
 - [x] **增量 3（spawn 引擎）**：`subagent/runner.ts`（可注入 `createAgentSession` 工厂 + 真实工厂 `createRealSubagentFactory`）+ `subagent/task-tool.ts`（注册 `task`，schema=TypeBox）+ `subagent/schema.ts` + `index-impl.ts` 注册接线（含修正 session_start 使 `task` 不进默认 active 集，仅委派 agent 经注入获得）；单测 `tests/subagent-runner.test.ts`、`tests/subagent-task-tool.test.ts`、`tests/subagent-task-injection.test.ts`（spawn/resume/跨类型切换/并发上限/取消/报告收敛/depth+1/白名单/注入）。
   - 备注：真实工厂 `createRealSubagentFactory`（实际 `createAgentSession` 拉起子会话）仅在真实 pi 运行时可端到端验证；单测用 fake 工厂覆盖编排逻辑。
-- [ ] **增量 4（UI + 恢复）**：`subagent/widget/tree.ts`（`setWidget(string[])`，仅 depth==1）、`subagent/reconcile.ts`（session_start 补 interrupted）、`/subagents` 只读面板（`ctx.ui.custom` + Component）。
+- [~] **增量 4（UI + 恢复）**：
+  - [x] `subagent/widget.ts`（`renderSubagentWidget(nodes) => string[] | undefined`，root 会话订阅 `registry` change 事件、节流 `setWidget`，仅显示 running、按深度缩进；单测 `tests/subagent-widget.test.ts` 含纯函数 + 端到端接线）。
+  - [-] `subagent/reconcile.ts`：**取消**（见 4.8，pi 原生处理孤儿 tool_use 且扩展 API 只读无法实现）。
+  - [-] `/subagents` 只读面板：**取消**。前台同步模型下 `task` 阻塞父 turn，用户无法在子 agent 运行期间输入命令；运行结束后注册表状态即失去查看意义。命令式（pull）查看在此架构下价值极低，故不实现；实时可见性由 push 式 widget 覆盖。
 
 原始建议顺序：
 1. `config.ts` + `depth.ts`（纯函数，易测）。
@@ -121,9 +124,14 @@ async function resumeSubagent(ctx, sessionId, prompt, onUpdate): Promise<RunResu
 - `ctx.ui.setWidget(key, lines: string[], options?)` 接收**行数组**（`extensions/types.ts:163`），非订阅式组件：订阅 `registry` 的 `change` 事件 → 按 `parentSessionId` 组树重算 `string[]` → 再次 `setWidget`（节流，P14）。
 - 全部结束后收敛为一行摘要或 `setWidget(key, undefined)` 移除。
 
-### 4.8 reconcile.ts
+### 4.8 reconcile.ts — 【已取消，不实现】
 
-- `reconcileInterruptedTasks(ctx)`：`session_start` 时扫描本会话，找 `task` 的 `tool_use` 无配对 `tool_result` 者，补 `interrupted` 结果；幂等（已补过不重复）。
+> 结论（经实证核实）：**不需要、也无法在扩展层实现，故取消。**
+>
+> - **不需要**：pi 核心已原生处理"孤儿 `tool_use`"（进程崩溃后 `task` 的 `tool_use` 无配对 `tool_result`）。实测：将会话截断到仅剩尾部 `assistant(task tool_use)` 后 `resume` + 追加 prompt，pi 不报错（exit 0），并自动为该 `tool_use` 合成一条 `"No result provided"` 的 `tool_result` 使请求合法、对话继续。此行为对所有工具通用，非 `task` 专属。
+> - **无法实现**：扩展拿到的 `ctx.sessionManager` 是 `ReadonlySessionManager`，扩展 append 能力仅 `appendEntry`（custom 条目）/`appendCustomMessageEntry`，**没有为指定 `tool_use` 追加配对 `tool_result` 的 API**；即便想补也补不了。
+>
+> 原设计意图（`session_start` 扫描未配对的 `task` tool_use 补 `interrupted` 结果）与 pi 原生行为重复，按 KISS 取消。
 
 ## 5. task 工具契约
 
