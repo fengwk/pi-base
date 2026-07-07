@@ -114,6 +114,40 @@ describe("notify support", () => {
 
     expect(payloads).toEqual([]);
   });
+
+  it("skips the completion notification in yolo mode", async () => {
+    // Intent: yolo bypasses permission checks (so permission.requested never
+    // fires), but agent_end still runs and would otherwise spam the user with a
+    // desktop ping on every loop end. The user is at the terminal watching the
+    // agent run, so skip session.completed too.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      yolo: true,
+      notify: { permissionAsked: true, agentEnd: true },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, {
+      cwd: root,
+      sessionManager: {
+        getSessionId: () => "session-yolo",
+        getSessionName: () => "Yolo Session",
+      },
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
   it("sends a completion notification on agent_end and suppresses it after permission rejection", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {

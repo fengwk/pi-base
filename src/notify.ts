@@ -61,7 +61,14 @@ export function registerNotifySupport(
   });
 
   pi.on("agent_end", async (event: AgentEndEvent, ctx) => {
-    if (!shouldNotifyForAgentEnd(loadSettings?.(ctx.cwd)?.settings.notify, ctx, event)) return;
+    const loaded = loadSettings?.(ctx.cwd);
+    if (!shouldNotifyForAgentEnd(loaded?.settings.notify, ctx, event)) return;
+
+    // In yolo mode the user is at the terminal watching the agent run; a desktop
+    // ping on every loop end is noise. Notify only when the user actually has to
+    // come back (permission prompt, true session completion), none of which apply
+    // under yolo — there is no prompt and the result is already on screen.
+    if (loaded?.settings.yolo === true) return;
 
     const payload = buildPayload("session.completed", ctx);
     if (!payload.sessionID) return;
