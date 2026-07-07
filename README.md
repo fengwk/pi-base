@@ -190,7 +190,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 - `offset` 默认 `1`
 - `limit` 默认 `200`，最大 `2000`
-- 文本读取返回统一的 agent 视图：头部包含 `path`、`total_lines`、`ends_with_newline`，支持 LSP 的文件类型还会额外给出 `lsp`；正文使用右对齐的 `数字|内容` 编号格式
+- 文本读取返回统一的 agent 视图：头部包含 `path`、`ends_with_newline`，支持 LSP 的文件类型还会额外给出 `lsp`；正文使用右对齐的 `数字|内容` 编号格式
 - 支持 UTF-8、UTF BOM、UTF-16 启发式和常见 legacy 编码探测；模型看到的是 LF 规范化后的简单文本视图
 - 单行显示超过 `2000` 字符时会在显示层截断，并标记该行被截断
 - 分页信息通过结果末尾的 `[Showing lines ...]` notice 给出

@@ -98,13 +98,11 @@ function buildDisplayedFileLines(text: string): { lines: string[]; endsWithNewli
 
 function buildTextReadHeader(args: {
   rawPath: string;
-  totalLines: number;
   endsWithNewline: boolean;
   lsp: LspSupportInfo;
 }): string[] {
   const header = [
     `path: ${args.rawPath}`,
-    `total_lines: ${args.totalLines}`,
     `ends_with_newline: ${args.endsWithNewline ? "yes" : "no"}`,
   ];
   if (args.lsp.supported) {
@@ -218,14 +216,19 @@ export function registerReadTool(
           if (formatted.truncated) upstreamTextTruncated = true;
           body.push(formatNumberedLine(line, lineNumberWidth, formatted.display));
         }
-        const contentLines: string[] = [...buildTextReadHeader({ rawPath, totalLines: displayedFileLines.length, endsWithNewline, lsp }), "", ...body];
-        contentLines.push(...buildReadNotices({
+        const notices = buildReadNotices({
           start,
           end,
           totalLines: displayedFileLines.length,
           hasMore: end < displayedFileLines.length,
           upstreamTextTruncated,
-        }));
+        });
+        const contentLines: string[] = [
+          ...buildTextReadHeader({ rawPath, endsWithNewline, lsp }),
+          "",
+          ...body,
+          ...(notices.length > 0 ? ["", ...notices] : []),
+        ];
         options.onSuccessfulRead?.(absolutePath, displayedFileLines);
         return {
           content: [{ type: "text" as const, text: contentLines.join("\n") }],

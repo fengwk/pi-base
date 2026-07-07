@@ -33,11 +33,10 @@ describe("read tool", () => {
     const text = getText(result);
     expect(text).not.toMatch(/\[src\/example\.ts#/);
     expect(text).toContain("path: src/example.ts");
-    expect(text).toContain("total_lines: 4");
     expect(text).toContain("ends_with_newline: yes");
     expect(text).toContain("2|two");
     expect(text).toContain("3|three");
-    expect(text).toContain("[Showing lines 2-3 of 4. Re-run read with offset=4 to continue.]");
+    expect(text).toContain("3|three\n\n[Showing lines 2-3 of 4. Re-run read with offset=4 to continue.]");
     expect(text).toContain("lsp: file type supported, but server not installed (typescript)");
     expect(text).not.toContain("kind: file");
     expect(text).not.toContain("encoding:");
@@ -51,7 +50,6 @@ describe("read tool", () => {
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).not.toMatch(/^\[.*#[0-9A-F]{4}\]$/m);
-    expect(text).toContain("total_lines: 2");
     expect(text).toContain("ends_with_newline: yes");
     expect(text).toContain("1|one");
     expect(text).toContain("2|two");
@@ -66,7 +64,6 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/mixed.txt" }, undefined, undefined, { cwd: root });
     const text = getText(result);
-    expect(text).toContain("total_lines: 3");
     expect(text).toContain("ends_with_newline: no");
     expect(text).toContain("1|one");
     expect(text).toContain("2|two");
@@ -82,7 +79,6 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/utf16.txt" }, undefined, undefined, { cwd: root });
     const text = getText(result);
-    expect(text).toContain("total_lines: 2");
     expect(text).toContain("ends_with_newline: yes");
     expect(text).toContain("1|alpha");
     expect(text).toContain("2|beta");
@@ -97,7 +93,6 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/legacy.txt" }, undefined, undefined, { cwd: root });
     const text = getText(result);
-    expect(text).toContain("total_lines: 2");
     expect(text).toContain("ends_with_newline: yes");
     expect(text).toContain("1|café");
     expect(text).toContain("2|olé");
@@ -173,7 +168,6 @@ describe("read tool", () => {
     });
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/empty.txt" }, undefined, undefined, { cwd: root });
     const text = getText(result);
-    expect(text).toContain("total_lines: 0");
     expect(text).toContain("ends_with_newline: no");
     expect(text).not.toContain("\n1|");
     expect(seen).toEqual([[]]);
