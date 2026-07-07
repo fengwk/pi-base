@@ -600,7 +600,9 @@ describe("mcp support", () => {
 
     const footerLines = registry.renderFooter(120);
     expect(footerLines.length).toBeGreaterThanOrEqual(2);
-    expect(footerLines.at(-2) ?? "").toContain("YOLO");
+    expect(footerLines.at(-1) ?? "").toContain("agent:default");
+    expect((footerLines.at(-1) ?? "").indexOf("agent:default")).toBe(0);
+    expect(footerLines.at(-1) ?? "").toContain("YOLO");
     expect(footerLines.at(-1) ?? "").toContain("MCP: 1/1 servers");
   });
 

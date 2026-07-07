@@ -88,7 +88,7 @@ You are the planner.
       piBaseExtension(registry.pi as any);
 
       await registry.emit("session_start", { reason: "startup" }, { cwd: root });
-      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
+      expect(registry.getStatuses().get("pi-base-agent")).toContain("agent:default");
 
       await registry.runCommand("agent", "planner", { cwd: root });
       expect(registry.getActiveTools()).toEqual(["read", "grep"]);
@@ -134,7 +134,7 @@ You are the planner.
       expect(registry.getCurrentModel()).toEqual(defaultModel);
       expect(registry.getActiveTools()).toEqual(BASE_TOOL_NAMES.slice());
       expect(registry.pi.getThinkingLevel()).toBe("medium");
-      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
+      expect(registry.getStatuses().get("pi-base-agent")).toContain("agent:default");
 
       const defaultPrompt = await registry.emit(
         "before_agent_start",
@@ -238,6 +238,50 @@ thinkingLevel: low
       expect(registry.getActiveTools()).toEqual(BASE_TOOL_NAMES.slice());
       expect(registry.getCurrentModel()).toEqual(model);
       expect(registry.pi.getThinkingLevel()).toBe("low");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("shows the current agent in the footer before other inline statuses", async () => {
+    // Intent: the active agent should be visible in the footer as the first
+    // inline status so users always know which agent owns the current prompt.
+    const root = await createTempWorkspace();
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    const defaultFooterLines = registry.renderFooter(120);
+    expect(defaultFooterLines.length).toBeGreaterThanOrEqual(2);
+    expect(defaultFooterLines.at(-1) ?? "").toContain("agent:default");
+    expect((defaultFooterLines.at(-1) ?? "").indexOf("agent:default")).toBe(0);
+
+    await registry.emit("session_shutdown", {}, { cwd: root });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "named.md",
+        `---
+name: named
+---
+
+Named prompt.
+`,
+      );
+      await registry.runCommand("agent", "named", { cwd: root });
+      const namedFooterLines = registry.renderFooter(120);
+      expect(namedFooterLines.length).toBeGreaterThanOrEqual(2);
+      expect(namedFooterLines.at(-1) ?? "").toContain("agent:named");
+      expect((namedFooterLines.at(-1) ?? "").indexOf("agent:named")).toBe(0);
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

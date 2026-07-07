@@ -252,8 +252,10 @@ describe("permission guard", () => {
     expect(registry.getStatuses().get("pi-base-permission")).toBe("YOLO");
     const footerLines = registry.renderFooter(120);
     expect(footerLines).toHaveLength(2);
-    expect(footerLines[1]).toContain("YOLO");
-    expect(registry.renderFooter(4)).toEqual(["YOLO"]);
+    expect(footerLines.at(-1) ?? "").toContain("agent:default");
+    expect((footerLines.at(-1) ?? "").indexOf("agent:default")).toBe(0);
+    expect(footerLines.at(-1) ?? "").toContain("YOLO");
+    expect((registry.renderFooter(4)[0] ?? "").replace(/\x1B\[[0-9;]*m/g, "")).toBe("a...");
     registry.setUI({
       select: async () => {
         throw new Error("yolo mode should not prompt");
@@ -293,7 +295,9 @@ describe("permission guard", () => {
     expect(registry.getStatuses().get("pi-base-permission")).toBe("YOLO");
     const footerLines = registry.renderFooter(120);
     expect(footerLines).toHaveLength(2);
-    expect(footerLines[1]).toContain("YOLO");
+    expect(footerLines.at(-1) ?? "").toContain("agent:default");
+    expect((footerLines.at(-1) ?? "").indexOf("agent:default")).toBe(0);
+    expect(footerLines.at(-1) ?? "").toContain("YOLO");
     const result = await registry.getTool("write").execute(
       "1",
       { workdir: ".", path: "src/default-yolo.ts", content: "export const enabled = true;\n" },

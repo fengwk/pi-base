@@ -5,8 +5,9 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const GLOBAL_PI_SETTINGS_PATH = join(homedir(), ".pi", "agent", "settings.json");
+export const PI_BASE_AGENT_STATUS_KEY = "pi-base-agent";
 export const PI_BASE_PERMISSION_STATUS_KEY = "pi-base-permission";
-export const PI_BASE_INLINE_STATUS_KEYS = [PI_BASE_PERMISSION_STATUS_KEY] as const;
+export const PI_BASE_INLINE_STATUS_KEYS = [PI_BASE_AGENT_STATUS_KEY, PI_BASE_PERMISSION_STATUS_KEY] as const;
 
 interface PiSettingsCacheEntry {
   mtimeMs: number;
@@ -137,18 +138,18 @@ class InlineStatusFooterComponent extends FooterComponent {
     }
     if (segments.length === 0) return super.render(width);
     const inlineStatusText = segments.join(" ");
-    const inlineStatus = ` ${inlineStatusText}`;
+    const inlineStatus = `${inlineStatusText} `;
     const inlineWidth = visibleWidth(inlineStatus);
     if (inlineWidth >= width) {
-      const priorityStatus = segments[segments.length - 1] ?? inlineStatusText;
+      const priorityStatus = segments[0] ?? inlineStatusText;
       return [truncateToWidth(priorityStatus, width, this.theme.fg("dim", "..."))];
     }
 
     const lines = super.render(Math.max(0, width - inlineWidth));
-    const targetLine = lines.length > 1 ? 1 : 0;
+    const targetLine = Math.max(0, lines.length - 1);
     if (lines.length === 0) return [inlineStatusText];
 
-    return lines.map((line, index) => index === targetLine ? `${line}${inlineStatus}` : line);
+    return lines.map((line, index) => index === targetLine ? `${inlineStatus}${line}` : line);
   }
 }
 
