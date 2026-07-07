@@ -120,39 +120,58 @@ export function registerAgentSupport(
 
     const defaults = loadMergedSettingsDefaults(ctx.cwd);
     const validTools = filterKnownTools(agent.tools, allRegisteredToolNames());
-    pi.setActiveTools(validTools);
 
     const effectiveModel = agent.model ?? defaults.model;
     if (effectiveModel) {
       const model = findModel(ctx, effectiveModel);
-      if (model) {
-        try {
-          const success = await pi.setModel(model);
-          if (!success && options.notify && ctx.hasUI) {
-            ctx.ui.notify(`Agent "${agent.name}": no auth configured for ${effectiveModel.provider}/${effectiveModel.modelId}.`, "warning");
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.warn(`Agent "${agent.name}": failed to activate model ${effectiveModel.provider}/${effectiveModel.modelId}: ${message}`);
-          if (options.notify && ctx.hasUI) {
-            ctx.ui.notify(
-              `Agent "${agent.name}": failed to activate model ${effectiveModel.provider}/${effectiveModel.modelId}. Check the provider, model ID, and auth configuration.`,
-              "warning",
-            );
-          }
+      if (!model) {
+        if (options.notify && ctx.hasUI) {
+          ctx.ui.notify(
+            `Agent "${agent.name}": model ${effectiveModel.provider}/${effectiveModel.modelId} not found. Check the provider name, model ID, and enabled models configuration.`,
+            "error",
+          );
         }
-      } else if (options.notify && ctx.hasUI) {
-        ctx.ui.notify(
-          `Agent "${agent.name}": model ${effectiveModel.provider}/${effectiveModel.modelId} not found. Check the provider name, model ID, and enabled models configuration.`,
-          "warning",
-        );
+        return false;
+      }
+      try {
+        const success = await pi.setModel(model);
+        if (!success) {
+          if (options.notify && ctx.hasUI) {
+            ctx.ui.notify(`Agent "${agent.name}": no auth configured for ${effectiveModel.provider}/${effectiveModel.modelId}.`, "error");
+          }
+          return false;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`Agent "${agent.name}": failed to activate model ${effectiveModel.provider}/${effectiveModel.modelId}: ${message}`);
+        if (options.notify && ctx.hasUI) {
+          ctx.ui.notify(
+            `Agent "${agent.name}": failed to activate model ${effectiveModel.provider}/${effectiveModel.modelId}. Check the provider, model ID, and auth configuration.`,
+            "error",
+          );
+        }
+        return false;
       }
     }
 
     const effectiveThinkingLevel = agent.thinkingLevel ?? defaults.thinkingLevel;
     if (effectiveThinkingLevel) {
-      pi.setThinkingLevel(effectiveThinkingLevel);
+      try {
+        pi.setThinkingLevel(effectiveThinkingLevel);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`Agent "${agent.name}": failed to apply thinking level ${effectiveThinkingLevel}: ${message}`);
+        if (options.notify && ctx.hasUI) {
+          ctx.ui.notify(
+            `Agent "${agent.name}": failed to apply thinking level ${effectiveThinkingLevel}. Check the selected model and provider configuration.`,
+            "error",
+          );
+        }
+        return false;
+      }
     }
+
+    pi.setActiveTools(validTools);
 
     activeAgentName = agent.name;
     updateStatus(ctx, agent.name);

@@ -384,8 +384,9 @@ model: missing-provider/missing-model
 
       expect(registry.getNotifications()).toContainEqual({
         message: 'Agent "missing-model": model missing-provider/missing-model not found. Check the provider name, model ID, and enabled models configuration.',
-        variant: "warning",
+        variant: "error",
       });
+      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -424,9 +425,51 @@ model: ${model.provider}/${model.id}
 
       expect(registry.getNotifications()).toContainEqual({
         message: 'Agent "broken-model": failed to activate model provider-b/model-b. Check the provider, model ID, and auth configuration.',
-        variant: "warning",
+        variant: "error",
       });
-      expect(registry.getStatuses().get("pi-base-agent")).toBe("agent:broken-model");
+      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("keeps /agent usable when applying thinking level throws and shows a friendly warning", async () => {
+    // Intent: model-capability/provider bugs inside pi.setThinkingLevel should
+    // not bubble out of /agent; keep the switch usable and explain the issue.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const model = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "broken-thinking.md",
+        `---
+name: broken-thinking
+model: ${model.provider}/${model.id}
+thinkingLevel: high
+---
+`,
+      );
+
+      const registry = createToolRegistry({ models: [model] });
+      registry.pi.setThinkingLevel = () => {
+        throw new Error("Cannot read properties of undefined (reading 'models')");
+      };
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "broken-thinking", { cwd: root });
+
+      expect(registry.getNotifications()).toContainEqual({
+        message: 'Agent "broken-thinking": failed to apply thinking level high. Check the selected model and provider configuration.',
+        variant: "error",
+      });
+      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
