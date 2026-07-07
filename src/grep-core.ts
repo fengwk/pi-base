@@ -15,8 +15,6 @@ const DEFAULT_TIMEOUT_SECONDS = 15;
 const BINARY_PROBE_MAX_BYTES = 1024 * 1024;
 const BINARY_PROBE_CHUNK_BYTES = 64 * 1024;
 const GREP_MAX_LINE_LENGTH = 500;
-
-export const GREP_COLLAPSED_PREVIEW_LINES = 15;
 export type GrepFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
 function formatGrepPattern(value: unknown): string {
@@ -31,7 +29,7 @@ export function formatGrepCall(args: any, theme: any, cwd?: string): string {
   const workdir = usedDefault ? "" : `${styleMuted(theme, " from ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   const suffix = formatOptionalArgs([
     ["include", args?.include],
-    ["ignoreCase", args?.ignoreCase === true ? true : undefined],
+    ["ignore_case", args?.ignore_case === true ? true : undefined],
     ["literal", args?.literal === true ? true : undefined],
     ["multiline", args?.multiline === true ? true : undefined],
     ["limit", args?.limit],
@@ -64,7 +62,7 @@ interface MultilineGrepOptions {
   absolutePath: string;
   searchPathIsDirectory: boolean;
   include?: string;
-  ignoreCase?: boolean;
+  caseInsensitive?: boolean;
   literal?: boolean;
   limit: number;
 }
@@ -80,7 +78,7 @@ async function executeStandardGrep(options: StandardGrepOptions, signal?: AbortS
 
   return new Promise((resolve, reject) => {
     const args = ["--json", "--line-number", "--color=never", "--hidden"];
-    if (options.ignoreCase) args.push("--ignore-case");
+    if (options.caseInsensitive) args.push("--ignore-case");
     if (options.literal) args.push("--fixed-strings");
     if (options.include) args.push("--glob", options.include);
     args.push("--", options.pattern, options.absolutePath);
@@ -269,7 +267,7 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
 
   return new Promise((resolve, reject) => {
     const args = ["--json", "--line-number", "--color=never", "--hidden", "--multiline"];
-    if (options.ignoreCase) args.push("--ignore-case");
+    if (options.caseInsensitive) args.push("--ignore-case");
     if (options.literal) args.push("--fixed-strings");
     if (options.include) args.push("--glob", options.include);
     args.push("--", options.pattern, options.absolutePath);
@@ -418,7 +416,7 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
           absolutePath,
           searchPathIsDirectory,
           include: params.include,
-          ignoreCase: params.ignoreCase === true,
+          caseInsensitive: params.ignore_case === true,
           literal: params.literal === true,
           limit,
         }, timeout.signal);
@@ -430,7 +428,7 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
           absolutePath,
           searchPathIsDirectory,
           include: params.include,
-          ignoreCase: params.ignoreCase === true,
+          caseInsensitive: params.ignore_case === true,
           literal: params.literal === true,
           limit,
           context: typeof params.context === "number" ? params.context : Number(params.context ?? 0) || 0,
@@ -442,7 +440,7 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
         path: rawPath,
         pattern,
         glob: params.include,
-        ignoreCase: params.ignoreCase === true,
+        ignoreCase: params.ignore_case === true,
         literal: params.literal === true,
         timeout: timeoutSeconds,
         limit,

@@ -314,7 +314,7 @@ describe("find (delegated to built-in pi-coding-agent)", () => {
     expect(getText(result)).toContain("find boom");
   });
 
-  it("delegates find renderResult when collapsed result lines are not configured", () => {
+  it("uses pi-base raw renderer for find even when collapsed result lines are not configured", () => {
     const registry = createToolRegistry();
     registerFindTool(
       registry.pi as any,
@@ -329,6 +329,13 @@ describe("find (delegated to built-in pi-coding-agent)", () => {
       { getCollapsedResultLines: () => undefined },
     );
 
-    expect(registry.getTool("find").renderResult({ content: [{ type: "text", text: "ok" }] }, {}, {}, { cwd: process.cwd() })).toBe("delegated-render");
+    const rendered = registry.getTool("find").renderResult(
+      { content: [{ type: "text", text: Array.from({ length: 25 }, (_, index) => `line-${index + 1}`).join("\n") }] },
+      { expanded: false, isPartial: false },
+      {},
+      { cwd: process.cwd() },
+    );
+
+    expect(rendered.render(200).join("\n")).toContain("ctrl+o to expand");
   });
 });

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { DEFAULT_MAX_BYTES, formatSize, type BashToolOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning, withLeadingResultNewline } from "./render.js";
+import { resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning, withLeadingResultNewline } from "./render.js";
 import { describeToolWorkdirForDisplay, resolveToCwd } from "./path-utils.js";
 import { loadToolPromptSnippet } from "./tool-prompt.js";
 
@@ -10,7 +10,6 @@ export type BashExecutionTool = { execute: (toolCallId: string, params: any, sig
 export type BashRenderDefinition = { renderResult?: (result: any, options: any, theme: any, context: any) => any };
 export type BashFactory = (cwd: string) => BashExecutionTool;
 export type BashDefinitionFactory = (cwd: string) => BashRenderDefinition;
-export const BASH_COLLAPSED_PREVIEW_LINES = 20;
 
 export function formatBashCall(args: any, theme: any, cwd?: string): string {
   const rawCommand = args?.command;
@@ -240,8 +239,7 @@ export function buildBashRenderText(result: any, renderOptions: any, theme: any,
 
   const rawWorkdir = String(context?.args?.workdir ?? "").replace(/^@/, "");
   const cwd = rawWorkdir ? resolveToCwd(rawWorkdir, context.cwd ?? process.cwd()) : (context.cwd ?? process.cwd());
-  const configuredCollapsedLines = collapsedLinesResolver?.(context?.cwd ?? process.cwd(), "bash");
-  const collapsedLines = configuredCollapsedLines ?? BASH_COLLAPSED_PREVIEW_LINES;
+  const collapsedLines = resolveCollapsedResultLines("bash", undefined, context, collapsedLinesResolver) ?? 20;
   const maxCollapsedChars = resolveCollapsedResultMaxChars("bash", undefined, context, maxCharsResolver);
   const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
   text.setText(withLeadingResultNewline(formatBashResultText(result, renderOptions, theme, { ...context, state }, collapsedLines, maxCollapsedChars)));

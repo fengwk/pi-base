@@ -1,19 +1,18 @@
-Performs exact string replacements in files.
+Perform exact string replacements in a text file.
 
 Usage:
 - Prefer using `read` before editing an existing text file so you can copy the exact current text.
-- `read` text output starts with metadata lines (`path`, `kind`, `encoding`, `bom`, `line_endings`, `final_newline`), then a blank line, then numbered body lines. Only the numbered body is file content.
-- When editing text from `read` tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + colon + space (e.g. `1: `). Everything after that space is the actual file content to match. Never include any part of the line number prefix in oldString or newString.
-- If `read` reports `final_newline: yes`, remember that the file ends with a newline even though the numbered body does not include an extra trailing empty line just to show it.
-- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
-- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
-- The edit will FAIL if `oldString` is not found in the file with an error "Could not find oldString".
-- The edit will FAIL if `oldString` is found multiple times in the file with an error "Found multiple exact matches". Either provide a larger string with more surrounding context to make the match unique or use `replaceAll` to change every instance of `oldString`.
-- Use `replaceAll` for replacing and renaming strings across the file. This parameter is useful for renaming a variable for instance.
+- `read` text output starts with a small header (`path`, `total_lines`, `ends_with_newline`, and sometimes `lsp`), then a blank line, then numbered body lines in `number|content` form.
+- When copying text from `read`, use only the file content after the first `|` on each numbered line. Never include the number column or the `|` itself in `old_string` or `new_string`.
+- If `read` reports `ends_with_newline: yes`, remember that the file ends with a newline, even though `read` does not add an extra numbered blank line to represent it.
+- Prefer `edit` for existing text files. Use `write` for new files or intentional whole-file replacement.
+- The edit fails if `old_string` is not found in the file with an error "Could not find old_string".
+- The edit fails if `old_string` is found multiple times in the file with an error "Found multiple exact matches". Either provide a larger string with more surrounding context to make the match unique or use `replace_all` to change every instance of `old_string`.
+- Use `replace_all` for file-wide exact renames or repeated replacements when every occurrence should change.
 
 Parameters:
 - `path` (required): path to the file to edit (relative or absolute).
-- `oldString` (required): exact text to replace. Must match exactly as shown in file content, including whitespace and indentation. Must be unique in the file unless `replaceAll` is true.
-- `newString` (required): replacement text (must differ from `oldString`).
-- `replaceAll` (optional, default false): replace all exact occurrences of `oldString`.
+- `old_string` (required): exact text to replace. Must match exactly as shown in file content, including whitespace and indentation. Must be unique in the file unless `replace_all` is true.
+- `new_string` (required): replacement text (must differ from `old_string`).
+- `replace_all` (optional, default false): replace all exact occurrences of `old_string`.
 - `workdir` (optional, default: the agent's current working directory; if provided, resolve relative paths from that directory).

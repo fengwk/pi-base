@@ -1,6 +1,6 @@
 import { createBashTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createGracefulBashOperations } from "./bash-operations.js";
-import { renderCallText, renderRawResult } from "./render.js";
+import { renderStreamingCallText, renderRawResult } from "./render.js";
 import { bashSchema } from "./schemas/bash.js";
 import {
   buildBashRenderText,
@@ -60,7 +60,7 @@ export function registerBashRendererTool(
         state.startedAt = Date.now();
         state.endedAt = undefined;
       }
-      return renderCallText(formatBashCall(args, theme, context?.cwd), context.lastComponent);
+      return renderStreamingCallText(formatBashCall(args, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const built = buildBashRenderText(result, renderOptions, theme, context, options.getCollapsedResultLines, options.getCollapsedResultMaxChars);

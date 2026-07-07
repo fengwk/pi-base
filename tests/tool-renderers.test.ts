@@ -37,8 +37,8 @@ describe("tool renderers", () => {
           args: {
             workdir: "packages/app",
             path: "src/example.ts",
-            oldString: "const a = 1;",
-            newString: "const a = 2;",
+            old_string: "const a = 1;",
+            new_string: "const a = 2;",
           },
         },
         { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" } },
@@ -96,6 +96,25 @@ describe("tool renderers", () => {
     });
   });
 
+  it("uses pi-base raw renderer for find even without explicit render config", async () => {
+    await withTempGlobalPiBaseConfig({}, async (root) => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const output = Array.from({ length: 25 }, (_, index) => `line-${index + 1}`).join("\n");
+
+      const rendered = render(registry.getTool("find").renderResult(
+        { content: [{ type: "text", text: output }] },
+        { expanded: false, isPartial: false },
+        {} as any,
+        { lastComponent: undefined, cwd: root },
+      ));
+      expect(rendered).toContain("line-20");
+      expect(rendered).not.toContain("line-21");
+      expect(rendered).toContain("5 more lines");
+      expect(rendered).toContain("ctrl+o to expand");
+    });
+  });
+
   it("honors collapsed result line overrides for grep, edit, and lsp result renderers", async () => {
     await withTempGlobalPiBaseConfig({ render: { collapsedToolResultLines: { grep: 1, edit: 1, lsp_diagnostics: 1 } } }, async (root) => {
       const registry = createToolRegistry();
@@ -146,7 +165,7 @@ describe("tool renderers", () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const editCall = render(registry.getTool("edit").renderCall(
-        { workdir: "pkg", path: "a.ts", oldString: "old", newString: "new" },
+        { workdir: "pkg", path: "a.ts", old_string: "old", new_string: "new" },
         { fg: (role: string, text: string) => text } as any,
         { cwd: "/tmp/ws" },
       ));
@@ -208,6 +227,63 @@ describe("tool renderers", () => {
     });
   });
 
+  it("renders streaming call state consistently across pi-base tools", async () => {
+    await withTempGlobalPiBaseConfig({}, async (root) => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+
+      const streamingContext = {
+        lastComponent: undefined,
+        executionStarted: false,
+        argsComplete: false,
+        isPartial: true,
+        expanded: false,
+        isError: false,
+        cwd: root,
+        state: {},
+      };
+
+      const cases = [
+        { name: "read", args: { offset: 1 } },
+        { name: "grep", args: { pattern: "demo" } },
+        { name: "find", args: { path: "src" } },
+        { name: "bash", args: { timeout_seconds: 5 } },
+      { name: "edit", args: { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" } },
+        { name: "write", args: { path: "src/example.ts", content: Array.from({ length: 14 }, (_, index) => `line-${index + 1}`).join("\n") } },
+        { name: "lsp_diagnostics", args: { severity: "warning" } },
+        { name: "lsp_goto_definition", args: { line: 3 } },
+        { name: "lsp_workspace_symbols", args: { query: "Example" } },
+        { name: "lsp_java_decompile", args: { target: "jdt://demo" } },
+      ];
+
+      for (const testCase of cases) {
+        const rendered = render(registry.getTool(testCase.name).renderCall(
+          testCase.args,
+          {} as any,
+          streamingContext as any,
+        ));
+        expect(rendered, testCase.name).toContain("streaming args");
+      }
+
+      const writeRendered = render(registry.getTool("write").renderCall(
+        { path: "src/example.ts", content: Array.from({ length: 14 }, (_, index) => `line-${index + 1}`).join("\n") },
+        {} as any,
+        streamingContext as any,
+      ));
+      expect(writeRendered).toContain("line-10");
+      expect(writeRendered).not.toContain("line-14");
+
+      const editRendered = render(registry.getTool("edit").renderCall(
+        { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" },
+        {} as any,
+        streamingContext as any,
+      ));
+      expect(editRendered).toContain("-old-6");
+      expect(editRendered).toContain("-...");
+      expect(editRendered).not.toContain("old-14");
+    });
+  });
+
   it("renders calls in concise opencode style for pi-base-wrapped tools", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
@@ -217,7 +293,7 @@ describe("tool renderers", () => {
       { name: "grep", args: { pattern: "demo", path: "src", workdir: "packages/web", include: "*.ts", multiline: true }, expected: "grep \"demo\" in src from packages/web [include=*.ts, multiline=true]" },
       { name: "find", args: { pattern: "*.ts", path: "src", workdir: "packages/web" }, expected: "find *.ts in src from packages/web" },
       { name: "bash", args: { command: "npm test", workdir: "packages/web", timeout_seconds: 5 }, expected: "$ npm test (timeout 5s) in packages/web" },
-      { name: "edit", args: { workdir: "services/api", path: "src/example.ts", oldString: "alpha", newString: "beta" }, expected: "edit src/example.ts in services/api" },
+      { name: "edit", args: { workdir: "services/api", path: "src/example.ts", old_string: "alpha", new_string: "beta" }, expected: "edit src/example.ts in services/api" },
       { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" }, expected: "write src/example.ts in services/api" },
       { name: "lsp_diagnostics", args: { path: "src/example.ts", workdir: "packages/web", severity: "error" }, expected: "lsp_diagnostics src/example.ts in packages/web [severity=error]" },
       { name: "lsp_goto_definition", args: { path: "src/example.ts", workdir: "services/api", line: 2 }, expected: "lsp_goto_definition src/example.ts in services/api [line=2, character=0]" },

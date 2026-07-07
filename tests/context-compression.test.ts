@@ -83,7 +83,7 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-1", readArgs, undefined, undefined, { cwd: root });
-    const editArgs = { workdir: ".", path: "src/example.txt", oldString: "alpha", newString: "alpha v1" };
+    const editArgs = { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "alpha v1" };
     const editResult = await registry.getTool("edit").execute("edit-1", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -107,7 +107,7 @@ describe("context compression", () => {
 
     const writeArgs = { workdir: ".", path: "src/example.txt", content: "alpha\nbeta\n" };
     const writeResult = await registry.getTool("write").execute("write-1", writeArgs, undefined, undefined, { cwd: root });
-    const editArgs = { workdir: ".", path: "src/example.txt", oldString: "alpha", newString: "alpha v1" };
+    const editArgs = { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "alpha v1" };
     const editResult = await registry.getTool("edit").execute("edit-after-write", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -131,12 +131,12 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-for-error-context", readArgs, undefined, undefined, { cwd: root });
-    const failedEditArgs = { workdir: ".", path: "src/example.txt", oldString: "nonexistent", newString: "replacement" };
+    const failedEditArgs = { workdir: ".", path: "src/example.txt", old_string: "nonexistent", new_string: "replacement" };
     const failedEdit = await registry.getTool("edit").execute("edit-error-context", failedEditArgs, undefined, undefined, { cwd: root });
     expect(failedEdit.isError).toBe(true);
-    expect(getText(failedEdit)).toContain("Could not find oldString");
+    expect(getText(failedEdit)).toContain("Could not find old_string");
 
-    const goodEditArgs = { workdir: ".", path: "src/example.txt", oldString: "alpha", newString: "alpha v1" };
+    const goodEditArgs = { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "alpha v1" };
     const goodEdit = await registry.getTool("edit").execute("edit-after-error-context", goodEditArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -156,7 +156,7 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-default", readArgs, undefined, undefined, { cwd: root });
-    await registry.getTool("edit").execute("edit-default", { workdir: ".", path: "src/example.txt", oldString: "alpha", newString: "alpha v1" }, undefined, undefined, { cwd: root });
+    await registry.getTool("edit").execute("edit-default", { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "alpha v1" }, undefined, undefined, { cwd: root });
 
     const messages = [...toolExchange("read", "read-default", readArgs, readResult)];
     const transformed = await registry.emit("context", { messages }, { cwd: root });

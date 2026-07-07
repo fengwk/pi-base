@@ -16,7 +16,7 @@ import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from 
 import {
   type CollapsedResultLinesResolver,
   type CollapsedResultMaxCharsResolver,
-  renderCallText,
+  renderStreamingCallText,
   renderRawResult,
   resolveCollapsedResultLines,
   resolveCollapsedResultMaxChars,
@@ -51,15 +51,15 @@ function formatEditCall(args: any, theme: any, cwd?: string): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
   const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
-  const oldString = String(args?.oldString ?? "");
-  const newString = String(args?.newString ?? "");
-  const replaceAllTag = args?.replaceAll === true ? " [replaceAll]" : "";
-  return `${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}${replaceAllTag}\n\n${formatEditPreview(oldString, newString)}`;
+  const oldText = String(args?.old_string ?? "");
+  const newText = String(args?.new_string ?? "");
+  const allMatchesTag = args?.replace_all === true ? " [replace_all]" : "";
+  return `${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}${allMatchesTag}\n\n${formatEditPreview(oldText, newText)}`;
 }
 
-function formatEditPreview(oldString: string, newString: string): string {
-  const oldPreview = previewLines(oldString, "-");
-  const newPreview = previewLines(newString, "+");
+function formatEditPreview(oldText: string, newText: string): string {
+  const oldPreview = previewLines(oldText, "-");
+  const newPreview = previewLines(newText, "+");
   return [...oldPreview, ...newPreview].join("\n");
 }
 
@@ -68,6 +68,17 @@ function previewLines(value: string, prefix: "+" | "-"): string[] {
   const shown = lines.slice(0, 6).map((line) => `${prefix}${line.length > 240 ? `${line.slice(0, 240)}...` : line}`);
   if (lines.length > shown.length) shown.push(`${prefix}...`);
   return shown;
+}
+
+function countDisplayedLines(text: string): number {
+  if (text.length === 0) return 0;
+  const lines = text.split("\n");
+  if (text.endsWith("\n") && lines[lines.length - 1] === "") lines.pop();
+  return lines.length;
+}
+
+function formatDiffLine(prefix: " " | "+" | "-", lineNumber: number, lineNumberWidth: number, line: string): string {
+  return `${prefix}${String(lineNumber).padStart(lineNumberWidth, " ")}|${line}`;
 }
 
 interface DocumentCursor {
@@ -210,6 +221,7 @@ function applyOccurrenceToDocument(
 function generateNumberedDiff(oldContent: string, newContent: string, contextLines = 4): { diff: string; firstChangedLine: number | undefined } {
   const parts = Diff.diffLines(oldContent, newContent);
   const output: string[] = [];
+  const lineNumberWidth = Math.max(1, String(Math.max(countDisplayedLines(oldContent), countDisplayedLines(newContent), 1)).length);
   let oldLineNum = 1;
   let newLineNum = 1;
   let lastWasChange = false;
@@ -223,8 +235,8 @@ function generateNumberedDiff(oldContent: string, newContent: string, contextLin
     if (part.added || part.removed) {
       if (firstChangedLine === undefined) firstChangedLine = newLineNum;
       for (const line of rawLines) {
-        if (part.added) output.push(`+${newLineNum++}|${line}`);
-        else output.push(`-${oldLineNum++}|${line}`);
+        if (part.added) output.push(formatDiffLine("+", newLineNum++, lineNumberWidth, line));
+        else output.push(formatDiffLine("-", oldLineNum++, lineNumberWidth, line));
       }
       lastWasChange = true;
       continue;
@@ -251,7 +263,7 @@ function generateNumberedDiff(oldContent: string, newContent: string, contextLin
         newLineNum += skipStart;
       }
       for (const line of linesToShow) {
-        output.push(` ${oldLineNum}|${line}`);
+        output.push(formatDiffLine(" ", oldLineNum, lineNumberWidth, line));
         oldLineNum++;
         newLineNum++;
       }
@@ -292,7 +304,7 @@ export function registerEditTool(
     parameters: editSchema,
     renderShell: "default" as const,
     renderCall(args: any, theme: any, context: any) {
-      return renderCallText(formatEditCall(args, theme, context?.cwd), context.lastComponent);
+      return renderStreamingCallText(formatEditCall(args, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("edit", undefined, context, options.getCollapsedResultLines);
@@ -305,27 +317,27 @@ export function registerEditTool(
 
         const rawPath = String(params.path ?? "").replace(/^@/, "");
         if (!rawPath) throw new Error("path is required.");
-        if (!hasStringProperty(params, "oldString")) {
-          return { content: [{ type: "text" as const, text: "oldString is required and must be a string." }], isError: true };
+        if (!hasStringProperty(params, "old_string")) {
+          return { content: [{ type: "text" as const, text: "old_string is required and must be a string." }], isError: true };
         }
-        if (!hasStringProperty(params, "newString")) {
-          return { content: [{ type: "text" as const, text: "newString is required and must be a string." }], isError: true };
+        if (!hasStringProperty(params, "new_string")) {
+          return { content: [{ type: "text" as const, text: "new_string is required and must be a string." }], isError: true };
         }
 
-        const oldString = params.oldString;
-        const newString = params.newString;
-        const replaceAll = params.replaceAll === true;
+        const oldText = params.old_string;
+        const newText = params.new_string;
+        const applyToAllMatches = params.replace_all === true;
 
-        if (oldString === newString) {
-          return { content: [{ type: "text" as const, text: "No changes to apply: oldString and newString are identical." }], isError: true };
+        if (oldText === newText) {
+          return { content: [{ type: "text" as const, text: "No changes to apply: old_string and new_string are identical." }], isError: true };
         }
-        if (oldString === "") {
-          return { content: [{ type: "text" as const, text: "oldString must not be empty. Use write to create or overwrite a file." }], isError: true };
+        if (oldText === "") {
+          return { content: [{ type: "text" as const, text: "old_string must not be empty. Use write to create or overwrite a file." }], isError: true };
         }
-        const normalizedOld = normalizeToLF(oldString);
-        const normalizedNew = normalizeToLF(newString);
+        const normalizedOld = normalizeToLF(oldText);
+        const normalizedNew = normalizeToLF(newText);
         if (normalizedOld === normalizedNew) {
-          return { content: [{ type: "text" as const, text: "No changes to apply: oldString and newString are identical after line-ending normalization." }], isError: true };
+          return { content: [{ type: "text" as const, text: "No changes to apply: old_string and new_string are identical after line-ending normalization." }], isError: true };
         }
 
         const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
@@ -347,23 +359,23 @@ export function registerEditTool(
           const occurrences = buildReplacementOccurrences(originalDocument, normalizedOld);
 
           if (occurrences.length === 0) {
-            return { kind: "error", text: `Could not find oldString in ${rawPath}. It must match exactly, including whitespace and indentation.` };
+            return { kind: "error", text: `Could not find old_string in ${rawPath}. It must match exactly, including whitespace and indentation.` };
           }
-          if (occurrences.length > 1 && !replaceAll) {
+          if (occurrences.length > 1 && !applyToAllMatches) {
             return {
               kind: "error",
-              text: `Found ${occurrences.length} exact matches for oldString in ${rawPath}. Provide more surrounding context to make the match unique, or set replaceAll to true.`,
+              text: `Found ${occurrences.length} exact matches for old_string in ${rawPath}. Provide more surrounding context to make the match unique, or set replace_all to true.`,
             };
           }
-          if (replaceAll && hasOverlappingOccurrences(occurrences)) {
+          if (applyToAllMatches && hasOverlappingOccurrences(occurrences)) {
             return {
               kind: "error",
-              text: `Found overlapping exact matches for oldString in ${rawPath}. replaceAll cannot safely apply overlapping replacements; provide a more specific oldString.`,
+              text: `Found overlapping exact matches for old_string in ${rawPath}. replace_all cannot safely apply overlapping replacements; provide a more specific old_string.`,
             };
           }
 
           let nextDocument = originalDocument;
-          const pendingOccurrences = replaceAll ? [...occurrences] : [occurrences[0]!];
+          const pendingOccurrences = applyToAllMatches ? [...occurrences] : [occurrences[0]!];
           for (const occurrence of pendingOccurrences.reverse()) {
             nextDocument = applyOccurrenceToDocument(nextDocument, occurrence, normalizedNew, endingStyle);
           }
@@ -380,7 +392,7 @@ export function registerEditTool(
             kind: "success",
             fileText,
             replacedText,
-            replacements: replaceAll ? occurrences.length : 1,
+            replacements: applyToAllMatches ? occurrences.length : 1,
           };
         });
         if (computation.kind === "error") {

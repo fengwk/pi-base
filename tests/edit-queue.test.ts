@@ -40,14 +40,14 @@ describe("edit queue", () => {
 
     const firstEdit = registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha", newString: "gamma" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "gamma" },
       undefined,
       undefined,
       { cwd: "/tmp/pi-base-edit-queue" },
     );
     const secondEdit = registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha", newString: "beta" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "beta" },
       undefined,
       undefined,
       { cwd: "/tmp/pi-base-edit-queue" },
@@ -60,7 +60,7 @@ describe("edit queue", () => {
     const [firstResult, secondResult] = await Promise.all([firstEdit, secondEdit]);
     expect(firstResult.isError).not.toBe(true);
     expect(secondResult.isError).toBe(true);
-    expect(getText(secondResult)).toContain("Could not find oldString");
+    expect(getText(secondResult)).toContain("Could not find old_string");
     expect(fileBytes.toString("utf8")).toBe("gamma\n");
   });
 });

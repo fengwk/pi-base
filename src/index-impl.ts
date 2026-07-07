@@ -16,7 +16,7 @@ import { applyUnifiedOutputTruncation } from "./tool-output.js";
 import { findSchema } from "./schemas/find.js";
 import { inferToolResultIsError } from "./tool-result.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
-import { formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, resolveToolPatternValue, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./render.js";
+import { formatOptionalArgs, renderStreamingCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, resolveToolPatternValue, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./render.js";
 import { applyContextCompressionToMessages, shouldApplyContextCompression } from "./context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./anthropic-cache-boundary.js";
 import { registerResumeAllCommand } from "./resume-all.js";
@@ -118,14 +118,11 @@ export function registerFindTool(
     description: loadToolDescription("find"),
     promptSnippet: loadToolPromptSnippet("find"),
     renderCall(args: any, theme: any, context: any) {
-      return renderCallText(formatFindCall(args, theme, context?.cwd), context.lastComponent);
+      return renderStreamingCallText(formatFindCall(args, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("find", undefined, context, options.getCollapsedResultLines);
       const maxCollapsedChars = resolveCollapsedResultMaxChars("find", undefined, context, options.getCollapsedResultMaxChars);
-      if (collapsedLines === undefined && maxCollapsedChars === undefined) {
-        return template.renderResult ? template.renderResult(result, renderOptions, theme, context) : renderRawResult(result, renderOptions, theme, context);
-      }
       return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, theme, context);
     },
     async execute(toolCallId: string, params: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any = {}) {

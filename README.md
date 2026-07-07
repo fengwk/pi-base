@@ -190,11 +190,11 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 - `offset` 默认 `1`
 - `limit` 默认 `200`，最大 `2000`
-- 文本读取返回统一的 agent 视图：`path`、`kind`、`encoding`、`bom`、`line_endings`、`final_newline` 元数据 + `<line>: <content>` 编号正文
+- 文本读取返回统一的 agent 视图：头部包含 `path`、`total_lines`、`ends_with_newline`，支持 LSP 的文件类型还会额外给出 `lsp`；正文使用右对齐的 `数字|内容` 编号格式
 - 支持 UTF-8、UTF BOM、UTF-16 启发式和常见 legacy 编码探测；模型看到的是 LF 规范化后的简单文本视图
 - 单行显示超过 `2000` 字符时会在显示层截断，并标记该行被截断
 - 分页信息通过结果末尾的 `[Showing lines ...]` notice 给出
-- 结果末尾会包含 LSP 支持状态
+- `ends_with_newline: yes` 表示文件末尾存在换行，但 `read` 不会专门额外生成一个编号空行去表示它
 
 其它行为：
 
@@ -210,7 +210,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `workdir` 默认当前 agent cwd
 - `timeout_seconds` 默认 `15`
 - `limit` 默认 `100`
-- 支持 `include`、`ignoreCase`、`literal`、`multiline`
+- 支持 `include`、`ignore_case`、`literal`、`multiline`
 - 搜索单个文件时会先探测二进制内容，二进制文件直接报错
 - 输出是候选位置，不是编辑锚点；编辑前先 `read`
 - 行过长时会截断到 `500` 字符，并在结果末尾给出提示
@@ -227,12 +227,12 @@ You are a planning-focused agent. Break work into clear steps before editing.
 ### `edit`
 
 - 适合小范围、精确文本替换
-- 参数是 `path`、`oldString`、`newString`，可选 `replaceAll` 和 `workdir`
-- `oldString` 必须与文件当前内容中的文本精确匹配；匹配 0 次或多次时会失败，除非显式 `replaceAll: true`
-- 模型应从最近的 `read` 输出复制真实文件内容，不要包含行号前缀
-- 可以用空字符串 `newString` 表达删除，也可以用空字符串 `oldString` 表达插入到文件开头
+- 参数是 `path`、`old_string`、`new_string`，可选 `replace_all` 和 `workdir`
+- `old_string` 必须与文件当前内容中的文本精确匹配；匹配 0 次或多次时会失败，除非显式 `replace_all: true`
+- 模型应从最近的 `read` 输出复制真实文件内容，不要包含前面的 `数字|` 编号列
+- 可以用空字符串 `new_string` 表达删除；`old_string` 不允许为空，如需头插或大范围重写，请改用 `write` 或提供更明确的编辑锚点
 - 编辑时会基于统一 LF 视图匹配，再按文件真实 BOM、编码、换行风格和尾行换行映射回磁盘
-- 修改成功后返回替换次数和编号 diff 预览
+- 修改成功后返回替换次数和同样使用 `数字|内容` 风格的编号 diff 预览
 
 ### `write`
 
@@ -362,7 +362,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 也可以是按工具名或通配符配置的对象
 - 只影响工具结果折叠预览，不影响工具调用预览
 - `0` 表示折叠态不显示结果正文，只保留展开提示
-- 当未显式配置时，当前默认值是：`read=10`、`grep=15`、`find=20`、`bash=20`
+- 当未显式配置时，当前默认值是：`read=10`、`grep=15`、`find=20`、`bash=20`、`write=10`
 - 其它工具未配置时沿用各自 renderer 当前默认值
 - 匹配优先级：精确工具名 > 更具体的通配符 > `*`
 

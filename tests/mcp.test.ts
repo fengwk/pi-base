@@ -285,6 +285,35 @@ describe("mcp support", () => {
     expect(callText).not.toContain("{}");
   });
 
+  it("renders streaming call state for MCP tools", () => {
+    const definition = createMcpToolDefinition({
+      serverKey: "docs",
+      serverConfig: { type: "local", command: ["demo"], toolPrefix: "docs" } as any,
+      tool: {
+        name: "search",
+        description: "Search docs",
+        inputSchema: { type: "object", properties: { query: { type: "string" } } },
+      },
+      callTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    });
+
+    const component = definition.renderCall?.(
+      { query: "hello" },
+      {} as any,
+      {
+        lastComponent: undefined,
+        argsComplete: false,
+        expanded: false,
+        state: {},
+        cwd: process.cwd(),
+      } as any,
+    );
+
+    const rendered = component?.render(200).join("\n") ?? "";
+    expect(rendered).toContain("streaming args");
+    expect(rendered).toContain("\"query\": \"hello\"");
+  });
+
   it("uses the server key as the default tool prefix", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {

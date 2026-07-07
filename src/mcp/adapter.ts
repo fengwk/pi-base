@@ -1,7 +1,7 @@
 import type { TSchema } from "@sinclair/typebox";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, styleOutput, styleToolTitle } from "../render.js";
+import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, renderStreamingCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, styleOutput, styleToolTitle } from "../render.js";
 import { convertJsonSchemaToTypeBox } from "./schema.js";
 import type { McpTool, McpToolCallResult, McpServerConfig } from "./types.js";
 
@@ -43,7 +43,7 @@ export function createMcpToolDefinition(options: CreateMcpToolDefinitionOptions)
       const callText = Object.keys(objectArgs).length === 0
         ? styleToolTitle(theme, aliasName)
         : `${styleToolTitle(theme, aliasName)}\n${styleOutput(theme, stringifyJson(objectArgs))}`;
-      return renderCallText(callText, context.lastComponent);
+      return renderStreamingCallText(callText, theme, context);
     },
     renderResult(result, renderOptions, theme, context) {
       const collapsedLines = resolveCollapsedResultLines(aliasName, undefined, context, getCollapsedResultLines);

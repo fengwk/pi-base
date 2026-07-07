@@ -13,13 +13,13 @@ describe("edit/write flow", () => {
 
     let message = "";
     try {
-      editTool.prepareArguments({ workdir: ".", path: "test.ts", oldString: "a" });
+      editTool.prepareArguments({ workdir: ".", path: "test.ts", old_string: "a" });
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
 
     expect(message).toContain("Validation failed for tool \"edit\":");
-    expect(message).toContain("newString");
+    expect(message).toContain("new_string");
     expect(message).toContain("Adjust the input parameters and re-run the `edit` command.");
   });
 
@@ -121,14 +121,14 @@ describe("edit/write flow", () => {
     expect(await readFile(file)).toEqual(originalBytes);
   });
 
-  it("edits a file using oldString/newString", async () => {
+  it("edits a file using old_string/new_string", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/new.ts", "export const demo = 1;\n");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const editResult = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/new.ts", oldString: "export const demo = 1;", newString: "export const demo = 2;" },
+      { workdir: ".", path: "src/new.ts", old_string: "export const demo = 1;", new_string: "export const demo = 2;" },
       undefined,
       undefined,
       { cwd: root },
@@ -138,30 +138,30 @@ describe("edit/write flow", () => {
     expect(await readFile(join(root, "src/new.ts"), "utf8")).toBe("export const demo = 2;\n");
   });
 
-  it("rejects edit when oldString is not found", async () => {
+  it("rejects edit when old_string is not found", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "nonexistent", newString: "replacement" },
+      { workdir: ".", path: "src/example.ts", old_string: "nonexistent", new_string: "replacement" },
       undefined,
       undefined,
       { cwd: root },
     );
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("Could not find oldString");
+    expect(getText(result)).toContain("Could not find old_string");
   });
 
-  it("rejects edit when oldString matches multiple times", async () => {
+  it("rejects edit when old_string matches multiple times", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nalpha\n");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha", newString: "beta" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "beta" },
       undefined,
       undefined,
       { cwd: root },
@@ -170,16 +170,16 @@ describe("edit/write flow", () => {
     expect(getText(result)).toContain("Found 2 exact matches");
   });
 
-  it("rejects edit when oldString has overlapping matches", async () => {
+  it("rejects edit when old_string has overlapping matches", async () => {
     // Intent: uniqueness checks must count overlapping occurrences too, otherwise
-    // `aaa` with oldString `aa` looks unique and edits the wrong span.
+    // `aaa` with old_string `aa` looks unique and edits the wrong span.
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "aaa\n");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "aa", newString: "b" },
+      { workdir: ".", path: "src/example.ts", old_string: "aa", new_string: "b" },
       undefined,
       undefined,
       { cwd: root },
@@ -189,14 +189,14 @@ describe("edit/write flow", () => {
     expect(await readFile(join(root, "src/example.ts"), "utf8")).toBe("aaa\n");
   });
 
-  it("supports replaceAll for multiple matches", async () => {
+  it("supports replace_all for multiple matches", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nalpha\n");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha", newString: "beta", replaceAll: true },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "beta", replace_all: true },
       undefined,
       undefined,
       { cwd: root },
@@ -205,8 +205,8 @@ describe("edit/write flow", () => {
     expect(await readFile(join(root, "src/example.ts"), "utf8")).toBe("beta\nbeta\n");
   });
 
-  it("rejects replaceAll when matches overlap", async () => {
-    // Intent: overlapping replaceAll cannot be applied as independent exact
+  it("rejects replace_all when matches overlap", async () => {
+    // Intent: overlapping replace_all cannot be applied as independent exact
     // replacements, so the tool should fail instead of producing order-dependent output.
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "aaa\n");
@@ -214,7 +214,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "aa", newString: "b", replaceAll: true },
+      { workdir: ".", path: "src/example.ts", old_string: "aa", new_string: "b", replace_all: true },
       undefined,
       undefined,
       { cwd: root },
@@ -224,14 +224,14 @@ describe("edit/write flow", () => {
     expect(await readFile(join(root, "src/example.ts"), "utf8")).toBe("aaa\n");
   });
 
-  it("rejects identical oldString and newString", async () => {
+  it("rejects identical old_string and new_string", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\n");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha", newString: "alpha" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "alpha" },
       undefined,
       undefined,
       { cwd: root },
@@ -251,7 +251,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha\r\n", newString: "alpha\n" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha\r\n", new_string: "alpha\n" },
       undefined,
       undefined,
       { cwd: root },
@@ -261,24 +261,24 @@ describe("edit/write flow", () => {
     expect(await readFile(file, "utf8")).toBe("alpha\r\n");
   });
 
-  it("rejects empty oldString", async () => {
+  it("rejects empty old_string", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\n");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "", newString: "beta" },
+      { workdir: ".", path: "src/example.ts", old_string: "", new_string: "beta" },
       undefined,
       undefined,
       { cwd: root },
     );
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("oldString must not be empty");
+    expect(getText(result)).toContain("old_string must not be empty");
   });
 
-  it("rejects missing newString when schema validation is bypassed", async () => {
-    // Intent: direct execute calls should not treat a missing newString argument
+  it("rejects missing new_string when schema validation is bypassed", async () => {
+    // Intent: direct execute calls should not treat a missing new_string argument
     // as an intentional deletion.
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\n");
@@ -286,13 +286,13 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha" },
       undefined,
       undefined,
       { cwd: root },
     );
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("newString is required");
+    expect(getText(result)).toContain("new_string is required");
     expect(await readFile(join(root, "src/example.ts"), "utf8")).toBe("alpha\n");
   });
 
@@ -303,7 +303,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha", newString: "gamma" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "gamma" },
       undefined,
       undefined,
       { cwd: root },
@@ -321,7 +321,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "beta", newString: "gamma" },
+      { workdir: ".", path: "src/example.ts", old_string: "beta", new_string: "gamma" },
       undefined,
       undefined,
       { cwd: root },
@@ -339,7 +339,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha\nbeta", newString: "left\nright" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha\nbeta", new_string: "left\nright" },
       undefined,
       undefined,
       { cwd: root },
@@ -357,7 +357,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha\nbeta", newString: "left\nright" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha\nbeta", new_string: "left\nright" },
       undefined,
       undefined,
       { cwd: root },
@@ -375,7 +375,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "middle", newString: "left\nright" },
+      { workdir: ".", path: "src/example.ts", old_string: "middle", new_string: "left\nright" },
       undefined,
       undefined,
       { cwd: root },
@@ -396,7 +396,7 @@ describe("edit/write flow", () => {
 
     const addNewline = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/no-newline.txt", oldString: "tail", newString: "tail\n" },
+      { workdir: ".", path: "src/no-newline.txt", old_string: "tail", new_string: "tail\n" },
       undefined,
       undefined,
       { cwd: root },
@@ -406,7 +406,7 @@ describe("edit/write flow", () => {
 
     const removeNewline = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/with-newline.txt", oldString: "tail\n", newString: "tail" },
+      { workdir: ".", path: "src/with-newline.txt", old_string: "tail\n", new_string: "tail" },
       undefined,
       undefined,
       { cwd: root },
@@ -425,7 +425,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha", newString: "gamma" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "gamma" },
       undefined,
       undefined,
       { cwd: root },
@@ -447,7 +447,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.txt", oldString: "alpha", newString: "gamma" },
+      { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "gamma" },
       undefined,
       undefined,
       { cwd: root },
@@ -471,7 +471,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/legacy.txt", oldString: "café", newString: "漢字" },
+      { workdir: ".", path: "src/legacy.txt", old_string: "café", new_string: "漢字" },
       undefined,
       undefined,
       { cwd: root },
@@ -484,7 +484,7 @@ describe("edit/write flow", () => {
   it("edit reports missing path", async () => {
     const registry = createToolRegistry();
     const tool = registerEditTool(registry.pi as any);
-    const result = await tool.execute("1", { workdir: ".", oldString: "a", newString: "b" }, undefined, undefined, { cwd: process.cwd() });
+    const result = await tool.execute("1", { workdir: ".", old_string: "a", new_string: "b" }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("path is required");
   });

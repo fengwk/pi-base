@@ -401,7 +401,7 @@ describe("bash tool and index", () => {
       toolName: "edit",
       toolCallId: "2",
       input: { path: "src/example.ts" },
-      content: [{ type: "text", text: "Error: Could not find oldString in src/example.ts. It must match exactly, including whitespace and indentation." }],
+      content: [{ type: "text", text: "Error: Could not find old_string in src/example.ts. It must match exactly, including whitespace and indentation." }],
       details: undefined,
       isError: false,
     });
@@ -430,7 +430,7 @@ describe("bash tool and index", () => {
     });
 
     expect(injected.systemPrompt).toContain("base system prompt");
-    expect(injected.systemPrompt).toContain("Base Tool Usage Guidance");
+    expect(injected.systemPrompt).toContain("# Core Tool Rules");
     expect(injected.systemPrompt).toContain("Use `bash` only for build, test, git");
     expect(injected.systemPrompt).not.toContain("<available_subagents>");
   });

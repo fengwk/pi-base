@@ -1,7 +1,15 @@
 import { Text } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 
-const DEFAULT_COLLAPSED_RESULT_LINES = 20;
+const INTERNAL_DEFAULT_COLLAPSED_RESULT_LINES = {
+  "*": 20,
+  bash: 20,
+  grep: 15,
+  read: 10,
+  write: 10,
+} as const;
+const DEFAULT_STREAMING_CALL_PREVIEW_LINES = 12;
+const MISSING_CALL_ARG_RE = /<missing-[^>]+>/g;
 const KEY_VALUE_RE = /^([A-Za-z][A-Za-z0-9]*):(?!\/\/)(?:\s*(.*))?$/;
 const SECTION_HEADER_RE = /^([A-Za-z][A-Za-z0-9 ]*):$/;
 
@@ -103,7 +111,7 @@ export function resolveCollapsedResultLines(
   getCollapsedResultLines?: CollapsedResultLinesResolver,
 ): number | undefined {
   const configured = getCollapsedResultLines?.(context?.cwd ?? process.cwd(), toolName);
-  return configured ?? defaultCollapsedLines;
+  return configured ?? defaultCollapsedLines ?? resolveToolPatternValue(INTERNAL_DEFAULT_COLLAPSED_RESULT_LINES, toolName);
 }
 export function resolveCollapsedResultMaxChars(
   toolName: string,
@@ -143,6 +151,46 @@ export function renderCallText(textValue: string, lastComponent?: unknown) {
   const text = (lastComponent as Text | undefined) ?? new Text("", 0, 0);
   text.setText(textValue);
   return text;
+}
+
+export interface CallRenderContextLike {
+  lastComponent?: unknown;
+  argsComplete?: boolean;
+  expanded?: boolean;
+}
+
+function isStreamingCall(context: CallRenderContextLike | undefined): boolean {
+  return context?.argsComplete === false;
+}
+
+function normalizeStreamingCallPlaceholders(textValue: string): string {
+  return textValue.replace(MISSING_CALL_ARG_RE, "...");
+}
+
+function injectStreamingCallLabel(textValue: string, theme: any): string {
+  const label = styleMuted(theme, " [streaming args]");
+  const firstNewline = textValue.indexOf("\n");
+  if (firstNewline === -1) return `${textValue}${label}`;
+  return `${textValue.slice(0, firstNewline)}${label}${textValue.slice(firstNewline)}`;
+}
+
+function collapseStreamingCallPreview(textValue: string, theme: any, expanded: boolean | undefined): string {
+  if (expanded) return textValue;
+  const lines = textValue.split("\n");
+  if (lines.length <= DEFAULT_STREAMING_CALL_PREVIEW_LINES) return textValue;
+  const visible = lines.slice(0, DEFAULT_STREAMING_CALL_PREVIEW_LINES);
+  visible.push(styleMuted(theme, `... (${lines.length - DEFAULT_STREAMING_CALL_PREVIEW_LINES} more lines while args are streaming)`));
+  return visible.join("\n");
+}
+
+export function renderStreamingCallText(textValue: string, theme: any, context: CallRenderContextLike | undefined) {
+  if (!isStreamingCall(context)) return renderCallText(textValue, context?.lastComponent);
+  const streamingText = collapseStreamingCallPreview(
+    injectStreamingCallLabel(normalizeStreamingCallPlaceholders(textValue), theme),
+    theme,
+    context?.expanded,
+  );
+  return renderCallText(streamingText, context?.lastComponent);
 }
 
 export function withLeadingResultNewline(textValue: string): string {
@@ -187,9 +235,9 @@ function colorizeResultLine(line: string, theme: any, state: { inDiff: boolean }
   if (line.startsWith("Replacements:")) return paint(theme, "muted", line);
   if (isError && line.startsWith("Validation failed")) return paint(theme, "error", line);
 
-  const numberedLineMatch = line.match(/^(\d+):(.*)$/);
+  const numberedLineMatch = line.match(/^(\s*\d+\|)(.*)$/);
   if (numberedLineMatch) {
-    return `${paint(theme, "muted", `${numberedLineMatch[1]}:`)}${paint(theme, "toolOutput", numberedLineMatch[2] ?? "")}`;
+    return `${paint(theme, "muted", numberedLineMatch[1] ?? "")}${paint(theme, "toolOutput", numberedLineMatch[2] ?? "")}`;
   }
 
   if (SECTION_HEADER_RE.test(line) && !KEY_VALUE_RE.test(line.slice(0, -1))) {
@@ -228,7 +276,7 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
   const bodyLines = rawBody ? rawBody.split("\n") : [];
   const collapsedLines = typeof options?.collapsedLines === "number" && Number.isFinite(options.collapsedLines) && options.collapsedLines >= 0
     ? Math.floor(options.collapsedLines)
-    : DEFAULT_COLLAPSED_RESULT_LINES;
+    : INTERNAL_DEFAULT_COLLAPSED_RESULT_LINES["*"];
   const maxCollapsedChars = typeof options?.maxCollapsedChars === "number" && Number.isFinite(options.maxCollapsedChars) && options.maxCollapsedChars >= 0
     ? Math.floor(options.maxCollapsedChars)
     : undefined;

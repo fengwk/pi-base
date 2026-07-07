@@ -1,7 +1,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { CollapsedResultLinesResolver, CollapsedResultMaxCharsResolver } from "../render.js";
-import { formatInlineValue, formatOptionalArgs, renderCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "../render.js";
+import type { CallRenderContextLike, CollapsedResultLinesResolver, CollapsedResultMaxCharsResolver } from "../render.js";
+import { formatInlineValue, formatOptionalArgs, renderStreamingCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleOutput, styleToolTitle } from "../render.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "../path-utils.js";
 import { LspDiscoveryResolver } from "./discovery.js";
 
@@ -168,8 +168,8 @@ export function renderLspResult(toolName: string, result: any, renderOptions: an
   return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, theme, context);
 }
 
-export function renderLspCall(text: string, lastComponent?: unknown) {
-  return renderCallText(text, lastComponent);
+export function renderLspCall(text: string, theme: any, context: CallRenderContextLike | undefined) {
+  return renderStreamingCallText(text, theme, context);
 }
 export async function executeLspDiagnostics(params: any, signal: AbortSignal | undefined, ctx: any, resolverFactory: LspResolverFactory | undefined, manager: { getClient: typeof import("./client.js").lspManager.getClient }): Promise<any> {
   let serverId = "unknown";

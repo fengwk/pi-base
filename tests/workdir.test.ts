@@ -44,11 +44,11 @@ describe("workdir defaults", () => {
     const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const readText = getText(readResult);
     expect(readResult.isError).not.toBe(true);
-    expect(readText).toContain("1: alpha");
+    expect(readText).toContain("1|alpha");
 
     const editResult = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/example.ts", oldString: "alpha", newString: "beta" },
+      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "beta" },
       undefined,
       undefined,
       { cwd: root },
@@ -86,11 +86,11 @@ describe("workdir defaults", () => {
     const readResult = await registry.getTool("read").execute("1", { path: "src/example.ts", workdir: "repo" }, undefined, undefined, { cwd: root });
     const readText = getText(readResult);
     expect(readResult.isError).not.toBe(true);
-    expect(readText).toContain("1: alpha");
+    expect(readText).toContain("1|alpha");
 
     const editResult = await registry.getTool("edit").execute(
       "2",
-      { workdir: "repo", path: "src/example.ts", oldString: "alpha", newString: "beta" },
+      { workdir: "repo", path: "src/example.ts", old_string: "alpha", new_string: "beta" },
       undefined,
       undefined,
       { cwd: root },

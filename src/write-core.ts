@@ -6,8 +6,6 @@ import { shortenHomePath, styleAccent, styleMuted, styleToolTitle } from "./rend
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { bomKindForEncoding, defaultTextEncoding, detectTextFileEncoding, encodeTextFile, textStartsWithBomMarker } from "./text-codec.js";
 
-export const WRITE_COLLAPSED_PREVIEW_LINES = 10;
-
 export function formatWriteSuccess(rawPath: string, existed: boolean): string {
   const action = existed ? "Overwrote" : "Created";
   return `${action} ${rawPath} successfully.`;

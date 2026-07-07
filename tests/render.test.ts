@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderRawResult, resolveToolPatternValue } from "../src/render.js";
+import { renderRawResult, renderStreamingCallText, resolveCollapsedResultLines, resolveToolPatternValue } from "../src/render.js";
 
 function render(component: any): string {
   return component.render(200).join("\n");
@@ -52,20 +52,20 @@ describe("render helpers", () => {
       "path: /tmp/demo.txt",
       "status: ok",
       "[src/demo.ts#A1B2]",
-      "1:hello",
+      "1|hello",
       "diff:",
-      "- 1 old line",
-      "+ 1 new line",
-      "  2 unchanged line",
+      "-1|old line",
+      "+1|new line",
+      " 2|unchanged line",
     ].join("\n");
 
     const rendered = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: true }, theme, { lastComponent: undefined }));
     expect(rendered).toContain("<muted>path:</muted> <accent>/tmp/demo.txt</accent>");
     expect(rendered).toContain("<muted>status:</muted> <success>ok</success>");
-    expect(rendered).toContain("<muted>1:</muted><toolOutput>hello</toolOutput>");
-    expect(rendered).toContain("<toolDiffRemoved>- 1 old line</toolDiffRemoved>");
-    expect(rendered).toContain("<toolDiffAdded>+ 1 new line</toolDiffAdded>");
-    expect(rendered).toContain("<toolDiffContext>  2 unchanged line</toolDiffContext>");
+    expect(rendered).toContain("<muted>1|</muted><toolOutput>hello</toolOutput>");
+    expect(rendered).toContain("<toolDiffRemoved>-1|old line</toolDiffRemoved>");
+    expect(rendered).toContain("<toolDiffAdded>+1|new line</toolDiffAdded>");
+    expect(rendered).toContain("<toolDiffContext> 2|unchanged line</toolDiffContext>");
   });
 
   it("colorizes write success message", () => {
@@ -102,5 +102,43 @@ describe("render helpers", () => {
     expect(resolveToolPatternValue(config, "image_search")).toBe(3);
     expect(resolveToolPatternValue(config, "lsp_diagnostics")).toBe(4);
     expect(resolveToolPatternValue(config, "unknown_tool")).toBe(5);
+  });
+
+  it("uses internal collapsed line defaults and falls back to wildcard", () => {
+    expect(resolveCollapsedResultLines("read", undefined, undefined)).toBe(10);
+    expect(resolveCollapsedResultLines("grep", undefined, undefined)).toBe(15);
+    expect(resolveCollapsedResultLines("write", undefined, undefined)).toBe(10);
+    expect(resolveCollapsedResultLines("bash", undefined, undefined)).toBe(20);
+    expect(resolveCollapsedResultLines("find", undefined, undefined)).toBe(20);
+    expect(resolveCollapsedResultLines("lsp_diagnostics", undefined, undefined)).toBe(20);
+  });
+
+  it("annotates and truncates call text while args are still streaming", () => {
+    const raw = ["write <missing-path>", "", ...Array.from({ length: 15 }, (_, index) => `line-${index + 1}`)].join("\n");
+
+    const rendered = render(renderStreamingCallText(raw, theme, {
+      lastComponent: undefined,
+      argsComplete: false,
+      expanded: false,
+    }));
+
+    expect(rendered).toContain("write ...");
+    expect(rendered).toContain("streaming args");
+    expect(rendered).toContain("line-10");
+    expect(rendered).not.toContain("line-15");
+    expect(rendered).toContain("more lines while args are streaming");
+  });
+
+  it("leaves completed call text unchanged", () => {
+    const raw = "grep <missing-pattern> in src";
+
+    const rendered = render(renderStreamingCallText(raw, theme, {
+      lastComponent: undefined,
+      argsComplete: true,
+      expanded: false,
+    }));
+
+    expect(rendered).toContain("<missing-pattern>");
+    expect(rendered).not.toContain("streaming args");
   });
 });

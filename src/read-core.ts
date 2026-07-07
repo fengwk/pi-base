@@ -3,14 +3,14 @@ import { createReadTool, withFileMutationQueue } from "@earendil-works/pi-coding
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, extname } from "node:path";
 import { buildImageReadDowngradeMessage, modelSupportsImages } from "./image-fallback.js";
-import { detectLineEnding, formatLineEndingStyle, normalizeToLF } from "./line-endings.js";
+import { normalizeToLF } from "./line-endings.js";
 import { LspDiscoveryResolver, type LspSupportInfo } from "./lsp/discovery.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import {
   type CollapsedResultLinesResolver,
   type CollapsedResultMaxCharsResolver,
   formatOptionalArgs,
-  renderCallText,
+  renderStreamingCallText,
   renderRawResult,
   resolveCollapsedResultLines,
   resolveCollapsedResultMaxChars,
@@ -29,8 +29,6 @@ const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 2000;
 const MAX_LINE_CHARS = 2000;
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
-const RESULT_COLLAPSED_LINES = 10;
-
 type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
 function parsePositiveInteger(value: unknown, name: string, defaultValue: number): number {
@@ -51,11 +49,8 @@ function formatLine(content: string): { display: string; truncated: boolean } {
   return { display, truncated: false };
 }
 
-/**
- * Format a line with its 1-based line number: `LINE: TEXT`.
- */
-function formatNumberedLine(line: number, display: string): string {
-  return `${line}: ${display}`;
+function formatNumberedLine(line: number, lineNumberWidth: number, display: string): string {
+  return `${String(line).padStart(lineNumberWidth, " ")}|${display}`;
 }
 
 function formatReadCall(args: any, theme: any, cwd?: string): string {
@@ -78,7 +73,6 @@ function buildReadNotices(args: {
   totalLines: number;
   hasMore: boolean;
   upstreamTextTruncated: boolean;
-  lsp: LspSupportInfo;
 }): string[] {
   const notices: string[] = [];
   if (args.hasMore && args.end >= args.start) {
@@ -87,8 +81,36 @@ function buildReadNotices(args: {
   if (args.upstreamTextTruncated) {
     notices.push(`[Some displayed lines were truncated to ${MAX_LINE_CHARS} characters. Re-read a smaller window if you need the full line text.]`);
   }
-  notices.push(`[${formatLspStatus(args.lsp)}]`);
   return notices;
+}
+
+function buildDisplayedFileLines(text: string): { lines: string[]; endsWithNewline: boolean } {
+  const normalizedText = normalizeToLF(text);
+  const endsWithNewline = text.endsWith("\n") || text.endsWith("\r");
+  const lines = normalizedText.length === 0 ? [] : normalizedText.split("\n");
+  // Drop the trailing empty element produced by a final newline so the numbered
+  // body only represents content-bearing lines and explicit blank lines.
+  if (endsWithNewline && lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return { lines, endsWithNewline };
+}
+
+function buildTextReadHeader(args: {
+  rawPath: string;
+  totalLines: number;
+  endsWithNewline: boolean;
+  lsp: LspSupportInfo;
+}): string[] {
+  const header = [
+    `path: ${args.rawPath}`,
+    `total_lines: ${args.totalLines}`,
+    `ends_with_newline: ${args.endsWithNewline ? "yes" : "no"}`,
+  ];
+  if (args.lsp.supported) {
+    header.push(formatLspStatus(args.lsp));
+  }
+  return header;
 }
 
 export type ReadLspResolverFactory = (cwd: string) => LspDiscoveryResolver;
@@ -110,10 +132,10 @@ export function registerReadTool(
     promptSnippet: loadToolPromptSnippet("read"),
     parameters: readSchema,
     renderCall(args: any, theme: any, context: any) {
-      return renderCallText(formatReadCall(args, theme, context?.cwd), context.lastComponent);
+      return renderStreamingCallText(formatReadCall(args, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
-      const collapsedLines = resolveCollapsedResultLines("read", RESULT_COLLAPSED_LINES, context, options.getCollapsedResultLines);
+      const collapsedLines = resolveCollapsedResultLines("read", undefined, context, options.getCollapsedResultLines);
       const maxCollapsedChars = resolveCollapsedResultMaxChars("read", undefined, context, options.getCollapsedResultMaxChars);
       return renderRawResult(result, { ...renderOptions, collapsedLines, maxCollapsedChars }, theme, context);
     },
@@ -179,20 +201,14 @@ export function registerReadTool(
         if (limit > MAX_LIMIT) throw new Error(`limit must be <= ${MAX_LIMIT}.`);
 
         const { text } = decodedFile;
-        const endingStyle = detectLineEnding(text);
-        const normalizedText = normalizeToLF(text);
-        const finalNewline = text.endsWith("\n") || text.endsWith("\r");
-        const displayedFileLines = normalizedText.length === 0 ? [] : normalizedText.split("\n");
-        // Drop the trailing empty element produced by a final newline so line counts match user expectations.
-        if (finalNewline && displayedFileLines.length > 0 && displayedFileLines[displayedFileLines.length - 1] === "") {
-          displayedFileLines.pop();
-        }
+        const { lines: displayedFileLines, endsWithNewline } = buildDisplayedFileLines(text);
         const resolverBaseDir = dirname(absolutePath);
         const lsp: LspSupportInfo = options.createResolver
           ? options.createResolver(resolverBaseDir).supportsLsp(absolutePath)
           : { supported: false };
         const start = Math.min(offset, displayedFileLines.length + 1);
         const end = Math.min(displayedFileLines.length, start + limit - 1);
+        const lineNumberWidth = Math.max(1, String(Math.max(displayedFileLines.length, 1)).length);
         const body: string[] = [];
         let upstreamTextTruncated = false;
         for (let line = start; line <= end; line++) {
@@ -200,25 +216,15 @@ export function registerReadTool(
           const rawLine = displayedFileLines[line - 1] ?? "";
           const formatted = formatLine(rawLine);
           if (formatted.truncated) upstreamTextTruncated = true;
-          body.push(formatNumberedLine(line, formatted.display));
+          body.push(formatNumberedLine(line, lineNumberWidth, formatted.display));
         }
-        const contentLines: string[] = [
-          `path: ${rawPath}`,
-          "kind: file",
-          `encoding: ${decodedFile.encoding}`,
-          `bom: ${decodedFile.bom}`,
-          `line_endings: ${formatLineEndingStyle(endingStyle)}`,
-          `final_newline: ${finalNewline ? "yes" : "no"}`,
-          "",
-          ...body,
-        ];
+        const contentLines: string[] = [...buildTextReadHeader({ rawPath, totalLines: displayedFileLines.length, endsWithNewline, lsp }), "", ...body];
         contentLines.push(...buildReadNotices({
           start,
           end,
           totalLines: displayedFileLines.length,
           hasMore: end < displayedFileLines.length,
           upstreamTextTruncated,
-          lsp,
         }));
         options.onSuccessfulRead?.(absolutePath, displayedFileLines);
         return {

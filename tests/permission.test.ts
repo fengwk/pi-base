@@ -159,7 +159,7 @@ describe("permission guard", () => {
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
     const result = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/secret.ts", oldString: "old", newString: "new" },
+      { workdir: ".", path: "src/secret.ts", old_string: "old", new_string: "new" },
       undefined,
       undefined,
       {

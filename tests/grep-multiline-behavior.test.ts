@@ -16,7 +16,7 @@ describe("grep multiline behavior", () => {
         path: "src",
         workdir: "packages/web",
         include: "**/*.ts",
-        ignoreCase: true,
+        ignore_case: true,
         literal: true,
         multiline: true,
         limit: 5,
@@ -28,7 +28,7 @@ describe("grep multiline behavior", () => {
 
     expect(rendered).toContain('grep "alpha\\\\nbeta" in src from packages/web');
     expect(rendered).toContain("include=**/*.ts");
-    expect(rendered).toContain("ignoreCase=true");
+    expect(rendered).toContain("ignore_case=true");
     expect(rendered).toContain("literal=true");
     expect(rendered).toContain("multiline=true");
     expect(rendered).toContain("timeout_seconds=30");

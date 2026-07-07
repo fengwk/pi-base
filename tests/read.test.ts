@@ -32,15 +32,15 @@ describe("read tool", () => {
     );
     const text = getText(result);
     expect(text).not.toMatch(/\[src\/example\.ts#/);
-    expect(text).toContain("kind: file");
-    expect(text).toContain("encoding: utf-8");
-    expect(text).toContain("bom: none");
-    expect(text).toContain("line_endings: lf");
-    expect(text).toContain("final_newline: yes");
-    expect(text).toContain("2: two");
-    expect(text).toContain("3: three");
+    expect(text).toContain("path: src/example.ts");
+    expect(text).toContain("total_lines: 4");
+    expect(text).toContain("ends_with_newline: yes");
+    expect(text).toContain("2|two");
+    expect(text).toContain("3|three");
     expect(text).toContain("[Showing lines 2-3 of 4. Re-run read with offset=4 to continue.]");
-    expect(text).toContain("[lsp: file type supported, but server not installed (typescript)]");
+    expect(text).toContain("lsp: file type supported, but server not installed (typescript)");
+    expect(text).not.toContain("kind: file");
+    expect(text).not.toContain("encoding:");
   });
 
   it("does not emit TAG header", async () => {
@@ -51,10 +51,10 @@ describe("read tool", () => {
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).not.toMatch(/^\[.*#[0-9A-F]{4}\]$/m);
-    expect(text).toContain("kind: file");
-    expect(text).toContain("encoding: utf-8");
-    expect(text).toContain("1: one");
-    expect(text).toContain("2: two");
+    expect(text).toContain("total_lines: 2");
+    expect(text).toContain("ends_with_newline: yes");
+    expect(text).toContain("1|one");
+    expect(text).toContain("2|two");
   });
 
   it("reports factual metadata while keeping a normalized body view", async () => {
@@ -66,13 +66,11 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/mixed.txt" }, undefined, undefined, { cwd: root });
     const text = getText(result);
-    expect(text).toContain("encoding: utf-8");
-    expect(text).toContain("bom: utf-8");
-    expect(text).toContain("line_endings: mixed");
-    expect(text).toContain("final_newline: no");
-    expect(text).toContain("1: one");
-    expect(text).toContain("2: two");
-    expect(text).toContain("3: three");
+    expect(text).toContain("total_lines: 3");
+    expect(text).toContain("ends_with_newline: no");
+    expect(text).toContain("1|one");
+    expect(text).toContain("2|two");
+    expect(text).toContain("3|three");
   });
 
   it("detects utf-16le text files and preserves a normal text view", async () => {
@@ -84,11 +82,10 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/utf16.txt" }, undefined, undefined, { cwd: root });
     const text = getText(result);
-    expect(text).toContain("encoding: utf-16le");
-    expect(text).toContain("bom: utf-16le");
-    expect(text).toContain("line_endings: crlf");
-    expect(text).toContain("1: alpha");
-    expect(text).toContain("2: beta");
+    expect(text).toContain("total_lines: 2");
+    expect(text).toContain("ends_with_newline: yes");
+    expect(text).toContain("1|alpha");
+    expect(text).toContain("2|beta");
   });
 
   it("detects legacy windows-1252 text files", async () => {
@@ -100,10 +97,23 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/legacy.txt" }, undefined, undefined, { cwd: root });
     const text = getText(result);
-    expect(text).toContain("encoding: windows-1252");
-    expect(text).toContain("bom: none");
-    expect(text).toContain("1: café");
-    expect(text).toContain("2: olé");
+    expect(text).toContain("total_lines: 2");
+    expect(text).toContain("ends_with_newline: yes");
+    expect(text).toContain("1|café");
+    expect(text).toContain("2|olé");
+  });
+
+  it("right-aligns read line numbers to the file width", async () => {
+    const root = await createTempWorkspace();
+    const lines = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
+    await writeWorkspaceFile(root, "src/padded.txt", `${lines}\n`);
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any);
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/padded.txt", offset: 9, limit: 3 }, undefined, undefined, { cwd: root });
+    const text = getText(result);
+    expect(text).toContain(" 9|line-9");
+    expect(text).toContain("10|line-10");
+    expect(text).toContain("11|line-11");
   });
 
   it("marks read results whose displayed lines were truncated", async () => {
@@ -148,11 +158,11 @@ describe("read tool", () => {
     releaseMutation();
     await blocker;
     const result = await pending;
-    expect(getText(result)).toContain("1: stable");
+    expect(getText(result)).toContain("1|stable");
   });
 
   it("treats an empty file as having zero body lines", async () => {
-    // Intent: empty files must not invent a synthetic `1: ` line, so line counts
+    // Intent: empty files must not invent a synthetic numbered content line, so line counts
     // and follow-up offsets remain accurate for the agent.
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/empty.txt", "");
@@ -163,9 +173,9 @@ describe("read tool", () => {
     });
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/empty.txt" }, undefined, undefined, { cwd: root });
     const text = getText(result);
-    expect(text).toContain("kind: file");
-    expect(text).toContain("final_newline: no");
-    expect(text).not.toContain("\n1: ");
+    expect(text).toContain("total_lines: 0");
+    expect(text).toContain("ends_with_newline: no");
+    expect(text).not.toContain("\n1|");
     expect(seen).toEqual([[]]);
   });
 
@@ -207,7 +217,7 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/hello　world.ts" }, undefined, undefined, { cwd: root });
     expect(result.isError).not.toBe(true);
-    expect(getText(result)).toContain("1: alpha");
+    expect(getText(result)).toContain("1|alpha");
   });
 
   it("truncates very long lines", async () => {

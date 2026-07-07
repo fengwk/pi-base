@@ -22,7 +22,7 @@ export function inferToolResultIsError(toolName: string, result: Pick<AgentToolR
   if (!text) return false;
 
   if (toolName === "edit") {
-    return text.startsWith("Error:") || text.startsWith("Could not find") || text.startsWith("Found ") || text.startsWith("File ") || text.startsWith("No changes") || text.startsWith("oldString");
+    return text.startsWith("Error:") || text.startsWith("Could not find") || text.startsWith("Found ") || text.startsWith("File ") || text.startsWith("No changes") || text.startsWith("old_string") || text.startsWith("new_string");
   }
 
   if (toolName === "bash") {
