@@ -10,8 +10,8 @@ const PROJECT_CONFIG_DIR = ".pi";
 const AGENTS_DIR = "agents";
 const SETTINGS_FILE = "settings.json";
 const SYSTEM_PROMPT_FILE = "SYSTEM.md";
-const AGENT_SELECTOR_ITEM_MAX_CHARS = 120;
-const AGENT_COMPLETION_DESCRIPTION_MAX_CHARS = 96;
+const AGENT_SELECTOR_ITEM_MAX_COLUMNS = 120;
+const AGENT_COMPLETION_DESCRIPTION_MAX_COLUMNS = 96;
 
 const VALID_THINKING_LEVELS = new Set<ReturnType<ExtensionAPI["getThinkingLevel"]>>([
   "off",
@@ -209,6 +209,23 @@ export function registerAgentSupport(
     return itemToAgentName.get(selected);
   };
 
+  const safeApplyAgent = async (
+    agentName: string,
+    ctx: ExtensionContext,
+    applyOptions: { persist: boolean; notify: boolean },
+  ): Promise<boolean> => {
+    try {
+      return await applyAgent(agentName, ctx, applyOptions);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Agent \"${agentName}\": unexpected activation failure: ${message}`, error);
+      if (applyOptions.notify && ctx.hasUI) {
+        ctx.ui.notify(`Agent "${agentName}": activation failed: ${message}`, "error");
+      }
+      return false;
+    }
+  };
+
   pi.registerCommand("agent", {
     description: "Switch agent (/agent <name>, /agent default, or /agent with selector)",
     getArgumentCompletions: (prefix) => {
@@ -219,7 +236,7 @@ export function registerAgentSupport(
       return matches.map((agent) => ({
         value: agent.name,
         label: agent.name,
-        description: truncateText(agent.description ?? buildAgentSummary(agent), AGENT_COMPLETION_DESCRIPTION_MAX_CHARS),
+        description: truncateDisplayWidth(agent.description ?? buildAgentSummary(agent), AGENT_COMPLETION_DESCRIPTION_MAX_COLUMNS),
       }));
     },
     handler: async (args, ctx) => {
@@ -236,7 +253,7 @@ export function registerAgentSupport(
         return;
       }
 
-      await applyAgent(agentName, ctx, { persist: true, notify: true });
+      await safeApplyAgent(agentName, ctx, { persist: true, notify: true });
     },
   });
 
@@ -249,9 +266,9 @@ export function registerAgentSupport(
       updateStatus(ctx, DEFAULT_AGENT_NAME);
       return;
     }
-    const applied = await applyAgent(requested.name, ctx, { persist: false, notify: false });
+    const applied = await safeApplyAgent(requested.name, ctx, { persist: false, notify: false });
     if (!applied && requested.name !== DEFAULT_AGENT_NAME) {
-      await applyAgent(DEFAULT_AGENT_NAME, ctx, { persist: false, notify: false });
+      await safeApplyAgent(DEFAULT_AGENT_NAME, ctx, { persist: false, notify: false });
     }
   });
 
@@ -311,13 +328,61 @@ function buildAgentSelectorItem(agent: AgentDefinition): string {
   const summary = buildAgentSummary(agent);
   if (!summary) return agent.name;
   const prefix = `${agent.name} - `;
-  return `${prefix}${truncateText(summary, Math.max(0, AGENT_SELECTOR_ITEM_MAX_CHARS - prefix.length))}`;
+  return `${prefix}${truncateDisplayWidth(summary, Math.max(0, AGENT_SELECTOR_ITEM_MAX_COLUMNS - stringDisplayWidth(prefix)))}`;
 }
 
-function truncateText(value: string, maxChars: number): string {
-  if (value.length <= maxChars) return value;
-  if (maxChars <= 1) return "…";
-  return `${value.slice(0, maxChars - 1)}…`;
+function truncateDisplayWidth(value: string, maxColumns: number): string {
+  if (stringDisplayWidth(value) <= maxColumns) return value;
+  if (maxColumns <= 1) return "…";
+
+  let output = "";
+  let usedColumns = 0;
+  for (const char of value) {
+    const charColumns = charDisplayWidth(char);
+    if (usedColumns + charColumns > maxColumns - 1) break;
+    output += char;
+    usedColumns += charColumns;
+  }
+  return `${output}…`;
+}
+
+function stringDisplayWidth(value: string): number {
+  let width = 0;
+  for (const char of value) {
+    width += charDisplayWidth(char);
+  }
+  return width;
+}
+
+function charDisplayWidth(char: string): number {
+  const codePoint = char.codePointAt(0);
+  if (codePoint === undefined) return 0;
+  if (isFullwidthCodePoint(codePoint)) return 2;
+  return 1;
+}
+
+function isFullwidthCodePoint(codePoint: number): boolean {
+  if (codePoint >= 0x1100 && (
+    codePoint <= 0x115f ||
+    codePoint === 0x2329 ||
+    codePoint === 0x232a ||
+    (codePoint >= 0x2e80 && codePoint <= 0x3247 && codePoint !== 0x303f) ||
+    (codePoint >= 0x3250 && codePoint <= 0x4dbf) ||
+    (codePoint >= 0x4e00 && codePoint <= 0xa4c6) ||
+    (codePoint >= 0xa960 && codePoint <= 0xa97c) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+    (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+    (codePoint >= 0xfe30 && codePoint <= 0xfe6b) ||
+    (codePoint >= 0xff01 && codePoint <= 0xff60) ||
+    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+    (codePoint >= 0x1b000 && codePoint <= 0x1b001) ||
+    (codePoint >= 0x1f200 && codePoint <= 0x1f251) ||
+    (codePoint >= 0x20000 && codePoint <= 0x3fffd)
+  )) {
+    return true;
+  }
+  return false;
 }
 
 function filterKnownTools(toolNames: string[] | undefined, allToolNames: string[]): string[] {

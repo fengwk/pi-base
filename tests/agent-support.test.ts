@@ -248,12 +248,12 @@ thinkingLevel: low
   });
 
   it("truncates long agent summaries in selector items and command completions", async () => {
-    // Intent: very long descriptions should not blow up the /agent selector or
-    // completion UI; keep them bounded with a visible ellipsis.
+    // Intent: /agent rendering must respect terminal column width, not only raw
+    // string length, so wide CJK descriptions still collapse into one line.
     const root = await createTempWorkspace();
     const agentDir = await createTempWorkspace();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    const longDescription = "Long description ".repeat(20).trim();
+    const longDescription = "长".repeat(60);
     const selectedItems: string[][] = [];
 
     process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -282,13 +282,14 @@ Verbose prompt.
 
       const completions = registry.getCommand("agent").getArgumentCompletions("ver");
       expect(completions).toHaveLength(1);
-      expect(completions[0]?.description?.length).toBeLessThanOrEqual(96);
+      expect(completions[0]?.description).not.toBe(longDescription);
       expect(completions[0]?.description).toMatch(/…$/);
 
       await registry.runCommand("agent", "", { cwd: root });
       expect(selectedItems).toHaveLength(1);
       const verboseItem = selectedItems[0]?.find((item) => item.startsWith("verbose - "));
-      expect(verboseItem?.length).toBeLessThanOrEqual(120);
+      expect(verboseItem).toBeDefined();
+      expect(verboseItem).not.toContain(longDescription);
       expect(verboseItem).toMatch(/…$/);
     } finally {
       if (previousAgentDir === undefined) {
@@ -467,6 +468,45 @@ thinkingLevel: high
 
       expect(registry.getNotifications()).toContainEqual({
         message: 'Agent "broken-thinking": failed to apply thinking level high. Check the selected model and provider configuration.',
+        variant: "error",
+      });
+      expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("reports unexpected activation errors without crashing the /agent command", async () => {
+    // Intent: unexpected internal failures must be surfaced as direct command
+    // errors instead of bubbling out as `Extension \"command:agent\" error`.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "broken-tools.md",
+        `---
+name: broken-tools
+---
+`,
+      );
+
+      const registry = createToolRegistry();
+      registry.pi.setActiveTools = () => {
+        throw new Error("Cannot read properties of undefined (reading 'models')");
+      };
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "broken-tools", { cwd: root });
+
+      expect(registry.getNotifications()).toContainEqual({
+        message: 'Agent "broken-tools": activation failed: Cannot read properties of undefined (reading \'models\')',
         variant: "error",
       });
       expect(registry.getStatuses().get("pi-base-agent")).toBeUndefined();
