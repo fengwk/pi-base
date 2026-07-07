@@ -222,11 +222,19 @@ export function renderCallText(textValue: string, lastComponent?: unknown) {
 export interface CallRenderContextLike {
   lastComponent?: unknown;
   argsComplete?: boolean;
+  executionStarted?: boolean;
+  isPartial?: boolean;
   expanded?: boolean;
 }
 
 function isStreamingCall(context: CallRenderContextLike | undefined): boolean {
-  return context?.argsComplete === false;
+  // Collapse into the rolling window only while the model is still emitting
+  // arguments AND the tool has not started running yet. Once execution starts
+  // (or a result settles), the arguments are necessarily final, so the full
+  // call must be rendered even if the host never flipped argsComplete to true.
+  if (context?.argsComplete !== false) return false;
+  if (context?.executionStarted) return false;
+  return true;
 }
 
 function normalizeStreamingCallPlaceholders(textValue: string): string {

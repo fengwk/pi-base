@@ -347,6 +347,81 @@ describe("tool renderers", () => {
     });
   });
 
+  it("expands write call to full content once args are complete", async () => {
+    await withTempGlobalPiBaseConfig({}, async (root) => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+
+      const write = registry.getTool("write");
+      const content = Array.from({ length: 90 }, (_, index) => `line-${index + 1}`).join("\n");
+      const args = { path: "novel_opening.txt", content };
+
+      // Simulate the tool-execution loop: reuse lastComponent across renders,
+      // stream first (argsComplete=false) then settle (argsComplete=true).
+      let lastComponent: any;
+      const renderOnce = (argsComplete: boolean) => {
+        const component = write.renderCall(args, {} as any, {
+          lastComponent,
+          executionStarted: false,
+          argsComplete,
+          isPartial: !argsComplete,
+          expanded: false,
+          isError: false,
+          cwd: root,
+          state: {},
+        } as any);
+        lastComponent = component;
+        return render(component);
+      };
+
+      // Streaming: rolling window keeps the block bounded
+      const streaming = renderOnce(false);
+      expect(streaming).toContain("streaming args");
+      expect(streaming).toContain("earlier lines");
+      expect(streaming).toContain("line-90");
+      expect(streaming).not.toContain("line-3");
+
+      // Args complete: full content is rendered, no truncation, no streaming label
+      const settled = renderOnce(true);
+      expect(settled).not.toContain("streaming args");
+      expect(settled).not.toContain("earlier lines");
+      expect(settled).toContain("line-1");
+      expect(settled).toContain("line-3");
+      expect(settled).toContain("line-90");
+    });
+  });
+
+  it("expands write call once execution starts even if argsComplete never flips", async () => {
+    await withTempGlobalPiBaseConfig({}, async (root) => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+
+      const write = registry.getTool("write");
+      const content = Array.from({ length: 90 }, (_, index) => `line-${index + 1}`).join("\n");
+      const args = { path: "novel_opening.txt", content };
+
+      let lastComponent: any;
+      const renderOnce = (ctx: any) => {
+        const component = write.renderCall(args, {} as any, { ...ctx, lastComponent, cwd: root, state: {} } as any);
+        lastComponent = component;
+        return render(component);
+      };
+
+      // Streaming (args incomplete, not executing) → rolling window
+      const streaming = renderOnce({ argsComplete: false, executionStarted: false, isPartial: true, expanded: false });
+      expect(streaming).toContain("earlier lines");
+      expect(streaming).not.toContain("line-3");
+
+      // Execution started while argsComplete is still false → must expand fully
+      const executing = renderOnce({ argsComplete: false, executionStarted: true, isPartial: true, expanded: false });
+      expect(executing).not.toContain("streaming args");
+      expect(executing).not.toContain("earlier lines");
+      expect(executing).toContain("line-1");
+      expect(executing).toContain("line-3");
+      expect(executing).toContain("line-90");
+    });
+  });
+
   it("renders calls in concise opencode style for pi-base-wrapped tools", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
