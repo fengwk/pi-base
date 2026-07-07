@@ -181,6 +181,49 @@ describe("notify support", () => {
     });
   });
 
+  it("collapses multiple permission asks in the same turn into one notification", async () => {
+    // Intent: when the model returns several tool calls at once (e.g. 5 edits),
+    // permission prompts are serialized but should alert the user only once per
+    // model round. A new turn_start resets the marker so the next round alerts again.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: { write: "ask" },
+      notify: { permissionAsked: true, agentEnd: false },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root, ui: { select: async () => "Yes" } });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const sessionCtx = {
+      cwd: root,
+      sessionManager: {
+        getSessionId: () => "session-turn",
+        getSessionName: () => "Turn Session",
+      },
+    };
+    const runWrite = async (id: string, path: string) =>
+      registry.getTool("write").execute(id, { workdir: ".", path, content: "export const x = true;\n" }, undefined, undefined, sessionCtx);
+
+    // First turn: two asks, only the first notifies.
+    await runWrite("1", "src/a.ts");
+    await runWrite("2", "src/b.ts");
+    expect(payloads).toHaveLength(1);
+
+    // A new turn resets the marker, so the next ask notifies again.
+    await registry.emit("turn_start", { type: "turn_start" }, sessionCtx);
+    await runWrite("3", "src/c.ts");
+    expect(payloads).toHaveLength(2);
+    expect(payloads.every((payload) => payload.kind === "permission.requested" && payload.sessionID === "session-turn")).toBe(true);
+  });
+
   it("does not throw when registered without loadSettings", async () => {
     // Intent: notify support is an exported helper; omitting loadSettings should
     // make notifications a no-op instead of throwing through optional chaining.

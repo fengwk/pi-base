@@ -43,6 +43,22 @@ export function registerNotifySupport(
   const loadSettings = options.loadSettings;
   const sendNotification = options.sendNotification ?? createShellNotificationSender(loadSettings);
   const suppressCompletedUntil = new Map<string, number>();
+  // Sessions that already emitted a permission notification for their current turn.
+  // A model round (one assistant message plus its whole tool-call batch) is a single
+  // "turn", and permission prompts within it are serialized, so we notify only once
+  // per turn. The marker is reset on the next `turn_start`, so this holds at most one
+  // entry per active session with no timers, time windows, or eviction bookkeeping.
+  const permissionNotifiedTurns = new Set<string>();
+
+  pi.on("turn_start", async (_event, ctx) => {
+    const sessionID = resolveSessionId(ctx);
+    if (sessionID) permissionNotifiedTurns.delete(sessionID);
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => {
+    const sessionID = resolveSessionId(ctx);
+    if (sessionID) permissionNotifiedTurns.delete(sessionID);
+  });
 
   pi.on("agent_end", async (event: AgentEndEvent, ctx) => {
     if (!shouldNotifyForAgentEnd(loadSettings?.(ctx.cwd)?.settings.notify, ctx, event)) return;
@@ -58,7 +74,15 @@ export function registerNotifySupport(
   return {
     async onPermissionAsked({ ctx }) {
       if (!shouldNotifyForPermissionAsk(loadSettings?.(ctx.cwd)?.settings.notify, ctx)) return;
-      await sendNotification(buildPayload("permission.requested", ctx), ctx);
+      const payload = buildPayload("permission.requested", ctx);
+      // Collapse a model round's whole tool-call batch into one alert: only the first
+      // permission ask of the current turn notifies. Subsequent asks in the same turn
+      // (e.g. 5 edits at once) are suppressed until the next turn_start resets the marker.
+      if (payload.sessionID) {
+        if (permissionNotifiedTurns.has(payload.sessionID)) return;
+        permissionNotifiedTurns.add(payload.sessionID);
+      }
+      await sendNotification(payload, ctx);
     },
     onPermissionRejected({ ctx }) {
       const notify = loadSettings?.(ctx.cwd)?.settings.notify;
@@ -122,7 +146,7 @@ function shouldNotifyForAgentEnd(config: NotifyConfig | undefined, ctx: Extensio
 
 function buildPayload(kind: PiBaseNotifyKind, ctx: ExtensionContext): PiBaseNotifyPayload {
   const projectName = basename(ctx.cwd) || ctx.cwd;
-  const sessionID = String(ctx.sessionManager.getSessionId?.() ?? basename(ctx.sessionManager.getSessionFile?.() ?? ""));
+  const sessionID = resolveSessionId(ctx);
   // sessionTitle is rendered into the notification body as
   // `[project] title`. If the session has no name, leave it empty so
   // the bash script can fall back to a project-only body instead of
@@ -136,4 +160,10 @@ function buildPayload(kind: PiBaseNotifyKind, ctx: ExtensionContext): PiBaseNoti
     sessionID,
     sessionTitle,
   };
+}
+
+// Stable per-session key used both for the notification payload and for the
+// per-turn permission-dedup marker, so both derive the id the same way.
+function resolveSessionId(ctx: ExtensionContext): string {
+  return String(ctx.sessionManager.getSessionId?.() ?? basename(ctx.sessionManager.getSessionFile?.() ?? ""));
 }
