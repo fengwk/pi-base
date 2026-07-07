@@ -155,11 +155,9 @@ function formatCompletedEditCall(header: string, diff: string | undefined, theme
   return `${header}\n\n${colorizeCompletedEditDiff(diff, theme)}`;
 }
 
-function formatSuccessfulEditResult(context: any, theme: any, replacements: number): string {
+function formatSuccessfulEditResult(context: any, replacements: number): string {
   const rawPath = String(context?.args?.path ?? "<unknown-path>");
-  const successText = theme?.fg ? theme.fg("success", `Edited ${rawPath} successfully.`) : `Edited ${rawPath} successfully.`;
-  const replacementsText = styleMuted(theme, `Replacements: ${replacements}`);
-  return `${successText}\n${replacementsText}`;
+  return `Edited ${rawPath} successfully.\nReplacements: ${replacements}`;
 }
 
 function formatDiffLine(prefix: " " | "+" | "-", lineNumber: number, lineNumberWidth: number, line: string): string {
@@ -416,8 +414,11 @@ export function registerEditTool(
           queueMicrotask(() => context?.invalidate?.());
         }
         if (typeof replacements === "number") {
-          return renderCallText(formatSuccessfulEditResult(context, theme, replacements), context?.lastComponent);
+          result = { ...result, content: [{ type: "text" as const, text: formatSuccessfulEditResult(context, replacements) }] };
         }
+      } else {
+        state.completedKey = undefined;
+        state.completedDiff = undefined;
       }
       const collapsedLines = resolveCollapsedResultLines("edit", undefined, context, options.getCollapsedResultLines);
       const maxCollapsedChars = resolveCollapsedResultMaxChars("edit", undefined, context, options.getCollapsedResultMaxChars);

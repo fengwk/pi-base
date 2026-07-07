@@ -165,6 +165,23 @@ describe("tool renderers", () => {
     });
   });
 
+  it("applies collapsed result max-char rules to successful edit summaries too", async () => {
+    await withTempGlobalPiBaseConfig({ render: { collapsedToolResultMaxChars: { edit: 10 } } }, async () => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const rendered = render(registry.getTool("edit").renderResult(
+        { content: [{ type: "text", text: "Edited src/a.ts successfully.\nReplacements: 1\n\ndiff:\n-1|const x = 1;\n+1|const x = 2;" }], details: { diff: "-1|const x = 1;\n+1|const x = 2;", replacements: 1, path: "/tmp/ws/src/a.ts" } },
+        { expanded: false, isPartial: false },
+        {} as any,
+        { lastComponent: undefined, state: {}, args: { path: "src/a.ts" }, cwd: "/tmp/ws" },
+      ));
+      expect(rendered).toContain("Edited src");
+      expect(rendered).toContain("output truncated");
+      expect(rendered).toContain("ctrl+o to expand");
+      expect(rendered).not.toContain("Replacements: 1");
+    });
+  });
+
   // Intent: write/edit renderCall should show full input for human review when expanded or already short enough.
   it("renderCall shows full edit input and write content", async () => {
     await withTempGlobalPiBaseConfig({}, async () => {
