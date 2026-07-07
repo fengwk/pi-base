@@ -29,7 +29,7 @@ function getDefaultSessionDir(cwd: string): string {
   return join(getAgentDir(), "sessions", safePath);
 }
 
-export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?: MockUiOverrides; model?: any; models?: any[] } = {}) {
+export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?: MockUiOverrides; model?: any; models?: any[]; modelRegistry?: any } = {}) {
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const events = new Map<string, Function[]>();
@@ -177,7 +177,7 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       mode: overrides.mode ?? "tui",
       cwd: overrides.cwd ?? defaultCwd,
       sessionManager,
-      modelRegistry: {
+      modelRegistry: options.modelRegistry ?? {
         find(provider: string, modelId: string) {
           return models.get(`${provider}/${modelId}`);
         },

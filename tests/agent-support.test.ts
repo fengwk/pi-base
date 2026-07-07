@@ -399,6 +399,51 @@ model: missing-provider/missing-model
     }
   });
 
+  it("looks up models with the registry receiver intact", async () => {
+    // Intent: pi-coding-agent's ModelRegistry.find depends on `this.models`.
+    // Calling the method without its receiver crashes with `reading 'models'`.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const model = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "bound-model.md",
+        `---
+name: bound-model
+model: ${model.provider}/${model.id}
+---
+`,
+      );
+
+      const backingModels = new Map([[`${model.provider}/${model.id}`, model]]);
+      const registry = createToolRegistry({
+        models: [model],
+        modelRegistry: {
+          models: backingModels,
+          find(this: { models: Map<string, typeof model> }, provider: string, modelId: string) {
+            return this.models.get(`${provider}/${modelId}`);
+          },
+          isUsingOAuth: () => false,
+        },
+      });
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "bound-model", { cwd: root });
+
+      expect(registry.getCurrentModel()).toEqual(model);
+      expect(registry.getStatuses().get("pi-base-agent")).toBe("agent:bound-model");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("keeps /agent usable when model activation throws and shows a friendly warning", async () => {
     // Intent: runtime/provider bugs inside pi.setModel should not crash the
     // /agent command; keep the switch alive and surface a configuration hint.

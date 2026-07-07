@@ -300,9 +300,9 @@ export function registerAgentSupport(
 }
 
 function findModel(ctx: ExtensionContext, ref: AgentModelRef): Model<Api> | undefined {
-  const finder = (ctx.modelRegistry as { find?: (provider: string, modelId: string) => Model<Api> | undefined }).find;
-  if (typeof finder !== "function") return undefined;
-  return finder(ref.provider, ref.modelId);
+  const modelRegistry = ctx.modelRegistry as { find?: (provider: string, modelId: string) => Model<Api> | undefined };
+  if (typeof modelRegistry.find !== "function") return undefined;
+  return modelRegistry.find(ref.provider, ref.modelId);
 }
 
 function buildUnknownAgentMessage(name: string, availableAgents: string[]): string {
