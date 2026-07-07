@@ -10,8 +10,6 @@ const PROJECT_CONFIG_DIR = ".pi";
 const AGENTS_DIR = "agents";
 const SETTINGS_FILE = "settings.json";
 const SYSTEM_PROMPT_FILE = "SYSTEM.md";
-const SKILLS_INTRO = "The following skills provide specialized instructions for specific tasks.";
-const SKILLS_END = "</available_skills>";
 
 const VALID_THINKING_LEVELS = new Set<ReturnType<ExtensionAPI["getThinkingLevel"]>>([
   "off",
@@ -228,19 +226,18 @@ export function registerAgentSupport(
       };
     }
 
-    const allowedSkillNames = activeAgent.skills;
     const selectedTools = event.systemPromptOptions.selectedTools ?? pi.getActiveTools();
     const allSkills = event.systemPromptOptions.skills ?? [];
-    const visibleSkills = filterVisibleSkills(allSkills, allowedSkillNames);
-
-    const systemPrompt = activeAgent.prompt
-      ? buildCustomSystemPrompt({
-          ...event.systemPromptOptions,
-          customPrompt: activeAgent.prompt,
-          selectedTools,
-          skills: visibleSkills,
-        })
-      : filterPromptSkills(event.systemPrompt, visibleSkills, allowedSkillNames);
+    const visibleSkills = skillsRenderableInPrompt(filterVisibleSkills(allSkills, activeAgent.skills));
+    const systemPrompt = buildAgentSystemPrompt(
+      {
+        ...event.systemPromptOptions,
+        customPrompt: resolveCustomPrompt(activeAgent, event.systemPromptOptions.customPrompt),
+        selectedTools,
+        skills: visibleSkills,
+      },
+      event.systemPrompt,
+    );
 
     return {
       systemPrompt: `${systemPrompt}\n\n${options.baseToolGuide}`,
@@ -285,28 +282,30 @@ function filterVisibleSkills(skills: Skill[], allowedSkillNames: string[] | unde
   return skills.filter((skill) => allowed.has(skill.name));
 }
 
-function filterPromptSkills(prompt: string, visibleSkills: Skill[], allowedSkillNames: string[] | undefined): string {
-  if (!allowedSkillNames || allowedSkillNames.length === 0) return prompt;
-  const start = prompt.indexOf(SKILLS_INTRO);
-  if (start === -1) return prompt;
-  const end = prompt.indexOf(SKILLS_END, start);
-  if (end === -1) return prompt;
-  const before = prompt.slice(0, start).replace(/\s*$/, "");
-  const after = prompt.slice(end + SKILLS_END.length);
-  const replacement = formatSkillsForPrompt(visibleSkills);
-  return `${before}${replacement}${after}`;
+/** Matches Pi `formatSkillsForPrompt`: skills marked disable-model-invocation stay CLI-only. */
+function skillsRenderableInPrompt(skills: Skill[]): Skill[] {
+  return skills.filter((skill) => !skill.disableModelInvocation);
 }
 
-function buildCustomSystemPrompt(options: BuildSystemPromptOptions): string {
+function resolveCustomPrompt(agent: AgentDefinition, fallbackCustomPrompt: string | undefined): string | undefined {
+  return agent.prompt ?? fallbackCustomPrompt;
+}
+
+/**
+ * Keep this aligned with Pi's `buildSystemPrompt` custom-prompt branch until the core package
+ * exports that helper as a stable public API. When no custom prompt source exists, preserve
+ * Pi's prebuilt system prompt as the fallback.
+ */
+function buildAgentSystemPrompt(options: BuildSystemPromptOptions, fallbackSystemPrompt: string): string {
   const customPrompt = options.customPrompt?.trim();
   if (!customPrompt) {
-    return "";
+    return fallbackSystemPrompt;
   }
 
   const appendSection = options.appendSystemPrompt ? `\n\n${options.appendSystemPrompt}` : "";
   const promptCwd = options.cwd.replace(/\\/g, "/");
   const contextFiles = options.contextFiles ?? [];
-  const selectedTools = options.selectedTools ?? [];
+  const selectedTools = options.selectedTools;
   const skills = options.skills ?? [];
 
   let prompt = customPrompt;
@@ -315,15 +314,15 @@ function buildCustomSystemPrompt(options: BuildSystemPromptOptions): string {
   }
 
   if (contextFiles.length > 0) {
-    prompt += "\n\n<project_context>\n\n";
+    prompt += "\n\n# Project Context\n\n";
     prompt += "Project-specific instructions and guidelines:\n\n";
-    for (const { path, content } of contextFiles) {
-      prompt += `<project_instructions path="${path}">\n${content}\n</project_instructions>\n\n`;
+    for (const { path: filePath, content } of contextFiles) {
+      prompt += `## ${filePath}\n\n${content}\n\n`;
     }
-    prompt += "</project_context>\n";
   }
 
-  if (selectedTools.includes("read") && skills.length > 0) {
+  const customPromptHasRead = !selectedTools || selectedTools.includes("read");
+  if (customPromptHasRead && skills.length > 0) {
     prompt += formatSkillsForPrompt(skills);
   }
 

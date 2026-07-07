@@ -19,7 +19,7 @@ const BASE_TOOL_NAMES = [
   "lsp_java_decompile",
 ] as const;
 
-function makeSkill(name: string, description: string): Skill {
+function makeSkill(name: string, description: string, options?: { disableModelInvocation?: boolean }): Skill {
   return {
     name,
     description,
@@ -32,7 +32,7 @@ function makeSkill(name: string, description: string): Skill {
       origin: "top-level",
       baseDir: `/skills/${name}`,
     },
-    disableModelInvocation: false,
+    disableModelInvocation: options?.disableModelInvocation ?? false,
   };
 }
 
@@ -247,9 +247,10 @@ thinkingLevel: low
     }
   });
 
-  it("filters the inherited system prompt skill block for agents without a custom prompt", async () => {
-    // Intent: an agent may restrict visible skills without replacing the base
-    // system prompt; that filter must preserve surrounding prompt text.
+  it("rebuilds empty-body agent prompts from structured options instead of patching the incoming prompt", async () => {
+    // Intent: empty-body agents should inherit the Pi-loaded custom prompt and
+    // let pi-base rebuild the full prompt from structured options. The incoming
+    // rendered prompt string is no longer the source of truth.
     const root = await createTempWorkspace();
     const agentDir = await createTempWorkspace();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -273,12 +274,16 @@ skills:
 
       const specSkill = makeSkill("spec", "Spec workflow");
       const otherSkill = makeSkill("other", "Other workflow");
+      const customPrompt = "Default system prompt.";
       const filtered = await registry.emit(
         "before_agent_start",
         {
-          systemPrompt: `Before.${formatSkillsForPrompt([specSkill, otherSkill])}\nAfter.`,
+          systemPrompt: `Incoming prompt should be ignored.${formatSkillsForPrompt([specSkill, otherSkill])}`,
           systemPromptOptions: {
             cwd: root,
+            customPrompt,
+            appendSystemPrompt: "Appendix",
+            contextFiles: [{ path: join(root, "AGENTS.md"), content: "Project rules" }],
             selectedTools: ["read"],
             skills: [specSkill, otherSkill],
           },
@@ -286,26 +291,129 @@ skills:
         { cwd: root },
       );
 
-      expect(filtered.systemPrompt).toContain("Before.");
-      expect(filtered.systemPrompt).toContain("After.");
+      expect(filtered.systemPrompt).toContain(customPrompt);
+      expect(filtered.systemPrompt).not.toContain("Incoming prompt should be ignored.");
+      expect(filtered.systemPrompt).toContain("Appendix");
+      expect(filtered.systemPrompt).toContain("# Project Context");
+      expect(filtered.systemPrompt).toContain(`## ${join(root, "AGENTS.md")}`);
       expect(filtered.systemPrompt).toContain("<name>spec</name>");
       expect(filtered.systemPrompt).not.toContain("<name>other</name>");
       expect(filtered.systemPrompt).toContain("# Core Tool Rules");
 
-      const noMarker = await registry.emit(
+      const allFiltered = await registry.emit(
         "before_agent_start",
         {
-          systemPrompt: "Prompt without a skills block.",
+          systemPrompt: "Incoming prompt should still be ignored.",
           systemPromptOptions: {
             cwd: root,
+            customPrompt,
             selectedTools: ["read"],
-            skills: [specSkill, otherSkill],
+            skills: [otherSkill],
           },
         },
         { cwd: root },
       );
-      expect(noMarker.systemPrompt).toContain("Prompt without a skills block.");
-      expect(noMarker.systemPrompt).not.toContain("<name>spec</name>");
+      expect(allFiltered.systemPrompt).toContain(customPrompt);
+      expect(allFiltered.systemPrompt).not.toContain("Incoming prompt should still be ignored.");
+      expect(allFiltered.systemPrompt).not.toContain("<available_skills>");
+      expect(allFiltered.systemPrompt).not.toContain("The following skills provide specialized instructions for specific tasks.");
+      expect(allFiltered.systemPrompt).not.toContain("<name>spec</name>");
+      expect(allFiltered.systemPrompt).not.toContain("<name>other</name>");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("omits disable-model-invocation skills when rebuilding inherited agent prompts", async () => {
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "skill-filter.md",
+        `---
+name: skill-filter
+skills:
+  - spec
+  - hidden
+---
+`,
+      );
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "skill-filter", { cwd: root });
+
+      const specSkill = makeSkill("spec", "Visible");
+      const hiddenSkill = makeSkill("hidden", "CLI only", { disableModelInvocation: true });
+      const result = await registry.emit(
+        "before_agent_start",
+        {
+          systemPrompt: "Incoming prompt should be ignored.",
+          systemPromptOptions: {
+            cwd: root,
+            customPrompt: "Default system prompt.",
+            selectedTools: ["read"],
+            skills: [specSkill, hiddenSkill],
+          },
+        },
+        { cwd: root },
+      );
+
+      expect(result.systemPrompt).toContain("Default system prompt.");
+      expect(result.systemPrompt).not.toContain("Incoming prompt should be ignored.");
+      expect(result.systemPrompt).toContain("<name>spec</name>");
+      expect(result.systemPrompt).not.toContain("<name>hidden</name>");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("falls back to Pi's prebuilt prompt when no custom prompt source exists", async () => {
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "skill-filter.md",
+        `---
+name: skill-filter
+skills:
+  - spec
+---
+`,
+      );
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "skill-filter", { cwd: root });
+
+      const result = await registry.emit(
+        "before_agent_start",
+        {
+          systemPrompt: "Pi fallback prompt.",
+          systemPromptOptions: {
+            cwd: root,
+            selectedTools: ["read"],
+            skills: [makeSkill("spec", "Spec workflow")],
+          },
+        },
+        { cwd: root },
+      );
+
+      expect(result.systemPrompt).toContain("Pi fallback prompt.");
+      expect(result.systemPrompt).not.toContain("<name>spec</name>");
+      expect(result.systemPrompt).toContain("# Core Tool Rules");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

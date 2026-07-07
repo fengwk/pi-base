@@ -121,7 +121,7 @@ export PI_BASE_GLOBAL_SETTINGS_PATH=/tmp/pi-base.json
 ~/.pi/agent/agents/**/*.md
 ```
 
-`pi-base` 会递归扫描这个目录。`~/.pi/agent/SYSTEM.md` 被视为默认 agent 的 prompt 来源，默认 agent 名固定为 `default`。
+`pi-base` 会递归扫描这个目录。默认 agent 名固定为 `default`；当 agent 正文为空时，`pi-base` 会回退到 Pi 加载的 `customPrompt`（通常来自 `~/.pi/agent/SYSTEM.md`）。
 
 ### Frontmatter 字段
 
@@ -157,12 +157,12 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `default` 是保留名，agent 文件不能使用这个名字。
 - `tools` 未配置或配置为 `[]`：所有工具可用。
 - `tools` 配置为非空数组：作为 allowlist，`pi-base` 会调用 `pi.setActiveTools()`，未列出的工具对 agent 不可见。
-- `skills` 未配置或配置为 `[]`：在 `read` 工具可用时，所有 skills 都会注入 prompt。
-- `skills` 配置为非空数组：只过滤 system prompt 中注入的 `<available_skills>` 列表。
-- `skills` 过滤只影响 prompt 注入，不会额外隐藏用户侧显式输入的 `/skill:name`。
-- skills 注入本身仍然遵循 Pi 默认行为：只有 `read` 工具可用时才会注入 `<available_skills>`。
-- Markdown 正文非空：正文作为该 agent 的 system prompt 主体，再继续追加原本的 `appendSystemPrompt`、context files、日期、cwd、skills 注入和 `BASE_TOOL_GUIDE`。
-- Markdown 正文为空：沿用当前默认 system prompt，只切换 model / thinking / tools / skills。
+- `skills` 未配置或配置为 `[]`：在 `read` 工具可用时，所有可见 skills 都会注入 prompt。
+- `skills` 配置为非空数组：`pi-base` 先按 allowlist 过滤 skills，再统一重建 system prompt。
+- skills 过滤只影响 prompt 注入，不会额外隐藏用户侧显式输入的 `/skill:name`。
+- skills 注入本身仍然遵循 Pi 默认行为：只有 `read` 工具可用时才会注入 `<available_skills>`，且 `disable-model-invocation` 的 skill 不会暴露给模型。
+- 所有 agent 都由 `pi-base` 统一重建 system prompt：agent Markdown 正文非空时覆盖 Pi 加载的 `customPrompt`；正文为空时回退到 Pi 加载的 `customPrompt`（通常是 `SYSTEM.md`）。
+- 若当前 agent 与 Pi 都没有可用的 `customPrompt`，`pi-base` 会保留 Pi 预构建的 system prompt 作为兜底。
 - `model` 或 `thinkingLevel` 未配置时，回退到 `settings.json` 中的默认值。
 - 最近一次显式 `/agent xxx` 切换会写入 session entry；后续 `session_start` 会自动恢复。
 - 如果当前 session 里从未持久化过 agent，启动时不会强制重置当前 model / thinking / active tools，只更新默认状态显示。
