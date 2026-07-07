@@ -265,16 +265,21 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
   const maxCollapsedChars = typeof options?.maxCollapsedChars === "number" && Number.isFinite(options.maxCollapsedChars) && options.maxCollapsedChars >= 0
     ? Math.floor(options.maxCollapsedChars)
     : undefined;
-  if (options?.expanded || isWithinCollapsedLimits(rawBody, bodyLines.length, collapsedLines, maxCollapsedChars)) {
+  if (options?.expanded) {
     text.setText(withLeadingResultNewline(rawBody ? colorizeResultBody(rawBody, theme, Boolean(context.isError)) : ""));
     return text;
   }
+  if (!rawBody || collapsedLines <= 0 || bodyLines.length < collapsedLines) {
+    text.setText("");
+    return text;
+  }
 
-  const visibleBody = bodyLines.slice(0, collapsedLines).join("\n");
+  const visibleLineCount = Math.max(0, collapsedLines - 1);
+  const visibleBody = bodyLines.slice(0, visibleLineCount).join("\n");
   const truncatedBody = typeof maxCollapsedChars === "number" && visibleBody.length > maxCollapsedChars
     ? `${visibleBody.slice(0, maxCollapsedChars)}...`
     : visibleBody;
-  const remaining = Math.max(0, bodyLines.length - collapsedLines);
+  const remaining = Math.max(0, bodyLines.length - visibleLineCount);
   const wasCharTruncated = truncatedBody !== visibleBody;
   const tailDetails = [
     remaining > 0 ? `${remaining} more lines` : undefined,
@@ -285,10 +290,4 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
   const body = truncatedBody ? colorizeResultBody(truncatedBody, theme, Boolean(context.isError)) : "";
   text.setText(withLeadingResultNewline(body ? `${body}\n${tail}` : tail));
   return text;
-}
-
-function isWithinCollapsedLimits(body: string, lineCount: number, collapsedLines: number, maxCollapsedChars: number | undefined): boolean {
-  if (lineCount > collapsedLines) return false;
-  if (typeof maxCollapsedChars === "number" && body.length > maxCollapsedChars) return false;
-  return true;
 }

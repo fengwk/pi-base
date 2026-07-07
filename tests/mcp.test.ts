@@ -222,6 +222,7 @@ describe("mcp support", () => {
 
     const tool = registry.getTool("echo");
     const longLine = "x".repeat(200);
+    const multiLine = Array.from({ length: 25 }, () => longLine).join("\n");
     const renderContext = {
       args: { text: "hello" },
       toolCallId: "1",
@@ -237,16 +238,17 @@ describe("mcp support", () => {
     };
 
     const collapsedComponent = tool.renderResult?.({
-      content: [{ type: "text", text: longLine }],
+      content: [{ type: "text", text: multiLine }],
     } as any, { expanded: false, isPartial: false }, {}, renderContext as any);
     const collapsedText = (collapsedComponent?.render(120).join("\n") ?? "").trimEnd();
     expect(collapsedText).toContain("ctrl+o to expand");
-    expect(collapsedText).not.toContain(longLine);
+    expect(collapsedText).not.toContain(multiLine);
     expect(collapsedText).toContain("output truncated");
     expect(collapsedText).toContain("xxxxxxxxxxxxxxxxxxxx...");
+    expect(collapsedText).toContain("6 more lines");
 
     const expandedComponent = tool.renderResult?.({
-      content: [{ type: "text", text: longLine }],
+      content: [{ type: "text", text: multiLine }],
     } as any, { expanded: true, isPartial: false }, {}, { ...renderContext, expanded: true } as any);
     const expandedText = (expandedComponent?.render(20000).join("\n") ?? "").trimEnd();
     expect(expandedText).toContain(longLine);

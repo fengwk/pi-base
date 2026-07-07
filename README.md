@@ -361,7 +361,12 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 可以是单个非负整数
 - 也可以是按工具名或通配符配置的对象
 - 只影响工具结果折叠预览，不影响工具调用预览
-- `0` 表示折叠态不显示结果正文，只保留展开提示
+- 对使用共享结果渲染器的工具（如 `read`、`find`、`grep`、`edit`、`write`、`lsp_*` 和大多数 `mcp_*`）：
+  - `0` 表示折叠态完全隐藏结果区域
+  - `N > 0` 表示折叠态最多占 `N` 行；当结果正文至少有 `N` 行时，会显示前 `N-1` 行，再用最后 1 行显示展开提示
+  - 当结果正文为空，或结果正文行数少于 `N` 时，折叠态不显示结果区域
+- `render.collapsedToolResultMaxChars` 只在折叠预览已经显示时生效，不会单独触发折叠预览
+- `bash` 仍使用专用结果渲染器：折叠态预览尾部输出，并继续显示 timing / truncation 等附加信息
 - 当未显式配置时，当前默认值是：`read=10`、`grep=15`、`find=20`、`bash=20`、`write=10`
 - 其它工具未配置时沿用各自 renderer 当前默认值
 - 匹配优先级：精确工具名 > 更具体的通配符 > `*`
@@ -377,7 +382,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
       "grep": 15,
       "lsp_*": 5,
       "mcp_*": 8,
-      "bash": 0
+      "edit": 0
     }
   }
 }

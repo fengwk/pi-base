@@ -51,7 +51,7 @@ describe("tool renderers", () => {
       for (const testCase of cases) {
         const tool = registry.getTool(testCase.name);
         const call = render(tool.renderCall(testCase.args, {} as any, { lastComponent: undefined }));
-        const result = render(tool.renderResult({ content: [{ type: "text", text: "line-1\nline-2" }] }, { expanded: false, isPartial: false }, {} as any, { lastComponent: undefined }));
+        const result = render(tool.renderResult({ content: [{ type: "text", text: "line-1\nline-2" }] }, { expanded: true, isPartial: false }, {} as any, { lastComponent: undefined }));
         expect(call.length).toBeGreaterThan(0);
         expect(result).toContain("line-1");
       }
@@ -80,9 +80,7 @@ describe("tool renderers", () => {
         {} as any,
         { lastComponent: undefined, cwd: root },
       ));
-      expect(findRendered).not.toContain("line-1");
-      expect(findRendered).not.toContain("line-25");
-      expect(findRendered).toContain("25 more lines");
+      expect(findRendered).toBe("");
 
       const readRendered = render(registry.getTool("read").renderResult(
         { content: [{ type: "text", text: output }] },
@@ -90,9 +88,9 @@ describe("tool renderers", () => {
         {} as any,
         { lastComponent: undefined, cwd: root },
       ));
-      expect(readRendered).toContain("line-1");
+      expect(readRendered).not.toContain("line-1");
       expect(readRendered).not.toContain("line-2");
-      expect(readRendered).toContain("24 more lines");
+      expect(readRendered).toContain("25 more lines");
     });
   });
 
@@ -108,9 +106,9 @@ describe("tool renderers", () => {
         {} as any,
         { lastComponent: undefined, cwd: root },
       ));
-      expect(rendered).toContain("line-20");
-      expect(rendered).not.toContain("line-21");
-      expect(rendered).toContain("5 more lines");
+      expect(rendered).toContain("line-19");
+      expect(rendered).not.toContain("line-20");
+      expect(rendered).toContain("6 more lines");
       expect(rendered).toContain("ctrl+o to expand");
     });
   });
@@ -128,9 +126,9 @@ describe("tool renderers", () => {
           {} as any,
           { lastComponent: undefined, cwd: root },
         ));
-        expect(rendered, toolName).toContain("line-1");
+        expect(rendered, toolName).not.toContain("line-1");
         expect(rendered, toolName).not.toContain("line-2");
-        expect(rendered, toolName).toContain("2 more lines");
+        expect(rendered, toolName).toContain("3 more lines");
       }
     });
   });
@@ -165,7 +163,7 @@ describe("tool renderers", () => {
     });
   });
 
-  it("applies collapsed result max-char rules to successful edit summaries too", async () => {
+  it("hides short successful edit summaries in collapsed mode even when max-char rules exist", async () => {
     await withTempGlobalPiBaseConfig({ render: { collapsedToolResultMaxChars: { edit: 10 } } }, async () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
@@ -175,10 +173,7 @@ describe("tool renderers", () => {
         {} as any,
         { lastComponent: undefined, state: {}, args: { path: "src/a.ts" }, cwd: "/tmp/ws" },
       ));
-      expect(rendered).toContain("Edited src");
-      expect(rendered).toContain("output truncated");
-      expect(rendered).toContain("ctrl+o to expand");
-      expect(rendered).not.toContain("Replacements: 1");
+      expect(rendered).toBe("");
     });
   });
 
@@ -263,8 +258,8 @@ describe("tool renderers", () => {
         { lastComponent: undefined, cwd: root },
       ));
       expect(diagnosticsRendered).toContain("line-1");
-      expect(diagnosticsRendered).not.toContain("line-3");
-      expect(diagnosticsRendered).toContain("2 more lines");
+      expect(diagnosticsRendered).not.toContain("line-2");
+      expect(diagnosticsRendered).toContain("3 more lines");
 
       const symbolsRendered = render(registry.getTool("lsp_workspace_symbols").renderResult(
         { content: [{ type: "text", text: output }] },
@@ -272,9 +267,8 @@ describe("tool renderers", () => {
         {} as any,
         { lastComponent: undefined, cwd: root },
       ));
-      expect(symbolsRendered).toContain("line-1");
-      expect(symbolsRendered).not.toContain("line-2");
-      expect(symbolsRendered).toContain("3 more lines");
+      expect(symbolsRendered).not.toContain("line-1");
+      expect(symbolsRendered).toContain("4 more lines");
     });
   });
 
