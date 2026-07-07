@@ -71,7 +71,6 @@ export function formatBashResultText(result: any, options: any, theme: any, cont
     : collapsedLines === 0
       ? ""
       : outputLines.slice(-collapsedLines).join("\n");
-  const wasLineTruncated = !options?.expanded && collapsedLines > 0 && outputLines.length > collapsedLines;
   const wasCharTruncated = !options?.expanded && typeof maxCollapsedChars === "number" && collapsedOutput.length > maxCollapsedChars;
   const visibleOutput = wasCharTruncated ? `${collapsedOutput.slice(0, maxCollapsedChars)}...` : collapsedOutput;
   const visibleLines = visibleOutput

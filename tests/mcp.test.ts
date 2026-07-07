@@ -244,8 +244,10 @@ describe("mcp support", () => {
     expect(collapsedText).toContain("ctrl+o to expand");
     expect(collapsedText).not.toContain(multiLine);
     expect(collapsedText).toContain("output truncated");
-    expect(collapsedText).toContain("xxxxxxxxxxxxxxxxxxxx...");
-    expect(collapsedText).toContain("6 more lines");
+    // The character budget is applied before counting lines, so a 20-char cap collapses the
+    // 25-line body to a single truncated line: content stays visible, no line-overflow hint.
+    expect(collapsedText).toContain("xxxxxxxxxxxxxxxxxxxx");
+    expect(collapsedText).not.toContain("more lines");
 
     const expandedComponent = tool.renderResult?.({
       content: [{ type: "text", text: multiLine }],

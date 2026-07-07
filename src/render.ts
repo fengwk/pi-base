@@ -258,7 +258,6 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
       })
     : [""];
   const rawBody = parts.join("\n\n");
-  const bodyLines = rawBody ? rawBody.split("\n") : [];
   const collapsedLines = typeof options?.collapsedLines === "number" && Number.isFinite(options.collapsedLines) && options.collapsedLines >= 0
     ? Math.floor(options.collapsedLines)
     : INTERNAL_DEFAULT_COLLAPSED_RESULT_LINES["*"];
@@ -269,25 +268,38 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
     text.setText(withLeadingResultNewline(rawBody ? colorizeResultBody(rawBody, theme, Boolean(context.isError)) : ""));
     return text;
   }
-  if (!rawBody || collapsedLines <= 0 || bodyLines.length < collapsedLines) {
+
+  // collapsedLines <= 0 hides the collapsed preview entirely (used by read/grep/find/
+  // edit/write); an empty body has nothing to show either.
+  if (collapsedLines <= 0 || !rawBody) {
     text.setText("");
     return text;
   }
 
-  const visibleLineCount = Math.max(0, collapsedLines - 1);
-  const visibleBody = bodyLines.slice(0, visibleLineCount).join("\n");
-  const truncatedBody = typeof maxCollapsedChars === "number" && visibleBody.length > maxCollapsedChars
-    ? `${visibleBody.slice(0, maxCollapsedChars)}...`
-    : visibleBody;
-  const remaining = Math.max(0, bodyLines.length - visibleLineCount);
-  const wasCharTruncated = truncatedBody !== visibleBody;
+  // Step 1: apply the character budget first so long single-line output stays visible
+  // instead of being dropped by the line-count gate below.
+  const charTruncated = typeof maxCollapsedChars === "number" && rawBody.length > maxCollapsedChars;
+  const charLimitedBody = charTruncated ? rawBody.slice(0, maxCollapsedChars) : rawBody;
+
+  // Step 2: only fold when the content exceeds the configured line count; when it fits,
+  // show it as-is. When folding, the last line of the window is reserved for the hint.
+  const limitedLines = charLimitedBody ? charLimitedBody.split("\n") : [];
+  const lineTruncated = limitedLines.length > collapsedLines;
+  const visibleLineCount = Math.max(0, lineTruncated ? collapsedLines - 1 : limitedLines.length);
+  const remaining = Math.max(0, limitedLines.length - visibleLineCount);
+  const visibleBody = limitedLines.slice(0, visibleLineCount).join("\n");
+
   const tailDetails = [
     remaining > 0 ? `${remaining} more lines` : undefined,
-    wasCharTruncated ? "output truncated" : undefined,
-    "ctrl+o to expand",
+    charTruncated ? "output truncated" : undefined,
+    remaining > 0 || charTruncated ? "ctrl+o to expand" : undefined,
   ].filter((part): part is string => Boolean(part));
+  const body = visibleBody ? colorizeResultBody(visibleBody, theme, Boolean(context.isError)) : "";
+  if (tailDetails.length === 0) {
+    text.setText(withLeadingResultNewline(body));
+    return text;
+  }
   const tail = paint(theme, "dim", `... (${tailDetails.join(", ")})`);
-  const body = truncatedBody ? colorizeResultBody(truncatedBody, theme, Boolean(context.isError)) : "";
   text.setText(withLeadingResultNewline(body ? `${body}\n${tail}` : tail));
   return text;
 }

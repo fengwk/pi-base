@@ -38,19 +38,32 @@ describe("render helpers", () => {
     expect(collapsed).toBe("");
   });
 
-  it("hides collapsed results completely when content is shorter than the configured line count", () => {
+  it("shows all content when it fits within the configured line count", () => {
     const raw = Array.from({ length: 2 }, (_, index) => `line-${index + 1}`).join("\n");
-    const collapsed = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: false, collapsedLines: 3 }, {}, { lastComponent: undefined }));
-    expect(collapsed).toBe("");
+    const lines = renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: false, collapsedLines: 3 }, {}, { lastComponent: undefined }).render(200);
+    expect(lines[1]).toContain("line-1");
+    expect(lines[2]).toContain("line-2");
+    expect(lines.join("\n")).not.toContain("more lines");
+    expect(lines).toHaveLength(3);
+  });
+
+  it("keeps long single-line output visible by truncating characters instead of dropping it", () => {
+    const raw = "x".repeat(500);
+    const lines = renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: false, collapsedLines: 5, maxCollapsedChars: 100 }, {}, { lastComponent: undefined }).render(200);
+    const joined = lines.join("\n");
+    expect(joined).toContain("x".repeat(100));
+    expect(joined).not.toContain("x".repeat(101));
+    expect(joined).toContain("output truncated");
+    expect(joined).toContain("ctrl+o to expand");
   });
 
   it("uses the last visible line for the expand hint so total rendered lines match the configured count", () => {
-    const raw = Array.from({ length: 3 }, (_, index) => `line-${index + 1}`).join("\n");
+    const raw = Array.from({ length: 5 }, (_, index) => `line-${index + 1}`).join("\n");
     const lines = renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: false, collapsedLines: 3 }, {}, { lastComponent: undefined }).render(200);
     expect(lines[0]?.trim()).toBe("");
     expect(lines[1]).toContain("line-1");
     expect(lines[2]).toContain("line-2");
-    expect(lines[3]).toContain("1 more lines");
+    expect(lines[3]).toContain("3 more lines");
     expect(lines).toHaveLength(4);
   });
 

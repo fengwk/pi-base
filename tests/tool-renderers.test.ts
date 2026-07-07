@@ -163,8 +163,8 @@ describe("tool renderers", () => {
     });
   });
 
-  it("hides short successful edit summaries in collapsed mode even when max-char rules exist", async () => {
-    await withTempGlobalPiBaseConfig({ render: { collapsedToolResultMaxChars: { edit: 10 } } }, async () => {
+  it("hides short successful edit summaries in collapsed mode when the line preview is disabled", async () => {
+    await withTempGlobalPiBaseConfig({ render: { collapsedToolResultLines: { edit: 0 }, collapsedToolResultMaxChars: { edit: 10 } } }, async () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const rendered = render(registry.getTool("edit").renderResult(
