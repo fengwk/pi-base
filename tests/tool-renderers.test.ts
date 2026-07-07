@@ -422,6 +422,37 @@ describe("tool renderers", () => {
     });
   });
 
+  it("expands write call when re-rendered from a stored session (isPartial=false)", async () => {
+    await withTempGlobalPiBaseConfig({}, async (root) => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+
+      const write = registry.getTool("write");
+      const content = Array.from({ length: 90 }, (_, index) => `line-${index + 1}`).join("\n");
+      const args = { path: "novel_opening.txt", content };
+
+      // History restore: the host never calls setArgsComplete/markExecutionStarted,
+      // so argsComplete and executionStarted stay false, but updateResult sets
+      // isPartial=false. The call must render fully, not as a rolling window.
+      const restored = render(write.renderCall(args, {} as any, {
+        lastComponent: undefined,
+        argsComplete: false,
+        executionStarted: false,
+        isPartial: false,
+        expanded: false,
+        isError: false,
+        cwd: root,
+        state: {},
+      } as any));
+
+      expect(restored).not.toContain("streaming args");
+      expect(restored).not.toContain("earlier lines");
+      expect(restored).toContain("line-1");
+      expect(restored).toContain("line-3");
+      expect(restored).toContain("line-90");
+    });
+  });
+
   it("renders calls in concise opencode style for pi-base-wrapped tools", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);

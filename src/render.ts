@@ -200,8 +200,11 @@ class StreamingCallWindowComponent {
       s.cachedWidth = width;
     }
     if (s.cachedSkipped && s.cachedSkipped > 0) {
-      const hint = styleMuted(s.theme, `... (${s.cachedSkipped} earlier lines, streaming)`);
-      return [s.cachedLines[0] ?? "", hint, ...(s.cachedLines ?? []).slice(1)];
+      // Keep the pinned title + trailing body together, and place the
+      // truncation hint at the very bottom so the block reads top-to-bottom
+      // without a divider wedged between the title and the content.
+      const hint = styleMuted(s.theme, `... (${s.cachedSkipped} earlier lines)`);
+      return [...(s.cachedLines ?? []), hint];
     }
     return s.cachedLines ?? [];
   }
@@ -229,11 +232,14 @@ export interface CallRenderContextLike {
 
 function isStreamingCall(context: CallRenderContextLike | undefined): boolean {
   // Collapse into the rolling window only while the model is still emitting
-  // arguments AND the tool has not started running yet. Once execution starts
-  // (or a result settles), the arguments are necessarily final, so the full
-  // call must be rendered even if the host never flipped argsComplete to true.
+  // arguments AND the tool has neither started running nor produced a result.
+  // Once execution starts, or a result has settled (isPartial === false, e.g.
+  // when a stored session is re-rendered from history), the arguments are
+  // necessarily final, so the full call must be rendered even if the host
+  // never flipped argsComplete to true.
   if (context?.argsComplete !== false) return false;
   if (context?.executionStarted) return false;
+  if (context?.isPartial === false) return false;
   return true;
 }
 
