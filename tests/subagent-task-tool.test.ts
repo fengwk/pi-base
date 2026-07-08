@@ -41,6 +41,7 @@ function fakeFactory(onSpawn?: (childDepth: number) => void): SubagentSessionFac
 
 const baseDeps = (over: Partial<SubagentTaskToolDeps> = {}): SubagentTaskToolDeps => ({
   getActiveAgentSubagents: () => ["worker"],
+  hasAgent: (name: string) => ["worker", "other"].includes(name),
   getMaxConcurrency: () => 2,
   factory: fakeFactory(),
   ...over,
@@ -55,10 +56,18 @@ describe("task tool", () => {
     expect((await tool.execute("1", { prompt: "go" }, undefined, undefined, ctx())).isError).toBe(true);
   });
 
-  it("rejects a subagent_type outside the allowlist", async () => {
+  it("reports a missing subagent_type with the currently available agents", async () => {
+    const tool = registerAndCapture(baseDeps({ hasAgent: () => false }));
+    const result = await tool.execute("1", { subagent_type: "ghost", description: "x", prompt: "go" }, undefined, undefined, ctx());
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('does not exist');
+    expect(text(result)).toContain('worker');
+  });
+
+  it("rejects an existing subagent_type outside the allowlist", async () => {
     // Intent: only agents in the caller's `subagents` allowlist may be delegated to.
     const tool = registerAndCapture(baseDeps());
-    const result = await tool.execute("1", { subagent_type: "hacker", description: "x", prompt: "go" }, undefined, undefined, ctx());
+    const result = await tool.execute("1", { subagent_type: "other", description: "x", prompt: "go" }, undefined, undefined, ctx());
     expect(result.isError).toBe(true);
     expect(text(result)).toContain("not allowed");
   });
@@ -82,7 +91,15 @@ describe("task tool", () => {
   it("enforces the per-session concurrency cap for new spawns", async () => {
     // Intent: a session running maxConcurrency subagents must reject further new delegations.
     const running = (id: string): SubagentNode => ({
-      sessionId: id, parentSessionId: "parent", agentType: "worker", description: "d", depth: 2, status: "running", toolCount: 0, startedAt: 0,
+      sessionId: id,
+      parentSessionId: "parent",
+      rootSessionId: "parent",
+      agentType: "worker",
+      description: "d",
+      depth: 2,
+      status: "running",
+      toolCount: 0,
+      startedAt: 0,
     });
     subagentRegistry.upsert(running("r1"));
     subagentRegistry.upsert(running("r2"));
@@ -92,9 +109,48 @@ describe("task tool", () => {
     expect(text(result)).toContain("concurrency limit");
   });
 
+  it("enforces maxConcurrency across parallel task calls in the same turn", async () => {
+    // Intent: parallel `task` execution must reserve slots before async spawn so the third
+    // call in one batch fails immediately instead of slipping past the concurrency guard.
+    let nextId = 0;
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const factory: SubagentSessionFactory = {
+      spawn: async () => ({
+        sessionId: `spawned-${++nextId}`,
+        prompt: async () => promptGate,
+        collect: () => ({ report: "ok", toolCount: 0 }),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+      }),
+      resume: async ({ sessionId }) => ({
+        sessionId,
+        prompt: async () => promptGate,
+        collect: () => ({ report: "ok", toolCount: 0 }),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+      }),
+    };
+    const tool = registerAndCapture(baseDeps({ getMaxConcurrency: () => 2, factory }));
+
+    const first = tool.execute("1", { subagent_type: "worker", description: "a", prompt: "go-a" }, undefined, undefined, ctx());
+    const second = tool.execute("2", { subagent_type: "worker", description: "b", prompt: "go-b" }, undefined, undefined, ctx());
+    const third = tool.execute("3", { subagent_type: "worker", description: "c", prompt: "go-c" }, undefined, undefined, ctx());
+
+    await Promise.resolve();
+    releasePrompt();
+    const [r1, r2, r3] = await Promise.all([first, second, third]);
+    expect(r1.isError).not.toBe(true);
+    expect(r2.isError).not.toBe(true);
+    expect(r3.isError).toBe(true);
+    expect(text(r3)).toContain("concurrency limit");
+  });
+
   it("refuses to resume a session that is currently running", async () => {
     // Intent: prevent double-driving one subagent session (P13).
-    subagentRegistry.upsert({ sessionId: "s1", parentSessionId: "parent", agentType: "worker", description: "d", depth: 2, status: "running", toolCount: 0, startedAt: 0 });
+    subagentRegistry.upsert({ sessionId: "s1", parentSessionId: "parent", rootSessionId: "parent", agentType: "worker", description: "d", depth: 2, status: "running", toolCount: 0, startedAt: 0 });
     const tool = registerAndCapture(baseDeps());
     const result = await tool.execute("1", { subagent_type: "worker", description: "do", prompt: "go", session_id: "s1" }, undefined, undefined, ctx());
     expect(result.isError).toBe(true);

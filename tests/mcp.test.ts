@@ -592,6 +592,59 @@ describe("mcp support", () => {
     expect(registry.getActiveTools()).not.toContain("echo");
   });
 
+  it("does not re-activate MCP aliases excluded by the active agent's tool allowlist", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = await createTempWorkspace();
+    const defaultModel = { provider: "provider-a", id: "model-a" };
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeFile(
+        join(agentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: defaultModel.provider, defaultModel: defaultModel.id, defaultThinkingLevel: "medium" }),
+        "utf8",
+      );
+      await writeFile(join(agentDir, "SYSTEM.md"), "Default system prompt.", "utf8");
+      await mkdir(join(agentDir, "agents"), { recursive: true });
+      await writeFile(
+        join(agentDir, "agents", "reviewer.md"),
+        `---\nname: reviewer\ntools:\n  - read\n---\nReview only.\n`,
+        "utf8",
+      );
+
+      const registry = createMcpRegistry({ hasUI: true, cwd: root, model: defaultModel, models: [defaultModel] });
+      registry.setFlag("agent", "reviewer");
+      piBaseExtension(registry.pi as any, {
+        mcp: {
+          clientFactory: createClientFactory({ mm: [{ toolsSequence: [[echoTool], [echoTool], [echoTool]] }] }),
+          heartbeatIntervalMs: 20,
+          retryDelaysMs: [20],
+          callWaitTimeoutMs: 20,
+        },
+      });
+
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+      await waitFor(() => hasTool(registry, "echo"));
+      expect(registry.getActiveTools()).toEqual(["read"]);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(registry.getActiveTools()).toEqual(["read"]);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
   it("converts JSON Schema type arrays into MCP parameter unions", () => {
     const unionSchema: any = convertJsonSchemaToTypeBox({ type: ["string", "null"] });
     expect(Array.isArray(unionSchema.anyOf)).toBe(true);
@@ -814,6 +867,61 @@ describe("mcp support", () => {
     const recovered = await registry.getTool("echo").execute("2", { text: "hello" }, undefined, undefined, { cwd: root });
     expect(recovered.isError).not.toBe(true);
     expect(getText(recovered)).toContain("recovered:hello");
+  });
+
+  it("does not reconnect for ordinary tool errors that merely contain a generic keyword", async () => {
+    // Intent: arbitrary remote tool failures can mention words like "closed" without meaning
+    // the transport died; reconnecting in that case would churn the server and mask real errors.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [
+            {
+              tools: [echoTool],
+              callResult: () => {
+                throw new Error("schema validation failed: field closedAt is required");
+              },
+            },
+            {
+              tools: [echoTool],
+              callResult: (_name, args) => ({
+                content: [{ type: "text", text: `unexpected-reconnect:${String(args.text ?? "")}` }],
+              }),
+            },
+          ],
+        }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "echo"));
+
+    const first = await registry.getTool("echo").execute("1", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(first.isError).toBe(true);
+    expect(getText(first)).toContain("field closedAt is required");
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const second = await registry.getTool("echo").execute("2", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(second.isError).toBe(true);
+    expect(getText(second)).toContain("field closedAt is required");
+    expect(getText(second)).not.toContain("unexpected-reconnect");
   });
 
   it("prints a tree view for /mcp-status", async () => {

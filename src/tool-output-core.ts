@@ -1,25 +1,41 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { getAgentDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { chmod, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 50 * 1024;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const TRUNCATION_DIR = join(tmpdir(), "pi-base-truncation");
+const TRUNCATION_SUBDIR = ["tmp", "pi-base", "truncation"] as const;
 
 const BASH_TRUNCATION_HINT_REGEX = /\[Showing lines \d+-\d+ of \d+\. Full output: .*?\]/i;
-let cleanupStarted = false;
+const cleanupStartedDirs = new Set<string>();
 
-async function ensureCleanupScheduled(): Promise<void> {
-  if (cleanupStarted) return;
-  cleanupStarted = true;
+function getTruncationDir(): string {
+  return join(getAgentDir(), ...TRUNCATION_SUBDIR);
+}
+
+async function ensureTruncationDir(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  if (process.platform !== "win32") {
+    await chmod(dir, 0o700).catch(() => undefined);
+  }
+}
+
+function sanitizeToolNameForFilename(toolName: string): string {
+  const sanitized = toolName.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return sanitized || "tool";
+}
+
+async function ensureCleanupScheduled(): Promise<string> {
+  const dir = getTruncationDir();
+  if (cleanupStartedDirs.has(dir)) return dir;
+  cleanupStartedDirs.add(dir);
   try {
-    await mkdir(TRUNCATION_DIR, { recursive: true });
+    await ensureTruncationDir(dir);
     const now = Date.now();
-    const entries = await readdir(TRUNCATION_DIR);
+    const entries = await readdir(dir);
     await Promise.all(entries.map(async (entry) => {
-      const filePath = join(TRUNCATION_DIR, entry);
+      const filePath = join(dir, entry);
       try {
         const info = await stat(filePath);
         if (now - info.mtimeMs > RETENTION_MS) await rm(filePath, { force: true });
@@ -30,12 +46,14 @@ async function ensureCleanupScheduled(): Promise<void> {
   } catch {
     // ignore cleanup failures
   }
+  return dir;
 }
 
 async function writeFullOutput(text: string, toolName: string): Promise<string> {
-  await ensureCleanupScheduled();
-  await mkdir(TRUNCATION_DIR, { recursive: true });
-  const filePath = join(TRUNCATION_DIR, `${toolName}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.txt`);
+  const dir = await ensureCleanupScheduled();
+  await ensureTruncationDir(dir);
+  const safeToolName = sanitizeToolNameForFilename(toolName);
+  const filePath = join(dir, `${safeToolName}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.txt`);
   await writeFile(filePath, text, "utf8");
   return filePath;
 }
@@ -180,7 +198,7 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
 
   const combined = textParts.join("\n\n");
   const details = (result as any)?.details;
-  const declaredUpstreamTruncation = (toolName === "read" || toolName === "grep") && Boolean(
+  const declaredUpstreamTruncation = (toolName === "read" || toolName === "grep" || toolName === "find") && Boolean(
     details?.upstreamTextTruncated === true
       || details?.linesTruncated === true
       || details?.truncation,

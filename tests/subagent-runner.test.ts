@@ -3,15 +3,18 @@ import {
   collectFromMessages,
   formatRunResult,
   runSubagent,
+  subagentSessionDir,
   type SubagentSession,
   type SubagentSessionFactory,
 } from "../src/subagent/runner.js";
+import { ROOT_SESSION_ENTRY, rootSessionEntryData } from "../src/subagent/depth.js";
 import { subagentRegistry } from "../src/subagent/registry.js";
+import { createTempWorkspace } from "./helpers.js";
 
 afterEach(() => subagentRegistry.clear());
 
-function fakeCtx(sessionId = "parent"): never {
-  return { cwd: "/tmp/work", sessionManager: { getSessionId: () => sessionId, getEntries: () => [] } } as never;
+function fakeCtx(sessionId = "parent", entries: Array<{ type: string; customType?: string; data?: unknown }> = []): never {
+  return { cwd: "/tmp/work", sessionManager: { getSessionId: () => sessionId, getEntries: () => entries } } as never;
 }
 
 function handle(id: string, opts: { prompt?: () => Promise<void>; report?: string; toolCount?: number }): SubagentSession {
@@ -41,6 +44,20 @@ describe("runSubagent", () => {
     expect(node.status).toBe("done");
     expect(node.toolCount).toBe(3);
     expect(node.parentSessionId).toBe("parent");
+    expect(node.rootSessionId).toBe("parent");
+  });
+
+  it("preserves the caller's persisted root-session id in registry nodes", async () => {
+    const factory: SubagentSessionFactory = {
+      spawn: async () => handle("child-rooted", { report: "ok" }),
+      resume: async () => handle("child-rooted", {}),
+    };
+    await runSubagent(
+      fakeCtx("child-parent", [{ type: "custom", customType: ROOT_SESSION_ENTRY, data: rootSessionEntryData("root-123") }]),
+      { agentType: "worker", description: "do work", prompt: "go", childDepth: 3 },
+      factory,
+    );
+    expect(subagentRegistry.get("child-rooted")?.rootSessionId).toBe("root-123");
   });
 
   it("returns error state (not throwing) when the subagent prompt fails", async () => {
@@ -89,19 +106,19 @@ describe("runSubagent", () => {
 });
 
 describe("collectFromMessages", () => {
-  it("returns the last assistant text and counts tool uses", () => {
-    // Intent: report = last assistant text; toolCount = tool_use blocks across the transcript.
+  it("returns the last assistant text and counts Pi toolCall blocks", () => {
+    // Intent: report = last assistant text; toolCount must match Pi's real assistant block type (`toolCall`).
     const messages = [
       { role: "user", content: [{ type: "text", text: "hi" }] },
-      { role: "assistant", content: [{ type: "text", text: "first" }, { type: "tool_use" }] },
+      { role: "assistant", content: [{ type: "text", text: "first" }, { type: "toolCall" }] },
       { role: "assistant", content: [{ type: "text", text: "final answer" }] },
     ];
     expect(collectFromMessages(messages)).toEqual({ report: "final answer", toolCount: 1 });
   });
 
-  it("returns no report when the assistant produced no text", () => {
-    const messages = [{ role: "assistant", content: [{ type: "tool_use" }] }];
-    expect(collectFromMessages(messages)).toEqual({ report: undefined, toolCount: 1 });
+  it("keeps backward compatibility with legacy tool-use block aliases", () => {
+    const messages = [{ role: "assistant", content: [{ type: "tool_use" }, { type: "tool_call" }] }];
+    expect(collectFromMessages(messages)).toEqual({ report: undefined, toolCount: 2 });
   });
 });
 
@@ -117,5 +134,20 @@ describe("formatRunResult", () => {
     const xml = formatRunResult({ sessionId: "s2", state: "error", error: "boom" });
     expect(xml).toContain('id="s2"');
     expect(xml).toContain("<task_error>boom</task_error>");
+  });
+});
+
+describe("subagentSessionDir", () => {
+  it("uses a hashed cwd-derived directory name to avoid lexical path collisions", async () => {
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = await createTempWorkspace();
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      expect(subagentSessionDir("/a-b/c")).not.toBe(subagentSessionDir("/a/b-c"));
+      expect(subagentSessionDir("/tmp/foo:bar")).not.toBe(subagentSessionDir("/tmp/foo/bar"));
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
   });
 });

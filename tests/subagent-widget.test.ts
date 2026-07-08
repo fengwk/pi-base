@@ -8,6 +8,7 @@ function node(overrides: Partial<SubagentNode>): SubagentNode {
   return {
     sessionId: "s",
     parentSessionId: "root",
+    rootSessionId: "test-session",
     agentType: "worker",
     description: "",
     depth: 2,
@@ -44,17 +45,29 @@ describe("renderSubagentWidget", () => {
     ]);
   });
 
-  it("wires the registry to the root session widget and clears it when work settles", async () => {
-    // Intent: a registry change on the root (UI) session pushes the tree into setWidget (throttled),
-    // and a terminal status removes the widget — proving the live-tree wiring end to end.
+  it("omits the tool suffix while a running subagent has no observed tool calls yet", () => {
+    // Intent: during execution, 0 does not mean a confirmed final count, so the widget should not mislead.
+    expect(renderSubagentWidget([node({ agentType: "mathworker", toolCount: 0 })])).toEqual([
+      "⟳ subagents running (1)",
+      "• mathworker",
+    ]);
+  });
+
+  it("wires the registry to the root session widget and isolates foreign roots", async () => {
+    // Intent: only the current root session's tree should render in its widget; foreign-root nodes
+    // must stay hidden even though the registry is process-global.
     const root = await createTempWorkspace();
     const registry = createToolRegistry({ model: defaultModel, models: [defaultModel] });
     piBaseExtension(registry.pi as never);
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
+    subagentRegistry.upsert(node({ sessionId: "foreign", agentType: "ignored", rootSessionId: "other-root", status: "running" }));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toBeUndefined();
+
     subagentRegistry.upsert(node({ sessionId: "x", agentType: "mathworker", status: "running" }));
     await new Promise((resolve) => setTimeout(resolve, 80)); // let the 50ms throttle flush
-    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toEqual(["⟳ subagents running (1)", "• mathworker · 0 tools"]);
+    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toEqual(["⟳ subagents running (1)", "• mathworker"]);
 
     subagentRegistry.update("x", { status: "done" });
     await new Promise((resolve) => setTimeout(resolve, 80));

@@ -75,6 +75,9 @@ export interface AgentSupportHandle {
   /** Names the currently-active agent may delegate to (empty when it cannot delegate). */
   getActiveAgentSubagents: () => string[];
   getActiveAgentName: () => string;
+  hasAgent: (name: string) => boolean;
+  /** Whether the active agent's tool policy allows this tool name when it becomes available later. */
+  canActivateTool: (toolName: string) => boolean;
 }
 
 export function registerAgentSupport(
@@ -148,6 +151,12 @@ export function registerAgentSupport(
   const resolveAgent = (name: string): AgentDefinition | undefined => {
     if (name === DEFAULT_AGENT_NAME) return catalog.byName.get(DEFAULT_AGENT_NAME);
     return catalog.byName.get(name);
+  };
+  const resolveActiveAgent = (): AgentDefinition | undefined => resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
+  const canActivateToolForActiveAgent = (toolName: string): boolean => {
+    const agent = resolveActiveAgent();
+    if (!agent?.tools) return agent?.tools === undefined;
+    return agent.tools.includes(toolName);
   };
 
   const applyAgent = async (
@@ -363,8 +372,10 @@ export function registerAgentSupport(
   });
 
   return {
-    getActiveAgentSubagents: () => resolveAgent(activeAgentName)?.subagents ?? [],
+    getActiveAgentSubagents: () => resolveActiveAgent()?.subagents ?? [],
     getActiveAgentName: () => activeAgentName,
+    hasAgent: (name: string) => catalog.byName.has(name),
+    canActivateTool: (toolName: string) => canActivateToolForActiveAgent(toolName),
   };
 }
 
@@ -584,6 +595,8 @@ function loadAgentCatalog(): AgentCatalog {
     }
   }
 
+  filterUnknownSubagents(byName, diagnostics);
+
   agents.sort((left, right) => {
     if (left.name === DEFAULT_AGENT_NAME) return -1;
     if (right.name === DEFAULT_AGENT_NAME) return 1;
@@ -591,6 +604,26 @@ function loadAgentCatalog(): AgentCatalog {
   });
 
   return { agents, byName, diagnostics };
+}
+
+function filterUnknownSubagents(byName: Map<string, AgentDefinition>, diagnostics: string[]): void {
+  const availableAgents = Array.from(byName.keys());
+  for (const agent of byName.values()) {
+    if (!agent.subagents?.length) continue;
+    const validSubagents: string[] = [];
+    const invalidSubagents: string[] = [];
+    for (const subagentName of agent.subagents) {
+      if (byName.has(subagentName)) validSubagents.push(subagentName);
+      else invalidSubagents.push(subagentName);
+    }
+    if (invalidSubagents.length > 0) {
+      const available = availableAgents.filter((name) => name !== agent.name).join(" / ") || "(no available agents)";
+      diagnostics.push(
+        `pi-base agent warning: agent "${agent.name}" declares unknown subagents [${invalidSubagents.join(", ")}]; available agents: ${available}. Ignoring the unknown entries.`,
+      );
+    }
+    agent.subagents = validSubagents.length > 0 ? validSubagents : undefined;
+  }
 }
 
 function createDefaultAgentDefinition(): AgentDefinition {

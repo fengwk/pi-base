@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
-import { getShellEnv, trackDetachedChildPid, untrackDetachedChildPid, waitForChildProcess } from "./internal/pi-coding-agent-utils.js";
+import { getShellEnv, waitForChildProcess } from "./internal/pi-coding-agent-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
 
 export interface BashOperations {
@@ -32,7 +32,6 @@ export function createGracefulBashOperations(options?: { shellPath?: string }): 
           env: env ?? getShellEnv(),
           stdio: ["ignore", "pipe", "pipe"],
         });
-        if (child.pid) trackDetachedChildPid(child.pid);
 
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
@@ -55,7 +54,6 @@ export function createGracefulBashOperations(options?: { shellPath?: string }): 
         }
 
         const cleanup = () => {
-          if (child.pid) untrackDetachedChildPid(child.pid);
           if (timeoutHandle) clearTimeout(timeoutHandle);
           signal?.removeEventListener("abort", onAbort);
           terminator.cleanup();

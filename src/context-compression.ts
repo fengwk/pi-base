@@ -19,7 +19,6 @@ interface ToolResultMessageLike {
   content?: unknown;
   details?: unknown;
   isError?: unknown;
-  [key: string]: unknown;
 }
 
 interface ToolCompressionOptions {

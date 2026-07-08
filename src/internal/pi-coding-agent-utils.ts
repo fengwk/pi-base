@@ -97,18 +97,6 @@ export function waitForChildProcess(child: import("node:child_process").ChildPro
   });
 }
 
-/**
- * Detached child processes must be tracked so they can be killed on parent
- * shutdown signals (SIGHUP/SIGTERM).
- */
-const trackedDetachedChildPids = new Set<number>();
-export function trackDetachedChildPid(pid: number): void {
-  trackedDetachedChildPids.add(pid);
-}
-export function untrackDetachedChildPid(pid: number): void {
-  trackedDetachedChildPids.delete(pid);
-}
-
 // =============================================================================
 // Shell environment
 // =============================================================================

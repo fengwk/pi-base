@@ -1,6 +1,12 @@
-# Core Tool Rules
+**Your tool usage:**
 
-- Prefer `read`, `grep`, `find`, `edit`, and `write` for repository file operations. Use `bash` only for build, test, git, package managers, external CLI commands, or tasks existing tools cannot satisfy.
+- Prefer `read`, `grep`, `find`, `edit`, and `write` for repository file operations. Use `bash` only for build, test, git, package managers, external CLI commands, or tasks that existing tools cannot satisfy.
+  - Good: `find({ pattern: "tools.ts", path: "src" })`
+  - Bad: `bash({ command: "find src -name 'tools.ts'" })`
+  - Good: `grep({ pattern: "demoDirectory", path: "src", workdir: "/path/to/project", literal: true })`
+  - Bad: `bash({ command: "cd /path/to/project && grep -R demoDirectory src" })`
+  - Good: `read({ path: "src" })`
+  - Bad: `bash({ command: "ls src" })`
 - When moving or copying files, prefer `bash` with `mv` or `cp` instead of simulating copy/move operations by deleting or fully rewriting files.
 - For exploration, prefer `grep` plus targeted `read` calls to locate relevant code efficiently. Treat `grep` output as candidate locations only; before editing, use `read` to inspect enough surrounding context to obtain the exact text for `old_string`.
 - When a file is central to the task or directly under review/edit, read the whole relevant file rather than relying on scattered snippets. If one `read` call is not enough, continue with additional `read` calls until that file has been fully covered.
@@ -10,7 +16,7 @@
 - If a prior tool result is replaced with a context compression placeholder, do not treat the placeholder as original tool output. Re-run the appropriate tool before relying on omitted details or file content.
 - When citing line numbers or offsets from tool output, copy them verbatim instead of inferring or reformatting them.
 - When using `edit` or `write`, provide complete intended content for every operation and do not use placeholders such as `...` or omitted sections.
-- After a successful `edit`, review the diff preview before moving on. After a successful `write`, use `read` if you need to inspect the resulting file content before continuing.
+- After successful `edit` operations, review the diff preview before moving on. After a successful `write`, use `read` if you need to inspect the resulting file content before continuing.
 - Prefer explicit file, directory, and search scopes. `grep` has a default `timeout_seconds` (15s); only set it explicitly when a broader scan is truly necessary. If it times out, narrow the path or pattern first. `bash` defaults to 120s (2 minutes); for long-running commands, explicitly pass a larger `timeout_seconds`. `find` requires an explicit `path`: `workdir` defaults to the current working directory, but `path` does not, so use `path: "."` when the intent really is the current working directory. Do not run broad searches from roots such as `/`, `~`, or `$HOME`.
 - Path-based tools (`read`, `grep`, `find`, `edit`, `write`, and `lsp_*`) default `workdir` to the agent's current working directory. If `workdir` is provided, relative path resolution uses that directory. For `bash`, when you need to run from a different cwd, prefer `workdir` over embedding `cd ... &&` inside `command`.
 - Be mindful of side effects. If the work requires temporary clones, downloads, generated files, or one-off scripts that are not part of the target task output, keep them in an isolated temporary directory instead of mixing them into the repository.

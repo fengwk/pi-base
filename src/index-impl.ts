@@ -28,7 +28,7 @@ import { registerNotifySupport, type RegisterNotifySupportOptions } from "./noti
 import { registerAgentSupport } from "./agent-support.js";
 import { TASK_TOOL_NAME } from "./subagent/constants.js";
 import { resolveSubagentConfig } from "./subagent/config.js";
-import { isRootSession, readDepth, ROOT_DEPTH } from "./subagent/depth.js";
+import { isRootSession, readDepth, readRootSessionId, ROOT_DEPTH } from "./subagent/depth.js";
 import {
   clearSubagentPermissionHost,
   setSubagentPermissionHost,
@@ -190,9 +190,13 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
   pi.on("session_start", async (event) => {
-    if (event.reason === "reload") reloadRuntimePiBaseSettings();
-    resolverFactory.clear();
-    await lspManager.shutdownAll();
+    if (event.reason === "reload") {
+      reloadRuntimePiBaseSettings();
+      resolverFactory.clear();
+      await lspManager.shutdownAll();
+    } else {
+      resolverFactory.clear();
+    }
     const activeTools = pi.getActiveTools();
     if (activeTools.length === 0) {
       pi.setActiveTools([...BASE_TOOL_NAMES]);
@@ -205,7 +209,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     }
   });
   pi.on("session_shutdown", async () => {
-    await lspManager.shutdownAll();
+    resolverFactory.clear();
   });
 
   registerReadTool(pi, {
@@ -234,12 +238,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     loadSettings,
     ...options.notify,
   });
-  registerMcpSupport(pi, {
-    loadSettings,
-    getCollapsedResultLines,
-    getCollapsedResultMaxChars,
-    ...options.mcp,
-  });
   const subagentControls = {
     taskToolName: TASK_TOOL_NAME,
     getMaxDepth: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxDepth,
@@ -257,8 +255,16 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
   });
+  registerMcpSupport(pi, {
+    loadSettings,
+    getCollapsedResultLines,
+    getCollapsedResultMaxChars,
+    canActivateTool: (toolName: string) => agentHandle.canActivateTool(toolName),
+    ...options.mcp,
+  });
   registerSubagentTaskTool(pi, {
     getActiveAgentSubagents: agentHandle.getActiveAgentSubagents,
+    hasAgent: agentHandle.hasAgent,
     getMaxConcurrency: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxConcurrency,
     factory: createRealSubagentFactory(),
   });
@@ -270,7 +276,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     resolveSubagentInfo: (ctx) => {
       const depth = readDepth(ctx);
       if (depth <= ROOT_DEPTH) return undefined;
-      return { agentType: agentHandle.getActiveAgentName(), depth };
+      return { agentType: agentHandle.getActiveAgentName(), depth, rootSessionId: readRootSessionId(ctx) };
     },
   });
   registerResumeAllCommand(pi);
@@ -279,10 +285,12 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   // sessions relay their `ask` prompts here via the module-level permission host. The same root
   // also owns the live subagent tree widget.
   let registeredHost: SubagentPermissionHost | null = null;
+  let registeredHostRootSessionId: string | null = null;
   let hostChain: Promise<unknown> = Promise.resolve();
   let unsubscribeWidget: (() => void) | null = null;
   pi.on("session_start", async (_event, ctx?: ExtensionContext) => {
     if (!ctx?.hasUI || !isRootSession(ctx)) return;
+    const rootSessionId = readRootSessionId(ctx);
     const host: SubagentPermissionHost = async (req) => {
       const run = hostChain.then(async () => {
         const title = `⟳ subagent「${req.agentType}」(depth ${req.depth}) requests permission\n\n${req.prompt}`;
@@ -293,7 +301,8 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       return run;
     };
     registeredHost = host;
-    setSubagentPermissionHost(host);
+    registeredHostRootSessionId = rootSessionId;
+    setSubagentPermissionHost(rootSessionId, host);
 
     // Live subagent tree widget: re-render (throttled) whenever the registry changes, so parallel
     // and nested delegation is visible while a `task` call blocks the parent turn.
@@ -301,7 +310,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     let scheduled = false;
     const render = () => {
       scheduled = false;
-      ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, renderSubagentWidget(subagentRegistry.all()));
+      ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, renderSubagentWidget(subagentRegistry.forRoot(rootSessionId)));
     };
     const scheduleRender = () => {
       if (scheduled) return;
@@ -312,8 +321,10 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
   pi.on("session_shutdown", async () => {
     if (registeredHost) {
-      clearSubagentPermissionHost(registeredHost);
+      if (registeredHostRootSessionId === null) clearSubagentPermissionHost(registeredHost);
+      else clearSubagentPermissionHost(registeredHostRootSessionId, registeredHost);
       registeredHost = null;
+      registeredHostRootSessionId = null;
     }
     if (unsubscribeWidget) {
       unsubscribeWidget();
@@ -321,7 +332,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     }
   });
 
-  (pi as any).on("context", async (event: any, ctx: ExtensionContext) => {
+  pi.on("context", async (event, ctx) => {
     if (!Array.isArray(event.messages)) return undefined;
     const compressionConfig = loadSettings(ctx.cwd).settings.contextCompression;
     if (!shouldApplyContextCompression(compressionConfig, ctx.model?.provider)) return undefined;
@@ -334,7 +345,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
 
   // Global output guard: applies to every tool result that flows through Pi, including third-party tools.
-  pi.on("tool_result", async (event, _ctx: any = {}) => {
+  pi.on("tool_result", async (event) => {
     const original = {
       content: event.content,
       details: event.details,

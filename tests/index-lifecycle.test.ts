@@ -10,7 +10,7 @@ function render(component: any): string {
 }
 
 describe("index lifecycle behavior", () => {
-  it("reloads runtime settings, clears resolvers, and shuts down lsp on session reload", async () => {
+  it("reloads runtime settings and shuts down lsp only on session reload", async () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     let shutdownCalls = 0;
@@ -20,6 +20,10 @@ describe("index lifecycle behavior", () => {
     };
 
     try {
+      await registry.emit("session_start", { reason: "startup" }, { cwd: process.cwd() });
+      await registry.emit("session_shutdown", { reason: "quit" }, { cwd: process.cwd() });
+      expect(shutdownCalls).toBe(0);
+
       await registry.emit("session_start", { reason: "reload" }, { cwd: process.cwd() });
       expect(shutdownCalls).toBe(1);
     } finally {

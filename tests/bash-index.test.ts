@@ -430,7 +430,7 @@ describe("bash tool and index", () => {
     });
 
     expect(injected.systemPrompt).toContain("base system prompt");
-    expect(injected.systemPrompt).toContain("# Core Tool Rules");
+    expect(injected.systemPrompt).toContain("**Your tool usage:**");
     expect(injected.systemPrompt).toContain("Use `bash` only for build, test, git");
     expect(injected.systemPrompt).not.toContain("<available_subagents>");
   });

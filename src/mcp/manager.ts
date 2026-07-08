@@ -34,6 +34,8 @@ export interface McpManagerOptions {
   callWaitTimeoutMs?: number;
   getCollapsedResultLines?: CollapsedResultLinesResolver;
   getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
+  /** Whether a newly available MCP alias is allowed to become active for the current agent. */
+  canActivateTool?: (toolName: string) => boolean;
   onSnapshotChange?: (snapshot: McpSnapshot, ctx: ExtensionContext) => void;
 }
 
@@ -210,6 +212,7 @@ export class McpManager {
     const pi = this.pi;
     if (!pi) return;
 
+    const canActivateTool = this.options.canActivateTool ?? (() => true);
     const seenRemoteNames = new Set<string>();
     const existingToolNames = new Set(pi.getAllTools().map((tool: { name: string }) => tool.name));
     const aliasesToActivate = new Set<string>();
@@ -247,7 +250,7 @@ export class McpManager {
         this.toolOwners.set(aliasName, runtime.key);
         existingToolNames.add(aliasName);
       }
-      aliasesToActivate.add(aliasName);
+      if (canActivateTool(aliasName)) aliasesToActivate.add(aliasName);
 
       runtime.tools.set(tool.name, {
         remoteName: tool.name,
@@ -452,21 +455,54 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
+const RECOVERABLE_CONNECTION_ERROR_CODES = new Set([
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EPIPE",
+  "ETIMEDOUT",
+]);
+const RECOVERABLE_CONNECTION_ERROR_PATTERNS = [
+  /\bnot connected\b/i,
+  /\bconnection timeout\b/i,
+  /\btransport closed\b/i,
+  /\bsocket closed\b/i,
+  /\bsocket hang up\b/i,
+  /\bconnection reset\b/i,
+  /\bbroken pipe\b/i,
+  /\b(?:unexpected )?eof\b/i,
+  /\b(?:transport|connection|socket) terminated\b/i,
+  /\beconn(?:aborted|refused|reset)\b/i,
+  /\bepipe\b/i,
+];
+
+function collectErrorChain(error: unknown): unknown[] {
+  const queue = [error];
+  const seen = new Set<unknown>();
+  const output: unknown[] = [];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === undefined || seen.has(current)) continue;
+    seen.add(current);
+    output.push(current);
+    if (current && typeof current === "object" && "cause" in current) {
+      queue.push((current as { cause?: unknown }).cause);
+    }
+  }
+  return output;
+}
+
 function isRecoverableConnectionError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
-  return [
-    "not connected",
-    "connection timeout",
-    "transport closed",
-    "socket",
-    "econn",
-    "epipe",
-    "broken pipe",
-    "eof",
-    "closed",
-    "terminated",
-    "network",
-  ].some((token) => message.includes(token));
+  const chain = collectErrorChain(error);
+  for (const item of chain) {
+    const code = item && typeof item === "object" && "code" in item ? (item as { code?: unknown }).code : undefined;
+    if (typeof code === "string" && RECOVERABLE_CONNECTION_ERROR_CODES.has(code.toUpperCase())) return true;
+    const message = getErrorMessage(item);
+    if (RECOVERABLE_CONNECTION_ERROR_PATTERNS.some((pattern) => pattern.test(message))) return true;
+  }
+  return false;
 }
 
 function delay(ms: number): Promise<void> {

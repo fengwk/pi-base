@@ -224,8 +224,8 @@ export function registerPermissionGuard(
     toggleYolo?: (cwd: string) => boolean;
     onPermissionAsked?: (input: { ctx: ExtensionContext }) => Promise<void>;
     onPermissionRejected?: (input: { ctx: ExtensionContext }) => void;
-    /** Resolve the delegating agent/depth of a headless subagent session, for the relayed prompt label. */
-    resolveSubagentInfo?: (ctx: ExtensionContext) => { agentType: string; depth: number } | undefined;
+    /** Resolve the delegating agent/depth/root-session of a headless subagent session, for the relayed prompt label. */
+    resolveSubagentInfo?: (ctx: ExtensionContext) => { agentType: string; depth: number; rootSessionId: string } | undefined;
   } = {},
 ): void {
   const loadSettings = options.loadSettings ?? loadRuntimePiBaseSettings;
@@ -277,6 +277,7 @@ export function registerPermissionGuard(
         const decision = await askSubagentPermissionHost({
           agentType: info.agentType,
           depth: info.depth,
+          rootSessionId: info.rootSessionId,
           prompt: buildPrompt(event.toolName, event.input, ctx.cwd),
           signal: (event as { signal?: AbortSignal }).signal,
         });

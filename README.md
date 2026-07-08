@@ -133,6 +133,7 @@ export PI_BASE_GLOBAL_SETTINGS_PATH=/tmp/pi-base.json
 - `thinkingLevel`
 - `tools`
 - `skills`
+- `subagents`
 
 示例：
 
@@ -163,6 +164,9 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `skills` 配置为非空数组：`pi-base` 先按 allowlist 过滤 skills，再统一重建 system prompt。
 - skills 过滤只影响 prompt 注入，不会额外隐藏用户侧显式输入的 `/skill:name`。
 - skills 注入本身仍然遵循 Pi 默认行为：只有 `read` 工具可用时才会注入 `<available_skills>`，且 `disable-model-invocation` 的 skill 不会暴露给模型。
+- `subagents` 未配置或为空：该 agent 不会获得 `task` 委派工具。
+- `subagents` 配置为非空数组：只有其中真实存在的 agent 会保留；不存在的 agent 会在启动或 `/reload` 时输出 warning，并从 allowlist 中剔除。
+- 当 `subagents` 过滤后的结果非空，且当前 session depth 还没有达到 `subagent.maxDepth` 时，`pi-base` 会为该 agent 注入 `task` 工具，并在 system prompt 中列出可委派的 subagent 名称和描述。
 - 所有 agent 都由 `pi-base` 统一重建 system prompt：agent Markdown 正文非空时覆盖 Pi 加载的 `customPrompt`；正文为空时回退到 Pi 加载的 `customPrompt`（通常是 `SYSTEM.md`）。
 - 若当前 agent 与 Pi 都没有可用的 `customPrompt`，`pi-base` 会保留 Pi 预构建的 system prompt 作为兜底。
 - `model` 或 `thinkingLevel` 未配置时，回退到 `settings.json` 中的默认值。
@@ -284,7 +288,8 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 - 默认工具名格式是 `<serverKey>_<toolName>`
 - `toolPrefix: ""` 时保留远端原始 tool 名
-- 动态注册的 MCP 工具会自动加入 active tools
+- 当当前 agent 没有 `tools` allowlist 时，新出现的 MCP 工具会自动加入 active tools
+- 当当前 agent 显式配置了 `tools` allowlist 时，只有 allowlist 中包含的 MCP alias 才会加入 active tools；不会因为 heartbeat / reconnect 把额外的 MCP 工具重新塞回当前 agent
 - 同名冲突时，该工具不会注册，并在 `/mcp-status` 中显示冲突原因
 
 ## 配置总览
@@ -300,6 +305,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 | `yolo` | 设置默认 YOLO 模式 |
 | `mcp` | 定义本地或远程 MCP server |
 | `contextCompression` | 压缩旧工具输出，减少上下文噪音 |
+| `subagent` | 控制 `task` 委派深度和并发上限 |
 
 一个常见起点：
 
@@ -353,6 +359,8 @@ You are a planning-focused agent. Break work into clear steps before editing.
   server map 按 key 合并；同 key 的项目配置覆盖同 key 的全局配置。
 - `contextCompression`
   各标量字段逐个覆盖；`tools` 数组是替换，不是追加。
+- `subagent`
+  `maxDepth` 和 `maxConcurrency` 都按字段浅覆盖；未配置的一侧继续继承全局值。
 
 ## 配置参考
 
@@ -609,6 +617,36 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - MCP 启动是异步的，不阻塞 session 启动
 - `pi-base` 会维护重连和 heartbeat，并把状态显示到 footer
 
+### `subagent`
+
+`subagent` 控制 `task` 委派工具的深度和并发上限。
+
+示例：
+
+```json
+{
+  "subagent": {
+    "maxDepth": 2,
+    "maxConcurrency": 10
+  }
+}
+```
+
+支持字段：
+
+- `maxDepth`
+- `maxConcurrency`
+
+行为规则：
+
+- `maxDepth` 默认 `2`
+- 根 session depth 记为 `1`；只有当 `当前 depth < maxDepth` 时，带有效 `subagents` allowlist 的 agent 才会注入 `task`
+- `maxConcurrency` 默认 `10`
+- `maxConcurrency` 只限制同一个父 session 当前正在运行的直接子 subagent 数量；超过上限时，新的 `task` 调用会直接报错
+- `task` 运行时会再次校验 `subagent_type`：
+  - agent 不存在时，报错并列出当前 agent 可用的 subagent 名称
+  - agent 存在但不在当前 agent 的 `subagents` allowlist 中时，报错 `not allowed`
+
 ### `lsp`
 
 `lsp.servers` 是完全用户定义的映射，`pi-base` 不内置任何 server 表。
@@ -696,7 +734,9 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 - 最大行数：`2000`
 - 最大字节数：`50KB`
-- 完整输出保存到：`os.tmpdir()/pi-base-truncation/`
+- 完整输出默认保存到：`~/.pi/agent/tmp/pi-base/truncation/`
+- 如果设置了 `PI_CODING_AGENT_DIR`，保存路径会跟随对应的 `agentDir/tmp/pi-base/truncation/`
+- 目录会按平台做 best-effort 创建；非 Windows 平台会尝试收紧到 `0700`
 - 旧截断文件会做 best-effort 清理，保留期约 `7` 天
 
 `details.truncation` 里会暴露：

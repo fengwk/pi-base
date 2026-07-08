@@ -120,7 +120,7 @@ You are the planner.
       expect(plannerPrompt.systemPrompt).toContain("<name>spec</name>");
       expect(plannerPrompt.systemPrompt).not.toContain("<name>other</name>");
       expect(plannerPrompt.systemPrompt).toContain(`Current working directory: ${root}`);
-      expect(plannerPrompt.systemPrompt).toContain("# Core Tool Rules");
+      expect(plannerPrompt.systemPrompt).toContain("**Your tool usage:**");
 
       await registry.pi.setModel(defaultModel as any);
       registry.setThinkingLevel("off");
@@ -154,7 +154,7 @@ You are the planner.
       expect(defaultPrompt.systemPrompt).not.toContain("You are the planner.");
       expect(defaultPrompt.systemPrompt).toContain("<name>spec</name>");
       expect(defaultPrompt.systemPrompt).toContain("<name>other</name>");
-      expect(defaultPrompt.systemPrompt).toContain("# Core Tool Rules");
+      expect(defaultPrompt.systemPrompt).toContain("**Your tool usage:**");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -779,7 +779,7 @@ skills:
       expect(filtered.systemPrompt).toContain(`## ${join(root, "AGENTS.md")}`);
       expect(filtered.systemPrompt).toContain("<name>spec</name>");
       expect(filtered.systemPrompt).not.toContain("<name>other</name>");
-      expect(filtered.systemPrompt).toContain("# Core Tool Rules");
+      expect(filtered.systemPrompt).toContain("**Your tool usage:**");
 
       const allFiltered = await registry.emit(
         "before_agent_start",
@@ -894,7 +894,7 @@ skills:
 
       expect(result.systemPrompt).toContain("Pi fallback prompt.");
       expect(result.systemPrompt).not.toContain("<name>spec</name>");
-      expect(result.systemPrompt).toContain("# Core Tool Rules");
+      expect(result.systemPrompt).toContain("**Your tool usage:**");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

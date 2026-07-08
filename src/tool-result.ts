@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { hasPiBaseToolErrorMarker } from "./tool-error-marker.js";
 
 function combineTextContent(result: Pick<AgentToolResult<any>, "content">): string {

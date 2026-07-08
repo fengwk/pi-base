@@ -161,6 +161,9 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       getEntries() {
         return [...entries];
       },
+      getSessionId() {
+        return "test-session";
+      },
       getBranch() {
         return [...entries];
       },

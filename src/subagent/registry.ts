@@ -7,6 +7,8 @@ export interface SubagentNode {
   sessionId: string;
   /** Delegating (parent) session id; used to reconstruct the tree. */
   parentSessionId: string;
+  /** Root UI-owning session id for this delegation tree. */
+  rootSessionId: string;
   agentType: string;
   description: string;
   depth: number;
@@ -56,6 +58,12 @@ export class SubagentRegistry extends EventEmitter {
   children(parentSessionId: string): SubagentNode[] {
     return [...this.nodes.values()]
       .filter((node) => node.parentSessionId === parentSessionId)
+      .map((node) => ({ ...node }));
+  }
+
+  forRoot(rootSessionId: string): SubagentNode[] {
+    return [...this.nodes.values()]
+      .filter((node) => node.rootSessionId === rootSessionId)
       .map((node) => ({ ...node }));
   }
 

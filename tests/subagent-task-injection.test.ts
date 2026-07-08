@@ -118,4 +118,30 @@ describe("task tool injection", () => {
     );
     expect(String(workerResult?.systemPrompt ?? "")).not.toContain("## Subagents");
   });
+
+  it("filters unknown subagents at load time so task is never injected for them", async () => {
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    const globalPath = join(agentDir, "global-pi-base.json");
+    await writeFile(globalPath, JSON.stringify({}), "utf8");
+    process.env.PI_BASE_GLOBAL_SETTINGS_PATH = globalPath;
+    await writeFile(
+      join(agentDir, "settings.json"),
+      JSON.stringify({ defaultProvider: defaultModel.provider, defaultModel: defaultModel.id, defaultThinkingLevel: "medium" }),
+      "utf8",
+    );
+    await writeFile(join(agentDir, "SYSTEM.md"), "Default system prompt.", "utf8");
+    await writeAgentFile(
+      agentDir,
+      "broken-orchestrator.md",
+      `---\nname: broken-orchestrator\nmodel: ${defaultModel.provider}/${defaultModel.id}\ntools:\n  - read\nsubagents:\n  - missing-worker\n---\nBroken.\n`,
+    );
+
+    const registry = createToolRegistry({ model: defaultModel, models: [defaultModel] });
+    piBaseExtension(registry.pi as never);
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await registry.runCommand("agent", "broken-orchestrator", { cwd: root });
+    expect(registry.getActiveTools()).toEqual(["read"]);
+  });
 });

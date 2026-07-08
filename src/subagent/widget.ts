@@ -24,8 +24,8 @@ export function renderSubagentWidget(nodes: SubagentNode[]): string[] | undefine
   const lines = [`⟳ subagents running (${running.length})`];
   for (const node of running) {
     const indent = "  ".repeat(Math.max(0, node.depth - 2));
-    const tools = node.toolCount === 1 ? "1 tool" : `${node.toolCount} tools`;
-    lines.push(`${indent}• ${node.agentType} · ${tools}`);
+    const tools = node.toolCount <= 0 ? "" : node.toolCount === 1 ? " · 1 tool" : ` · ${node.toolCount} tools`;
+    lines.push(`${indent}• ${node.agentType}${tools}`);
   }
   return lines;
 }

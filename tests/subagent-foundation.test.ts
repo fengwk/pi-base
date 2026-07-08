@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEPTH_ENTRY, ROOT_DEPTH, depthEntryData, isRootSession, readDepth } from "../src/subagent/depth.js";
+import { DEPTH_ENTRY, ROOT_DEPTH, ROOT_SESSION_ENTRY, depthEntryData, isRootSession, readDepth, readRootSessionId, rootSessionEntryData } from "../src/subagent/depth.js";
 import { SubagentRegistry, type SubagentNode } from "../src/subagent/registry.js";
 import {
   askSubagentPermissionHost,
@@ -14,8 +14,8 @@ interface Entry {
   data?: unknown;
 }
 
-function ctxWithEntries(entries: Entry[]): { sessionManager: { getEntries: () => Entry[] } } {
-  return { sessionManager: { getEntries: () => entries } };
+function ctxWithEntries(entries: Entry[], sessionId = "root-session"): { sessionManager: { getEntries: () => Entry[]; getSessionId: () => string } } {
+  return { sessionManager: { getEntries: () => entries, getSessionId: () => sessionId } };
 }
 
 describe("subagent depth", () => {
@@ -41,12 +41,29 @@ describe("subagent depth", () => {
     const ctx = ctxWithEntries([{ type: "custom", customType: DEPTH_ENTRY, data: { depth: "nope" } }]);
     expect(readDepth(ctx as never)).toBe(ROOT_DEPTH);
   });
+
+  it("defaults the root session id to the current session and restores persisted child roots", () => {
+    const rootCtx = ctxWithEntries([], "root-1");
+    expect(readRootSessionId(rootCtx as never)).toBe("root-1");
+
+    const childCtx = ctxWithEntries([
+      { type: "custom", customType: ROOT_SESSION_ENTRY, data: rootSessionEntryData("root-2") },
+      { type: "custom", customType: ROOT_SESSION_ENTRY, data: rootSessionEntryData("root-3") },
+    ], "child-1");
+    expect(readRootSessionId(childCtx as never)).toBe("root-3");
+  });
+
+  it("ignores malformed root-session entries", () => {
+    const ctx = ctxWithEntries([{ type: "custom", customType: ROOT_SESSION_ENTRY, data: { rootSessionId: 42 } }], "root-4");
+    expect(readRootSessionId(ctx as never)).toBe("root-4");
+  });
 });
 
 describe("SubagentRegistry", () => {
   const node = (id: string, parent: string, status: SubagentNode["status"] = "running"): SubagentNode => ({
     sessionId: id,
     parentSessionId: parent,
+    rootSessionId: "root",
     agentType: "worker",
     description: "task",
     depth: 2,
@@ -63,6 +80,14 @@ describe("SubagentRegistry", () => {
     registry.upsert(node("c", "root", "done"));
     expect(registry.children("root").map((n) => n.sessionId).sort()).toEqual(["a", "b", "c"]);
     expect(registry.runningChildCount("root")).toBe(2);
+  });
+
+  it("filters snapshots by root session", () => {
+    const registry = new SubagentRegistry();
+    registry.upsert(node("a", "root-a"));
+    registry.upsert({ ...node("b", "root-b"), rootSessionId: "other-root" });
+    expect(registry.forRoot("root").map((n) => n.sessionId)).toEqual(["a"]);
+    expect(registry.forRoot("other-root").map((n) => n.sessionId)).toEqual(["b"]);
   });
 
   it("emits change events on upsert/update/remove", () => {
@@ -95,22 +120,23 @@ describe("subagent permission host", () => {
     // Intent: headless top-level (no UI host) must return null so the guard can safely block, not allow.
     clearSubagentPermissionHost();
     expect(hasSubagentPermissionHost()).toBe(false);
-    await expect(askSubagentPermissionHost({ agentType: "w", depth: 2, prompt: "bash: rm -rf" })).resolves.toBeNull();
+    await expect(askSubagentPermissionHost({ agentType: "w", depth: 2, rootSessionId: "root-a", prompt: "bash: rm -rf" })).resolves.toBeNull();
   });
 
-  it("forwards to the registered host and clears by identity", async () => {
-    // Intent: subagent asks reach the root host; a stale root must not unregister a newer host.
+  it("forwards to the registered root host and clears by identity", async () => {
+    // Intent: subagent asks must reach only their owning root host; a stale root must not unregister a newer host.
     const hostA = vi.fn(async () => true);
     const hostB = vi.fn(async () => false);
-    setSubagentPermissionHost(hostA);
-    await expect(askSubagentPermissionHost({ agentType: "w", depth: 2, prompt: "bash: rm -rf" })).resolves.toBe(true);
+    setSubagentPermissionHost("root-a", hostA);
+    await expect(askSubagentPermissionHost({ agentType: "w", depth: 2, rootSessionId: "root-a", prompt: "bash: rm -rf" })).resolves.toBe(true);
+    await expect(askSubagentPermissionHost({ agentType: "w", depth: 2, rootSessionId: "root-b", prompt: "bash: rm -rf" })).resolves.toBeNull();
 
-    setSubagentPermissionHost(hostB);
-    clearSubagentPermissionHost(hostA); // hostA is stale; must be a no-op
-    expect(hasSubagentPermissionHost()).toBe(true);
-    await expect(askSubagentPermissionHost({ agentType: "w", depth: 2, prompt: "bash: rm -rf" })).resolves.toBe(false);
+    setSubagentPermissionHost("root-a", hostB);
+    clearSubagentPermissionHost("root-a", hostA); // hostA is stale; must be a no-op
+    expect(hasSubagentPermissionHost("root-a")).toBe(true);
+    await expect(askSubagentPermissionHost({ agentType: "w", depth: 2, rootSessionId: "root-a", prompt: "bash: rm -rf" })).resolves.toBe(false);
 
-    clearSubagentPermissionHost(hostB);
-    expect(hasSubagentPermissionHost()).toBe(false);
+    clearSubagentPermissionHost("root-a", hostB);
+    expect(hasSubagentPermissionHost("root-a")).toBe(false);
   });
 });
