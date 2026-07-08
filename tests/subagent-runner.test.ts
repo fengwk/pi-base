@@ -114,9 +114,9 @@ describe("runSubagent", () => {
       prompt: async () => undefined,
       collect: () => ({ report: "done", toolCount: 2 }),
       subscribe(listener) {
-        listener({ type: "tool_execution_start", toolName: "read", args: { path: "src/a.ts" } });
-        listener({ type: "tool_execution_update", toolName: "read", partialResult: { content: [{ type: "text", text: "path: src/a.ts" }] } });
-        listener({ type: "tool_execution_end", toolName: "read", result: { content: [{ type: "text", text: "path: src/a.ts\n1|alpha" }] } });
+        listener({ type: "tool_execution_start", toolCallId: "call-1", toolName: "read", args: { path: "src/a.ts" } });
+        listener({ type: "tool_execution_update", toolCallId: "call-1", toolName: "read", partialResult: { content: [{ type: "text", text: "path: src/a.ts" }] } });
+        listener({ type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: { content: [{ type: "text", text: "path: src/a.ts\n1|alpha" }] } });
         listener({
           type: "message_end",
           message: { role: "assistant", content: [{ type: "text", text: "final summary" }] },
@@ -148,8 +148,7 @@ describe("runSubagent", () => {
     expect(progress).toEqual([
       { kind: "status", text: "started worker session child-progress" },
       { kind: "tool", text: '→ read {"path":"src/a.ts"}', toolCalls: 1 },
-      { kind: "tool", text: "… read\npath: src/a.ts" },
-      { kind: "tool", text: "✓ read\npath: src/a.ts\n1|alpha" },
+      { kind: "tool", text: '✓ read {"path":"src/a.ts"}' },
       { kind: "assistant", text: "assistant\nfinal summary", turns: 1 },
       { kind: "status", text: "completed" },
     ]);
@@ -198,7 +197,7 @@ describe("runSubagent", () => {
     const child: SubagentSession = {
       sessionId: "child-tool-idle",
       prompt: async () => {
-        listener?.({ type: "tool_execution_start", toolName: "bash", args: { command: "sleep 999" } });
+        listener?.({ type: "tool_execution_start", toolCallId: "call-bash", toolName: "bash", args: { command: "sleep 999" } });
         await new Promise<void>((_resolve, reject) => {
           rejectPrompt = reject;
         });
@@ -221,7 +220,7 @@ describe("runSubagent", () => {
       await vi.advanceTimersByTimeAsync(200);
       expect(child.abort).toHaveBeenCalledTimes(0);
 
-      listener?.({ type: "tool_execution_end", toolName: "bash", isError: false, result: { content: [{ type: "text", text: "done" }] } });
+      listener?.({ type: "tool_execution_end", toolCallId: "call-bash", toolName: "bash", isError: false, result: { content: [{ type: "text", text: "done" }] } });
       await vi.advanceTimersByTimeAsync(60);
       const result = await resultPromise;
       expect(child.abort).toHaveBeenCalledTimes(1);
@@ -243,11 +242,11 @@ describe("runSubagent", () => {
       prompt: async () => {
         listener?.({
           type: "message_end",
-          message: { role: "assistant", content: [{ type: "text", text: "turn one" }, { type: "toolCall" }] },
+          message: { role: "assistant", content: [{ type: "toolCall" }] },
         });
         listener?.({
           type: "message_end",
-          message: { role: "assistant", content: [{ type: "text", text: "turn two" }, { type: "toolCall" }] },
+          message: { role: "assistant", content: [{ type: "toolCall" }] },
         });
         listener?.({
           type: "message_end",

@@ -108,7 +108,7 @@ describe("task tool", () => {
           content: [{ type: "text", text: "" }],
           details: {
             progress: true,
-            progressEntries: ['→ read {"path":"src/a.ts"}', '✓ read\npath: src/a.ts\n1|alpha'],
+            progressEntries: ['→ read {"path":"src/a.ts"}', '✓ read {"path":"src/a.ts"}'],
             turns: 1,
             toolCalls: 1,
           },
@@ -120,7 +120,8 @@ describe("task tool", () => {
     );
     expect(partial).toContain("running · turns: 1 · tool calls: 1");
     expect(partial).toContain('→ read {"path":"src/a.ts"}');
-    expect(partial).toContain("1|alpha");
+    expect(partial).toContain('✓ read {"path":"src/a.ts"}');
+    expect(partial).not.toContain("1|alpha");
 
     const final = render(
       tool.renderResult(
@@ -142,6 +143,42 @@ describe("task tool", () => {
     expect(final).toContain("Result");
     expect(final).toContain("REPORT");
     expect(final).not.toContain("running · turns:");
+  });
+
+  it("shows a five-entry rolling tail for live progress", () => {
+    const tool = registerAndCapture(baseDeps());
+    const partial = render(
+      tool.renderResult(
+        {
+          content: [{ type: "text", text: "" }],
+          details: {
+            progress: true,
+            progressEntries: [
+              "start",
+              '→ read {"path":"a"}',
+              '✓ read {"path":"a"}',
+              '→ grep {"pattern":"b"}',
+              '✓ grep {"pattern":"b"}',
+              '→ write {"path":"c"}',
+              '✓ write {"path":"c"}',
+            ],
+            turns: 1,
+            toolCalls: 3,
+          },
+        },
+        { isPartial: true },
+        {},
+        { lastComponent: undefined },
+      ),
+    );
+    expect(partial).toContain("running · turns: 1 · tool calls: 3");
+    expect(partial).not.toContain("start");
+    expect(partial).not.toContain('→ read {"path":"a"}');
+    expect(partial).toContain('✓ read {"path":"a"}');
+    expect(partial).toContain('→ grep {"pattern":"b"}');
+    expect(partial).toContain('✓ grep {"pattern":"b"}');
+    expect(partial).toContain('→ write {"path":"c"}');
+    expect(partial).toContain('✓ write {"path":"c"}');
   });
 
   it("collapses long final task reports until expanded", () => {
@@ -167,8 +204,8 @@ describe("task tool", () => {
   });
 
   it("streams child progress updates through the task tool", async () => {
-    // Intent: child-session events must surface as a summarized running view,
-    // with real tool/assistant output instead of bare tool names.
+    // Intent: child-session events must surface as a concise running tail,
+    // while still reflecting assistant turn counts even for tool-only turns.
     let listener: ((event: unknown) => void) | undefined;
     const factory: SubagentSessionFactory = {
       spawn: async () => ({
@@ -178,9 +215,9 @@ describe("task tool", () => {
           return () => undefined;
         },
         prompt: async () => {
-          listener?.({ type: "tool_execution_start", toolName: "read", args: { path: "src/a.ts" } });
-          listener?.({ type: "tool_execution_end", toolName: "read", isError: false, result: { content: [{ type: "text", text: "path: src/a.ts\n1|alpha" }] } });
-          listener?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
+          listener?.({ type: "tool_execution_start", toolCallId: "call-1", toolName: "read", args: { path: "src/a.ts" } });
+          listener?.({ type: "tool_execution_end", toolCallId: "call-1", toolName: "read", isError: false, result: { content: [{ type: "text", text: "path: src/a.ts\n1|alpha" }] } });
+          listener?.({ type: "message_end", message: { role: "assistant", content: [{ type: "toolCall" }] } });
         },
         collect: () => ({ report: "ok", toolCount: 1 }),
         abort: vi.fn(),
@@ -200,8 +237,9 @@ describe("task tool", () => {
     expect(result.isError).toBeFalsy();
     expect(updates.join("\n")).toContain("running · turns: 1 · tool calls: 1");
     expect(updates.join("\n")).toContain('→ read {"path":"src/a.ts"}');
-    expect(updates.join("\n")).toContain("path: src/a.ts");
-    expect(updates.join("\n")).toContain("assistant\ndone");
+    expect(updates.join("\n")).toContain('✓ read {"path":"src/a.ts"}');
+    expect(updates.join("\n")).not.toContain("path: src/a.ts");
+    expect(updates.join("\n")).not.toContain("assistant");
   });
 
   it("passes childDepth = parent depth + 1", async () => {
@@ -270,6 +308,15 @@ describe("task tool", () => {
     expect(r2.isError).not.toBe(true);
     expect(r3.isError).toBe(true);
     expect(text(r3)).toContain("concurrency limit");
+  });
+
+  it("applies maxConcurrency to resumed subagent sessions too", async () => {
+    // Intent: resume should consume the same concurrency budget as a new child run.
+    subagentRegistry.upsert({ sessionId: "other", parentSessionId: "parent", rootSessionId: "parent", agentType: "worker", description: "d", depth: 2, status: "running", toolCount: 0, startedAt: 0 });
+    const tool = registerAndCapture(baseDeps({ getMaxConcurrency: () => 1 }));
+    const result = await tool.execute("1", { subagent_type: "worker", description: "do", prompt: "go", session_id: "resume-me" }, undefined, undefined, ctx());
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("concurrency limit");
   });
 
   it("refuses to resume a session that is currently running", async () => {

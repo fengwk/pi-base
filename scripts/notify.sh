@@ -34,8 +34,8 @@ wt_session="${WT_SESSION:-}"
 
 build_title() {
   # 标题直接体现通知场景目的。
-  # 注意：src/notify.ts 当前只发出 session.completed 与 permission.requested。
-  # question.requested / session.error 为预留分支（尚未接线），未知 kind 统一落到 *) 兜底。
+  # 注意：src/notify.ts 当前会发出 session.completed / session.error / permission.requested。
+  # question.requested 为预留分支，未知 kind 统一落到 *) 兜底。
   case "$kind" in
     session.completed)
       printf '%s' "Pi - Completed"

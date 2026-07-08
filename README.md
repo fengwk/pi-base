@@ -519,8 +519,8 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 省略 `notify` 时默认不通知
 - `permissionAsked: true` 时，在权限确认前发通知
 - 同一模型回合（一条 assistant 消息及其整批 tool call）内的多次权限确认只通知一次，下一回合（`turn_start`）重置后再次通知
-- `agentEnd: true` 时，在 `agent_end` 后发完成通知
-- 当前 runtime 处于 yolo 模式时，即使 `agentEnd: true` 也不会发送完成通知
+- `agentEnd: true` 时，在 `agent_end` 后发停止通知：正常结束发 completed，最终异常停止发 error
+- 当前 runtime 处于 yolo 模式时，仍然会在 agent 真正停下后发送停止通知；yolo 只是因为不会弹权限确认，所以自然不会产生 permission 通知
 - `suppressCompletedAfterRejectionMs` 默认 `5000`
 - `suppressCompletedAfterRejectionMs: 0` 表示关闭抑制窗口
 - 通知脚本固定使用包内的 `scripts/notify.sh`

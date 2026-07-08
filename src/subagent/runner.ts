@@ -142,11 +142,12 @@ export async function runSubagent(
   };
 
   args.onProgress?.({ kind: "status", text: `started ${args.agentType} session ${handle.sessionId}` });
+  const activeToolArgs = new Map<string, string>();
   const unsubscribeProgress = handle.subscribe?.((event) => {
     if (isToolExecutionStartEvent(event)) activeToolCalls += 1;
     else if (isToolExecutionEndEvent(event)) activeToolCalls = Math.max(0, activeToolCalls - 1);
     resetIdleTimer();
-    const update = formatProgressEvent(event);
+    const update = formatProgressEvent(event, activeToolArgs);
     if (update?.turns) assistantTurns += update.turns;
     if (update) args.onProgress?.(update);
     const assistantToolCalls = assistantToolCallCountFromEvent(event);
@@ -261,34 +262,31 @@ function truncateMultiline(text: string, maxLines = 8, maxChars = 1200): string 
   return `${body}\n… (${suffix})`;
 }
 
-function previewToolPayload(payload: unknown): string {
-  const contentText = rawTextFromContent((payload as { content?: unknown })?.content);
-  if (contentText) return truncateMultiline(contentText);
-  if (isRecord(payload) && typeof payload.text === "string") return truncateMultiline(payload.text);
-  if (typeof payload === "string") return truncateMultiline(payload);
-  const serialized = stringifyPreview(payload).trim();
+function formatToolArgsPreview(args: unknown): string {
+  if (args === undefined) return "";
+  const serialized = stringifyPreview(args).trim();
   if (!serialized || serialized === "{}") return "";
-  return summarizeText(serialized, 240);
+  return ` ${summarizeText(serialized, 160)}`;
 }
 
-function formatProgressEvent(event: unknown): SubagentProgressUpdate | undefined {
+function formatProgressEvent(event: unknown, activeToolArgs: Map<string, string>): SubagentProgressUpdate | undefined {
   if (!isRecord(event) || typeof event.type !== "string") return undefined;
   if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
-    const argsPreview = event.args === undefined ? "" : ` ${summarizeText(stringifyPreview(event.args), 160)}`;
+    const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+    const argsPreview = formatToolArgsPreview(event.args);
+    if (toolCallId) activeToolArgs.set(toolCallId, argsPreview);
     return { kind: "tool", text: `→ ${event.toolName}${argsPreview}`, toolCalls: 1 };
   }
-  if (event.type === "tool_execution_update" && typeof event.toolName === "string") {
-    const body = previewToolPayload(event.partialResult);
-    return { kind: "tool", text: body ? `… ${event.toolName}\n${body}` : `… ${event.toolName}` };
-  }
   if (event.type === "tool_execution_end" && typeof event.toolName === "string") {
-    const body = previewToolPayload(event.result);
+    const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+    const argsPreview = toolCallId ? (activeToolArgs.get(toolCallId) ?? "") : "";
+    if (toolCallId) activeToolArgs.delete(toolCallId);
     const prefix = event.isError === true ? "✗" : "✓";
-    return { kind: "tool", text: body ? `${prefix} ${event.toolName}\n${body}` : `${prefix} ${event.toolName}` };
+    return { kind: "tool", text: `${prefix} ${event.toolName}${argsPreview}` };
   }
   if (event.type === "message_end" && isRecord(event.message) && event.message.role === "assistant") {
     const body = truncateMultiline(rawTextFromContent(event.message.content));
-    return body ? { kind: "assistant", text: `assistant\n${body}`, turns: 1 } : undefined;
+    return { kind: "assistant", text: body ? `assistant\n${body}` : "", turns: 1 };
   }
   return undefined;
 }

@@ -12,13 +12,19 @@ async function writeProjectSettings(root: string, settings: unknown): Promise<vo
 }
 
 let previousGlobalSettingsPath: string | undefined;
+let previousAgentDir: string | undefined;
 
 beforeEach(async () => {
   previousGlobalSettingsPath = process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+  previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await createTempWorkspace();
   const globalPath = join(root, "global-pi-base.json");
   await writeFile(globalPath, JSON.stringify({}), "utf8");
   process.env.PI_BASE_GLOBAL_SETTINGS_PATH = globalPath;
+
+  const agentDir = await createTempWorkspace();
+  await writeFile(join(agentDir, "settings.json"), JSON.stringify({}), "utf8");
+  process.env.PI_CODING_AGENT_DIR = agentDir;
 });
 
 afterEach(() => {
@@ -26,6 +32,11 @@ afterEach(() => {
     delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
   } else {
     process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
+  }
+  if (previousAgentDir === undefined) {
+    delete process.env.PI_CODING_AGENT_DIR;
+  } else {
+    process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   }
 });
 
@@ -115,11 +126,9 @@ describe("notify support", () => {
     expect(payloads).toEqual([]);
   });
 
-  it("skips the completion notification in yolo mode", async () => {
-    // Intent: yolo bypasses permission checks (so permission.requested never
-    // fires), but agent_end still runs and would otherwise spam the user with a
-    // desktop ping on every loop end. The user is at the terminal watching the
-    // agent run, so skip session.completed too.
+  it("still sends a completion notification in yolo mode when the agent stops", async () => {
+    // Intent: yolo removes permission prompts, so permission.requested never fires,
+    // but when the agent actually stops the user still needs a desktop ping to come back.
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
       yolo: true,
@@ -145,12 +154,18 @@ describe("notify support", () => {
       },
     });
 
-    expect(payloads).toEqual([]);
+    expect(payloads).toEqual([{
+      kind: "session.completed",
+      cwd: root,
+      projectName: root.split("/").at(-1) ?? root,
+      sessionID: "session-yolo",
+      sessionTitle: "Yolo Session",
+    }]);
   });
 
-  it("uses the runtime /yolo toggle when deciding completion notifications", async () => {
-    // Intent: notify reads cached runtime settings, so toggling /yolo must
-    // suppress completed pings until the user toggles it back off.
+  it("uses the runtime /yolo toggle without suppressing final stop notifications", async () => {
+    // Intent: /yolo should keep bypassing permission asks, but once the agent really
+    // stops it should still notify so the user knows to come back.
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
       notify: { agentEnd: true },
@@ -177,8 +192,6 @@ describe("notify support", () => {
 
     await registry.runCommand("yolo", "", { cwd: root });
     await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
-    expect(payloads).toEqual([]);
-
     await registry.runCommand("yolo", "", { cwd: root });
     await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
     expect(payloads).toEqual([
@@ -189,7 +202,124 @@ describe("notify support", () => {
         sessionID: "session-runtime-yolo",
         sessionTitle: "Runtime Yolo Session",
       },
+      {
+        kind: "session.completed",
+        cwd: root,
+        projectName: root.split("/").at(-1) ?? root,
+        sessionID: "session-runtime-yolo",
+        sessionTitle: "Runtime Yolo Session",
+      },
     ]);
+  });
+
+  it("does not notify on intermediate retryable errors that will auto-retry", async () => {
+    // Intent: notification should mean "come back now", so transient retryable errors
+    // must stay silent until the retry budget is actually exhausted.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      notify: { agentEnd: true },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    await registry.emit("agent_end", {
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 2 }],
+    }, {
+      cwd: root,
+      sessionManager: {
+        getSessionId: () => "session-retrying",
+        getSessionName: () => "Retrying Session",
+        getEntries: () => [{ type: "message", message: { role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 1 } }],
+      },
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
+  it("sends an error notification when the retry budget is exhausted", async () => {
+    // Intent: once transient failures stop auto-retrying, the user should get the same
+    // stop notification as a normal completion.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      notify: { agentEnd: true },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    await registry.emit("agent_end", {
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 4 }],
+    }, {
+      cwd: root,
+      sessionManager: {
+        getSessionId: () => "session-error",
+        getSessionName: () => "Error Session",
+        getEntries: () => [
+          { type: "message", message: { role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 1 } },
+          { type: "message", message: { role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 2 } },
+          { type: "message", message: { role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 3 } },
+        ],
+      },
+    });
+
+    expect(payloads).toEqual([{
+      kind: "session.error",
+      cwd: root,
+      projectName: root.split("/").at(-1) ?? root,
+      sessionID: "session-error",
+      sessionTitle: "Error Session",
+    }]);
+  });
+
+  it("skips the stop notification when the last assistant message was aborted", async () => {
+    // Intent: if we can tell the stop came from a user abort, avoid a redundant desktop ping.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      notify: { agentEnd: true },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    await registry.emit("agent_end", {
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "aborted" }],
+    }, {
+      cwd: root,
+      sessionManager: {
+        getSessionId: () => "session-aborted",
+        getSessionName: () => "Aborted Session",
+      },
+    });
+
+    expect(payloads).toEqual([]);
   });
 
   it("sends a completion notification on agent_end and suppresses it after permission rejection", async () => {

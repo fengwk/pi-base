@@ -1,14 +1,24 @@
-import type { AgentEndEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type AgentEndEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isContextOverflow, isRetryableAssistantError, type AssistantMessage } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LoadedPiBaseSettings, NotifyConfig } from "./config.js";
 
 const DEFAULT_NOTIFY_COMMAND = [resolve(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "notify.sh")];
 const SUPPRESS_COMPLETED_DEFAULT_MS = 5_000;
+const PI_SETTINGS_FILE = "settings.json";
+const PI_PROJECT_SETTINGS_DIR = ".pi";
+const PI_RETRY_MAX_RETRIES_DEFAULT = 3;
 
-export type PiBaseNotifyKind = "permission.requested" | "session.completed";
+interface PiRuntimeFinalitySettings {
+  retryEnabled: boolean;
+  maxRetries: number;
+  compactionEnabled: boolean;
+}
+
+export type PiBaseNotifyKind = "permission.requested" | "session.completed" | "session.error";
 
 export interface PiBaseNotifyPayload {
   kind: PiBaseNotifyKind;
@@ -64,13 +74,10 @@ export function registerNotifySupport(
     const loaded = loadSettings?.(ctx.cwd);
     if (!shouldNotifyForAgentEnd(loaded?.settings.notify, ctx, event)) return;
 
-    // In yolo mode the user is at the terminal watching the agent run; a desktop
-    // ping on every loop end is noise. Notify only when the user actually has to
-    // come back (permission prompt, true session completion), none of which apply
-    // under yolo — there is no prompt and the result is already on screen.
-    if (loaded?.settings.yolo === true) return;
+    const kind = resolveAgentEndNotificationKind(event, ctx);
+    if (!kind) return;
 
-    const payload = buildPayload("session.completed", ctx);
+    const payload = buildPayload(kind, ctx);
     if (!payload.sessionID) return;
     const suppressedUntil = suppressCompletedUntil.get(payload.sessionID) ?? 0;
     if (Date.now() < suppressedUntil) return;
@@ -149,6 +156,99 @@ function shouldNotifyForPermissionAsk(config: NotifyConfig | undefined, ctx: Ext
 
 function shouldNotifyForAgentEnd(config: NotifyConfig | undefined, ctx: ExtensionContext, _event: AgentEndEvent): boolean {
   return ctx.hasUI && config?.agentEnd === true;
+}
+
+function resolveAgentEndNotificationKind(
+  event: AgentEndEvent,
+  ctx: ExtensionContext,
+): Exclude<PiBaseNotifyKind, "permission.requested"> | undefined {
+  const assistant = findLastAssistantMessage(event.messages);
+  if (!assistant) return "session.completed";
+  if (assistant.stopReason === "aborted") return undefined;
+  if (assistant.stopReason !== "error") return "session.completed";
+
+  const finality = loadPiRuntimeFinalitySettings(ctx.cwd);
+  const overflowSignal = isContextOverflow(assistant, ctx.model?.contextWindow);
+  if (finality.compactionEnabled && overflowSignal) {
+    const overflowErrorCount = countTrailingAssistantErrors(ctx, assistant, (message) => isContextOverflow(message, ctx.model?.contextWindow));
+    if (overflowErrorCount <= 1) return undefined;
+  }
+
+  const retryableSignal = isRetryableAssistantError(assistant);
+  if (finality.retryEnabled && retryableSignal) {
+    const retryableErrorCount = countTrailingAssistantErrors(ctx, assistant, isRetryableAssistantError);
+    if (retryableErrorCount <= finality.maxRetries) return undefined;
+  }
+
+  return "session.error";
+}
+
+function findLastAssistantMessage(messages: AgentEndEvent["messages"]): AssistantMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isAssistantMessage(message)) return message;
+  }
+  return undefined;
+}
+
+function isAssistantMessage(message: unknown): message is AssistantMessage {
+  return !!message && typeof message === "object" && (message as { role?: unknown }).role === "assistant";
+}
+
+function countTrailingAssistantErrors(
+  ctx: ExtensionContext,
+  currentAssistant: AssistantMessage,
+  predicate: (message: AssistantMessage) => boolean,
+): number {
+  const entries = ctx.sessionManager.getEntries?.() ?? [];
+  let count = 0;
+  let sawCurrent = false;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index] as { type?: unknown; message?: unknown };
+    if (entry?.type !== "message") continue;
+    const message = entry.message;
+    if (!isAssistantMessage(message) || message.stopReason !== "error" || !predicate(message)) break;
+    count += 1;
+    if (message.timestamp === currentAssistant.timestamp) sawCurrent = true;
+  }
+  return sawCurrent ? count : count + 1;
+}
+
+function loadPiRuntimeFinalitySettings(cwd: string): PiRuntimeFinalitySettings {
+  const globalSettings = readJsonObjectSafe(join(getAgentDir(), PI_SETTINGS_FILE));
+  const projectSettings = readJsonObjectSafe(join(resolve(cwd), PI_PROJECT_SETTINGS_DIR, PI_SETTINGS_FILE));
+  const globalRetry = asRecord(globalSettings.retry);
+  const projectRetry = asRecord(projectSettings.retry);
+  const globalCompaction = asRecord(globalSettings.compaction);
+  const projectCompaction = asRecord(projectSettings.compaction);
+  const retryEnabled = readBoolean(projectRetry.enabled) ?? readBoolean(globalRetry.enabled) ?? true;
+  const maxRetries = readNonNegativeInteger(projectRetry.maxRetries)
+    ?? readNonNegativeInteger(globalRetry.maxRetries)
+    ?? PI_RETRY_MAX_RETRIES_DEFAULT;
+  const compactionEnabled = readBoolean(projectCompaction.enabled) ?? readBoolean(globalCompaction.enabled) ?? true;
+  return { retryEnabled, maxRetries, compactionEnabled };
+}
+
+function readJsonObjectSafe(filePath: string): Record<string, unknown> {
+  if (!existsSync(filePath)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
+    return asRecord(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function readBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readNonNegativeInteger(value: unknown): number | undefined {
+  return Number.isInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
 }
 
 function buildPayload(kind: PiBaseNotifyKind, ctx: ExtensionContext): PiBaseNotifyPayload {

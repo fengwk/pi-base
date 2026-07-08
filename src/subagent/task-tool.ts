@@ -21,10 +21,10 @@ export interface SubagentTaskToolDeps {
 
 const TASK_DESCRIPTION = loadToolDescription(TASK_TOOL_NAME);
 const TASK_PROMPT_SNIPPET = loadToolPromptSnippet(TASK_TOOL_NAME);
-const LIVE_OUTPUT_LINES = 18;
+const LIVE_OUTPUT_ENTRIES = 5;
 const MAX_PROGRESS_ENTRIES = 60;
 const COLLAPSED_RESULT_LINES = 10;
-const pendingSpawnReservations = new Map<string, number>();
+const pendingSessionReservations = new Map<string, number>();
 
 interface TaskToolDetails {
   progress?: boolean;
@@ -83,7 +83,7 @@ function formatProgressSummary(turns: number, toolCalls: number): string {
 
 function formatVisibleProgress(entries: string[]): string {
   if (entries.length === 0) return "";
-  return entries.join("\n\n").split("\n").slice(-LIVE_OUTPUT_LINES).join("\n");
+  return entries.slice(-LIVE_OUTPUT_ENTRIES).join("\n");
 }
 
 function createProgressReporter(onUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined): (update: SubagentProgressUpdate) => void {
@@ -98,7 +98,8 @@ function createProgressReporter(onUpdate: AgentToolUpdateCallback<TaskToolDetail
     const countsChanged = nextTurns !== turns || nextToolCalls !== toolCalls;
     turns = nextTurns;
     toolCalls = nextToolCalls;
-    if (normalized && entries.at(-1) !== normalized) {
+    const shouldAppendEntry = normalized.length > 0 && update.kind !== "assistant";
+    if (shouldAppendEntry && entries.at(-1) !== normalized) {
       entries.push(normalized);
       while (entries.length > MAX_PROGRESS_ENTRIES) entries.shift();
     } else if (!countsChanged) {
@@ -117,25 +118,25 @@ function createProgressReporter(onUpdate: AgentToolUpdateCallback<TaskToolDetail
   };
 }
 
-function countPendingSpawnReservations(parentSessionId: string): number {
-  return pendingSpawnReservations.get(parentSessionId) ?? 0;
+function countPendingSessionReservations(parentSessionId: string): number {
+  return pendingSessionReservations.get(parentSessionId) ?? 0;
 }
 
-function tryReserveSpawnSlot(parentSessionId: string, maxConcurrency: number): { active: number; release: () => void } | undefined {
+function tryReserveSessionSlot(parentSessionId: string, maxConcurrency: number): { active: number; release: () => void } | undefined {
   const running = subagentRegistry.runningChildCount(parentSessionId);
-  const pending = countPendingSpawnReservations(parentSessionId);
+  const pending = countPendingSessionReservations(parentSessionId);
   const active = running + pending;
   if (active >= maxConcurrency) return undefined;
-  pendingSpawnReservations.set(parentSessionId, pending + 1);
+  pendingSessionReservations.set(parentSessionId, pending + 1);
   let released = false;
   return {
     active: active + 1,
     release: () => {
       if (released) return;
       released = true;
-      const next = (pendingSpawnReservations.get(parentSessionId) ?? 0) - 1;
-      if (next > 0) pendingSpawnReservations.set(parentSessionId, next);
-      else pendingSpawnReservations.delete(parentSessionId);
+      const next = (pendingSessionReservations.get(parentSessionId) ?? 0) - 1;
+      if (next > 0) pendingSessionReservations.set(parentSessionId, next);
+      else pendingSessionReservations.delete(parentSessionId);
     },
   };
 }
@@ -277,23 +278,22 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
       }
 
       const parentSessionId = ctx.sessionManager.getSessionId();
-      let releaseSpawnReservation: (() => void) | undefined;
+      let releaseSessionReservation: (() => void) | undefined;
       if (sessionId) {
         const existing = subagentRegistry.get(sessionId);
         if (existing?.status === "running") {
           return errorResult(`subagent session "${sessionId}" is currently running; cannot resume until it finishes.`);
         }
-      } else {
-        const max = deps.getMaxConcurrency(ctx.cwd);
-        const reservation = tryReserveSpawnSlot(parentSessionId, max);
-        if (!reservation) {
-          const active = subagentRegistry.runningChildCount(parentSessionId) + countPendingSpawnReservations(parentSessionId);
-          return errorResult(
-            `concurrency limit reached (${active}/${max} subagents running or starting). Wait for one to finish before delegating more.`,
-          );
-        }
-        releaseSpawnReservation = reservation.release;
       }
+      const max = deps.getMaxConcurrency(ctx.cwd);
+      const reservation = tryReserveSessionSlot(parentSessionId, max);
+      if (!reservation) {
+        const active = subagentRegistry.runningChildCount(parentSessionId) + countPendingSessionReservations(parentSessionId);
+        return errorResult(
+          `concurrency limit reached (${active}/${max} subagents running or starting). Wait for one to finish before delegating more.`,
+        );
+      }
+      releaseSessionReservation = reservation.release;
 
       const childDepth = readDepth(ctx) + 1;
       const reportProgress = createProgressReporter(onUpdate);
@@ -309,9 +309,9 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
             idleTimeoutMs: deps.getIdleTimeoutMs(ctx.cwd),
             maxTurns: deps.getMaxTurns(ctx.cwd),
             signal: signal ?? undefined,
-            onRegistered: sessionId ? undefined : () => {
-              releaseSpawnReservation?.();
-              releaseSpawnReservation = undefined;
+            onRegistered: () => {
+              releaseSessionReservation?.();
+              releaseSessionReservation = undefined;
             },
             onProgress: reportProgress,
           },
@@ -319,7 +319,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
         );
         return { content: [{ type: "text" as const, text: formatRunResult(result) }], details: { result }, isError: result.state !== "completed" };
       } finally {
-        releaseSpawnReservation?.();
+        releaseSessionReservation?.();
       }
     },
   });
