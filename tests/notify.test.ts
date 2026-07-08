@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension, { type PiBaseNotifyPayload } from "../index.js";
 import { registerNotifySupport } from "../src/notify.js";
+import { askSubagentPermissionHost, clearSubagentPermissionHost } from "../src/subagent/permission-host.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 async function writeProjectSettings(root: string, settings: unknown): Promise<void> {
@@ -28,6 +29,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  clearSubagentPermissionHost();
   if (previousGlobalSettingsPath === undefined) {
     delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
   } else {
@@ -124,6 +126,101 @@ describe("notify support", () => {
     });
 
     expect(payloads).toEqual([]);
+  });
+
+  it("sends a notification when a relayed subagent permission approval is requested", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      notify: { permissionAsked: true, agentEnd: false },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root, ui: { select: async () => "Yes" } });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    const rootCtx = {
+      cwd: root,
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "root-session",
+        getSessionName: () => "Root Session",
+        getEntries: () => [],
+      },
+    };
+    await registry.emit("session_start", { reason: "startup" }, rootCtx);
+
+    await askSubagentPermissionHost({
+      agentType: "worker",
+      depth: 2,
+      rootSessionId: "root-session",
+      prompt: "Permission request",
+    });
+
+    expect(payloads).toEqual([
+      {
+        kind: "permission.requested",
+        cwd: root,
+        projectName: root.split("/").at(-1) ?? root,
+        sessionID: "root-session",
+        sessionTitle: "Root Session",
+      },
+    ]);
+  });
+
+  it("collapses multiple relayed subagent permission asks in the same root turn into one notification", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      notify: { permissionAsked: true, agentEnd: false },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root, ui: { select: async () => "Yes" } });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    const rootCtx = {
+      cwd: root,
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "root-session-turn",
+        getSessionName: () => "Root Turn Session",
+        getEntries: () => [],
+      },
+    };
+    await registry.emit("session_start", { reason: "startup" }, rootCtx);
+
+    await askSubagentPermissionHost({
+      agentType: "worker-a",
+      depth: 2,
+      rootSessionId: "root-session-turn",
+      prompt: "Permission request A",
+    });
+    await askSubagentPermissionHost({
+      agentType: "worker-b",
+      depth: 2,
+      rootSessionId: "root-session-turn",
+      prompt: "Permission request B",
+    });
+    expect(payloads).toHaveLength(1);
+
+    await registry.emit("turn_start", { type: "turn_start" }, rootCtx);
+    await askSubagentPermissionHost({
+      agentType: "worker-c",
+      depth: 2,
+      rootSessionId: "root-session-turn",
+      prompt: "Permission request C",
+    });
+    expect(payloads).toHaveLength(2);
+    expect(payloads.every((payload) => payload.kind === "permission.requested" && payload.sessionID === "root-session-turn")).toBe(true);
   });
 
   it("still sends a completion notification in yolo mode when the agent stops", async () => {

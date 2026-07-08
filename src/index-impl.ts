@@ -299,8 +299,10 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     const rootSessionId = readRootSessionId(ctx);
     const host: SubagentPermissionHost = async (req) => {
       const run = hostChain.then(async () => {
+        await notifyHooks.onPermissionAsked({ ctx });
         const title = `⟳ subagent「${req.agentType}」(depth ${req.depth}) requests permission\n\n${req.prompt}`;
         const choice = await ctx.ui.select(title, ["Yes", "No"]);
+        if (choice !== "Yes") notifyHooks.onPermissionRejected({ ctx });
         return choice === "Yes";
       });
       hostChain = run.catch(() => undefined);
