@@ -203,6 +203,7 @@ describe("pi-base config", () => {
     ["invalid context compression shape", { contextCompression: [] }, /contextCompression must be an object/],
     ["invalid context compression rounds", { contextCompression: { retainedUserMessageRounds: 0 } }, /retainedUserMessageRounds/],
     ["invalid context compression tools", { contextCompression: { tools: [""] } }, /empty tool name/],
+    ["invalid enabled providers", { contextCompression: { enabledProviders: "openai" } }, /enabledProviders must be an array of strings/],
     ["invalid disabled providers", { contextCompression: { disabledProviders: ["  "] } }, /disabledProviders/],
     ["invalid mcp shape", { mcp: [] }, /mcp must be an object/],
     ["missing mcp servers", { mcp: {} }, /mcp\.servers must be an object/],
@@ -379,6 +380,8 @@ describe("pi-base config", () => {
           retainedUserMessageRounds: 4,
           retainedAssistantTurns: 8,
           tools: ["bash", "custom_tool"],
+          enabledProviders: ["openai", "google"],
+          disabledProviders: ["xai"],
         },
       }), "utf8");
       await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
@@ -386,6 +389,7 @@ describe("pi-base config", () => {
           anchorHygiene: false,
           retainedAssistantTurns: 6,
           tools: ["bash", "read"],
+          enabledProviders: ["openai"],
         },
       }), "utf8");
       const loaded = loadPiBaseSettings(root);
@@ -394,6 +398,8 @@ describe("pi-base config", () => {
         retainedUserMessageRounds: 4,
         retainedAssistantTurns: 6,
         tools: ["bash", "read"],
+        enabledProviders: ["openai"],
+        disabledProviders: ["xai"],
       });
     });
   });

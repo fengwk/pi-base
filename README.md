@@ -469,7 +469,8 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `retainedUserMessageRounds`
 - `retainedAssistantTurns`
 - `tools`
-- `disabledProviders`（按 provider id 跳过压缩，用于避免破坏 prompt cache，例如 xAI）
+- `enabledProviders`（仅对这些 provider id 生效；未配置时表示不限制）
+- `disabledProviders`（按 provider id 跳过压缩；即使命中了 `enabledProviders`，只要这里匹配也会禁用）
 
 行为规则：
 
@@ -480,7 +481,11 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 如果配置了 `tools` 但没写保留策略，默认是 `retainedUserMessageRounds: 2` 和 `retainedAssistantTurns: 4`
 - `read` 到当前 prompt 中已注入 skill 路径下的文件时，不参与普通的 age compression；只有在同文件后来被改动且 `anchorHygiene` 生效时才会被折叠
 - 不会额外写 session marker，也不会显示长期 UI 标记
-- 当 `ctx.model.provider` 命中 `disabledProviders`（不区分大小写）时，**本次 LLM 调用不做任何 context 投影**（消息原样发送）
+- `enabledProviders` 未配置时，provider 不受限制
+- `enabledProviders` 配置为数组时，只有命中的 provider 才会做 context compression；未命中直接跳过
+- `enabledProviders: []` 表示没有任何 provider 会命中，因此等价于“全部不生效”
+- 在通过 `enabledProviders` 检查后，若 `ctx.model.provider` 又命中 `disabledProviders`（都不区分大小写），**本次 LLM 调用仍然不做任何 context 投影**（消息原样发送）
+- 也就是 provider 生效顺序为：先看 `enabledProviders`，再看 `disabledProviders`，两者都通过才启用压缩
 - `anchorHygiene` 会折叠已经被后续修改影响的旧 `read`/`edit` 成功结果，避免历史工具输出误导当前编辑判断；`write` 的成功 ack 视为时间线锚点，**不参与** anchorHygiene 折叠（它仍会让同路径的旧 `read`/`edit` 失效）
 
 
@@ -493,6 +498,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
     "retainedUserMessageRounds": 2,
     "retainedAssistantTurns": 4,
     "tools": ["bash", "grep", "find", "read", "write", "edit"],
+    "enabledProviders": ["openai", "xai"],
     "disabledProviders": ["xai"]
   }
 }

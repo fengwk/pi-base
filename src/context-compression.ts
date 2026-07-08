@@ -282,10 +282,18 @@ export function shouldApplyContextCompression(
   const hasAnchorHygiene = config.anchorHygiene === true;
   if (!hasAgeTools && !hasAnchorHygiene) return false;
   if (!providerId) return true;
-  const disabled = config.disabledProviders;
-  if (!disabled?.length) return true;
   const normalized = providerId.trim().toLowerCase();
-  return !disabled.some((entry) => entry.trim().toLowerCase() === normalized);
+  const enabled = config.enabledProviders;
+  if (enabled !== undefined) {
+    const matchedEnabled = enabled.some((entry) => entry.trim().toLowerCase() === normalized);
+    if (!matchedEnabled) return false;
+  }
+  const disabled = config.disabledProviders;
+  if (disabled !== undefined && disabled.length > 0) {
+    const matchedDisabled = disabled.some((entry) => entry.trim().toLowerCase() === normalized);
+    if (matchedDisabled) return false;
+  }
+  return true;
 }
 
 export function applyContextCompressionToMessages<T extends ToolResultMessageLike>(

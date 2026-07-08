@@ -39,6 +39,8 @@ export interface ContextCompressionConfig {
   retainedUserMessageRounds?: number;
   retainedAssistantTurns?: number;
   tools?: string[];
+  /** When set, context compression applies only to listed provider ids (case-insensitive) unless later excluded by `disabledProviders`. */
+  enabledProviders?: string[];
   /** When the active model's provider id is listed here, pi-base skips context compression for that LLM call (messages are left unchanged). Use for providers whose prompt cache breaks when tool results are replaced with placeholders (e.g. some xAI setups). */
   disabledProviders?: string[];
 }
@@ -363,10 +365,14 @@ function sanitizeContextCompressionToolsConfig(value: unknown): string[] {
   return output;
 }
 
-function sanitizeContextCompressionDisabledProviders(value: unknown): string[] {
-  const providers = requireStringArray(value, "contextCompression.disabledProviders");
+function sanitizeContextCompressionProviders(
+  value: unknown,
+  path: "contextCompression.enabledProviders" | "contextCompression.disabledProviders",
+  options: { allowEmpty: boolean },
+): string[] {
+  const providers = requireStringArray(value, path);
   const normalized = providers.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  if (normalized.length === 0) throw new Error("contextCompression.disabledProviders must contain at least one provider id.");
+  if (!options.allowEmpty && normalized.length === 0) throw new Error(`${path} must contain at least one provider id.`);
   return normalized;
 }
 
@@ -384,7 +390,12 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
     output.retainedAssistantTurns = sanitizePositiveInteger(input.retainedAssistantTurns, "contextCompression.retainedAssistantTurns");
   }
   if (input.tools !== undefined) output.tools = sanitizeContextCompressionToolsConfig(input.tools);
-  if (input.disabledProviders !== undefined) output.disabledProviders = sanitizeContextCompressionDisabledProviders(input.disabledProviders);
+  if (input.enabledProviders !== undefined) {
+    output.enabledProviders = sanitizeContextCompressionProviders(input.enabledProviders, "contextCompression.enabledProviders", { allowEmpty: true });
+  }
+  if (input.disabledProviders !== undefined) {
+    output.disabledProviders = sanitizeContextCompressionProviders(input.disabledProviders, "contextCompression.disabledProviders", { allowEmpty: false });
+  }
   return output;
 }
 
@@ -621,12 +632,22 @@ function cloneContextCompressionTools(value: string[] | undefined): string[] | u
   return value === undefined ? undefined : [...value];
 }
 
+function cloneContextCompressionProviders(value: string[] | undefined): string[] | undefined {
+  return value === undefined ? undefined : [...value];
+}
+
 function mergeContextCompression(
   base: ContextCompressionConfig | undefined,
   override: ContextCompressionConfig | undefined,
 ): ContextCompressionConfig | undefined {
   if (!base && !override) return undefined;
   const tools = override?.tools !== undefined ? cloneContextCompressionTools(override.tools) : cloneContextCompressionTools(base?.tools);
+  const enabledProviders = override?.enabledProviders !== undefined
+    ? cloneContextCompressionProviders(override.enabledProviders)
+    : cloneContextCompressionProviders(base?.enabledProviders);
+  const disabledProviders = override?.disabledProviders !== undefined
+    ? cloneContextCompressionProviders(override.disabledProviders)
+    : cloneContextCompressionProviders(base?.disabledProviders);
   const output: ContextCompressionConfig = {
     ...(base?.anchorHygiene !== undefined || override?.anchorHygiene !== undefined ? { anchorHygiene: override?.anchorHygiene ?? base?.anchorHygiene } : {}),
     ...(base?.retainedUserMessageRounds !== undefined || override?.retainedUserMessageRounds !== undefined
@@ -636,9 +657,8 @@ function mergeContextCompression(
       ? { retainedAssistantTurns: override?.retainedAssistantTurns ?? base?.retainedAssistantTurns }
       : {}),
     ...(tools !== undefined ? { tools } : {}),
-    ...(base?.disabledProviders || override?.disabledProviders
-      ? { disabledProviders: override?.disabledProviders ?? base?.disabledProviders }
-      : {}),
+    ...(enabledProviders !== undefined ? { enabledProviders } : {}),
+    ...(disabledProviders !== undefined ? { disabledProviders } : {}),
   };
   return Object.keys(output).length > 0 ? output : undefined;
 }

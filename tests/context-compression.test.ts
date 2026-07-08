@@ -248,12 +248,27 @@ describe("context compression", () => {
     expect(transformed).toBeUndefined();
   });
 
-  // Intent: provider-level opt-out must skip all compression so providers with fragile prompt caches (e.g. xAI) stay byte-stable.
-  it("shouldApplyContextCompression returns false when provider is disabled", () => {
-    const config = { tools: ["bash"], disabledProviders: ["xai"] };
-    expect(shouldApplyContextCompression(config, "xai")).toBe(false);
-    expect(shouldApplyContextCompression(config, "XAI")).toBe(false);
-    expect(shouldApplyContextCompression(config, "openai")).toBe(true);
+  // Intent: provider gating first narrows the allowlist, then disabledProviders may still
+  // veto a provider even if it was explicitly enabled.
+  it("shouldApplyContextCompression honors enabledProviders first, then disabledProviders", () => {
+    const disabledOnly = { tools: ["bash"], disabledProviders: ["xai"] };
+    expect(shouldApplyContextCompression(disabledOnly, "xai")).toBe(false);
+    expect(shouldApplyContextCompression(disabledOnly, "XAI")).toBe(false);
+    expect(shouldApplyContextCompression(disabledOnly, "openai")).toBe(true);
+
+    const enabledOnly = { tools: ["bash"], enabledProviders: ["openai", "google"] };
+    expect(shouldApplyContextCompression(enabledOnly, "openai")).toBe(true);
+    expect(shouldApplyContextCompression(enabledOnly, "OPENAI")).toBe(true);
+    expect(shouldApplyContextCompression(enabledOnly, "xai")).toBe(false);
+
+    const enabledEmpty = { tools: ["bash"], enabledProviders: [] };
+    expect(shouldApplyContextCompression(enabledEmpty, "openai")).toBe(false);
+    expect(shouldApplyContextCompression(enabledEmpty, "xai")).toBe(false);
+
+    const enabledAndDisabled = { tools: ["bash"], enabledProviders: ["openai", "xai"], disabledProviders: ["xai"] };
+    expect(shouldApplyContextCompression(enabledAndDisabled, "openai")).toBe(true);
+    expect(shouldApplyContextCompression(enabledAndDisabled, "xai")).toBe(false);
+
     expect(shouldApplyContextCompression(undefined, "xai")).toBe(false);
   });
 
