@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { applyUnifiedOutputTruncation } from "../src/tool-output.js";
-import { createTempWorkspace, createToolRegistry } from "./helpers.js";
+import { createToolRegistry } from "./helpers.js";
 
 describe("tool output truncation", () => {
   it("returns small text output unchanged", async () => {
@@ -27,33 +28,25 @@ describe("tool output truncation", () => {
   });
 
   it("truncates large text output, preserves attachments, and writes the full output", async () => {
-    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    const agentDir = await createTempWorkspace();
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    try {
-      const big = Array.from({ length: 2505 }, (_, index) => `line-${index + 1}`).join("\n");
-      const truncated = await applyUnifiedOutputTruncation("demo", {
-        content: [
-          { type: "text", text: big },
-          { type: "image", mimeType: "image/png", data: "x" },
-          { type: "text", text: "ignored second text part" },
-        ],
-        details: { source: "test" },
-      } as any);
-      expect(truncated.truncated).toBe(true);
-      expect((truncated.result.content[0] as any)?.type).toBe("text");
-      expect(String((truncated.result.content[0] as any)?.text)).toContain("The tool call succeeded but the output was truncated");
-      expect((truncated.result.content[1] as any)?.type).toBe("image");
-      expect((truncated.result as any).details?.source).toBe("test");
-      const outputPath = (truncated.result as any).details?.truncation?.outputPath;
-      expect(outputPath).toBeTruthy();
-      expect(outputPath).toContain(join(agentDir, "tmp", "pi-base", "truncation"));
-      const saved = await readFile(outputPath, "utf8");
-      expect(saved).toContain("line-2505");
-    } finally {
-      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    }
+    const big = Array.from({ length: 2505 }, (_, index) => `line-${index + 1}`).join("\n");
+    const truncated = await applyUnifiedOutputTruncation("demo", {
+      content: [
+        { type: "text", text: big },
+        { type: "image", mimeType: "image/png", data: "x" },
+        { type: "text", text: "ignored second text part" },
+      ],
+      details: { source: "test" },
+    } as any);
+    expect(truncated.truncated).toBe(true);
+    expect((truncated.result.content[0] as any)?.type).toBe("text");
+    expect(String((truncated.result.content[0] as any)?.text)).toContain("The tool call succeeded but the output was truncated");
+    expect((truncated.result.content[1] as any)?.type).toBe("image");
+    expect((truncated.result as any).details?.source).toBe("test");
+    const outputPath = (truncated.result as any).details?.truncation?.outputPath;
+    expect(outputPath).toBeTruthy();
+    expect(outputPath).toContain(join(tmpdir(), "pi-base-truncation"));
+    const saved = await readFile(outputPath, "utf8");
+    expect(saved).toContain("line-2505");
   });
 
   it("preserves original item order when truncation happens in a later text block", async () => {

@@ -775,8 +775,8 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 - 最大行数：`2000`
 - 最大字节数：`50KB`
-- 完整输出默认保存到：`~/.pi/agent/tmp/pi-base/truncation/`
-- 如果设置了 `PI_CODING_AGENT_DIR`，保存路径会跟随对应的 `agentDir/tmp/pi-base/truncation/`
+- 完整输出默认保存到系统临时目录下的 `pi-base-truncation/`（例如 Linux / macOS 常见为 `/tmp/pi-base-truncation/`）
+- 上游已经自行截断并暴露 `Full output` 路径的工具（例如 Pi core 的 `bash`）会保留上游路径，不再额外搬运到 `pi-base` 自己的目录
 - 目录会按平台做 best-effort 创建；非 Windows 平台会尝试收紧到 `0700`
 - 旧截断文件会做 best-effort 清理，保留期约 `7` 天
 

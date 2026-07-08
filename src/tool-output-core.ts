@@ -1,17 +1,18 @@
-import { getAgentDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { chmod, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 50 * 1024;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const TRUNCATION_SUBDIR = ["tmp", "pi-base", "truncation"] as const;
+const TRUNCATION_DIR_NAME = "pi-base-truncation";
 
 const BASH_TRUNCATION_HINT_REGEX = /\[Showing lines \d+-\d+ of \d+\. Full output: .*?\]/i;
 const cleanupStartedDirs = new Set<string>();
 
 function getTruncationDir(): string {
-  return join(getAgentDir(), ...TRUNCATION_SUBDIR);
+  return join(tmpdir(), TRUNCATION_DIR_NAME);
 }
 
 async function ensureTruncationDir(dir: string): Promise<void> {
