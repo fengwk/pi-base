@@ -23,7 +23,8 @@ export interface SubagentSession {
   subscribe?: (listener: (event: unknown) => void) => () => void;
   /** Queue a follow-up message while the child is still running. Used for soft stop nudges. */
   followUp?: (text: string) => Promise<void>;
-  abort: () => void;
+  /** Abort the child session. Implementations may complete synchronously or asynchronously. */
+  abort: () => void | Promise<void>;
   dispose: () => void;
 }
 
@@ -64,11 +65,48 @@ function formatDurationMs(value: number): string {
   return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
 }
 
+const liveHandles = new Map<string, SubagentSession>();
+
+function subtreeSessionIds(rootSessionId: string): string[] {
+  const nodes = subagentRegistry.all();
+  const childrenByParent = new Map<string, string[]>();
+  for (const node of nodes) {
+    const bucket = childrenByParent.get(node.parentSessionId);
+    if (bucket) bucket.push(node.sessionId);
+    else childrenByParent.set(node.parentSessionId, [node.sessionId]);
+  }
+  const ordered: string[] = [];
+  const queue = [rootSessionId];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    ordered.push(current);
+    const children = childrenByParent.get(current) ?? [];
+    queue.push(...children);
+  }
+  return ordered;
+}
+
+async function abortSubagentTree(rootSessionId: string): Promise<void> {
+  const ids = subtreeSessionIds(rootSessionId);
+  await Promise.allSettled(ids.map(async (sessionId) => {
+    const handle = liveHandles.get(sessionId);
+    if (!handle) return;
+    await handle.abort();
+  }));
+}
+
+function cancelledByUserMessage(sessionId: string): string {
+  return `Cancelled by user. Session preserved as \`${sessionId}\`; resume later with \`session_id: "${sessionId}"\`.`;
+}
+
 /**
  * Orchestrate one foreground delegation: spawn (or resume) a subagent session, track it in the
  * registry, await completion, and collect the report. Cancellation of the parent turn (signal)
- * cascades to `session.abort()`. Always resolves with the child session id so the caller can
- * resume or inspect it, even on failure.
+ * fans out to the whole live subagent subtree rooted at this child. Always resolves with the child
+ * session id so the caller can resume or inspect it, even on failure.
  */
 export async function runSubagent(
   ctx: ExtensionContext,
@@ -97,6 +135,7 @@ export async function runSubagent(
     toolCount: 0,
     startedAt: Date.now(),
   });
+  liveHandles.set(handle.sessionId, handle);
   try {
     args.onRegistered?.(handle.sessionId);
   } catch {
@@ -107,6 +146,7 @@ export async function runSubagent(
   let assistantTurns = 0;
   let activeToolCalls = 0;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancellationRequested = false;
   const clearIdleTimer = () => {
     if (idleTimer !== undefined) {
       clearTimeout(idleTimer);
@@ -123,7 +163,7 @@ export async function runSubagent(
         kind: "status",
         text: `idle timeout after ${formatDurationMs(args.idleTimeoutMs ?? 0)} without assistant/session progress; aborting`,
       });
-      handle.abort();
+      void handle.abort();
     }, args.idleTimeoutMs);
     idleTimer.unref?.();
   };
@@ -151,16 +191,32 @@ export async function runSubagent(
     const assistantToolCalls = assistantToolCallCountFromEvent(event);
     maybeQueueFinishReminder(assistantToolCalls);
   });
-  const onAbort = () => {
+  const requestCancellation = () => {
+    if (cancellationRequested) return;
+    cancellationRequested = true;
     clearIdleTimer();
-    args.onProgress?.({ kind: "status", text: "cancelled" });
-    handle.abort();
+    args.onProgress?.({ kind: "status", text: "cancel requested by user; aborting active subagent tree" });
+    void abortSubagentTree(handle.sessionId);
   };
-  args.signal?.addEventListener("abort", onAbort);
+  const onAbort = () => {
+    requestCancellation();
+  };
+  args.signal?.addEventListener("abort", onAbort, { once: true });
   try {
     resetIdleTimer();
+    if (args.signal?.aborted) requestCancellation();
     await handle.prompt(args.prompt);
     clearIdleTimer();
+    if (args.signal?.aborted) {
+      const failure = cancelledByUserMessage(handle.sessionId);
+      finish(handle.sessionId, "cancelled", safeToolCount(handle));
+      args.onProgress?.({ kind: "status", text: "cancelled" });
+      return {
+        sessionId: handle.sessionId,
+        state: "cancelled",
+        error: failure,
+      };
+    }
     if (idleTimedOut) throw new Error("idle timeout watchdog triggered");
     const { report, toolCount } = handle.collect();
     finish(handle.sessionId, "done", toolCount);
@@ -172,7 +228,7 @@ export async function runSubagent(
     const failure = idleTimedOut
       ? `idle timeout after ${formatDurationMs(args.idleTimeoutMs ?? 0)} without assistant/session progress`
       : cancelled
-        ? "aborted"
+        ? cancelledByUserMessage(handle.sessionId)
         : describeError(error);
     if (!idleTimedOut) {
       args.onProgress?.({ kind: "status", text: cancelled ? "cancelled" : `error: ${failure}` });
@@ -187,6 +243,7 @@ export async function runSubagent(
     clearIdleTimer();
     args.signal?.removeEventListener("abort", onAbort);
     unsubscribeProgress?.();
+    liveHandles.delete(handle.sessionId);
     handle.dispose();
   }
 }
@@ -386,12 +443,18 @@ export function collectFromMessages(messages: RuntimeMessage[]): { report?: stri
 
 /**
  * Default factory: subagent sessions are ordinary persistent pi sessions in the isolated dir,
- * created in-process via `createAgentSession`. The child re-loads pi-base, whose `session_start`
- * applies the agent named by the pre-written `pi-base-agent-state` entry and reads its depth.
- * Sessions are headless (no uiContext) — permission prompts relay to the root via the host.
+ * created in-process via `createAgentSession`. The child re-loads pi-base, restores its delegated
+ * depth/root metadata from persisted entries, then performs a real `/agent <name>` activation pass
+ * so the delegated agent's own model/thinking/tool policy takes effect. Sessions are headless
+ * (no uiContext) — permission prompts relay to the root via the host.
  */
 export function createRealSubagentFactory(): SubagentSessionFactory {
-  const build = async (sm: SessionManager, sessionId: string, ctx: ExtensionContext): Promise<SubagentSession> => {
+  const build = async (
+    sm: SessionManager,
+    sessionId: string,
+    ctx: ExtensionContext,
+    agentType: string,
+  ): Promise<SubagentSession> => {
     const { session } = await createAgentSession({
       cwd: ctx.cwd,
       sessionManager: sm,
@@ -399,6 +462,9 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       modelRegistry: ctx.modelRegistry,
     });
     await session.bindExtensions({});
+    // Force a real agent activation pass inside the child session so delegated agents honor their
+    // own model/thinking/tool policy instead of inheriting the parent's runtime state.
+    await session.prompt(`/agent ${agentType}`);
     return {
       sessionId,
       prompt: (text: string) => session.prompt(text),
@@ -417,7 +483,7 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       sm.appendCustomEntry(DEPTH_ENTRY, { depth: childDepth });
       const rootSessionId = readRootSessionId(ctx);
       if (rootSessionId) sm.appendCustomEntry(ROOT_SESSION_ENTRY, rootSessionEntryData(rootSessionId));
-      return build(sm, sm.getSessionId(), ctx);
+      return build(sm, sm.getSessionId(), ctx, agentType);
     },
     async resume({ ctx, sessionId, agentType }) {
       const path = findSubagentSessionPath(ctx.cwd, sessionId);
@@ -428,7 +494,7 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       sm.appendCustomEntry(AGENT_STATE_ENTRY, { name: agentType });
       const rootSessionId = readRootSessionId(ctx);
       if (rootSessionId) sm.appendCustomEntry(ROOT_SESSION_ENTRY, rootSessionEntryData(rootSessionId));
-      return build(sm, sm.getSessionId(), ctx);
+      return build(sm, sm.getSessionId(), ctx, agentType);
     },
   };
 }

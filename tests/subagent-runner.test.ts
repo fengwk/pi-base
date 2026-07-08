@@ -89,8 +89,83 @@ describe("runSubagent", () => {
       factory,
     );
     expect(result.state).toBe("cancelled");
+    expect(result.error).toContain("Cancelled by user");
     expect(child.abort).toHaveBeenCalledTimes(1);
     expect(subagentRegistry.get("child-cx")!.status).toBe("cancelled");
+  });
+
+  it("treats a prompt that resolves after abort as cancelled instead of completed", async () => {
+    // Intent: Pi resolves aborted child prompts with a terminal assistant message; task must still
+    // surface cancellation rather than incorrectly reporting completion.
+    const controller = new AbortController();
+    const child = handle("child-cx-resolved", {
+      prompt: async () => {
+        controller.abort();
+      },
+      report: "should not surface",
+      toolCount: 4,
+    });
+    const factory: SubagentSessionFactory = { spawn: async () => child, resume: async () => child };
+    const result = await runSubagent(
+      fakeCtx(),
+      { agentType: "w", prompt: "p", childDepth: 2, signal: controller.signal },
+      factory,
+    );
+    expect(result.state).toBe("cancelled");
+    expect(result.error).toContain("Cancelled by user");
+    expect(result.error).toContain("child-cx-resolved");
+    expect(child.abort).toHaveBeenCalledTimes(1);
+    expect(subagentRegistry.get("child-cx-resolved")!.status).toBe("cancelled");
+  });
+
+  it("propagates a parent abort to already-running descendant subagents in the same tree", async () => {
+    // Intent: user cancellation in the root session should fan out to all live descendants, not
+    // rely on each intermediate parent session to relay aborts correctly.
+    const topController = new AbortController();
+    let releaseGrandchild!: () => void;
+    const grandchild: SubagentSession = {
+      sessionId: "grandchild-running",
+      prompt: () => new Promise<void>((_resolve, reject) => {
+        releaseGrandchild = () => reject(new Error("grandchild aborted"));
+      }),
+      collect: () => ({ report: undefined, toolCount: 0 }),
+      abort: vi.fn(() => releaseGrandchild()),
+      dispose: vi.fn(),
+    };
+    const nestedFactory: SubagentSessionFactory = {
+      spawn: async () => grandchild,
+      resume: async () => grandchild,
+    };
+    const childAbort = vi.fn(() => undefined);
+    const child: SubagentSession = {
+      sessionId: "child-parent",
+      prompt: async () => {
+        const nested = runSubagent(
+          fakeCtx("child-parent", [{ type: "custom", customType: ROOT_SESSION_ENTRY, data: rootSessionEntryData("root-session") }]),
+          { agentType: "leaf", prompt: "leaf", childDepth: 3 },
+          nestedFactory,
+        );
+        await Promise.resolve();
+        topController.abort();
+        await nested;
+      },
+      collect: () => ({ report: undefined, toolCount: 0 }),
+      abort: childAbort,
+      dispose: vi.fn(),
+    };
+    const topFactory: SubagentSessionFactory = {
+      spawn: async () => child,
+      resume: async () => child,
+    };
+    const result = await runSubagent(
+      fakeCtx("root-session"),
+      { agentType: "worker", prompt: "go", childDepth: 2, signal: topController.signal },
+      topFactory,
+    );
+    expect(result.state).toBe("cancelled");
+    expect(childAbort).toHaveBeenCalledTimes(1);
+    expect(grandchild.abort).toHaveBeenCalledTimes(1);
+    expect(subagentRegistry.get("child-parent")!.status).toBe("cancelled");
   });
 
   it("returns an error result when the session cannot even be created", async () => {

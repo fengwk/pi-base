@@ -98,8 +98,9 @@ describe("createRealSubagentFactory", () => {
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(2, DEPTH_ENTRY, { depth: 3 });
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(3, ROOT_SESSION_ENTRY, { rootSessionId: "root-7" });
     expect(session.bindExtensions).toHaveBeenCalledWith({});
+    expect(session.prompt).toHaveBeenNthCalledWith(1, "/agent worker");
     await child.prompt("go");
-    expect(session.prompt).toHaveBeenCalledWith("go");
+    expect(session.prompt).toHaveBeenNthCalledWith(2, "go");
     await child.followUp?.("finish now");
     expect(session.followUp).toHaveBeenCalledWith("finish now");
     expect(child.collect()).toEqual({ report: "final answer", toolCount: 1 });
@@ -131,6 +132,7 @@ describe("createRealSubagentFactory", () => {
     expect(mocked.sessionManagerOpen).toHaveBeenCalledWith(join(legacyDir, "agent_resumed-1.jsonl"));
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(1, "pi-base-agent-state", { name: "reviewer" });
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(2, ROOT_SESSION_ENTRY, { rootSessionId: "parent-2" });
+    expect(session.prompt).toHaveBeenNthCalledWith(1, "/agent reviewer");
     expect(child.collect()).toEqual({ report: "resumed report", toolCount: 0 });
   });
 
