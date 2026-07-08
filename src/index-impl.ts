@@ -254,6 +254,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       const value = pi.getFlag("agent");
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
+    getConfiguredDefaultAgentName: (cwd: string) => loadSettings(cwd).settings.defaultAgent,
   });
   registerMcpSupport(pi, {
     loadSettings,

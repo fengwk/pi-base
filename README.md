@@ -91,6 +91,17 @@ export PI_BASE_GLOBAL_SETTINGS_PATH=/tmp/pi-base.json
 
 当前 workspace cwd 下的 `.pi/settings.json` 优先于全局 `~/.pi/agent/settings.json`。
 
+如果希望 fresh session 启动时自动进入某个命名 agent，可以在 `pi-base.json` 里加：
+
+```json
+{
+  "defaultAgent": "planner"
+}
+```
+
+启动选择顺序是：`session 已持久化的 agent > --agent <name> > pi-base.json.defaultAgent > default`。
+如果 `defaultAgent` 未配置或指向不存在的 agent，会回退到 `default`（即 `SYSTEM.md` / 内置默认定义）。
+
 ### 3. 启动后重载
 
 修改 `pi-base.json`、`SYSTEM.md`、`settings.json` 或 agent Markdown 后，在 Pi 中执行：
@@ -171,7 +182,9 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 若当前 agent 与 Pi 都没有可用的 `customPrompt`，`pi-base` 会保留 Pi 预构建的 system prompt 作为兜底。
 - `model` 或 `thinkingLevel` 未配置时，回退到 `settings.json` 中的默认值。
 - 最近一次显式 `/agent xxx` 切换会写入 session entry；后续 `session_start` 会自动恢复。
-- 如果当前 session 里从未持久化过 agent，启动时不会强制重置当前 model / thinking / active tools，只更新默认状态显示。
+- fresh session 的启动选择顺序是：`session 已持久化的 agent > --agent <name> > pi-base.json.defaultAgent > default`。
+- `--agent` 或 `defaultAgent` 指向不存在的 agent 时，会在 startup UI 上提示 warning，并回退到 `default`。
+- 当 fresh session 没有命中上述启动 agent 时，启动阶段不会强制重置当前 model / thinking / active tools，只更新默认状态显示。
 - 启动或 `/reload` 时，格式错误、重名或非法 agent 会被忽略，并输出 warning。
 
 ### 切换方式
@@ -306,6 +319,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 | `mcp` | 定义本地或远程 MCP server |
 | `contextCompression` | 压缩旧工具输出，减少上下文噪音 |
 | `subagent` | 控制 `task` 委派深度和并发上限 |
+| `defaultAgent` | fresh session 启动时默认进入的命名 agent |
 
 一个常见起点：
 
@@ -361,8 +375,29 @@ You are a planning-focused agent. Break work into clear steps before editing.
   各标量字段逐个覆盖；`tools` 数组是替换，不是追加。
 - `subagent`
   `maxDepth` 和 `maxConcurrency` 都按字段浅覆盖；未配置的一侧继续继承全局值。
+- `defaultAgent`
+  项目值直接覆盖全局值。
 
 ## 配置参考
+
+### `defaultAgent`
+
+`defaultAgent` 用来指定 fresh session 在没有已持久化 agent、也没有传 `--agent` 时，自动进入哪个命名 agent。
+
+示例：
+
+```json
+{
+  "defaultAgent": "planner"
+}
+```
+
+行为规则：
+
+- 值必须是已存在的 agent 名（也可以显式写 `default`）
+- 选择顺序是：`session 已持久化的 agent > --agent <name> > defaultAgent > default`
+- `defaultAgent` 指向不存在的 agent 时，会回退到 `default`
+- 命中的 `defaultAgent` 会像 `--agent` 一样写入 session entry，后续 turn / resume 会继续沿用
 
 ### `render`
 

@@ -85,7 +85,12 @@ export function registerAgentSupport(
     ExtensionAPI,
     "appendEntry" | "getActiveTools" | "getAllTools" | "getThinkingLevel" | "on" | "registerCommand" | "setActiveTools" | "setModel" | "setThinkingLevel"
   >,
-  options: { baseToolGuide: string; subagentControls?: SubagentControls; getStartupAgentName?: () => string | undefined },
+  options: {
+    baseToolGuide: string;
+    subagentControls?: SubagentControls;
+    getStartupAgentName?: () => string | undefined;
+    getConfiguredDefaultAgentName?: (cwd: string) => string | undefined;
+  },
 ): AgentSupportHandle {
   let catalog = loadAgentCatalog();
   let activeAgentName = DEFAULT_AGENT_NAME;
@@ -132,6 +137,11 @@ export function registerAgentSupport(
     if (ctx.hasUI) {
       ctx.ui.notify(`Loaded agents with ${diagnostics.length} warning(s); see stderr for details.`, "warning");
     }
+  };
+
+  const warnStartupAgentFallback = (ctx: ExtensionContext, message: string): void => {
+    console.warn(`pi-base agent warning: ${message}`);
+    if (ctx.hasUI) ctx.ui.notify(message, "warning");
   };
 
   const allRegisteredToolNames = (): string[] => pi.getAllTools().map((tool) => tool.name);
@@ -238,16 +248,20 @@ export function registerAgentSupport(
     return true;
   };
 
-  const pickAgentFromEntries = (ctx: ExtensionContext): { name: string; persisted: boolean } => {
+  const pickAgentFromEntries = (ctx: ExtensionContext): { name: string; persisted: boolean; missingRequestedName?: string } => {
     const entry = ctx.sessionManager
       .getEntries()
       .filter((item: { type: string; customType?: string }) => item.type === "custom" && item.customType === AGENT_STATE_ENTRY)
       .pop() as { data?: { name?: string } } | undefined;
     const requestedName = typeof entry?.data?.name === "string" ? entry.data.name.trim() : "";
     if (!requestedName) return { name: DEFAULT_AGENT_NAME, persisted: false };
+    if (catalog.byName.has(requestedName)) {
+      return { name: requestedName, persisted: true };
+    }
     return {
-      name: catalog.byName.has(requestedName) ? requestedName : DEFAULT_AGENT_NAME,
+      name: DEFAULT_AGENT_NAME,
       persisted: true,
+      missingRequestedName: requestedName,
     };
   };
 
@@ -320,22 +334,36 @@ export function registerAgentSupport(
     warnDiagnostics(ctx, nextCatalog.diagnostics);
     const requested = pickAgentFromEntries(ctx);
     if (!requested.persisted) {
-      // No agent persisted in this session: honor a `--agent <name>` startup flag when present.
-      // Subagent children never reach here (they always carry a persisted agent-state entry and
-      // start with empty flag values), so this only affects the root session; the applied agent
-      // is persisted so it survives subsequent turns and resume.
+      // No agent persisted in this session: honor a startup source when present.
+      // Precedence stays simple and explicit: persisted session agent -> --agent ->
+      // pi-base.json defaultAgent -> built-in default. Subagent children never reach here
+      // (they always carry a persisted agent-state entry and start with empty flag values),
+      // so this only affects the root session.
       const startupName = options.getStartupAgentName?.()?.trim();
       if (startupName) {
         if (nextCatalog.byName.has(startupName)) {
           const applied = await safeApplyAgent(startupName, ctx, { persist: true, notify: false });
           if (applied) return;
-        } else if (ctx.hasUI) {
-          ctx.ui.notify(`Agent "${startupName}" (from --agent) not found; using the default agent.`, "error");
+        } else {
+          warnStartupAgentFallback(ctx, `Agent "${startupName}" (from --agent) not found; using the default agent.`);
+        }
+      } else {
+        const configuredDefaultAgentName = options.getConfiguredDefaultAgentName?.(ctx.cwd)?.trim();
+        if (configuredDefaultAgentName) {
+          if (nextCatalog.byName.has(configuredDefaultAgentName)) {
+            const applied = await safeApplyAgent(configuredDefaultAgentName, ctx, { persist: true, notify: false });
+            if (applied) return;
+          } else {
+            warnStartupAgentFallback(ctx, `Agent "${configuredDefaultAgentName}" (from pi-base.json defaultAgent) not found; using the default agent.`);
+          }
         }
       }
       activeAgentName = DEFAULT_AGENT_NAME;
       updateStatus(ctx, DEFAULT_AGENT_NAME);
       return;
+    }
+    if (requested.missingRequestedName) {
+      warnStartupAgentFallback(ctx, `Agent "${requested.missingRequestedName}" (from session entry) not found; using the default agent.`);
     }
     const applied = await safeApplyAgent(requested.name, ctx, { persist: false, notify: false });
     if (!applied && requested.name !== DEFAULT_AGENT_NAME) {

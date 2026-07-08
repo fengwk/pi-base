@@ -61,6 +61,8 @@ export interface PiBaseSettings {
   mcp?: McpConfig;
   contextCompression?: ContextCompressionConfig;
   subagent?: SubagentConfig;
+  /** Fresh sessions start in this named agent when no agent was persisted and no `--agent` flag is provided. */
+  defaultAgent?: string;
 }
 
 export interface LoadedPiBaseSettings {
@@ -324,6 +326,13 @@ function sanitizePositiveInteger(value: unknown, path: string): number {
   return Number(value);
 }
 
+function sanitizeNonEmptyString(value: unknown, path: string): string {
+  if (typeof value !== "string") throw new Error(`${path} must be a string.`);
+  const trimmed = value.trim();
+  if (trimmed.length === 0) throw new Error(`${path} must be a non-empty string.`);
+  return trimmed;
+}
+
 function sanitizeSubagentConfig(value: unknown): SubagentConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("subagent must be a JSON object.");
@@ -467,6 +476,7 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
     mcp: input.mcp === undefined ? undefined : sanitizeMcpConfig(input.mcp),
     contextCompression: input.contextCompression === undefined ? undefined : sanitizeContextCompressionConfig(input.contextCompression),
     subagent: input.subagent === undefined ? undefined : sanitizeSubagentConfig(input.subagent),
+    defaultAgent: input.defaultAgent === undefined ? undefined : sanitizeNonEmptyString(input.defaultAgent, "defaultAgent"),
   };
 }
 
@@ -534,6 +544,7 @@ function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
     ...(settings.mcp ? { mcp: normalizeMcpConfigPaths(settings.mcp) } : {}),
     ...(settings.contextCompression ? { contextCompression: settings.contextCompression } : {}),
     ...(settings.subagent ? { subagent: settings.subagent } : {}),
+    ...(settings.defaultAgent !== undefined ? { defaultAgent: settings.defaultAgent } : {}),
   };
 }
 
@@ -602,6 +613,9 @@ function mergeSubagent(base: SubagentConfig | undefined, override: SubagentConfi
   return Object.keys(output).length > 0 ? output : undefined;
 }
 
+function mergeDefaultAgent(base: string | undefined, override: string | undefined): string | undefined {
+  return override ?? base;
+}
 
 function cloneContextCompressionTools(value: string[] | undefined): string[] | undefined {
   return value === undefined ? undefined : [...value];
@@ -646,6 +660,7 @@ export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSet
       mcp: mergeMcp(globalSettings.mcp, projectSettings.mcp),
       contextCompression: mergeContextCompression(globalSettings.contextCompression, projectSettings.contextCompression),
       subagent: mergeSubagent(globalSettings.subagent, projectSettings.subagent),
+      defaultAgent: mergeDefaultAgent(globalSettings.defaultAgent, projectSettings.defaultAgent),
     },
   };
 }

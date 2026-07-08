@@ -42,6 +42,11 @@ async function writeAgentFile(agentDir: string, relativePath: string, content: s
   await writeFile(absolutePath, content, "utf8");
 }
 
+async function writePiBaseConfig(root: string, settings: unknown): Promise<void> {
+  await mkdir(join(root, ".pi"), { recursive: true });
+  await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify(settings), "utf8");
+}
+
 describe("agent support", () => {
   it("switches agents from markdown definitions and restores defaults", async () => {
     const root = await createTempWorkspace();
@@ -205,12 +210,16 @@ You are the planner.
       expect(r1.getStatuses().get("00-pi-base-agent")).toContain("agent:planner");
       expect(r1.getActiveTools()).toEqual(["read", "grep"]);
 
-      // Case 2: unknown --agent name falls back to the default agent without throwing.
+      // Case 2: unknown --agent name falls back to the default agent and surfaces a startup warning.
       const r2 = createToolRegistry({ model: defaultModel, models: [defaultModel, plannerModel] });
       r2.setFlag("agent", "does-not-exist");
       piBaseExtension(r2.pi as any);
       await r2.emit("session_start", { reason: "startup" }, { cwd: root });
       expect(r2.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
+      expect(r2.getNotifications().at(-1)).toMatchObject({
+        variant: "warning",
+        message: expect.stringContaining('from --agent'),
+      });
 
       // Case 3: a session that already persisted an agent ignores the flag (resume semantics).
       const r3 = createToolRegistry({ model: defaultModel, models: [defaultModel, plannerModel] });
@@ -220,6 +229,88 @@ You are the planner.
       await r3.emit("session_start", { reason: "startup" }, { cwd: root });
       expect(r3.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
       expect(r3.getActiveTools()).not.toEqual(["read", "grep"]);
+
+      // Case 4: an invalid persisted session agent falls back to default and still warns at startup.
+      const r4 = createToolRegistry({ model: defaultModel, models: [defaultModel, plannerModel] });
+      piBaseExtension(r4.pi as any);
+      r4.pi.appendEntry("pi-base-agent-state", { name: "deleted-agent" });
+      await r4.emit("session_start", { reason: "startup" }, { cwd: root });
+      expect(r4.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
+      expect(r4.getNotifications().at(-1)).toMatchObject({
+        variant: "warning",
+        message: expect.stringContaining('from session entry'),
+      });
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("activates configured defaultAgent on fresh sessions and falls back cleanly", async () => {
+    // Intent: pi-base.json should be able to pick the startup agent for fresh root sessions
+    // without touching resumed sessions. Explicit --agent still wins, and unknown configured
+    // names must fall back to the built-in default agent.
+    const rootWithConfiguredDefault = await createTempWorkspace();
+    const rootWithFlagOverride = await createTempWorkspace();
+    const rootWithMissingDefault = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const defaultModel = { provider: "provider-a", id: "model-a" };
+    const plannerModel = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeFile(
+        join(agentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: defaultModel.provider, defaultModel: defaultModel.id, defaultThinkingLevel: "medium" }),
+        "utf8",
+      );
+      await writeFile(join(agentDir, "SYSTEM.md"), "Default system prompt.", "utf8");
+      await writeAgentFile(
+        agentDir,
+        "planner.md",
+        `---
+name: planner
+description: Planning mode
+model: ${plannerModel.provider}/${plannerModel.id}
+tools:
+  - read
+  - grep
+---
+You are the planner.
+`,
+      );
+
+      // Case 1: fresh session with configured defaultAgent starts in that agent.
+      await writePiBaseConfig(rootWithConfiguredDefault, { defaultAgent: "planner" });
+      const r1 = createToolRegistry({ model: defaultModel, models: [defaultModel, plannerModel] });
+      piBaseExtension(r1.pi as any);
+      await r1.emit("session_start", { reason: "startup" }, { cwd: rootWithConfiguredDefault });
+      expect(r1.getStatuses().get("00-pi-base-agent")).toContain("agent:planner");
+      expect(r1.getActiveTools()).toEqual(["read", "grep"]);
+
+      // Case 2: explicit --agent still overrides the configured defaultAgent.
+      await writePiBaseConfig(rootWithFlagOverride, { defaultAgent: "planner" });
+      const r2 = createToolRegistry({ model: defaultModel, models: [defaultModel, plannerModel] });
+      r2.setFlag("agent", "default");
+      piBaseExtension(r2.pi as any);
+      await r2.emit("session_start", { reason: "startup" }, { cwd: rootWithFlagOverride });
+      expect(r2.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
+      expect(r2.getActiveTools()).not.toEqual(["read", "grep"]);
+
+      // Case 3: unknown configured defaultAgent reports the problem and falls back cleanly.
+      await writePiBaseConfig(rootWithMissingDefault, { defaultAgent: "does-not-exist" });
+      const r3 = createToolRegistry({ model: defaultModel, models: [defaultModel, plannerModel] });
+      piBaseExtension(r3.pi as any);
+      await r3.emit("session_start", { reason: "startup" }, { cwd: rootWithMissingDefault });
+      expect(r3.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
+      expect(r3.getNotifications().at(-1)).toMatchObject({
+        variant: "warning",
+        message: expect.stringContaining('from pi-base.json defaultAgent'),
+      });
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

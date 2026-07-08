@@ -217,6 +217,7 @@ describe("pi-base config", () => {
     ["invalid remote url", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "not a url" } } } }, /url must be a valid URL/],
     ["invalid remote headers", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "https://example.com", headers: [] } } } }, /headers must be an object/],
     ["invalid yolo", { yolo: "yes" }, /yolo must be a boolean/],
+    ["invalid defaultAgent", { defaultAgent: "   " }, /defaultAgent must be a non-empty string/],
   ])("rejects invalid config: %s", async (_name, settings, expected) => {
     // Intent: invalid pi-base.json files should fail at load time with
     // actionable paths, because users otherwise only see extension startup
@@ -353,6 +354,18 @@ describe("pi-base config", () => {
     });
   });
 
+  it("loads defaultAgent from unified pi-base config and lets project settings override it", async () => {
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async (globalPath) => {
+      await mkdir(dirname(globalPath), { recursive: true });
+      await writeFile(globalPath, JSON.stringify({ defaultAgent: "reviewer" }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ defaultAgent: "planner" }), "utf8");
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.defaultAgent).toBe("planner");
+    });
+  });
 
   it("loads context compression settings and lets project settings override shared retention values and tool list", async () => {
     const root = await createTempWorkspace();
