@@ -218,7 +218,8 @@ function renderLiveOutput(result: unknown, theme: any) {
   container.addChild(new Spacer(1));
   container.addChild(new Text(paint(theme, "muted", summary), 0, 0));
   const bg = theme?.bg ? (text: string) => theme.bg("toolPendingBg", text) : undefined;
-  const box = new Box(1, 1, bg);
+  const box = new Box(1, 0, bg);
+  box.addChild(new Spacer(1));
   box.addChild(new Text(visible || paint(theme, "muted", "(running...)"), 0, 0));
   container.addChild(box);
   return container;

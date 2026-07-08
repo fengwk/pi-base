@@ -185,6 +185,25 @@ describe("task tool", () => {
     expect(partial).toContain('✓ write {"path":"c"}');
   });
 
+  it("does not leave a trailing blank line at the bottom of live task output", () => {
+    const tool = registerAndCapture(baseDeps());
+    const lines = tool.renderResult(
+      {
+        content: [{ type: "text", text: "" }],
+        details: {
+          progress: true,
+          progressEntries: ['→ read {"path":"src/a.ts"}', '✓ read {"path":"src/a.ts"}'],
+          turns: 1,
+          toolCalls: 1,
+        },
+      },
+      { isPartial: true },
+      {},
+      { lastComponent: undefined },
+    ).render(200);
+    expect(lines.at(-1)?.trim()).not.toBe("");
+  });
+
   it("uses configured collapsed task result budgets until expanded", () => {
     // Intent: final task results must respect the same render.* line/char policy as other tools.
     const tool = registerAndCapture(baseDeps({
