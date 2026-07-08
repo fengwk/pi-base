@@ -37,6 +37,9 @@ function getDefaultSessionDir(cwd: string): string {
 }
 
 export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?: MockUiOverrides; model?: any; models?: any[]; modelRegistry?: any } = {}) {
+  if (process.env.PI_BASE_GLOBAL_SETTINGS_PATH === undefined) {
+    process.env.PI_BASE_GLOBAL_SETTINGS_PATH = join(tmpdir(), "pi-base-test-global-settings.json");
+  }
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const events = new Map<string, Function[]>();

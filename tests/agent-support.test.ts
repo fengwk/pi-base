@@ -1,6 +1,6 @@
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
 import piBaseExtension from "../index.js";
@@ -48,6 +48,20 @@ async function writePiBaseConfig(root: string, settings: unknown): Promise<void>
 }
 
 describe("agent support", () => {
+  const previousGlobalSettingsPath = process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+
+  beforeEach(async () => {
+    process.env.PI_BASE_GLOBAL_SETTINGS_PATH = join(await createTempWorkspace(), "global-pi-base.json");
+  });
+
+  afterEach(() => {
+    if (previousGlobalSettingsPath === undefined) {
+      delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+    } else {
+      process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
+    }
+  });
+
   it("switches agents from markdown definitions and restores defaults", async () => {
     const root = await createTempWorkspace();
     const agentDir = await createTempWorkspace();
@@ -100,6 +114,10 @@ You are the planner.
       expect(registry.getCurrentModel()).toEqual(plannerModel);
       expect(registry.pi.getThinkingLevel()).toBe("high");
       expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:planner");
+      expect(registry.getNotifications()).toContainEqual({
+        message: `Agent "planner" activated. model:${plannerModel.provider}/${plannerModel.id} thinking:high`,
+        variant: "info",
+      });
 
       const specSkill = makeSkill("spec", "Spec workflow");
       const otherSkill = makeSkill("other", "Other workflow");
@@ -131,14 +149,14 @@ You are the planner.
       registry.setThinkingLevel("off");
       registry.pi.setActiveTools(["bash"]);
       await registry.emit("session_start", { reason: "reload" }, { cwd: root });
-      expect(registry.getCurrentModel()).toEqual(plannerModel);
+      expect(registry.getCurrentModel()).toEqual(defaultModel);
       expect(registry.getActiveTools()).toEqual(["read", "grep"]);
-      expect(registry.pi.getThinkingLevel()).toBe("high");
+      expect(registry.pi.getThinkingLevel()).toBe("off");
 
       await registry.runCommand("agent", "default", { cwd: root });
       expect(registry.getCurrentModel()).toEqual(defaultModel);
       expect(registry.getActiveTools()).toEqual(BASE_TOOL_NAMES.slice());
-      expect(registry.pi.getThinkingLevel()).toBe("medium");
+      expect(registry.pi.getThinkingLevel()).toBe("off");
       expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
 
       const defaultPrompt = await registry.emit(
@@ -160,6 +178,51 @@ You are the planner.
       expect(defaultPrompt.systemPrompt).toContain("<name>spec</name>");
       expect(defaultPrompt.systemPrompt).toContain("<name>other</name>");
       expect(defaultPrompt.systemPrompt).toContain("**Your tool usage:**");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("keeps resume session model and thinking level when restoring a persisted agent", async () => {
+    // Intent: on resume, agent support should restore prompt/tools/skills from the persisted agent
+    // without reapplying that agent's model or thinking level over the session's own state.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const sessionModel = { provider: "provider-a", id: "model-a" };
+    const plannerModel = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "planner.md",
+        `---
+name: planner
+model: ${plannerModel.provider}/${plannerModel.id}
+thinkingLevel: high
+tools:
+  - read
+  - grep
+---
+Planner prompt.
+`,
+      );
+
+      const registry = createToolRegistry({ model: sessionModel, models: [sessionModel, plannerModel] });
+      piBaseExtension(registry.pi as any);
+      registry.pi.appendEntry("pi-base-agent-state", { name: "planner" });
+      registry.setThinkingLevel("low");
+      await registry.emit("session_start", { reason: "resume" }, { cwd: root });
+
+      expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:planner");
+      expect(registry.getCurrentModel()).toEqual(sessionModel);
+      expect(registry.pi.getThinkingLevel()).toBe("low");
+      expect(registry.getActiveTools()).toEqual(["read", "grep"]);
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -208,6 +271,7 @@ You are the planner.
       piBaseExtension(r1.pi as any);
       await r1.emit("session_start", { reason: "startup" }, { cwd: root });
       expect(r1.getStatuses().get("00-pi-base-agent")).toContain("agent:planner");
+      expect(r1.getCurrentModel()).toEqual(plannerModel);
       expect(r1.getActiveTools()).toEqual(["read", "grep"]);
 
       // Case 2: unknown --agent name falls back to the default agent and surfaces a startup warning.
@@ -290,6 +354,7 @@ You are the planner.
       piBaseExtension(r1.pi as any);
       await r1.emit("session_start", { reason: "startup" }, { cwd: rootWithConfiguredDefault });
       expect(r1.getStatuses().get("00-pi-base-agent")).toContain("agent:planner");
+      expect(r1.getCurrentModel()).toEqual(plannerModel);
       expect(r1.getActiveTools()).toEqual(["read", "grep"]);
 
       // Case 2: explicit --agent still overrides the configured defaultAgent.
@@ -639,10 +704,10 @@ model: missing-provider/missing-model
       await registry.runCommand("agent", "missing-model", { cwd: root });
 
       expect(registry.getNotifications()).toContainEqual({
-        message: 'Agent "missing-model": model missing-provider/missing-model not found. Check the provider name, model ID, and enabled models configuration.',
-        variant: "error",
+        message: 'Agent "missing-model": model missing-provider/missing-model not found. Keeping the current session model.',
+        variant: "warning",
       });
-      expect(registry.getStatuses().get("00-pi-base-agent")).toBeUndefined();
+      expect(registry.getStatuses().get("00-pi-base-agent")).toBe("agent:missing-model");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -725,10 +790,10 @@ model: ${model.provider}/${model.id}
       await registry.runCommand("agent", "broken-model", { cwd: root });
 
       expect(registry.getNotifications()).toContainEqual({
-        message: 'Agent "broken-model": failed to activate model provider-b/model-b. Check the provider, model ID, and auth configuration.',
-        variant: "error",
+        message: 'Agent "broken-model": failed to activate model provider-b/model-b. Keeping the current session model.',
+        variant: "warning",
       });
-      expect(registry.getStatuses().get("00-pi-base-agent")).toBeUndefined();
+      expect(registry.getStatuses().get("00-pi-base-agent")).toBe("agent:broken-model");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -767,10 +832,10 @@ thinkingLevel: high
       await registry.runCommand("agent", "broken-thinking", { cwd: root });
 
       expect(registry.getNotifications()).toContainEqual({
-        message: 'Agent "broken-thinking": failed to apply thinking level high. Check the selected model and provider configuration.',
-        variant: "error",
+        message: 'Agent "broken-thinking": failed to apply thinking level high. Keeping the current session thinking level.',
+        variant: "warning",
       });
-      expect(registry.getStatuses().get("00-pi-base-agent")).toBeUndefined();
+      expect(registry.getStatuses().get("00-pi-base-agent")).toBe("agent:broken-thinking");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

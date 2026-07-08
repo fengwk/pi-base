@@ -7,9 +7,7 @@ import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
 const DEFAULT_AGENT_NAME = "default";
 /** Custom session entry naming the active agent; also written into subagent sessions at spawn. */
 export const AGENT_STATE_ENTRY = "pi-base-agent-state";
-const PROJECT_CONFIG_DIR = ".pi";
 const AGENTS_DIR = "agents";
-const SETTINGS_FILE = "settings.json";
 const SYSTEM_PROMPT_FILE = "SYSTEM.md";
 const AGENT_SELECTOR_ITEM_MAX_COLUMNS = 120;
 const AGENT_COMPLETION_DESCRIPTION_MAX_COLUMNS = 96;
@@ -58,11 +56,6 @@ interface AgentCatalog {
   agents: AgentDefinition[];
   byName: Map<string, AgentDefinition>;
   diagnostics: string[];
-}
-
-interface MergedSettingsDefaults {
-  model?: AgentModelRef;
-  thinkingLevel?: ThinkingLevel;
 }
 
 export interface SubagentControls {
@@ -172,7 +165,7 @@ export function registerAgentSupport(
   const applyAgent = async (
     requestedName: string,
     ctx: ExtensionContext,
-    options: { persist: boolean; notify: boolean },
+    options: { persist: boolean; notify: boolean; applyModelThinking: boolean },
   ): Promise<boolean> => {
     const agent = resolveAgent(requestedName);
     if (!agent) {
@@ -182,56 +175,56 @@ export function registerAgentSupport(
       return false;
     }
 
-    const defaults = loadMergedSettingsDefaults(ctx.cwd);
     const validTools = filterKnownTools(agent.tools, allRegisteredToolNames());
 
-    const effectiveModel = agent.model ?? defaults.model;
-    if (effectiveModel) {
-      const model = findModel(ctx, effectiveModel);
+    let canApplyThinkingLevel = options.applyModelThinking;
+    if (options.applyModelThinking && agent.model) {
+      const model = findModel(ctx, agent.model);
       if (!model) {
-        if (options.notify && ctx.hasUI) {
+        console.warn(`Agent "${agent.name}": model ${agent.model.provider}/${agent.model.modelId} not found. Agent switch will keep the current session model.`);
+        if (ctx.hasUI) {
           ctx.ui.notify(
-            `Agent "${agent.name}": model ${effectiveModel.provider}/${effectiveModel.modelId} not found. Check the provider name, model ID, and enabled models configuration.`,
-            "error",
+            `Agent "${agent.name}": model ${agent.model.provider}/${agent.model.modelId} not found. Keeping the current session model.`,
+            "warning",
           );
         }
-        return false;
-      }
-      try {
-        const success = await pi.setModel(model);
-        if (!success) {
-          if (options.notify && ctx.hasUI) {
-            ctx.ui.notify(`Agent "${agent.name}": no auth configured for ${effectiveModel.provider}/${effectiveModel.modelId}.`, "error");
+        canApplyThinkingLevel = false;
+      } else {
+        try {
+          const success = await pi.setModel(model);
+          if (!success) {
+            console.warn(`Agent "${agent.name}": no auth configured for ${agent.model.provider}/${agent.model.modelId}. Agent switch will keep the current session model.`);
+            if (ctx.hasUI) {
+              ctx.ui.notify(`Agent "${agent.name}": no auth configured for ${agent.model.provider}/${agent.model.modelId}. Keeping the current session model.`, "warning");
+            }
+            canApplyThinkingLevel = false;
           }
-          return false;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`Agent "${agent.name}": failed to activate model ${agent.model.provider}/${agent.model.modelId}: ${message}`);
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              `Agent "${agent.name}": failed to activate model ${agent.model.provider}/${agent.model.modelId}. Keeping the current session model.`,
+              "warning",
+            );
+          }
+          canApplyThinkingLevel = false;
         }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`Agent "${agent.name}": failed to activate model ${effectiveModel.provider}/${effectiveModel.modelId}: ${message}`);
-        if (options.notify && ctx.hasUI) {
-          ctx.ui.notify(
-            `Agent "${agent.name}": failed to activate model ${effectiveModel.provider}/${effectiveModel.modelId}. Check the provider, model ID, and auth configuration.`,
-            "error",
-          );
-        }
-        return false;
       }
     }
 
-    const effectiveThinkingLevel = agent.thinkingLevel ?? defaults.thinkingLevel;
-    if (effectiveThinkingLevel) {
+    if (canApplyThinkingLevel && agent.thinkingLevel) {
       try {
-        pi.setThinkingLevel(effectiveThinkingLevel);
+        pi.setThinkingLevel(agent.thinkingLevel);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(`Agent "${agent.name}": failed to apply thinking level ${effectiveThinkingLevel}: ${message}`);
-        if (options.notify && ctx.hasUI) {
+        console.warn(`Agent "${agent.name}": failed to apply thinking level ${agent.thinkingLevel}: ${message}`);
+        if (ctx.hasUI) {
           ctx.ui.notify(
-            `Agent "${agent.name}": failed to apply thinking level ${effectiveThinkingLevel}. Check the selected model and provider configuration.`,
-            "error",
+            `Agent "${agent.name}": failed to apply thinking level ${agent.thinkingLevel}. Keeping the current session thinking level.`,
+            "warning",
           );
         }
-        return false;
       }
     }
 
@@ -243,7 +236,10 @@ export function registerAgentSupport(
       persistActiveAgent(agent.name);
     }
     if (options.notify && ctx.hasUI) {
-      ctx.ui.notify(`Agent "${agent.name}" activated.`, "info");
+      const selectedModel = agent.model ? ` model:${agent.model.provider}/${agent.model.modelId}` : "";
+      const selectedThinking = agent.thinkingLevel ? ` thinking:${agent.thinkingLevel}` : "";
+      const suffix = options.applyModelThinking && (selectedModel || selectedThinking) ? `${selectedModel}${selectedThinking}` : "";
+      ctx.ui.notify(`Agent "${agent.name}" activated.${suffix}`, "info");
     }
     return true;
   };
@@ -284,7 +280,7 @@ export function registerAgentSupport(
   const safeApplyAgent = async (
     agentName: string,
     ctx: ExtensionContext,
-    applyOptions: { persist: boolean; notify: boolean },
+    applyOptions: { persist: boolean; notify: boolean; applyModelThinking: boolean },
   ): Promise<boolean> => {
     try {
       return await applyAgent(agentName, ctx, applyOptions);
@@ -325,7 +321,7 @@ export function registerAgentSupport(
         return;
       }
 
-      await safeApplyAgent(agentName, ctx, { persist: true, notify: true });
+      await safeApplyAgent(agentName, ctx, { persist: true, notify: true, applyModelThinking: true });
     },
   });
 
@@ -342,7 +338,7 @@ export function registerAgentSupport(
       const startupName = options.getStartupAgentName?.()?.trim();
       if (startupName) {
         if (nextCatalog.byName.has(startupName)) {
-          const applied = await safeApplyAgent(startupName, ctx, { persist: true, notify: false });
+          const applied = await safeApplyAgent(startupName, ctx, { persist: true, notify: false, applyModelThinking: true });
           if (applied) return;
         } else {
           warnStartupAgentFallback(ctx, `Agent "${startupName}" (from --agent) not found; using the default agent.`);
@@ -351,7 +347,7 @@ export function registerAgentSupport(
         const configuredDefaultAgentName = options.getConfiguredDefaultAgentName?.(ctx.cwd)?.trim();
         if (configuredDefaultAgentName) {
           if (nextCatalog.byName.has(configuredDefaultAgentName)) {
-            const applied = await safeApplyAgent(configuredDefaultAgentName, ctx, { persist: true, notify: false });
+            const applied = await safeApplyAgent(configuredDefaultAgentName, ctx, { persist: true, notify: false, applyModelThinking: true });
             if (applied) return;
           } else {
             warnStartupAgentFallback(ctx, `Agent "${configuredDefaultAgentName}" (from pi-base.json defaultAgent) not found; using the default agent.`);
@@ -365,9 +361,9 @@ export function registerAgentSupport(
     if (requested.missingRequestedName) {
       warnStartupAgentFallback(ctx, `Agent "${requested.missingRequestedName}" (from session entry) not found; using the default agent.`);
     }
-    const applied = await safeApplyAgent(requested.name, ctx, { persist: false, notify: false });
+    const applied = await safeApplyAgent(requested.name, ctx, { persist: false, notify: false, applyModelThinking: false });
     if (!applied && requested.name !== DEFAULT_AGENT_NAME) {
-      await safeApplyAgent(DEFAULT_AGENT_NAME, ctx, { persist: false, notify: false });
+      await safeApplyAgent(DEFAULT_AGENT_NAME, ctx, { persist: false, notify: false, applyModelThinking: false });
     }
   });
 
@@ -570,31 +566,6 @@ function buildAgentSystemPrompt(options: BuildSystemPromptOptions, fallbackSyste
   prompt += `\nCurrent date: ${year}-${month}-${day}`;
   prompt += `\nCurrent working directory: ${promptCwd}`;
   return prompt;
-}
-
-function loadMergedSettingsDefaults(cwd: string): MergedSettingsDefaults {
-  const globalSettings = readSettingsFile(join(getAgentDir(), SETTINGS_FILE));
-  const projectSettings = readSettingsFile(join(cwd, PROJECT_CONFIG_DIR, SETTINGS_FILE));
-  const provider = asTrimmedString(projectSettings.defaultProvider) ?? asTrimmedString(globalSettings.defaultProvider);
-  const modelId = asTrimmedString(projectSettings.defaultModel) ?? asTrimmedString(globalSettings.defaultModel);
-  const thinkingLevel = normalizeThinkingLevel(projectSettings.defaultThinkingLevel)
-    ?? normalizeThinkingLevel(globalSettings.defaultThinkingLevel);
-
-  return {
-    ...(provider && modelId ? { model: { provider, modelId } } : {}),
-    ...(thinkingLevel ? { thinkingLevel } : {}),
-  };
-}
-
-function readSettingsFile(filePath: string): Record<string, unknown> {
-  if (!existsSync(filePath)) return {};
-  try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return parsed as Record<string, unknown>;
-  } catch {
-    return {};
-  }
 }
 
 function loadAgentCatalog(): AgentCatalog {

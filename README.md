@@ -140,8 +140,8 @@ export PI_BASE_GLOBAL_SETTINGS_PATH=/tmp/pi-base.json
 
 - `name`
 - `description`
-- `model`，格式必须是 `provider/modelId`
-- `thinkingLevel`
+- `model`，格式必须是 `provider/modelId`；仅作为显式选中该 agent 时的建议值
+- `thinkingLevel`；仅作为显式选中该 agent 时的建议值
 - `tools`
 - `skills`
 - `subagents`
@@ -180,7 +180,10 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 当 `subagents` 过滤后的结果非空，且当前 session depth 还没有达到 `subagent.maxDepth` 时，`pi-base` 会为该 agent 注入 `task` 工具，并在 system prompt 中列出可委派的 subagent 名称和描述。
 - 所有 agent 都由 `pi-base` 统一重建 system prompt：agent Markdown 正文非空时覆盖 Pi 加载的 `customPrompt`；正文为空时回退到 Pi 加载的 `customPrompt`（通常是 `SYSTEM.md`）。
 - 若当前 agent 与 Pi 都没有可用的 `customPrompt`，`pi-base` 会保留 Pi 预构建的 system prompt 作为兜底。
-- `model` 或 `thinkingLevel` 未配置时，回退到 `settings.json` 中的默认值。
+- agent 持续控制的是 prompt / tools / skills / subagents；session 自己的 `model` 和 `thinkingLevel` 在 resume / reload 时不会被 agent 覆盖。
+- `model` 和 `thinkingLevel` 只在显式选中 agent 时做 best-effort 应用：`/agent <name>`、fresh session 命中 `--agent`、或 fresh session 命中 `defaultAgent`。
+- `/agent default` 不会强制把 session 的 `model` / `thinkingLevel` 重置回 `settings.json` 默认值；若要改回默认模型，请显式切 model。
+- 如果 agent 定义的 `model` 或 `thinkingLevel` 无法应用，`pi-base` 会给出 warning，但不会阻塞 agent 本身切换。
 - 最近一次显式 `/agent xxx` 切换会写入 session entry；后续 `session_start` 会自动恢复。
 - fresh session 的启动选择顺序是：`session 已持久化的 agent > --agent <name> > pi-base.json.defaultAgent > default`。
 - `--agent` 或 `defaultAgent` 指向不存在的 agent 时，会在 startup UI 上提示 warning，并回退到 `default`。
@@ -398,6 +401,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 选择顺序是：`session 已持久化的 agent > --agent <name> > defaultAgent > default`
 - `defaultAgent` 指向不存在的 agent 时，会回退到 `default`
 - 命中的 `defaultAgent` 会像 `--agent` 一样写入 session entry，后续 turn / resume 会继续沿用
+- 若该 agent 定义了 `model` / `thinkingLevel`，只会在命中 `defaultAgent` 的 fresh session 启动时 best-effort 应用；后续 resume / reload 仍以 session 自己的值为准
 
 ### `render`
 
