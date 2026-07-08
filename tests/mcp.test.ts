@@ -587,6 +587,12 @@ describe("mcp support", () => {
     await waitFor(() => !registry.getActiveTools().includes("create_temp_dir"));
     expect(registry.getActiveTools()).toContain("echo");
 
+    // Agent switches rebuild active tools from registered definitions. A stale MCP
+    // definition must stay filtered out so a dead alias cannot be resurrected.
+    await registry.runCommand("agent", "default", { cwd: root });
+    expect(registry.getActiveTools()).not.toContain("create_temp_dir");
+    expect(registry.getActiveTools()).toContain("echo");
+
     // Tearing MCP down must retire the remaining alias instead of leaving a dead entry.
     await registry.emit("session_shutdown", {});
     expect(registry.getActiveTools()).not.toContain("echo");

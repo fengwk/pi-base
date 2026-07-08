@@ -83,6 +83,8 @@ export function registerAgentSupport(
     subagentControls?: SubagentControls;
     getStartupAgentName?: () => string | undefined;
     getConfiguredDefaultAgentName?: (cwd: string) => string | undefined;
+    /** Filters registered tool definitions that should not be offered to agents right now. */
+    isToolActivatable?: (toolName: string) => boolean;
   },
 ): AgentSupportHandle {
   let catalog = loadAgentCatalog();
@@ -137,7 +139,9 @@ export function registerAgentSupport(
     if (ctx.hasUI) ctx.ui.notify(message, "warning");
   };
 
-  const allRegisteredToolNames = (): string[] => pi.getAllTools().map((tool) => tool.name);
+  const allRegisteredToolNames = (): string[] => pi.getAllTools()
+    .map((tool) => tool.name)
+    .filter((toolName) => options.isToolActivatable?.(toolName) ?? true);
 
   const updateStatus = (ctx: ExtensionContext, agentName: string): void => {
     if (!ctx.hasUI) return;

@@ -8,7 +8,7 @@ import { renderMcpFooterStatus, renderMcpStatusTree } from "./status.js";
 export const PI_BASE_MCP_STATUS_KEY = "02-pi-base-mcp";
 const MCP_STATUS_MESSAGE_TYPE = "pi-base-mcp-status";
 
-export interface RegisterMcpSupportOptions extends Pick<McpManagerOptions, "clientFactory" | "heartbeatIntervalMs" | "retryDelaysMs" | "callWaitTimeoutMs" | "canActivateTool"> {
+export interface RegisterMcpSupportOptions extends Pick<McpManagerOptions, "clientFactory" | "heartbeatIntervalMs" | "retryDelaysMs" | "callWaitTimeoutMs" | "canActivateTool" | "onToolAvailabilityChange"> {
   loadSettings?: (cwd: string) => LoadedPiBaseSettings;
   getCollapsedResultLines?: CollapsedResultLinesResolver;
   getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
@@ -41,6 +41,7 @@ export function registerMcpSupport(
     getCollapsedResultLines: options.getCollapsedResultLines,
     getCollapsedResultMaxChars: options.getCollapsedResultMaxChars,
     canActivateTool: options.canActivateTool,
+    onToolAvailabilityChange: options.onToolAvailabilityChange,
     onSnapshotChange: (snapshot, ctx) => {
       if (!ctx.hasUI) return;
       ctx.ui.setStatus(PI_BASE_MCP_STATUS_KEY, renderMcpFooterStatus(snapshot));

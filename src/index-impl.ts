@@ -243,6 +243,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getMaxDepth: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxDepth,
     readDepth,
   };
+  const inactiveDynamicToolNames = new Set<string>();
   pi.registerFlag("agent", {
     type: "string",
     description: "Start in a specific pi-base agent by name (e.g. --agent reviewer). Ignored if the resumed session already has an agent.",
@@ -255,13 +256,20 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
     getConfiguredDefaultAgentName: (cwd: string) => loadSettings(cwd).settings.defaultAgent,
+    isToolActivatable: (toolName: string) => !inactiveDynamicToolNames.has(toolName),
   });
   registerMcpSupport(pi, {
+    ...options.mcp,
     loadSettings,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
-    canActivateTool: (toolName: string) => agentHandle.canActivateTool(toolName),
-    ...options.mcp,
+    canActivateTool: (toolName: string) =>
+      agentHandle.canActivateTool(toolName) && (options.mcp?.canActivateTool?.(toolName) ?? true),
+    onToolAvailabilityChange: (toolName: string, available: boolean) => {
+      if (available) inactiveDynamicToolNames.delete(toolName);
+      else inactiveDynamicToolNames.add(toolName);
+      options.mcp?.onToolAvailabilityChange?.(toolName, available);
+    },
   });
   registerSubagentTaskTool(pi, {
     getActiveAgentSubagents: agentHandle.getActiveAgentSubagents,

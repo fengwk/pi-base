@@ -36,6 +36,8 @@ export interface McpManagerOptions {
   getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
   /** Whether a newly available MCP alias is allowed to become active for the current agent. */
   canActivateTool?: (toolName: string) => boolean;
+  /** Reports whether an MCP alias currently represents a live server-advertised tool. */
+  onToolAvailabilityChange?: (toolName: string, available: boolean) => void;
   onSnapshotChange?: (snapshot: McpSnapshot, ctx: ExtensionContext) => void;
 }
 
@@ -87,7 +89,10 @@ export class McpManager {
       this.clearRetry(runtime);
       this.clearHeartbeat(runtime);
       for (const snapshot of runtime.tools.values()) {
-        if (snapshot.state !== "conflict") aliasesToDeactivate.add(snapshot.aliasName);
+        if (snapshot.state !== "conflict") {
+          aliasesToDeactivate.add(snapshot.aliasName);
+          this.reportToolAvailability(snapshot.aliasName, false);
+        }
       }
       disconnects.push(...collectDisconnects(runtime));
     }
@@ -250,6 +255,7 @@ export class McpManager {
         this.toolOwners.set(aliasName, runtime.key);
         existingToolNames.add(aliasName);
       }
+      this.reportToolAvailability(aliasName, true);
       if (canActivateTool(aliasName)) aliasesToActivate.add(aliasName);
 
       runtime.tools.set(tool.name, {
@@ -265,6 +271,7 @@ export class McpManager {
       runtime.tools.set(remoteName, { ...snapshot, state: "stale" });
       // A tool the server no longer advertises must stop being an active tool, so the
       // model cannot pick an alias that would only fail once it reaches execution.
+      this.reportToolAvailability(snapshot.aliasName, false);
       aliasesToDeactivate.add(snapshot.aliasName);
     }
 
@@ -289,6 +296,14 @@ export class McpManager {
 
     if (next.length !== current.length || next.some((name, index) => name !== current[index])) {
       pi.setActiveTools(next);
+    }
+  }
+
+  private reportToolAvailability(aliasName: string, available: boolean): void {
+    try {
+      this.options.onToolAvailabilityChange?.(aliasName, available);
+    } catch {
+      // Availability bookkeeping is best-effort; active-tools reconciliation remains authoritative.
     }
   }
 
