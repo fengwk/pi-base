@@ -321,7 +321,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 | `yolo` | 设置默认 YOLO 模式 |
 | `mcp` | 定义本地或远程 MCP server |
 | `contextCompression` | 压缩旧工具输出，减少上下文噪音 |
-| `subagent` | 控制 `task` 委派深度和并发上限 |
+| `subagent` | 控制 `task` 委派深度、直接子并发上限与整树总并发上限 |
 | `defaultAgent` | fresh session 启动时默认进入的命名 agent |
 
 一个常见起点：
