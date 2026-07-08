@@ -267,8 +267,11 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getActiveAgentSubagents: agentHandle.getActiveAgentSubagents,
     hasAgent: agentHandle.hasAgent,
     getMaxConcurrency: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxConcurrency,
+    getMaxTotalConcurrency: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxTotalConcurrency,
     getIdleTimeoutMs: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).idleTimeoutMs,
     getMaxTurns: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxTurns,
+    getCollapsedResultLines,
+    getCollapsedResultMaxChars,
     factory: createRealSubagentFactory(),
   });
   registerPermissionGuard(pi, {

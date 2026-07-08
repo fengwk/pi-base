@@ -65,7 +65,6 @@ describe("SubagentRegistry", () => {
     parentSessionId: parent,
     rootSessionId: "root",
     agentType: "worker",
-    description: "task",
     depth: 2,
     status,
     toolCount: 0,
@@ -78,8 +77,11 @@ describe("SubagentRegistry", () => {
     registry.upsert(node("a", "root"));
     registry.upsert(node("b", "root"));
     registry.upsert(node("c", "root", "done"));
+    registry.upsert({ ...node("d", "other-parent"), rootSessionId: "other-root" });
     expect(registry.children("root").map((n) => n.sessionId).sort()).toEqual(["a", "b", "c"]);
     expect(registry.runningChildCount("root")).toBe(2);
+    expect(registry.runningCountForRoot("root")).toBe(2);
+    expect(registry.runningCountForRoot("other-root")).toBe(1);
   });
 
   it("filters snapshots by root session", () => {

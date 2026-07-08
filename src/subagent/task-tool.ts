@@ -2,11 +2,17 @@ import type { Static } from "@sinclair/typebox";
 import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { TASK_TOOL_NAME } from "./constants.js";
-import { readDepth } from "./depth.js";
+import { readDepth, readRootSessionId } from "./depth.js";
 import { subagentRegistry } from "./registry.js";
 import { formatRunResult, runSubagent, type RunResult, type SubagentProgressUpdate, type SubagentSessionFactory } from "./runner.js";
 import { taskSchema } from "./schema.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
+import {
+  resolveCollapsedResultLines,
+  resolveCollapsedResultMaxChars,
+  type CollapsedResultLinesResolver,
+  type CollapsedResultMaxCharsResolver,
+} from "../render.js";
 
 export interface SubagentTaskToolDeps {
   /** Agents the currently-active agent may delegate to (its `subagents` allowlist). */
@@ -14,8 +20,11 @@ export interface SubagentTaskToolDeps {
   /** Whether an agent name exists in the loaded catalog (after invalid subagent filtering). */
   hasAgent: (name: string) => boolean;
   getMaxConcurrency: (cwd: string) => number;
+  getMaxTotalConcurrency: (cwd: string) => number | undefined;
   getIdleTimeoutMs: (cwd: string) => number | undefined;
   getMaxTurns: (cwd: string) => number | undefined;
+  getCollapsedResultLines?: CollapsedResultLinesResolver;
+  getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
   factory: SubagentSessionFactory;
 }
 
@@ -23,8 +32,9 @@ const TASK_DESCRIPTION = loadToolDescription(TASK_TOOL_NAME);
 const TASK_PROMPT_SNIPPET = loadToolPromptSnippet(TASK_TOOL_NAME);
 const LIVE_OUTPUT_ENTRIES = 5;
 const MAX_PROGRESS_ENTRIES = 60;
-const COLLAPSED_RESULT_LINES = 10;
+const TASK_DEFAULT_COLLAPSED_RESULT_LINES = 10;
 const pendingSessionReservations = new Map<string, number>();
+const pendingRootReservations = new Map<string, number>();
 
 interface TaskToolDetails {
   progress?: boolean;
@@ -59,12 +69,10 @@ function formatAvailableAgents(agentNames: string[]): string {
   return agentNames.length > 0 ? agentNames.join(" / ") : "no available agents";
 }
 
-function formatTaskCommand(params: { subagent_type?: unknown; description?: unknown; session_id?: unknown }): string {
+function formatTaskCommand(params: { subagent_type?: unknown; session_id?: unknown }): string {
   const agentType = readString(params.subagent_type) || "<missing-subagent_type>";
-  const description = readString(params.description);
   const sessionId = readString(params.session_id);
   const parts = ["task", agentType];
-  if (description) parts.push(`--description ${JSON.stringify(description)}`);
   if (sessionId) parts.push(`--resume ${sessionId}`);
   return parts.join(" ");
 }
@@ -122,21 +130,41 @@ function countPendingSessionReservations(parentSessionId: string): number {
   return pendingSessionReservations.get(parentSessionId) ?? 0;
 }
 
-function tryReserveSessionSlot(parentSessionId: string, maxConcurrency: number): { active: number; release: () => void } | undefined {
+function countPendingRootReservations(rootSessionId: string): number {
+  return pendingRootReservations.get(rootSessionId) ?? 0;
+}
+
+function tryReserveSessionSlot(
+  parentSessionId: string,
+  rootSessionId: string,
+  maxConcurrency: number,
+  maxTotalConcurrency: number | undefined,
+): { directActive: number; totalActive: number; release: () => void } | undefined {
   const running = subagentRegistry.runningChildCount(parentSessionId);
   const pending = countPendingSessionReservations(parentSessionId);
-  const active = running + pending;
-  if (active >= maxConcurrency) return undefined;
+  const directActive = running + pending;
+  if (directActive >= maxConcurrency) return undefined;
+
+  const totalRunning = subagentRegistry.runningCountForRoot(rootSessionId);
+  const totalPending = countPendingRootReservations(rootSessionId);
+  const totalActive = totalRunning + totalPending;
+  if (maxTotalConcurrency !== undefined && totalActive >= maxTotalConcurrency) return undefined;
+
   pendingSessionReservations.set(parentSessionId, pending + 1);
+  pendingRootReservations.set(rootSessionId, totalPending + 1);
   let released = false;
   return {
-    active: active + 1,
+    directActive: directActive + 1,
+    totalActive: totalActive + 1,
     release: () => {
       if (released) return;
       released = true;
-      const next = (pendingSessionReservations.get(parentSessionId) ?? 0) - 1;
-      if (next > 0) pendingSessionReservations.set(parentSessionId, next);
+      const nextDirect = (pendingSessionReservations.get(parentSessionId) ?? 0) - 1;
+      if (nextDirect > 0) pendingSessionReservations.set(parentSessionId, nextDirect);
       else pendingSessionReservations.delete(parentSessionId);
+      const nextTotal = (pendingRootReservations.get(rootSessionId) ?? 0) - 1;
+      if (nextTotal > 0) pendingRootReservations.set(rootSessionId, nextTotal);
+      else pendingRootReservations.delete(rootSessionId);
     },
   };
 }
@@ -196,13 +224,46 @@ function renderLiveOutput(result: unknown, theme: any) {
   return container;
 }
 
-function formatCollapsedReport(report: string, theme: any): string {
-  const lines = report.trim().split("\n");
-  const visible = lines.slice(0, COLLAPSED_RESULT_LINES);
-  const remaining = lines.length - visible.length;
-  const body = visible.join("\n") || "(no textual report produced)";
-  if (remaining <= 0) return body;
-  return `${body}\n${paint(theme, "muted", `... (${remaining} more lines; expand for full report)`)}`;
+function renderTaskReportBody(
+  report: string,
+  expanded: boolean | undefined,
+  theme: any,
+  context: { cwd?: string } | undefined,
+  deps: Pick<SubagentTaskToolDeps, "getCollapsedResultLines" | "getCollapsedResultMaxChars">,
+): string {
+  const normalized = report.trim() || "(no textual report produced)";
+  if (expanded) return normalized;
+
+  const collapsedLines = resolveCollapsedResultLines(
+    TASK_TOOL_NAME,
+    TASK_DEFAULT_COLLAPSED_RESULT_LINES,
+    context,
+    deps.getCollapsedResultLines,
+  ) ?? TASK_DEFAULT_COLLAPSED_RESULT_LINES;
+  const maxCollapsedChars = resolveCollapsedResultMaxChars(
+    TASK_TOOL_NAME,
+    undefined,
+    context,
+    deps.getCollapsedResultMaxChars,
+  );
+
+  if (collapsedLines <= 0) return "";
+
+  const charTruncated = typeof maxCollapsedChars === "number" && normalized.length > maxCollapsedChars;
+  const charLimitedBody = charTruncated ? normalized.slice(0, maxCollapsedChars) : normalized;
+  const lines = charLimitedBody ? charLimitedBody.split("\n") : [];
+  const lineTruncated = lines.length > collapsedLines;
+  const visibleLineCount = Math.max(0, lineTruncated ? collapsedLines - 1 : lines.length);
+  const remaining = Math.max(0, lines.length - visibleLineCount);
+  const visibleBody = lines.slice(0, visibleLineCount).join("\n");
+  const tailDetails = [
+    remaining > 0 ? `${remaining} more lines` : undefined,
+    charTruncated ? "output truncated" : undefined,
+    remaining > 0 || charTruncated ? "ctrl+o to expand" : undefined,
+  ].filter((part): part is string => Boolean(part));
+  if (tailDetails.length === 0) return normalized;
+  const tail = paint(theme, "muted", `... (${tailDetails.join(", ")})`);
+  return visibleBody ? `${visibleBody}\n${tail}` : tail;
 }
 
 function renderFinalResult(
@@ -210,6 +271,8 @@ function renderFinalResult(
   expanded: boolean | undefined,
   theme: any,
   isError: boolean | undefined,
+  context: { cwd?: string } | undefined,
+  deps: Pick<SubagentTaskToolDeps, "getCollapsedResultLines" | "getCollapsedResultMaxChars">,
 ) {
   const parsed = extractRunResult(result);
   const state = parsed?.state ?? (isError ? "error" : "completed");
@@ -221,13 +284,15 @@ function renderFinalResult(
   const icon = state === "completed" ? paint(theme, "success", "✓") : paint(theme, "error", "✗");
   const sessionSuffix = sessionId ? paint(theme, "muted", ` (${sessionId})`) : "";
   const header = `${icon} ${title(theme, `task ${state}`)}${sessionSuffix}`;
-  const body = expanded ? report.trim() || "(no textual report produced)" : formatCollapsedReport(report, theme);
+  const body = renderTaskReportBody(report, expanded, theme, context, deps);
   const container = new Container();
   container.addChild(new Spacer(1));
   container.addChild(new Text(header, 0, 0));
-  container.addChild(new Spacer(1));
-  container.addChild(new Text(paint(theme, "muted", "Result"), 0, 0));
-  container.addChild(new Text(paint(theme, state === "completed" ? "toolOutput" : "error", body), 0, 0));
+  if (body) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(paint(theme, "muted", "Result"), 0, 0));
+    container.addChild(new Text(paint(theme, state === "completed" ? "toolOutput" : "error", body), 0, 0));
+  }
   return container;
 }
 
@@ -249,7 +314,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
     },
     renderResult(result, renderOptions, theme, context) {
       if (renderOptions.isPartial) return renderLiveOutput(result, theme);
-      return renderFinalResult(result, renderOptions.expanded, theme, context.isError);
+      return renderFinalResult(result, renderOptions.expanded, theme, context.isError, context, deps);
     },
     async execute(
       _toolCallId: string,
@@ -259,7 +324,6 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
       ctx: ExtensionContext,
     ) {
       const agentType = readString(params?.subagent_type);
-      const description = readString(params?.description);
       const prompt = readString(params?.prompt);
       const sessionId = readString(params?.session_id) || undefined;
 
@@ -278,6 +342,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
       }
 
       const parentSessionId = ctx.sessionManager.getSessionId();
+      const rootSessionId = readRootSessionId(ctx) || parentSessionId;
       let releaseSessionReservation: (() => void) | undefined;
       if (sessionId) {
         const existing = subagentRegistry.get(sessionId);
@@ -286,11 +351,18 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
         }
       }
       const max = deps.getMaxConcurrency(ctx.cwd);
-      const reservation = tryReserveSessionSlot(parentSessionId, max);
+      const maxTotal = deps.getMaxTotalConcurrency(ctx.cwd);
+      const reservation = tryReserveSessionSlot(parentSessionId, rootSessionId, max, maxTotal);
       if (!reservation) {
-        const active = subagentRegistry.runningChildCount(parentSessionId) + countPendingSessionReservations(parentSessionId);
+        const directActive = subagentRegistry.runningChildCount(parentSessionId) + countPendingSessionReservations(parentSessionId);
+        if (directActive >= max) {
+          return errorResult(
+            `concurrency limit reached (${directActive}/${max} subagents running or starting). Wait for one to finish before delegating more.`,
+          );
+        }
+        const totalActive = subagentRegistry.runningCountForRoot(rootSessionId) + countPendingRootReservations(rootSessionId);
         return errorResult(
-          `concurrency limit reached (${active}/${max} subagents running or starting). Wait for one to finish before delegating more.`,
+          `total concurrency limit reached (${totalActive}/${maxTotal} subagents running or starting in this delegation tree). Wait for one to finish before delegating more.`,
         );
       }
       releaseSessionReservation = reservation.release;
@@ -302,7 +374,6 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
           ctx,
           {
             agentType,
-            description,
             prompt,
             sessionId,
             childDepth,

@@ -674,6 +674,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
   "subagent": {
     "maxDepth": 2,
     "maxConcurrency": 10,
+    "maxTotalConcurrency": 20,
     "idleTimeoutMs": 300000,
     "maxTurns": 50
   }
@@ -684,6 +685,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 - `maxDepth`
 - `maxConcurrency`
+- `maxTotalConcurrency`
 - `idleTimeoutMs`
 - `maxTurns`
 
@@ -693,6 +695,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 根 session depth 记为 `1`；只有当 `当前 depth < maxDepth` 时，带有效 `subagents` allowlist 的 agent 才会注入 `task`
 - `maxConcurrency` 默认 `10`
 - `maxConcurrency` 只限制同一个父 session 当前正在运行的直接子 subagent 数量；超过上限时，新的 `task` 调用会直接报错
+- `maxTotalConcurrency` 默认关闭；配置后，它限制同一个 root session 下面整棵 delegation tree 当前同时运行或启动中的 subagent 总数；超过上限时，即使当前父 session 自己还没达到 `maxConcurrency`，新的 `task` 也会直接报错
 - `idleTimeoutMs` 默认关闭；配置后，它衡量的是“没有 assistant / session 侧进展时的空闲时间”。一旦 child 已进入 tool 执行阶段，tool 本体运行过程中的静默不会触发这个 watchdog；只有 tool 结束后重新等待下一次 assistant / 模型侧进展时才会重新计时
 - `maxTurns` 默认 `50`；当 child 已完成 `N` 次 assistant turn 且仍在继续发起工具循环时，`pi-base` 会像 opencode 的 `maxSteps` 一样，在后续每一轮继续注入一条“立即收尾并返回最终报告”的 follow-up 提示，直到 child 自己结束
 - `task` 运行时会再次校验 `subagent_type`：

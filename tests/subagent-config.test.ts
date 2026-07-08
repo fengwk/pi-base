@@ -39,8 +39,8 @@ describe("subagent config", () => {
   it("reads explicit project overrides", async () => {
     // Intent: operator-provided limits must win over defaults.
     const root = await createTempWorkspace();
-    await writeProjectConfig(root, { subagent: { maxDepth: 4, maxConcurrency: 3, idleTimeoutMs: 45000, maxTurns: 6 } });
-    expect(loadSubagentConfig(root)).toEqual({ maxDepth: 4, maxConcurrency: 3, idleTimeoutMs: 45000, maxTurns: 6 });
+    await writeProjectConfig(root, { subagent: { maxDepth: 4, maxConcurrency: 3, maxTotalConcurrency: 12, idleTimeoutMs: 45000, maxTurns: 6 } });
+    expect(loadSubagentConfig(root)).toEqual({ maxDepth: 4, maxConcurrency: 3, maxTotalConcurrency: 12, idleTimeoutMs: 45000, maxTurns: 6 });
   });
 
   it("fills only the missing field with its default", async () => {
@@ -62,7 +62,16 @@ describe("subagent config", () => {
   it("treats idleTimeoutMs=0 as disabled", async () => {
     const root = await createTempWorkspace();
     await writeProjectConfig(root, { subagent: { idleTimeoutMs: 0 } });
-    expect(loadSubagentConfig(root)).toEqual({ maxDepth: DEFAULT_MAX_DEPTH, maxConcurrency: DEFAULT_MAX_CONCURRENCY, maxTurns: DEFAULT_MAX_TURNS });
+    const original = process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+    const isolatedGlobal = join(root, "isolated-global-pi-base.json");
+    try {
+      await writeFile(isolatedGlobal, JSON.stringify({}), "utf8");
+      process.env.PI_BASE_GLOBAL_SETTINGS_PATH = isolatedGlobal;
+      expect(loadSubagentConfig(root)).toEqual({ maxDepth: DEFAULT_MAX_DEPTH, maxConcurrency: DEFAULT_MAX_CONCURRENCY, maxTurns: DEFAULT_MAX_TURNS });
+    } finally {
+      if (original === undefined) delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+      else process.env.PI_BASE_GLOBAL_SETTINGS_PATH = original;
+    }
   });
 
   it("rejects non-positive maxDepth at load time", async () => {
@@ -72,10 +81,13 @@ describe("subagent config", () => {
     expect(() => loadPiBaseSettings(root)).toThrowError(/subagent\.maxDepth must be a positive integer/);
   });
 
-  it("rejects non-integer maxConcurrency at load time", async () => {
+  it("rejects non-integer maxConcurrency and maxTotalConcurrency at load time", async () => {
     const root = await createTempWorkspace();
     await writeProjectConfig(root, { subagent: { maxConcurrency: 2.5 } });
     expect(() => loadPiBaseSettings(root)).toThrowError(/subagent\.maxConcurrency must be a positive integer/);
+
+    await writeProjectConfig(root, { subagent: { maxTotalConcurrency: 1.5 } });
+    expect(() => loadPiBaseSettings(root)).toThrowError(/subagent\.maxTotalConcurrency must be a positive integer/);
   });
 
   it("rejects negative idleTimeoutMs and non-positive maxTurns at load time", async () => {

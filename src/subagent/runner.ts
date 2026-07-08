@@ -41,7 +41,6 @@ export interface SubagentProgressUpdate {
 
 export interface RunSubagentArgs {
   agentType: string;
-  description: string;
   prompt: string;
   sessionId?: string;
   childDepth: number;
@@ -93,7 +92,6 @@ export async function runSubagent(
     parentSessionId,
     rootSessionId,
     agentType: args.agentType,
-    description: args.description,
     depth: args.childDepth,
     status: "running",
     toolCount: 0,

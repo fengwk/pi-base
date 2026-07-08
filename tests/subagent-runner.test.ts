@@ -36,7 +36,7 @@ describe("runSubagent", () => {
     };
     const result = await runSubagent(
       fakeCtx(),
-      { agentType: "worker", description: "do work", prompt: "go", childDepth: 2 },
+      { agentType: "worker", prompt: "go", childDepth: 2 },
       factory,
     );
     expect(result).toEqual({ sessionId: "child-1", state: "completed", report: "final report" });
@@ -54,7 +54,7 @@ describe("runSubagent", () => {
     };
     await runSubagent(
       fakeCtx("child-parent", [{ type: "custom", customType: ROOT_SESSION_ENTRY, data: rootSessionEntryData("root-123") }]),
-      { agentType: "worker", description: "do work", prompt: "go", childDepth: 3 },
+      { agentType: "worker", prompt: "go", childDepth: 3 },
       factory,
     );
     expect(subagentRegistry.get("child-rooted")?.rootSessionId).toBe("root-123");
@@ -66,7 +66,7 @@ describe("runSubagent", () => {
       spawn: async () => handle("child-err", { prompt: async () => { throw new Error("boom"); } }),
       resume: async () => handle("child-err", {}),
     };
-    const result = await runSubagent(fakeCtx(), { agentType: "w", description: "d", prompt: "p", childDepth: 2 }, factory);
+    const result = await runSubagent(fakeCtx(), { agentType: "w", prompt: "p", childDepth: 2 }, factory);
     expect(result.state).toBe("error");
     expect(result.sessionId).toBe("child-err");
     expect(result.error).toContain("boom");
@@ -85,7 +85,7 @@ describe("runSubagent", () => {
     const factory: SubagentSessionFactory = { spawn: async () => child, resume: async () => child };
     const result = await runSubagent(
       fakeCtx(),
-      { agentType: "w", description: "d", prompt: "p", childDepth: 2, signal: controller.signal },
+      { agentType: "w", prompt: "p", childDepth: 2, signal: controller.signal },
       factory,
     );
     expect(result.state).toBe("cancelled");
@@ -99,7 +99,7 @@ describe("runSubagent", () => {
       spawn: async () => { throw new Error("spawn failed"); },
       resume: async () => { throw new Error("not found"); },
     };
-    const result = await runSubagent(fakeCtx(), { agentType: "w", description: "d", prompt: "p", childDepth: 2 }, factory);
+    const result = await runSubagent(fakeCtx(), { agentType: "w", prompt: "p", childDepth: 2 }, factory);
     expect(result.state).toBe("error");
     expect(result.error).toContain("spawn failed");
   });
@@ -132,7 +132,6 @@ describe("runSubagent", () => {
       fakeCtx(),
       {
         agentType: "worker",
-        description: "stream progress",
         prompt: "go",
         childDepth: 2,
         onRegistered() {
@@ -174,7 +173,7 @@ describe("runSubagent", () => {
     try {
       const resultPromise = runSubagent(
         fakeCtx(),
-        { agentType: "worker", description: "idle", prompt: "go", childDepth: 2, idleTimeoutMs: 50 },
+        { agentType: "worker", prompt: "go", childDepth: 2, idleTimeoutMs: 50 },
         factory,
       );
       await vi.advanceTimersByTimeAsync(60);
@@ -214,7 +213,7 @@ describe("runSubagent", () => {
     try {
       const resultPromise = runSubagent(
         fakeCtx(),
-        { agentType: "worker", description: "tool idle", prompt: "go", childDepth: 2, idleTimeoutMs: 50 },
+        { agentType: "worker", prompt: "go", childDepth: 2, idleTimeoutMs: 50 },
         factory,
       );
       await vi.advanceTimersByTimeAsync(200);
@@ -267,7 +266,6 @@ describe("runSubagent", () => {
       fakeCtx(),
       {
         agentType: "worker",
-        description: "turn limit",
         prompt: "go",
         childDepth: 2,
         maxTurns: 1,

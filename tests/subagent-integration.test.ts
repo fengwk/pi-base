@@ -127,7 +127,6 @@ Return SLOW_DONE.
       "task-1",
       {
         subagent_type: "it-slowworker",
-        description: "slow check",
         prompt: "Run the slow worker integration check and return SLOW_DONE.",
       },
       undefined,

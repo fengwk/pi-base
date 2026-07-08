@@ -10,7 +10,6 @@ export interface SubagentNode {
   /** Root UI-owning session id for this delegation tree. */
   rootSessionId: string;
   agentType: string;
-  description: string;
   depth: number;
   status: SubagentStatus;
   toolCount: number;
@@ -72,6 +71,15 @@ export class SubagentRegistry extends EventEmitter {
     let count = 0;
     for (const node of this.nodes.values()) {
       if (node.parentSessionId === parentSessionId && node.status === "running") count += 1;
+    }
+    return count;
+  }
+
+  /** Count of all currently-running descendants under one root session (for total tree caps). */
+  runningCountForRoot(rootSessionId: string): number {
+    let count = 0;
+    for (const node of this.nodes.values()) {
+      if (node.rootSessionId === rootSessionId && node.status === "running") count += 1;
     }
     return count;
   }

@@ -52,6 +52,8 @@ export interface SubagentConfig {
   maxDepth?: number;
   /** Max number of subagents a single session may run concurrently. Excess `task` calls are rejected. Default 10. */
   maxConcurrency?: number;
+  /** Max number of running subagents allowed across one root session's entire delegation tree. Omit to disable this total cap. */
+  maxTotalConcurrency?: number;
   /** Abort a delegated subagent after this many milliseconds without any session activity. Omit or set 0 to disable. */
   idleTimeoutMs?: number;
   /** Soft-stop a delegated subagent after this many completed assistant turns. Omit to disable. */
@@ -347,6 +349,7 @@ function sanitizeSubagentConfig(value: unknown): SubagentConfig {
   const output: SubagentConfig = {};
   if (input.maxDepth !== undefined) output.maxDepth = sanitizePositiveInteger(input.maxDepth, "subagent.maxDepth");
   if (input.maxConcurrency !== undefined) output.maxConcurrency = sanitizePositiveInteger(input.maxConcurrency, "subagent.maxConcurrency");
+  if (input.maxTotalConcurrency !== undefined) output.maxTotalConcurrency = sanitizePositiveInteger(input.maxTotalConcurrency, "subagent.maxTotalConcurrency");
   if (input.idleTimeoutMs !== undefined) output.idleTimeoutMs = sanitizeNonNegativeInteger(input.idleTimeoutMs, "subagent.idleTimeoutMs");
   if (input.maxTurns !== undefined) output.maxTurns = sanitizePositiveInteger(input.maxTurns, "subagent.maxTurns");
   return output;
@@ -626,6 +629,9 @@ function mergeSubagent(base: SubagentConfig | undefined, override: SubagentConfi
   const output: SubagentConfig = {
     ...(base?.maxDepth !== undefined || override?.maxDepth !== undefined ? { maxDepth: override?.maxDepth ?? base?.maxDepth } : {}),
     ...(base?.maxConcurrency !== undefined || override?.maxConcurrency !== undefined ? { maxConcurrency: override?.maxConcurrency ?? base?.maxConcurrency } : {}),
+    ...(base?.maxTotalConcurrency !== undefined || override?.maxTotalConcurrency !== undefined
+      ? { maxTotalConcurrency: override?.maxTotalConcurrency ?? base?.maxTotalConcurrency }
+      : {}),
     ...(base?.idleTimeoutMs !== undefined || override?.idleTimeoutMs !== undefined
       ? { idleTimeoutMs: override?.idleTimeoutMs ?? base?.idleTimeoutMs }
       : {}),

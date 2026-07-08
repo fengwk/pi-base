@@ -10,7 +10,6 @@ function node(overrides: Partial<SubagentNode>): SubagentNode {
     parentSessionId: "root",
     rootSessionId: "test-session",
     agentType: "worker",
-    description: "",
     depth: 2,
     status: "running",
     toolCount: 0,
