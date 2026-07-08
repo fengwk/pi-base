@@ -88,15 +88,20 @@ export async function runSubagent(
     const line = formatProgressEvent(event);
     if (line) args.onProgress?.(line);
   });
-  const onAbort = () => handle.abort();
+  const onAbort = () => {
+    args.onProgress?.("cancelled");
+    handle.abort();
+  };
   args.signal?.addEventListener("abort", onAbort);
   try {
     await handle.prompt(args.prompt);
     const { report, toolCount } = handle.collect();
     finish(handle.sessionId, "done", toolCount);
+    args.onProgress?.("completed");
     return { sessionId: handle.sessionId, state: "completed", report };
   } catch (error) {
     const cancelled = args.signal?.aborted ?? false;
+    args.onProgress?.(cancelled ? "cancelled" : `error: ${describeError(error)}`);
     finish(handle.sessionId, cancelled ? "cancelled" : "error", safeToolCount(handle));
     return {
       sessionId: handle.sessionId,
@@ -131,6 +136,7 @@ function summarizeText(text: string, maxChars = 140): string {
 function formatProgressEvent(event: unknown): string | undefined {
   if (!isRecord(event) || typeof event.type !== "string") return undefined;
   if (event.type === "tool_execution_start" && typeof event.toolName === "string") return `→ ${event.toolName}`;
+  if (event.type === "tool_execution_update" && typeof event.toolName === "string") return `… ${event.toolName}`;
   if (event.type === "tool_execution_end" && typeof event.toolName === "string") {
     return `${event.isError === true ? "✗" : "✓"} ${event.toolName}`;
   }

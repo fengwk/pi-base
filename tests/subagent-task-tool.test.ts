@@ -83,13 +83,79 @@ describe("task tool", () => {
     expect(text(result)).toContain("state=\"completed\"");
   });
 
-  it("renders a compact task title, live progress, and final result separately", () => {
-    // Intent: while running, the task row should show progress logs via partial result;
-    // after completion, the call area stays compact and final output renders as the result.
+  it("renders command, full prompt, live output, and final report separately", () => {
+    // Intent: delegated prompts must remain inspectable, live child progress should only appear
+    // while the task is running, and the final result should focus on the subagent report.
     const tool = registerAndCapture(baseDeps());
-    expect(render(tool.renderCall({ subagent_type: "worker", description: "audit" }, {}, { lastComponent: undefined }))).toContain("task: worker — audit");
-    expect(render(tool.renderResult({ content: [{ type: "text", text: "started worker\n→ read" }] }, { isPartial: true }, {}, { lastComponent: undefined }))).toContain("→ read");
-    expect(render(tool.renderResult({ content: [{ type: "text", text: '<task id="s" state="completed">ok</task>' }] }, { isPartial: false }, {}, { lastComponent: undefined }))).toContain("completed");
+    const call = render(
+      tool.renderCall(
+        { subagent_type: "worker", description: "audit", prompt: "line 1\nline 2" },
+        {},
+        { lastComponent: undefined },
+      ),
+    );
+    expect(call).toContain("Command");
+    expect(call).toContain('task worker --description "audit"');
+    expect(call).toContain("Prompt");
+    expect(call).toContain("line 1");
+    expect(call).toContain("line 2");
+
+    const partial = render(
+      tool.renderResult(
+        {
+          content: [{ type: "text", text: "started worker\n→ read" }],
+          details: { progress: true, progressLines: ["started worker", "→ read"] },
+        },
+        { isPartial: true },
+        {},
+        { lastComponent: undefined },
+      ),
+    );
+    expect(partial).toContain("Live output");
+    expect(partial).toContain("→ read");
+
+    const final = render(
+      tool.renderResult(
+        {
+          content: [
+            {
+              type: "text",
+              text: '<task id="s" state="completed">\n<task_result>\nREPORT\n</task_result>\n</task>',
+            },
+          ],
+          details: { result: { sessionId: "s", state: "completed", report: "REPORT" } },
+        },
+        { isPartial: false },
+        {},
+        { lastComponent: undefined },
+      ),
+    );
+    expect(final).toContain("task completed");
+    expect(final).toContain("Result");
+    expect(final).toContain("REPORT");
+    expect(final).not.toContain("Live output");
+  });
+
+  it("collapses long final task reports until expanded", () => {
+    // Intent: folded task results should respect the task renderer's collapsed line budget.
+    const tool = registerAndCapture(baseDeps());
+    const report = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+    const result = {
+      content: [{ type: "text", text: "" }],
+      details: { result: { sessionId: "s", state: "completed", report } },
+    };
+    const collapsed = render(
+      tool.renderResult(result, { isPartial: false, expanded: false }, {}, { lastComponent: undefined }),
+    );
+    expect(collapsed).toContain("line 10");
+    expect(collapsed).not.toContain("line 11");
+    expect(collapsed).toContain("expand for full report");
+
+    const expanded = render(
+      tool.renderResult(result, { isPartial: false, expanded: true }, {}, { lastComponent: undefined }),
+    );
+    expect(expanded).toContain("line 12");
+    expect(expanded).not.toContain("expand for full report");
   });
 
   it("streams child progress updates through the task tool", async () => {
