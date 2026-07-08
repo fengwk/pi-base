@@ -103,6 +103,189 @@ describe("runSubagent", () => {
     expect(result.state).toBe("error");
     expect(result.error).toContain("spawn failed");
   });
+
+  it("emits live progress updates and ignores best-effort registration hook failures", async () => {
+    // Intent: task-tool live rows depend on structured progress updates, and
+    // auxiliary registration hooks must not break a successful delegation.
+    const progress: Array<{ kind: string; text: string; turns?: number; toolCalls?: number }> = [];
+    const unsubscribe = vi.fn();
+    const child: SubagentSession = {
+      sessionId: "child-progress",
+      prompt: async () => undefined,
+      collect: () => ({ report: "done", toolCount: 2 }),
+      subscribe(listener) {
+        listener({ type: "tool_execution_start", toolName: "read", args: { path: "src/a.ts" } });
+        listener({ type: "tool_execution_update", toolName: "read", partialResult: { content: [{ type: "text", text: "path: src/a.ts" }] } });
+        listener({ type: "tool_execution_end", toolName: "read", result: { content: [{ type: "text", text: "path: src/a.ts\n1|alpha" }] } });
+        listener({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "final summary" }] },
+        });
+        listener({ type: "ignored" });
+        return unsubscribe;
+      },
+      abort: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const factory: SubagentSessionFactory = { spawn: async () => child, resume: async () => child };
+    const result = await runSubagent(
+      fakeCtx(),
+      {
+        agentType: "worker",
+        description: "stream progress",
+        prompt: "go",
+        childDepth: 2,
+        onRegistered() {
+          throw new Error("ignore me");
+        },
+        onProgress(update) {
+          progress.push(update);
+        },
+      },
+      factory,
+    );
+    expect(result).toEqual({ sessionId: "child-progress", state: "completed", report: "done" });
+    expect(progress).toEqual([
+      { kind: "status", text: "started worker session child-progress" },
+      { kind: "tool", text: '→ read {"path":"src/a.ts"}', toolCalls: 1 },
+      { kind: "tool", text: "… read\npath: src/a.ts" },
+      { kind: "tool", text: "✓ read\npath: src/a.ts\n1|alpha" },
+      { kind: "assistant", text: "assistant\nfinal summary", turns: 1 },
+      { kind: "status", text: "completed" },
+    ]);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(child.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts a subagent that stays idle past idleTimeoutMs", async () => {
+    // Intent: a delegated child that stops emitting any assistant/session activity should
+    // not block the parent forever.
+    vi.useFakeTimers();
+    let rejectPrompt!: (error: Error) => void;
+    const child: SubagentSession = {
+      sessionId: "child-idle",
+      prompt: () => new Promise<void>((_resolve, reject) => {
+        rejectPrompt = reject;
+      }),
+      collect: () => ({ report: undefined, toolCount: 0 }),
+      abort: vi.fn(() => rejectPrompt(new Error("watchdog abort"))),
+      dispose: vi.fn(),
+    };
+    const factory: SubagentSessionFactory = { spawn: async () => child, resume: async () => child };
+    try {
+      const resultPromise = runSubagent(
+        fakeCtx(),
+        { agentType: "worker", description: "idle", prompt: "go", childDepth: 2, idleTimeoutMs: 50 },
+        factory,
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      const result = await resultPromise;
+      expect(result.state).toBe("error");
+      expect(result.error).toContain("idle timeout after 50ms");
+      expect(child.abort).toHaveBeenCalledTimes(1);
+      expect(subagentRegistry.get("child-idle")?.status).toBe("error");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not count long-running tool execution silence toward idleTimeoutMs", async () => {
+    // Intent: idle watchdog should target model/session-side stalls; once a tool
+    // starts running, silence during the tool body itself should not trip idle.
+    vi.useFakeTimers();
+    let listener: ((event: unknown) => void) | undefined;
+    let rejectPrompt!: (error: Error) => void;
+    const child: SubagentSession = {
+      sessionId: "child-tool-idle",
+      prompt: async () => {
+        listener?.({ type: "tool_execution_start", toolName: "bash", args: { command: "sleep 999" } });
+        await new Promise<void>((_resolve, reject) => {
+          rejectPrompt = reject;
+        });
+      },
+      collect: () => ({ report: undefined, toolCount: 0 }),
+      subscribe(next) {
+        listener = next;
+        return () => undefined;
+      },
+      abort: vi.fn(() => rejectPrompt(new Error("tool-finished-timeout"))),
+      dispose: vi.fn(),
+    };
+    const factory: SubagentSessionFactory = { spawn: async () => child, resume: async () => child };
+    try {
+      const resultPromise = runSubagent(
+        fakeCtx(),
+        { agentType: "worker", description: "tool idle", prompt: "go", childDepth: 2, idleTimeoutMs: 50 },
+        factory,
+      );
+      await vi.advanceTimersByTimeAsync(200);
+      expect(child.abort).toHaveBeenCalledTimes(0);
+
+      listener?.({ type: "tool_execution_end", toolName: "bash", isError: false, result: { content: [{ type: "text", text: "done" }] } });
+      await vi.advanceTimersByTimeAsync(60);
+      const result = await resultPromise;
+      expect(child.abort).toHaveBeenCalledTimes(1);
+      expect(result.state).toBe("error");
+      expect(result.error).toContain("idle timeout after 50ms");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("repeats finish reminders at and beyond maxTurns without hard-aborting the child", async () => {
+    // Intent: align with opencode-style soft stopping: once the child reaches the
+    // turn budget, every further tool-driving assistant turn gets another finish reminder.
+    const progress: string[] = [];
+    let listener: ((event: unknown) => void) | undefined;
+    const followUp = vi.fn(async () => undefined);
+    const child: SubagentSession = {
+      sessionId: "child-turn-limit",
+      prompt: async () => {
+        listener?.({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "turn one" }, { type: "toolCall" }] },
+        });
+        listener?.({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "turn two" }, { type: "toolCall" }] },
+        });
+        listener?.({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "final answer" }] },
+        });
+      },
+      collect: () => ({ report: "final answer", toolCount: 2 }),
+      subscribe(next) {
+        listener = next;
+        return () => undefined;
+      },
+      followUp,
+      abort: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const factory: SubagentSessionFactory = { spawn: async () => child, resume: async () => child };
+    const result = await runSubagent(
+      fakeCtx(),
+      {
+        agentType: "worker",
+        description: "turn limit",
+        prompt: "go",
+        childDepth: 2,
+        maxTurns: 1,
+        onProgress(update) {
+          progress.push(update.text);
+        },
+      },
+      factory,
+    );
+    expect(followUp).toHaveBeenCalledTimes(2);
+    expect(followUp).toHaveBeenNthCalledWith(1, expect.stringContaining("delegated task turn limit"));
+    expect(followUp).toHaveBeenNthCalledWith(2, expect.stringContaining("delegated task turn limit"));
+    expect(child.abort).toHaveBeenCalledTimes(0);
+    expect(result).toEqual({ sessionId: "child-turn-limit", state: "completed", report: "final answer" });
+    expect(progress.join("\n")).toContain("turn limit reached (1/1)");
+    expect(progress.join("\n")).toContain("turn limit reached (2/1)");
+  });
 });
 
 describe("collectFromMessages", () => {
@@ -128,6 +311,12 @@ describe("formatRunResult", () => {
     expect(xml).toContain('id="s1"');
     expect(xml).toContain("state=\"completed\"");
     expect(xml).toContain("<task_result>\ndone\n</task_result>");
+  });
+
+  it("renders a placeholder when the completed child produced no textual report", () => {
+    // Intent: callers need a stable result envelope even when the child ended silently.
+    const xml = formatRunResult({ sessionId: "s1-empty", state: "completed" });
+    expect(xml).toContain("(no textual report produced)");
   });
 
   it("emits an error envelope with the session id for failures", () => {

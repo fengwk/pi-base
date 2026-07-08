@@ -148,6 +148,50 @@ describe("notify support", () => {
     expect(payloads).toEqual([]);
   });
 
+  it("uses the runtime /yolo toggle when deciding completion notifications", async () => {
+    // Intent: notify reads cached runtime settings, so toggling /yolo must
+    // suppress completed pings until the user toggles it back off.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      notify: { agentEnd: true },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const sessionCtx = {
+      cwd: root,
+      sessionManager: {
+        getSessionId: () => "session-runtime-yolo",
+        getSessionName: () => "Runtime Yolo Session",
+      },
+    };
+
+    await registry.runCommand("yolo", "", { cwd: root });
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
+    expect(payloads).toEqual([]);
+
+    await registry.runCommand("yolo", "", { cwd: root });
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
+    expect(payloads).toEqual([
+      {
+        kind: "session.completed",
+        cwd: root,
+        projectName: root.split("/").at(-1) ?? root,
+        sessionID: "session-runtime-yolo",
+        sessionTitle: "Runtime Yolo Session",
+      },
+    ]);
+  });
+
   it("sends a completion notification on agent_end and suppresses it after permission rejection", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {

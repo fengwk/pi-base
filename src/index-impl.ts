@@ -267,6 +267,8 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getActiveAgentSubagents: agentHandle.getActiveAgentSubagents,
     hasAgent: agentHandle.hasAgent,
     getMaxConcurrency: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxConcurrency,
+    getIdleTimeoutMs: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).idleTimeoutMs,
+    getMaxTurns: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxTurns,
     factory: createRealSubagentFactory(),
   });
   registerPermissionGuard(pi, {
@@ -295,8 +297,8 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     const host: SubagentPermissionHost = async (req) => {
       const run = hostChain.then(async () => {
         const title = `⟳ subagent「${req.agentType}」(depth ${req.depth}) requests permission\n\n${req.prompt}`;
-        const choice = await ctx.ui.select(title, ["Allow", "Deny"]);
-        return choice === "Allow";
+        const choice = await ctx.ui.select(title, ["Yes", "No"]);
+        return choice === "Yes";
       });
       hostChain = run.catch(() => undefined);
       return run;

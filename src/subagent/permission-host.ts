@@ -3,7 +3,7 @@ export interface SubagentPermissionRequest {
   depth: number;
   /** Root session id that owns this delegation tree. Used to route asks to the correct UI host. */
   rootSessionId?: string;
-  /** Fully-built permission prompt text; the host prepends an agent label and shows Allow/Deny. */
+  /** Fully-built permission prompt text; the host prepends an agent label and shows Yes/No. */
   prompt: string;
   signal?: AbortSignal;
 }

@@ -121,6 +121,28 @@ describe("pi-base config", () => {
     });
   });
 
+  it("expands HOME shortcuts in PI_BASE_GLOBAL_SETTINGS_PATH", async () => {
+    // Intent: launcher-provided literal env overrides should resolve the same
+    // HOME shortcuts as the rest of the config surface.
+    const root = await createTempWorkspace();
+    const previous = process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+    const globalDir = join(homedir(), `.pi-base-global-${process.pid}-${Date.now()}`);
+    const globalPath = join(globalDir, "pi-base.json");
+    const relativeToHome = globalPath.slice(homedir().length + 1).replace(/\\/g, "/");
+    try {
+      await mkdir(globalDir, { recursive: true });
+      await writeFile(globalPath, JSON.stringify({ notify: { agentEnd: true } }), "utf8");
+      process.env.PI_BASE_GLOBAL_SETTINGS_PATH = `~/${relativeToHome}`;
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.globalPath).toBe(globalPath);
+      expect(loaded.settings.notify?.agentEnd).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+      else process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previous;
+      await rm(globalDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects non-HOME environment placeholders in lsp command paths", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");

@@ -45,6 +45,8 @@ const baseDeps = (over: Partial<SubagentTaskToolDeps> = {}): SubagentTaskToolDep
   getActiveAgentSubagents: () => ["worker"],
   hasAgent: (name: string) => ["worker", "other"].includes(name),
   getMaxConcurrency: () => 2,
+  getIdleTimeoutMs: () => undefined,
+  getMaxTurns: () => undefined,
   factory: fakeFactory(),
   ...over,
 });
@@ -83,9 +85,9 @@ describe("task tool", () => {
     expect(text(result)).toContain("state=\"completed\"");
   });
 
-  it("renders command, full prompt, live output, and final report separately", () => {
-    // Intent: delegated prompts must remain inspectable, live child progress should only appear
-    // while the task is running, and the final result should focus on the subagent report.
+  it("renders the task call without labels and shows summarized live output separately from the final report", () => {
+    // Intent: delegated prompts must remain inspectable without noisy labels,
+    // while the running view should expose a live summary + rolling transcript.
     const tool = registerAndCapture(baseDeps());
     const call = render(
       tool.renderCall(
@@ -94,25 +96,31 @@ describe("task tool", () => {
         { lastComponent: undefined },
       ),
     );
-    expect(call).toContain("Command");
     expect(call).toContain('task worker --description "audit"');
-    expect(call).toContain("Prompt");
     expect(call).toContain("line 1");
     expect(call).toContain("line 2");
+    expect(call).not.toContain("Command");
+    expect(call).not.toContain("Prompt");
 
     const partial = render(
       tool.renderResult(
         {
-          content: [{ type: "text", text: "started worker\n→ read" }],
-          details: { progress: true, progressLines: ["started worker", "→ read"] },
+          content: [{ type: "text", text: "" }],
+          details: {
+            progress: true,
+            progressEntries: ['→ read {"path":"src/a.ts"}', '✓ read\npath: src/a.ts\n1|alpha'],
+            turns: 1,
+            toolCalls: 1,
+          },
         },
         { isPartial: true },
         {},
         { lastComponent: undefined },
       ),
     );
-    expect(partial).toContain("Live output");
-    expect(partial).toContain("→ read");
+    expect(partial).toContain("running · turns: 1 · tool calls: 1");
+    expect(partial).toContain('→ read {"path":"src/a.ts"}');
+    expect(partial).toContain("1|alpha");
 
     const final = render(
       tool.renderResult(
@@ -133,7 +141,7 @@ describe("task tool", () => {
     expect(final).toContain("task completed");
     expect(final).toContain("Result");
     expect(final).toContain("REPORT");
-    expect(final).not.toContain("Live output");
+    expect(final).not.toContain("running · turns:");
   });
 
   it("collapses long final task reports until expanded", () => {
@@ -159,8 +167,8 @@ describe("task tool", () => {
   });
 
   it("streams child progress updates through the task tool", async () => {
-    // Intent: child-session events must surface as live task progress, then disappear when
-    // the final result replaces the partial output.
+    // Intent: child-session events must surface as a summarized running view,
+    // with real tool/assistant output instead of bare tool names.
     let listener: ((event: unknown) => void) | undefined;
     const factory: SubagentSessionFactory = {
       spawn: async () => ({
@@ -170,8 +178,9 @@ describe("task tool", () => {
           return () => undefined;
         },
         prompt: async () => {
-          listener?.({ type: "tool_execution_start", toolName: "read" });
-          listener?.({ type: "tool_execution_end", toolName: "read", isError: false });
+          listener?.({ type: "tool_execution_start", toolName: "read", args: { path: "src/a.ts" } });
+          listener?.({ type: "tool_execution_end", toolName: "read", isError: false, result: { content: [{ type: "text", text: "path: src/a.ts\n1|alpha" }] } });
+          listener?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
         },
         collect: () => ({ report: "ok", toolCount: 1 }),
         abort: vi.fn(),
@@ -189,9 +198,10 @@ describe("task tool", () => {
     const tool = registerAndCapture(baseDeps({ factory }));
     const result = await tool.execute("1", { subagent_type: "worker", description: "do", prompt: "go" }, undefined, (partial) => updates.push(text(partial)), ctx());
     expect(result.isError).toBeFalsy();
-    expect(updates.join("\n")).toContain("started worker session child-progress");
-    expect(updates.join("\n")).toContain("→ read");
-    expect(updates.join("\n")).toContain("✓ read");
+    expect(updates.join("\n")).toContain("running · turns: 1 · tool calls: 1");
+    expect(updates.join("\n")).toContain('→ read {"path":"src/a.ts"}');
+    expect(updates.join("\n")).toContain("path: src/a.ts");
+    expect(updates.join("\n")).toContain("assistant\ndone");
   });
 
   it("passes childDepth = parent depth + 1", async () => {

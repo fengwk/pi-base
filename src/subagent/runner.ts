@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { createAgentSession, getAgentDir, SessionManager, type AgentSessionEvent, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AGENT_STATE_ENTRY } from "../agent-support.js";
@@ -21,6 +21,8 @@ export interface SubagentSession {
   collect: () => { report?: string; toolCount: number };
   /** Subscribe to child-session events for best-effort progress reporting. */
   subscribe?: (listener: (event: unknown) => void) => () => void;
+  /** Queue a follow-up message while the child is still running. Used for soft stop nudges. */
+  followUp?: (text: string) => Promise<void>;
   abort: () => void;
   dispose: () => void;
 }
@@ -30,17 +32,37 @@ export interface SubagentSessionFactory {
   resume: (params: { ctx: ExtensionContext; sessionId: string; agentType: string }) => Promise<SubagentSession>;
 }
 
+export interface SubagentProgressUpdate {
+  kind: "status" | "tool" | "assistant";
+  text: string;
+  turns?: number;
+  toolCalls?: number;
+}
+
 export interface RunSubagentArgs {
   agentType: string;
   description: string;
   prompt: string;
   sessionId?: string;
   childDepth: number;
+  idleTimeoutMs?: number;
+  maxTurns?: number;
   signal?: AbortSignal;
   /** Called once the child session has been registered as running. */
   onRegistered?: (sessionId: string) => void;
-  /** Best-effort progress line sink for live task rendering. */
-  onProgress?: (line: string) => void;
+  /** Best-effort progress sink for live task rendering. */
+  onProgress?: (update: SubagentProgressUpdate) => void;
+}
+
+const MAX_TURNS_FINISH_PROMPT = readFileSync(
+  new URL("../../prompts/subagent-max-turns.md", import.meta.url),
+  "utf8",
+).trim();
+
+function formatDurationMs(value: number): string {
+  if (value < 1000) return `${value}ms`;
+  const seconds = value / 1000;
+  return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
 }
 
 /**
@@ -83,32 +105,87 @@ export async function runSubagent(
     // Reservation/notification hooks are best-effort and must not fail the task.
   }
 
-  args.onProgress?.(`started ${args.agentType} session ${handle.sessionId}`);
+  let idleTimedOut = false;
+  let assistantTurns = 0;
+  let activeToolCalls = 0;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearIdleTimer = () => {
+    if (idleTimer !== undefined) {
+      clearTimeout(idleTimer);
+      idleTimer = undefined;
+    }
+  };
+  const resetIdleTimer = () => {
+    clearIdleTimer();
+    if (activeToolCalls > 0) return;
+    if (args.idleTimeoutMs === undefined || args.idleTimeoutMs < 1) return;
+    idleTimer = setTimeout(() => {
+      idleTimedOut = true;
+      args.onProgress?.({
+        kind: "status",
+        text: `idle timeout after ${formatDurationMs(args.idleTimeoutMs ?? 0)} without assistant/session progress; aborting`,
+      });
+      handle.abort();
+    }, args.idleTimeoutMs);
+    idleTimer.unref?.();
+  };
+  const maybeQueueFinishReminder = (assistantToolCalls: number) => {
+    if (assistantToolCalls < 1) return;
+    if (typeof handle.followUp !== "function") return;
+    if (args.maxTurns === undefined || args.maxTurns < 1) return;
+    if (assistantTurns < args.maxTurns) return;
+    args.onProgress?.({
+      kind: "status",
+      text: `turn limit reached (${assistantTurns}/${args.maxTurns}); asking subagent to finish`,
+    });
+    void handle.followUp?.(MAX_TURNS_FINISH_PROMPT).catch(() => undefined);
+  };
+
+  args.onProgress?.({ kind: "status", text: `started ${args.agentType} session ${handle.sessionId}` });
   const unsubscribeProgress = handle.subscribe?.((event) => {
-    const line = formatProgressEvent(event);
-    if (line) args.onProgress?.(line);
+    if (isToolExecutionStartEvent(event)) activeToolCalls += 1;
+    else if (isToolExecutionEndEvent(event)) activeToolCalls = Math.max(0, activeToolCalls - 1);
+    resetIdleTimer();
+    const update = formatProgressEvent(event);
+    if (update?.turns) assistantTurns += update.turns;
+    if (update) args.onProgress?.(update);
+    const assistantToolCalls = assistantToolCallCountFromEvent(event);
+    maybeQueueFinishReminder(assistantToolCalls);
   });
   const onAbort = () => {
-    args.onProgress?.("cancelled");
+    clearIdleTimer();
+    args.onProgress?.({ kind: "status", text: "cancelled" });
     handle.abort();
   };
   args.signal?.addEventListener("abort", onAbort);
   try {
+    resetIdleTimer();
     await handle.prompt(args.prompt);
+    clearIdleTimer();
+    if (idleTimedOut) throw new Error("idle timeout watchdog triggered");
     const { report, toolCount } = handle.collect();
     finish(handle.sessionId, "done", toolCount);
-    args.onProgress?.("completed");
+    args.onProgress?.({ kind: "status", text: "completed" });
     return { sessionId: handle.sessionId, state: "completed", report };
   } catch (error) {
+    clearIdleTimer();
     const cancelled = args.signal?.aborted ?? false;
-    args.onProgress?.(cancelled ? "cancelled" : `error: ${describeError(error)}`);
+    const failure = idleTimedOut
+      ? `idle timeout after ${formatDurationMs(args.idleTimeoutMs ?? 0)} without assistant/session progress`
+      : cancelled
+        ? "aborted"
+        : describeError(error);
+    if (!idleTimedOut) {
+      args.onProgress?.({ kind: "status", text: cancelled ? "cancelled" : `error: ${failure}` });
+    }
     finish(handle.sessionId, cancelled ? "cancelled" : "error", safeToolCount(handle));
     return {
       sessionId: handle.sessionId,
       state: cancelled ? "cancelled" : "error",
-      error: cancelled ? "aborted" : describeError(error),
+      error: failure,
     };
   } finally {
+    clearIdleTimer();
     args.signal?.removeEventListener("abort", onAbort);
     unsubscribeProgress?.();
     handle.dispose();
@@ -119,30 +196,99 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function textFromContent(content: unknown): string {
+function rawTextFromContent(content: unknown): string {
   if (!Array.isArray(content)) return "";
   return content
     .filter((part): part is { type?: unknown; text?: unknown } => isRecord(part) && part.type === "text" && typeof part.text === "string")
     .map((part) => part.text as string)
     .join("")
-    .replace(/\s+/g, " ")
+    .replace(/\r\n?/g, "\n")
     .trim();
+}
+
+function toolCallCountFromContent(content: unknown): number {
+  if (!Array.isArray(content)) return 0;
+  let count = 0;
+  for (const part of content) {
+    if (part?.type === "toolCall" || part?.type === "tool_use" || part?.type === "tool_call") count += 1;
+  }
+  return count;
+}
+
+function assistantToolCallCountFromEvent(event: unknown): number {
+  if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message) || event.message.role !== "assistant") return 0;
+  return toolCallCountFromContent(event.message.content);
+}
+
+function isToolExecutionStartEvent(event: unknown): boolean {
+  return isRecord(event) && event.type === "tool_execution_start" && typeof event.toolName === "string";
+}
+
+function isToolExecutionEndEvent(event: unknown): boolean {
+  return isRecord(event) && event.type === "tool_execution_end" && typeof event.toolName === "string";
 }
 
 function summarizeText(text: string, maxChars = 140): string {
   return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
-function formatProgressEvent(event: unknown): string | undefined {
+function stringifyPreview(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === "string") return serialized;
+  } catch {
+    // Fall back to a plain string preview for unusual event payloads.
+  }
+  return String(value ?? "");
+}
+
+function truncateMultiline(text: string, maxLines = 8, maxChars = 1200): string {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return "";
+  const lines = normalized.split("\n");
+  const visible: string[] = [];
+  let usedChars = 0;
+  for (const line of lines) {
+    const nextChars = line.length + (visible.length > 0 ? 1 : 0);
+    if (visible.length >= maxLines || usedChars + nextChars > maxChars) break;
+    visible.push(line);
+    usedChars += nextChars;
+  }
+  const body = visible.join("\n");
+  if (body.length === normalized.length && visible.length === lines.length) return body;
+  const remainingLines = Math.max(0, lines.length - visible.length);
+  const suffix = remainingLines > 0 ? `${remainingLines} more lines` : "truncated";
+  return `${body}\n… (${suffix})`;
+}
+
+function previewToolPayload(payload: unknown): string {
+  const contentText = rawTextFromContent((payload as { content?: unknown })?.content);
+  if (contentText) return truncateMultiline(contentText);
+  if (isRecord(payload) && typeof payload.text === "string") return truncateMultiline(payload.text);
+  if (typeof payload === "string") return truncateMultiline(payload);
+  const serialized = stringifyPreview(payload).trim();
+  if (!serialized || serialized === "{}") return "";
+  return summarizeText(serialized, 240);
+}
+
+function formatProgressEvent(event: unknown): SubagentProgressUpdate | undefined {
   if (!isRecord(event) || typeof event.type !== "string") return undefined;
-  if (event.type === "tool_execution_start" && typeof event.toolName === "string") return `→ ${event.toolName}`;
-  if (event.type === "tool_execution_update" && typeof event.toolName === "string") return `… ${event.toolName}`;
+  if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
+    const argsPreview = event.args === undefined ? "" : ` ${summarizeText(stringifyPreview(event.args), 160)}`;
+    return { kind: "tool", text: `→ ${event.toolName}${argsPreview}`, toolCalls: 1 };
+  }
+  if (event.type === "tool_execution_update" && typeof event.toolName === "string") {
+    const body = previewToolPayload(event.partialResult);
+    return { kind: "tool", text: body ? `… ${event.toolName}\n${body}` : `… ${event.toolName}` };
+  }
   if (event.type === "tool_execution_end" && typeof event.toolName === "string") {
-    return `${event.isError === true ? "✗" : "✓"} ${event.toolName}`;
+    const body = previewToolPayload(event.result);
+    const prefix = event.isError === true ? "✗" : "✓";
+    return { kind: "tool", text: body ? `${prefix} ${event.toolName}\n${body}` : `${prefix} ${event.toolName}` };
   }
   if (event.type === "message_end" && isRecord(event.message) && event.message.role === "assistant") {
-    const text = summarizeText(textFromContent(event.message.content));
-    return text ? `assistant: ${text}` : undefined;
+    const body = truncateMultiline(rawTextFromContent(event.message.content));
+    return body ? { kind: "assistant", text: `assistant\n${body}`, turns: 1 } : undefined;
   }
   return undefined;
 }
@@ -262,6 +408,7 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       prompt: (text: string) => session.prompt(text),
       collect: () => collectFromMessages(session.messages as unknown as RuntimeMessage[]),
       subscribe: (listener: (event: unknown) => void) => session.subscribe(listener as (event: AgentSessionEvent) => void),
+      followUp: (text: string) => session.followUp(text),
       abort: () => session.abort(),
       dispose: () => undefined,
     };

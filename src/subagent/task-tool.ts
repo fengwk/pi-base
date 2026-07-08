@@ -4,7 +4,7 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { TASK_TOOL_NAME } from "./constants.js";
 import { readDepth } from "./depth.js";
 import { subagentRegistry } from "./registry.js";
-import { formatRunResult, runSubagent, type RunResult, type SubagentSessionFactory } from "./runner.js";
+import { formatRunResult, runSubagent, type RunResult, type SubagentProgressUpdate, type SubagentSessionFactory } from "./runner.js";
 import { taskSchema } from "./schema.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
 
@@ -14,19 +14,24 @@ export interface SubagentTaskToolDeps {
   /** Whether an agent name exists in the loaded catalog (after invalid subagent filtering). */
   hasAgent: (name: string) => boolean;
   getMaxConcurrency: (cwd: string) => number;
+  getIdleTimeoutMs: (cwd: string) => number | undefined;
+  getMaxTurns: (cwd: string) => number | undefined;
   factory: SubagentSessionFactory;
 }
 
 const TASK_DESCRIPTION = loadToolDescription(TASK_TOOL_NAME);
 const TASK_PROMPT_SNIPPET = loadToolPromptSnippet(TASK_TOOL_NAME);
-const LIVE_OUTPUT_LINES = 12;
-const MAX_PROGRESS_LINES = 40;
+const LIVE_OUTPUT_LINES = 18;
+const MAX_PROGRESS_ENTRIES = 60;
 const COLLAPSED_RESULT_LINES = 10;
 const pendingSpawnReservations = new Map<string, number>();
 
 interface TaskToolDetails {
   progress?: boolean;
+  progressEntries?: string[];
   progressLines?: string[];
+  turns?: number;
+  toolCalls?: number;
   result?: RunResult;
 }
 
@@ -64,25 +69,50 @@ function formatTaskCommand(params: { subagent_type?: unknown; description?: unkn
   return parts.join(" ");
 }
 
-function indentBlock(text: string, theme: any): string {
+function dimBlock(text: string, theme: any): string {
   const body = text.length > 0 ? text : "<missing-prompt>";
   return body
     .split("\n")
-    .map((line) => `  ${paint(theme, "dim", line)}`)
+    .map((line) => paint(theme, "dim", line))
     .join("\n");
 }
 
-function createProgressReporter(onUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined): (line: string) => void {
-  const lines: string[] = [];
-  return (line: string) => {
+function formatProgressSummary(turns: number, toolCalls: number): string {
+  return `running · turns: ${turns} · tool calls: ${toolCalls}`;
+}
+
+function formatVisibleProgress(entries: string[]): string {
+  if (entries.length === 0) return "";
+  return entries.join("\n\n").split("\n").slice(-LIVE_OUTPUT_LINES).join("\n");
+}
+
+function createProgressReporter(onUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined): (update: SubagentProgressUpdate) => void {
+  const entries: string[] = [];
+  let turns = 0;
+  let toolCalls = 0;
+  return (update: SubagentProgressUpdate) => {
     if (!onUpdate) return;
-    const normalized = line.trim();
-    if (!normalized || lines.at(-1) === normalized) return;
-    lines.push(normalized);
-    while (lines.length > MAX_PROGRESS_LINES) lines.shift();
+    const normalized = update.text.trim();
+    const nextTurns = turns + (update.turns ?? 0);
+    const nextToolCalls = toolCalls + (update.toolCalls ?? 0);
+    const countsChanged = nextTurns !== turns || nextToolCalls !== toolCalls;
+    turns = nextTurns;
+    toolCalls = nextToolCalls;
+    if (normalized && entries.at(-1) !== normalized) {
+      entries.push(normalized);
+      while (entries.length > MAX_PROGRESS_ENTRIES) entries.shift();
+    } else if (!countsChanged) {
+      return;
+    }
     onUpdate({
-      content: [{ type: "text", text: lines.join("\n") }],
-      details: { progress: true, progressLines: [...lines] },
+      content: [{ type: "text", text: [formatProgressSummary(turns, toolCalls), ...entries].join("\n\n") }],
+      details: {
+        progress: true,
+        progressEntries: [...entries],
+        progressLines: [...entries],
+        turns,
+        toolCalls,
+      },
     });
   };
 }
@@ -141,25 +171,26 @@ function renderTaskCall(args: Static<typeof taskSchema>, theme: any, lastCompone
   const text = lastComponent instanceof Text ? lastComponent : new Text("", 0, 0);
   const prompt = displayString(args?.prompt);
   text.setText([
-    paint(theme, "muted", "Command"),
-    `  ${title(theme, formatTaskCommand(args ?? {}))}`,
+    title(theme, formatTaskCommand(args ?? {})),
     "",
-    paint(theme, "muted", "Prompt"),
-    indentBlock(prompt, theme),
+    dimBlock(prompt, theme),
   ].join("\n"));
   return text;
 }
 
 function renderLiveOutput(result: unknown, theme: any) {
   const details = (result as { details?: TaskToolDetails })?.details;
-  const lines = details?.progressLines ?? textContent(result).split("\n").filter(Boolean);
-  const visible = lines.slice(-LIVE_OUTPUT_LINES);
+  const entries = details?.progressEntries
+    ?? details?.progressLines
+    ?? textContent(result).split("\n\n").map((block) => block.trim()).filter(Boolean);
+  const summary = formatProgressSummary(details?.turns ?? 0, details?.toolCalls ?? 0);
+  const visible = formatVisibleProgress(entries);
   const container = new Container();
   container.addChild(new Spacer(1));
-  container.addChild(new Text(paint(theme, "muted", "Live output"), 0, 0));
+  container.addChild(new Text(paint(theme, "muted", summary), 0, 0));
   const bg = theme?.bg ? (text: string) => theme.bg("toolPendingBg", text) : undefined;
   const box = new Box(1, 1, bg);
-  box.addChild(new Text(visible.length > 0 ? visible.join("\n") : paint(theme, "muted", "(running...)"), 0, 0));
+  box.addChild(new Text(visible || paint(theme, "muted", "(running...)"), 0, 0));
   container.addChild(box);
   return container;
 }
@@ -275,6 +306,8 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
             prompt,
             sessionId,
             childDepth,
+            idleTimeoutMs: deps.getIdleTimeoutMs(ctx.cwd),
+            maxTurns: deps.getMaxTurns(ctx.cwd),
             signal: signal ?? undefined,
             onRegistered: sessionId ? undefined : () => {
               releaseSpawnReservation?.();

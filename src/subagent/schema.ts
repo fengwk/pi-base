@@ -13,12 +13,12 @@ export const taskSchema = Type.Object({
     description: "Which subagent to delegate to. Must be listed in the current agent's `subagents` allowlist.",
   }),
   description: Type.String({
-    description: "Short (3-5 word) description of the delegated task, shown in the UI.",
+    description: "Prefer a short 3-5 word description of the delegated task, shown in the UI.",
   }),
   prompt: Type.String({
     description: "The full task/instructions handed to the subagent.",
   }),
   session_id: Type.Optional(Type.String({
-    description: "Resume a previous subagent session by its id (returned from an earlier task call).",
+    description: "Resume a previous subagent session by its id (the `<task id=\"...\">` value returned from an earlier task call).",
   })),
 });

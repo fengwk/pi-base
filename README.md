@@ -79,7 +79,7 @@ export PI_BASE_GLOBAL_SETTINGS_PATH=/tmp/pi-base.json
 - `~/.pi/agent/settings.json`
 - `<workspace-cwd>/.pi/settings.json`
 
-`pi-base` 只读取 `settings.json` 里的这三个默认字段：
+这里列的是 Pi 默认 session 会用到的三个字段；`pi-base` 会沿用 Pi 已提供的默认值，不会自己重新解析 `settings.json` 的其它内容：
 
 ```json
 {
@@ -89,7 +89,7 @@ export PI_BASE_GLOBAL_SETTINGS_PATH=/tmp/pi-base.json
 }
 ```
 
-当前 workspace cwd 下的 `.pi/settings.json` 优先于全局 `~/.pi/agent/settings.json`。
+Pi 自身会按“当前 workspace cwd 下的 `.pi/settings.json` 优先于全局 `~/.pi/agent/settings.json`”的顺序提供默认值，`pi-base` 直接沿用这份 session 默认状态。
 
 如果希望 fresh session 启动时自动进入某个命名 agent，可以在 `pi-base.json` 里加：
 
@@ -397,9 +397,9 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 行为规则：
 
-- 值必须是已存在的 agent 名（也可以显式写 `default`）
+- 建议填写已存在的 agent 名（也可以显式写 `default`）
 - 选择顺序是：`session 已持久化的 agent > --agent <name> > defaultAgent > default`
-- `defaultAgent` 指向不存在的 agent 时，会回退到 `default`
+- `defaultAgent` 指向不存在的 agent 时，会在启动时给出 warning，并回退到 `default`
 - 命中的 `defaultAgent` 会像 `--agent` 一样写入 session entry，后续 turn / resume 会继续沿用
 - 若该 agent 定义了 `model` / `thinkingLevel`，只会在命中 `defaultAgent` 的 fresh session 启动时 best-effort 应用；后续 resume / reload 仍以 session 自己的值为准
 
@@ -520,6 +520,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `permissionAsked: true` 时，在权限确认前发通知
 - 同一模型回合（一条 assistant 消息及其整批 tool call）内的多次权限确认只通知一次，下一回合（`turn_start`）重置后再次通知
 - `agentEnd: true` 时，在 `agent_end` 后发完成通知
+- 当前 runtime 处于 yolo 模式时，即使 `agentEnd: true` 也不会发送完成通知
 - `suppressCompletedAfterRejectionMs` 默认 `5000`
 - `suppressCompletedAfterRejectionMs: 0` 表示关闭抑制窗口
 - 通知脚本固定使用包内的 `scripts/notify.sh`
@@ -569,7 +570,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `ask` 会在交互模式下弹出确认框
 - 确认框只提供 `Yes` / `No`
 - 提示里会显示 `Tool`、`Workdir` 和单行压缩后的 `Arguments`
-- 无 UI 时，`ask` 直接拦截调用
+- 根 session 没有 UI 时，`ask` 直接拦截调用；但真正的 headless subagent session 如果其 root session 有 UI，会把确认请求转发给 root UI
 - 没有会话内的“永久允许这类调用”快捷方式，后续自动放行只能靠配置规则
 - 对路径类工具，会匹配：
   - 原始传入路径
@@ -664,7 +665,7 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 ### `subagent`
 
-`subagent` 控制 `task` 委派工具的深度和并发上限。
+`subagent` 控制 `task` 委派工具的深度、并发，以及防卡死守护策略。
 
 示例：
 
@@ -672,7 +673,9 @@ You are a planning-focused agent. Break work into clear steps before editing.
 {
   "subagent": {
     "maxDepth": 2,
-    "maxConcurrency": 10
+    "maxConcurrency": 10,
+    "idleTimeoutMs": 300000,
+    "maxTurns": 50
   }
 }
 ```
@@ -681,6 +684,8 @@ You are a planning-focused agent. Break work into clear steps before editing.
 
 - `maxDepth`
 - `maxConcurrency`
+- `idleTimeoutMs`
+- `maxTurns`
 
 行为规则：
 
@@ -688,6 +693,8 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - 根 session depth 记为 `1`；只有当 `当前 depth < maxDepth` 时，带有效 `subagents` allowlist 的 agent 才会注入 `task`
 - `maxConcurrency` 默认 `10`
 - `maxConcurrency` 只限制同一个父 session 当前正在运行的直接子 subagent 数量；超过上限时，新的 `task` 调用会直接报错
+- `idleTimeoutMs` 默认关闭；配置后，它衡量的是“没有 assistant / session 侧进展时的空闲时间”。一旦 child 已进入 tool 执行阶段，tool 本体运行过程中的静默不会触发这个 watchdog；只有 tool 结束后重新等待下一次 assistant / 模型侧进展时才会重新计时
+- `maxTurns` 默认 `50`；当 child 已完成 `N` 次 assistant turn 且仍在继续发起工具循环时，`pi-base` 会像 opencode 的 `maxSteps` 一样，在后续每一轮继续注入一条“立即收尾并返回最终报告”的 follow-up 提示，直到 child 自己结束
 - `task` 运行时会再次校验 `subagent_type`：
   - agent 不存在时，报错并列出当前 agent 可用的 subagent 名称
   - agent 存在但不在当前 agent 的 `subagents` allowlist 中时，报错 `not allowed`

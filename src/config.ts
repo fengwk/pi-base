@@ -52,6 +52,10 @@ export interface SubagentConfig {
   maxDepth?: number;
   /** Max number of subagents a single session may run concurrently. Excess `task` calls are rejected. Default 10. */
   maxConcurrency?: number;
+  /** Abort a delegated subagent after this many milliseconds without any session activity. Omit or set 0 to disable. */
+  idleTimeoutMs?: number;
+  /** Soft-stop a delegated subagent after this many completed assistant turns. Omit to disable. */
+  maxTurns?: number;
 }
 
 export interface PiBaseSettings {
@@ -74,7 +78,7 @@ export interface LoadedPiBaseSettings {
 }
 
 function defaultGlobalSettingsPath(): string {
-  if (process.env.PI_BASE_GLOBAL_SETTINGS_PATH) return resolve(process.env.PI_BASE_GLOBAL_SETTINGS_PATH);
+  if (process.env.PI_BASE_GLOBAL_SETTINGS_PATH) return resolve(expandHomePath(process.env.PI_BASE_GLOBAL_SETTINGS_PATH));
   return join(homedir(), ".pi", "agent", "pi-base.json");
 }
 
@@ -343,6 +347,8 @@ function sanitizeSubagentConfig(value: unknown): SubagentConfig {
   const output: SubagentConfig = {};
   if (input.maxDepth !== undefined) output.maxDepth = sanitizePositiveInteger(input.maxDepth, "subagent.maxDepth");
   if (input.maxConcurrency !== undefined) output.maxConcurrency = sanitizePositiveInteger(input.maxConcurrency, "subagent.maxConcurrency");
+  if (input.idleTimeoutMs !== undefined) output.idleTimeoutMs = sanitizeNonNegativeInteger(input.idleTimeoutMs, "subagent.idleTimeoutMs");
+  if (input.maxTurns !== undefined) output.maxTurns = sanitizePositiveInteger(input.maxTurns, "subagent.maxTurns");
   return output;
 }
 
@@ -620,6 +626,10 @@ function mergeSubagent(base: SubagentConfig | undefined, override: SubagentConfi
   const output: SubagentConfig = {
     ...(base?.maxDepth !== undefined || override?.maxDepth !== undefined ? { maxDepth: override?.maxDepth ?? base?.maxDepth } : {}),
     ...(base?.maxConcurrency !== undefined || override?.maxConcurrency !== undefined ? { maxConcurrency: override?.maxConcurrency ?? base?.maxConcurrency } : {}),
+    ...(base?.idleTimeoutMs !== undefined || override?.idleTimeoutMs !== undefined
+      ? { idleTimeoutMs: override?.idleTimeoutMs ?? base?.idleTimeoutMs }
+      : {}),
+    ...(base?.maxTurns !== undefined || override?.maxTurns !== undefined ? { maxTurns: override?.maxTurns ?? base?.maxTurns } : {}),
   };
   return Object.keys(output).length > 0 ? output : undefined;
 }
