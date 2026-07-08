@@ -646,6 +646,8 @@ You are a planning-focused agent. Break work into clear steps before editing.
 - `task` 运行时会再次校验 `subagent_type`：
   - agent 不存在时，报错并列出当前 agent 可用的 subagent 名称
   - agent 存在但不在当前 agent 的 `subagents` allowlist 中时，报错 `not allowed`
+- `task` 执行中会在 tool row 中输出简洁进展日志（如子 agent 启动、工具开始/结束、assistant 文本摘要）；完成后中间进展会被最终结果替换。
+- root session UI 会展示当前运行中 subagent 的 parent/child 树；同级 subagent 按启动时间排序，嵌套 subagent 按真实 `parentSessionId` 缩进。
 
 ### `lsp`
 

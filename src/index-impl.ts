@@ -310,7 +310,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     let scheduled = false;
     const render = () => {
       scheduled = false;
-      ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, renderSubagentWidget(subagentRegistry.forRoot(rootSessionId)));
+      ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, renderSubagentWidget(subagentRegistry.forRoot(rootSessionId), rootSessionId));
     };
     const scheduleRender = () => {
       if (scheduled) return;

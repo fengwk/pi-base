@@ -8,7 +8,9 @@ afterEach(() => subagentRegistry.clear());
 
 interface CapturedTool {
   name: string;
-  execute: (id: string, params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: unknown, ctx: never) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
+  renderCall: (args: Record<string, unknown>, theme: unknown, context: unknown) => { render: (width: number) => string[] };
+  renderResult: (result: unknown, options: { expanded?: boolean; isPartial?: boolean }, theme: unknown, context: unknown) => { render: (width: number) => string[] };
+  execute: (id: string, params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: ((partial: { content: Array<{ text: string }> }) => void) | undefined, ctx: never) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
 }
 
 function registerAndCapture(deps: SubagentTaskToolDeps): CapturedTool {
@@ -48,6 +50,7 @@ const baseDeps = (over: Partial<SubagentTaskToolDeps> = {}): SubagentTaskToolDep
 });
 
 const text = (r: { content: Array<{ text: string }> }): string => r.content.map((c) => c.text).join("");
+const render = (component: { render: (width: number) => string[] }): string => component.render(200).join("\n");
 
 describe("task tool", () => {
   it("rejects missing required args", async () => {
@@ -78,6 +81,51 @@ describe("task tool", () => {
     expect(result.isError).toBeFalsy();
     expect(text(result)).toContain('id="spawned"');
     expect(text(result)).toContain("state=\"completed\"");
+  });
+
+  it("renders a compact task title, live progress, and final result separately", () => {
+    // Intent: while running, the task row should show progress logs via partial result;
+    // after completion, the call area stays compact and final output renders as the result.
+    const tool = registerAndCapture(baseDeps());
+    expect(render(tool.renderCall({ subagent_type: "worker", description: "audit" }, {}, { lastComponent: undefined }))).toContain("task: worker — audit");
+    expect(render(tool.renderResult({ content: [{ type: "text", text: "started worker\n→ read" }] }, { isPartial: true }, {}, { lastComponent: undefined }))).toContain("→ read");
+    expect(render(tool.renderResult({ content: [{ type: "text", text: '<task id="s" state="completed">ok</task>' }] }, { isPartial: false }, {}, { lastComponent: undefined }))).toContain("completed");
+  });
+
+  it("streams child progress updates through the task tool", async () => {
+    // Intent: child-session events must surface as live task progress, then disappear when
+    // the final result replaces the partial output.
+    let listener: ((event: unknown) => void) | undefined;
+    const factory: SubagentSessionFactory = {
+      spawn: async () => ({
+        sessionId: "child-progress",
+        subscribe: (fn) => {
+          listener = fn;
+          return () => undefined;
+        },
+        prompt: async () => {
+          listener?.({ type: "tool_execution_start", toolName: "read" });
+          listener?.({ type: "tool_execution_end", toolName: "read", isError: false });
+        },
+        collect: () => ({ report: "ok", toolCount: 1 }),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+      }),
+      resume: async ({ sessionId }) => ({
+        sessionId,
+        prompt: async () => undefined,
+        collect: () => ({ report: "ok", toolCount: 0 }),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+      }),
+    };
+    const updates: string[] = [];
+    const tool = registerAndCapture(baseDeps({ factory }));
+    const result = await tool.execute("1", { subagent_type: "worker", description: "do", prompt: "go" }, undefined, (partial) => updates.push(text(partial)), ctx());
+    expect(result.isError).toBeFalsy();
+    expect(updates.join("\n")).toContain("started worker session child-progress");
+    expect(updates.join("\n")).toContain("→ read");
+    expect(updates.join("\n")).toContain("✓ read");
   });
 
   it("passes childDepth = parent depth + 1", async () => {

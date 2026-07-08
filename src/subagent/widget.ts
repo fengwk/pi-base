@@ -11,21 +11,41 @@ export const SUBAGENT_WIDGET_KEY = "pi-base-subagents";
  * nodes stay in the registry with a terminal status but are intentionally omitted here, so the
  * widget appears during active delegation and disappears once everything settles.
  *
- * Depth drives indentation, giving a tree-like view without walking the full parent chain.
- * Top-level subagents (depth 2) sit flush under the header; each further nesting level adds one
- * indent step.
+ * Parent/child links drive indentation. Top-level subagents sit flush under the header;
+ * each child level adds one indent step. Siblings keep start-time order within their parent.
  */
-export function renderSubagentWidget(nodes: SubagentNode[]): string[] | undefined {
-  const running = nodes
-    .filter((node) => node.status === "running")
-    .sort((a, b) => a.startedAt - b.startedAt);
+export function renderSubagentWidget(nodes: SubagentNode[], rootSessionId?: string): string[] | undefined {
+  const running = nodes.filter((node) => node.status === "running");
   if (running.length === 0) return undefined;
 
-  const lines = [`⟳ subagents running (${running.length})`];
+  const childrenByParent = new Map<string, SubagentNode[]>();
+  const nodeIds = new Set(running.map((node) => node.sessionId));
   for (const node of running) {
-    const indent = "  ".repeat(Math.max(0, node.depth - 2));
+    const children = childrenByParent.get(node.parentSessionId) ?? [];
+    children.push(node);
+    childrenByParent.set(node.parentSessionId, children);
+  }
+  for (const children of childrenByParent.values()) {
+    children.sort((a, b) => a.startedAt - b.startedAt);
+  }
+
+  const lines = [`⟳ subagents running (${running.length})`];
+  const visited = new Set<string>();
+  const renderNode = (node: SubagentNode, level: number) => {
+    if (visited.has(node.sessionId)) return;
+    visited.add(node.sessionId);
+    const indent = "  ".repeat(Math.max(0, level));
     const tools = node.toolCount <= 0 ? "" : node.toolCount === 1 ? " · 1 tool" : ` · ${node.toolCount} tools`;
     lines.push(`${indent}• ${node.agentType}${tools}`);
-  }
+    for (const child of childrenByParent.get(node.sessionId) ?? []) renderNode(child, level + 1);
+  };
+
+  const roots = rootSessionId
+    ? [...(childrenByParent.get(rootSessionId) ?? [])]
+    : running.filter((node) => !nodeIds.has(node.parentSessionId)).sort((a, b) => a.startedAt - b.startedAt);
+  for (const root of roots) renderNode(root, 0);
+
+  const orphans = running.filter((node) => !visited.has(node.sessionId)).sort((a, b) => a.startedAt - b.startedAt);
+  for (const orphan of orphans) renderNode(orphan, 0);
   return lines;
 }

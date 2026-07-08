@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { createAgentSession, getAgentDir, SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, getAgentDir, SessionManager, type AgentSessionEvent, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AGENT_STATE_ENTRY } from "../agent-support.js";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, readRootSessionId, rootSessionEntryData } from "./depth.js";
 import { subagentRegistry, type SubagentStatus } from "./registry.js";
@@ -19,6 +19,8 @@ export interface SubagentSession {
   prompt: (text: string) => Promise<void>;
   /** Read the final report (last assistant text) and tool-use count after a prompt resolves. */
   collect: () => { report?: string; toolCount: number };
+  /** Subscribe to child-session events for best-effort progress reporting. */
+  subscribe?: (listener: (event: unknown) => void) => () => void;
   abort: () => void;
   dispose: () => void;
 }
@@ -37,6 +39,8 @@ export interface RunSubagentArgs {
   signal?: AbortSignal;
   /** Called once the child session has been registered as running. */
   onRegistered?: (sessionId: string) => void;
+  /** Best-effort progress line sink for live task rendering. */
+  onProgress?: (line: string) => void;
 }
 
 /**
@@ -79,6 +83,11 @@ export async function runSubagent(
     // Reservation/notification hooks are best-effort and must not fail the task.
   }
 
+  args.onProgress?.(`started ${args.agentType} session ${handle.sessionId}`);
+  const unsubscribeProgress = handle.subscribe?.((event) => {
+    const line = formatProgressEvent(event);
+    if (line) args.onProgress?.(line);
+  });
   const onAbort = () => handle.abort();
   args.signal?.addEventListener("abort", onAbort);
   try {
@@ -96,8 +105,40 @@ export async function runSubagent(
     };
   } finally {
     args.signal?.removeEventListener("abort", onAbort);
+    unsubscribeProgress?.();
     handle.dispose();
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function textFromContent(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part): part is { type?: unknown; text?: unknown } => isRecord(part) && part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text as string)
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function summarizeText(text: string, maxChars = 140): string {
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+function formatProgressEvent(event: unknown): string | undefined {
+  if (!isRecord(event) || typeof event.type !== "string") return undefined;
+  if (event.type === "tool_execution_start" && typeof event.toolName === "string") return `→ ${event.toolName}`;
+  if (event.type === "tool_execution_end" && typeof event.toolName === "string") {
+    return `${event.isError === true ? "✗" : "✓"} ${event.toolName}`;
+  }
+  if (event.type === "message_end" && isRecord(event.message) && event.message.role === "assistant") {
+    const text = summarizeText(textFromContent(event.message.content));
+    return text ? `assistant: ${text}` : undefined;
+  }
+  return undefined;
 }
 
 function finish(sessionId: string, status: SubagentStatus, toolCount: number): void {
@@ -214,6 +255,7 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       sessionId,
       prompt: (text: string) => session.prompt(text),
       collect: () => collectFromMessages(session.messages as unknown as RuntimeMessage[]),
+      subscribe: (listener: (event: unknown) => void) => session.subscribe(listener as (event: AgentSessionEvent) => void),
       abort: () => session.abort(),
       dispose: () => undefined,
     };

@@ -1,11 +1,12 @@
 import type { Static } from "@sinclair/typebox";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { TASK_TOOL_NAME } from "./constants.js";
 import { readDepth } from "./depth.js";
 import { subagentRegistry } from "./registry.js";
 import { formatRunResult, runSubagent, type SubagentSessionFactory } from "./runner.js";
 import { taskSchema } from "./schema.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
+import { renderRawResult, renderStreamingCallText } from "../render.js";
 
 export interface SubagentTaskToolDeps {
   /** Agents the currently-active agent may delegate to (its `subagents` allowlist). */
@@ -18,7 +19,12 @@ export interface SubagentTaskToolDeps {
 
 const TASK_DESCRIPTION = loadToolDescription(TASK_TOOL_NAME);
 const TASK_PROMPT_SNIPPET = loadToolPromptSnippet(TASK_TOOL_NAME);
+const MAX_PROGRESS_LINES = 40;
 const pendingSpawnReservations = new Map<string, number>();
+
+interface TaskToolDetails {
+  progress?: boolean;
+}
 
 function errorResult(text: string): { content: Array<{ type: "text"; text: string }>; details: undefined; isError: true } {
   return { content: [{ type: "text", text: `Error: ${text}` }], details: undefined, isError: true };
@@ -30,6 +36,31 @@ function readString(value: unknown): string {
 
 function formatAvailableAgents(agentNames: string[]): string {
   return agentNames.length > 0 ? agentNames.join(" / ") : "no available agents";
+}
+
+function formatTaskTitle(params: { subagent_type?: unknown; description?: unknown; session_id?: unknown }): string {
+  const agentType = readString(params.subagent_type) || "subagent";
+  const description = readString(params.description);
+  const sessionId = readString(params.session_id);
+  const parts = [`task: ${agentType}`];
+  if (description) parts.push(`— ${description}`);
+  if (sessionId) parts.push(`(resume ${sessionId})`);
+  return parts.join(" ");
+}
+
+function createProgressReporter(onUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined): (line: string) => void {
+  const lines: string[] = [];
+  return (line: string) => {
+    if (!onUpdate) return;
+    const normalized = line.trim();
+    if (!normalized || lines.at(-1) === normalized) return;
+    lines.push(normalized);
+    while (lines.length > MAX_PROGRESS_LINES) lines.shift();
+    onUpdate({
+      content: [{ type: "text", text: lines.join("\n") }],
+      details: { progress: true },
+    });
+  };
 }
 
 function countPendingSpawnReservations(parentSessionId: string): number {
@@ -68,11 +99,17 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
     promptSnippet: TASK_PROMPT_SNIPPET,
     parameters: taskSchema,
     executionMode: "parallel",
+    renderCall(args: Static<typeof taskSchema>, theme, context) {
+      return renderStreamingCallText(formatTaskTitle(args ?? {}), theme, context);
+    },
+    renderResult(result, renderOptions, theme, context) {
+      return renderRawResult(result, { ...renderOptions, expanded: renderOptions.isPartial ? true : renderOptions.expanded }, theme, context);
+    },
     async execute(
       _toolCallId: string,
       params: Static<typeof taskSchema>,
       signal: AbortSignal | undefined,
-      _onUpdate: unknown,
+      onUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined,
       ctx: ExtensionContext,
     ) {
       const agentType = readString(params?.subagent_type);
@@ -114,6 +151,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
       }
 
       const childDepth = readDepth(ctx) + 1;
+      const reportProgress = createProgressReporter(onUpdate);
       try {
         const result = await runSubagent(
           ctx,
@@ -128,6 +166,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
               releaseSpawnReservation?.();
               releaseSpawnReservation = undefined;
             },
+            onProgress: reportProgress,
           },
           deps.factory,
         );

@@ -31,17 +31,22 @@ describe("renderSubagentWidget", () => {
     expect(renderSubagentWidget([node({ status: "done" }), node({ status: "error" })])).toBeUndefined();
   });
 
-  it("lists only running subagents, indented by depth, oldest first", () => {
-    // Intent: the widget visualizes concurrent + nested in-flight subagents as a depth-indented tree.
+  it("lists only running subagents as a true parent/child tree", () => {
+    // Intent: the widget must follow parentSessionId, not global depth/start ordering, so
+    // concurrent sibling branches remain unambiguous.
     const lines = renderSubagentWidget([
-      node({ sessionId: "b", agentType: "writer", depth: 3, toolCount: 1, startedAt: 20 }),
-      node({ sessionId: "a", agentType: "mathworker", depth: 2, toolCount: 4, startedAt: 10 }),
+      node({ sessionId: "a", parentSessionId: "root", agentType: "planner", depth: 2, toolCount: 4, startedAt: 10 }),
+      node({ sessionId: "b", parentSessionId: "root", agentType: "builder", depth: 2, startedAt: 20 }),
+      node({ sessionId: "b1", parentSessionId: "b", agentType: "builder-child", depth: 3, startedAt: 25 }),
+      node({ sessionId: "a1", parentSessionId: "a", agentType: "planner-child", depth: 3, toolCount: 1, startedAt: 30 }),
       node({ sessionId: "c", agentType: "ignored", status: "done", startedAt: 5 }),
-    ]);
+    ], "root");
     expect(lines).toEqual([
-      "⟳ subagents running (2)",
-      "• mathworker · 4 tools",
-      "  • writer · 1 tool",
+      "⟳ subagents running (4)",
+      "• planner · 4 tools",
+      "  • planner-child · 1 tool",
+      "• builder",
+      "  • builder-child",
     ]);
   });
 
