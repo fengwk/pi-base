@@ -134,7 +134,8 @@ export function registerFindTool(
     description: loadToolDescription("find"),
     promptSnippet: loadToolPromptSnippet("find"),
     renderCall(args: any, theme: any, context: any) {
-      return renderStreamingCallText(formatFindCall(args, theme, context?.cwd), theme, context);
+      const mappedArgs = mapFilePathToPath(args);
+      return renderStreamingCallText(formatFindCall(mappedArgs, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("find", undefined, context, options.getCollapsedResultLines);

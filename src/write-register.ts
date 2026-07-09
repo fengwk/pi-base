@@ -49,6 +49,7 @@ export function registerWriteTool(
     },
     parameters: writeSchema,
     renderCall(args: any, theme: any, context: any) {
+      args = mapFilePathToPath(args);
       // While the model is still streaming args, route through renderStreamingCallText so
       // the rolling window keeps the latest few body lines instead of a full dump. Once
       // args are complete (or the host doesn't tell us), render the static call so the

@@ -20,7 +20,8 @@ export function registerGrepTool(
     },
     parameters: grepSchema,
     renderCall(args: any, theme: any, context: any) {
-      return renderStreamingCallText(formatGrepCall(args, theme, context?.cwd), theme, context);
+      const mappedArgs = mapFilePathToPath(args);
+      return renderStreamingCallText(formatGrepCall(mappedArgs, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("grep", undefined, context, options.getCollapsedResultLines);

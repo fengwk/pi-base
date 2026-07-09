@@ -31,7 +31,8 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     },
     parameters: lspDiagnosticsSchema,
     renderCall(args: any, theme: any, context: any) {
-      return renderLspCall(formatLspDiagnosticsCall(args, theme, context?.cwd), theme, context);
+      const mappedArgs = mapFilePathToPath(args);
+      return renderLspCall(formatLspDiagnosticsCall(mappedArgs, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       return renderLspResult("lsp_diagnostics", result, renderOptions, theme, context, options);
@@ -51,7 +52,8 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     },
     parameters: lspGotoDefinitionSchema,
     renderCall(args: any, theme: any, context: any) {
-      return renderLspCall(formatLspGotoDefinitionCall(args, theme, context?.cwd), theme, context);
+      const mappedArgs = mapFilePathToPath(args);
+      return renderLspCall(formatLspGotoDefinitionCall(mappedArgs, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       return renderLspResult("lsp_goto_definition", result, renderOptions, theme, context, options);
@@ -71,7 +73,8 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     },
     parameters: lspWorkspaceSymbolsSchema,
     renderCall(args: any, theme: any, context: any) {
-      return renderLspCall(formatLspWorkspaceSymbolsCall(args, theme, context?.cwd), theme, context);
+      const mappedArgs = mapFilePathToPath(args);
+      return renderLspCall(formatLspWorkspaceSymbolsCall(mappedArgs, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       return renderLspResult("lsp_workspace_symbols", result, renderOptions, theme, context, options);
@@ -91,7 +94,8 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     },
     parameters: lspJavaDecompileSchema,
     renderCall(args: any, theme: any, context: any) {
-      return renderLspCall(formatLspJavaDecompileCall(args, theme, context?.cwd), theme, context);
+      const mappedArgs = mapFilePathToPath(args);
+      return renderLspCall(formatLspJavaDecompileCall(mappedArgs, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       return renderLspResult("lsp_java_decompile", result, renderOptions, theme, context, options);

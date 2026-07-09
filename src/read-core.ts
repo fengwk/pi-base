@@ -134,7 +134,8 @@ export function registerReadTool(
       return mapFilePathToPath(args);
     },
     renderCall(args: any, theme: any, context: any) {
-      return renderStreamingCallText(formatReadCall(args, theme, context?.cwd), theme, context);
+      const mappedArgs = mapFilePathToPath(args);
+      return renderStreamingCallText(formatReadCall(mappedArgs, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("read", undefined, context, options.getCollapsedResultLines);

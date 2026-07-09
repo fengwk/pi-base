@@ -461,7 +461,8 @@ export function registerEditTool(
     parameters: editSchema,
     renderShell: "default" as const,
     renderCall(args: any, theme: any, context: any) {
-      const header = formatEditCall(args, theme, context?.cwd);
+      const mappedArgs = mapFilePathToPath(args);
+      const header = formatEditCall(mappedArgs, theme, context?.cwd);
       const state = getEditRenderState(context);
       if (state.completedKey !== undefined) {
         stopEditWorkingSpinner(state);
@@ -469,10 +470,10 @@ export function registerEditTool(
       }
       if (context?.executionStarted && context?.isPartial !== false) {
         scheduleEditWorkingSpinner(state, context?.invalidate);
-        return renderCallText(`${header}\n\n${formatEditWorkingLine(args, theme, state.spinnerIndex)}`, context?.lastComponent);
+        return renderCallText(`${header}\n\n${formatEditWorkingLine(mappedArgs, theme, state.spinnerIndex)}`, context?.lastComponent);
       }
       stopEditWorkingSpinner(state);
-      const preview = formatEditCallPreview(args, theme);
+      const preview = formatEditCallPreview(mappedArgs, theme);
       return renderStreamingCallText(preview ? `${header}\n\n${preview}` : header, theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
