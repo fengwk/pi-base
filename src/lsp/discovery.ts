@@ -218,13 +218,22 @@ export class LspDiscoveryResolver {
   /**
    * Find the workspace root for a file.
    *
-   * Priority order:
-   * 1. Nearest `.git` (file or directory) — stops at the project boundary so
-   *    git worktrees do not leak past their worktree's `.git` file into the
-   *    main repository.  This matches `vim.fs.root` / nvim-lspconfig behaviour.
-   * 2. `rootMarkers` (topmost / shallowest match wins).
-   * 3. `firstMatchMarkers` (first match wins).
-   * 4. Fallback to the file's parent directory.
+   * Two phases:
+   * 1. Walk up once to locate the nearest `.git` (file or directory) and use
+   *    it as a hard boundary — this prevents git worktree leak into the main
+   *    repository (same intent as `vim.fs.root` / nvim-lspconfig's
+   *    `search_ancestors` + `.git` in the marker list).
+   * 2. Walk up again from the file, stopping before crossing the `.git`
+   *    boundary, and collect:
+   *    - `rootMarkers`:  topmost / shallowest hit (closest to filesystem root).
+   *    - `firstMatchMarkers`: first hit (closest to the file, matching
+   *      `util.root_pattern` behaviour).
+   *
+   * Return priority:
+   *   rootMarkers > firstMatchMarkers > gitRoot > file's parent directory
+   *
+   * Non-git projects skip the boundary and behave identically to the
+   * previous implementation.
    */
   findWorkspaceRoot(filePath: string, server: LspServerConfig): string {
     const resolvedFile = resolve(filePath);
@@ -268,7 +277,11 @@ export class LspDiscoveryResolver {
       dir = dirname(dir);
     }
 
-    return gitRoot || topmostRoot || firstRoot || dirname(resolvedFile);
+    // Build markers take priority within the .git boundary so monorepos
+    // correctly resolve sub-project roots (e.g. backend/pom.xml below the
+    // repo-level .git).  The .git root is only used as a last-resort
+    // project boundary when no marker was found.
+    return topmostRoot || firstRoot || gitRoot || dirname(resolvedFile);
   }
 
   findServerForFile(filePath: string): LspServerConfig {
