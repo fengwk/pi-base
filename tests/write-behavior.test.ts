@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { registerWriteTool } from "../src/write.js";
@@ -56,5 +56,115 @@ describe("write behavior", () => {
 
     expect(getText(result)).toContain("Overwrote src/existing.ts successfully.");
     expect(writes[0]).toContain("src/existing.ts");
+  });
+
+  describe("formatWriteCall collapsed preview", () => {
+    const path = "../src/write-core.js";
+    let formatWriteCall: (args: any, theme: any, cwd?: string, options?: { collapsed?: boolean }) => string;
+    let WRITE_COLLAPSED_CALL_PREVIEW_LINES: number;
+
+    beforeAll(async () => {
+      const mod = await import(path);
+      formatWriteCall = mod.formatWriteCall;
+      WRITE_COLLAPSED_CALL_PREVIEW_LINES = mod.WRITE_COLLAPSED_CALL_PREVIEW_LINES;
+    });
+
+    function makeTheme() {
+      return {
+        fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+        bold: (text: string) => `*${text}*`,
+      } as any;
+    }
+
+    it("exports the collapsed preview line cap as 7 to match the streaming window's body tail", () => {
+      expect(WRITE_COLLAPSED_CALL_PREVIEW_LINES).toBe(7);
+    });
+
+    it("renders the header alone when content is empty (no body, no hint)", () => {
+      const rendered = formatWriteCall({ path: "a.ts", content: "" }, makeTheme(), "/tmp");
+      expect(rendered).toContain("write");
+      expect(rendered).toContain("a.ts");
+      // No body block (header is "write a.ts" with no trailing "\n\n" then content).
+      expect(rendered).not.toMatch(/a\.ts\s*\n\s*\n/);
+    });
+
+    it("renders the full body in un-collapsed mode regardless of length", () => {
+      const content = Array.from({ length: 50 }, (_, i) => `line-${i + 1}`).join("\n");
+      const rendered = formatWriteCall({ path: "a.ts", content }, makeTheme(), "/tmp");
+      // Un-collapsed default: every line present, no "more lines" hint.
+      expect(rendered).toContain("line-1");
+      expect(rendered).toContain("line-50");
+      expect(rendered).not.toContain("more lines");
+    });
+
+    it("collapses long content to the first 7 lines plus a count hint", () => {
+      const content = Array.from({ length: 20 }, (_, i) => `line-${i + 1}`).join("\n");
+      const rendered = formatWriteCall({ path: "a.ts", content }, makeTheme(), "/tmp", { collapsed: true });
+      expect(rendered).toContain("line-1");
+      expect(rendered).toContain("line-7");
+      expect(rendered).not.toContain("line-8");
+      expect(rendered).toContain("13 more lines");
+      expect(rendered).toContain("20 total");
+    });
+
+    it("collapses to all lines when content fits within the cap (no hint emitted)", () => {
+      const content = "alpha\nbeta\ngamma";
+      const rendered = formatWriteCall({ path: "a.ts", content }, makeTheme(), "/tmp", { collapsed: true });
+      expect(rendered).toContain("alpha");
+      expect(rendered).toContain("beta");
+      expect(rendered).toContain("gamma");
+      expect(rendered).not.toContain("more lines");
+    });
+
+    it("uses the singular 'line' when exactly one line is elided", () => {
+      const content = Array.from({ length: 8 }, (_, i) => `line-${i + 1}`).join("\n");
+      const rendered = formatWriteCall({ path: "a.ts", content }, makeTheme(), "/tmp", { collapsed: true });
+      expect(rendered).toContain("1 more line,");
+      expect(rendered).not.toContain("1 more lines,");
+      expect(rendered).toContain("8 total");
+    });
+
+    it("handles the 7-line boundary (cap equals content) with no elision", () => {
+      const content = Array.from({ length: 7 }, (_, i) => `line-${i + 1}`).join("\n");
+      const rendered = formatWriteCall({ path: "a.ts", content }, makeTheme(), "/tmp", { collapsed: true });
+      expect(rendered).toContain("line-1");
+      expect(rendered).toContain("line-7");
+      expect(rendered).not.toContain("more lines");
+    });
+
+    it("handles the 8-line boundary (cap plus one) with the singular elision hint", () => {
+      const content = Array.from({ length: 8 }, (_, i) => `line-${i + 1}`).join("\n");
+      const rendered = formatWriteCall({ path: "a.ts", content }, makeTheme(), "/tmp", { collapsed: true });
+      expect(rendered).toContain("line-7");
+      expect(rendered).not.toContain("line-8");
+      expect(rendered).toContain("1 more line,");
+    });
+
+    it("drops a trailing newline from the content so it does not inflate the line count", () => {
+      const content = "alpha\nbeta\ngamma\n";
+      const rendered = formatWriteCall({ path: "a.ts", content }, makeTheme(), "/tmp", { collapsed: true });
+      // Trailing newline should not produce a phantom 4th line.
+      expect(rendered).toContain("alpha");
+      expect(rendered).toContain("beta");
+      expect(rendered).toContain("gamma");
+      expect(rendered).not.toContain("more lines");
+    });
+
+    it("collapses long single-line content down to the cap (preserves the 7 visible lines)", () => {
+      const content = "x".repeat(500);
+      const lines = content.split("\n");
+      expect(lines.length).toBe(1);
+      // 1 line of content, ≤ 7, so the collapsed preview is just that one line.
+      const rendered = formatWriteCall({ path: "a.ts", content }, makeTheme(), "/tmp", { collapsed: true });
+      expect(rendered).toContain("xxxxx");
+      expect(rendered).not.toContain("more lines");
+    });
+
+    it("omits the path segment when path is missing (no crash, just the title)", () => {
+      const rendered = formatWriteCall({ content: "alpha\nbeta" }, makeTheme(), "/tmp", { collapsed: true });
+      expect(rendered).toContain("write");
+      expect(rendered).toContain("alpha");
+      expect(rendered).not.toContain("more lines");
+    });
   });
 });
