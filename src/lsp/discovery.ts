@@ -215,12 +215,44 @@ export class LspDiscoveryResolver {
     return { supported: false };
   }
 
+  /**
+   * Find the workspace root for a file.
+   *
+   * Priority order:
+   * 1. Nearest `.git` (file or directory) — stops at the project boundary so
+   *    git worktrees do not leak past their worktree's `.git` file into the
+   *    main repository.  This matches `vim.fs.root` / nvim-lspconfig behaviour.
+   * 2. `rootMarkers` (topmost / shallowest match wins).
+   * 3. `firstMatchMarkers` (first match wins).
+   * 4. Fallback to the file's parent directory.
+   */
   findWorkspaceRoot(filePath: string, server: LspServerConfig): string {
-    let dir = dirname(resolve(filePath));
+    const resolvedFile = resolve(filePath);
+    let dir = dirname(resolvedFile);
     let prev = "";
+
+    // Walk up and look for .git first — it is the strongest project-boundary
+    // signal and the only way to correctly stop inside a git worktree.
+    let gitRoot: string | null = null;
+    let probe = dir;
+    let probePrev = "";
+    while (probe !== probePrev) {
+      if (existsSync(join(probe, ".git"))) {
+        gitRoot = probe;
+        break;
+      }
+      probePrev = probe;
+      probe = dirname(probe);
+    }
+
     let topmostRoot: string | null = null;
     let firstRoot: string | null = null;
     while (dir !== prev) {
+      // Stop at the .git boundary if one was found above the current
+      // directory, so that rootMarkers in ancestor repos do not hijack a
+      // worktree's project root.
+      if (gitRoot !== null && dir === dirname(gitRoot)) break;
+
       for (const marker of server.rootMarkers ?? []) {
         if (existsSync(join(dir, marker))) topmostRoot = dir;
       }
@@ -235,7 +267,8 @@ export class LspDiscoveryResolver {
       prev = dir;
       dir = dirname(dir);
     }
-    return topmostRoot || firstRoot || dirname(resolve(filePath));
+
+    return gitRoot || topmostRoot || firstRoot || dirname(resolvedFile);
   }
 
   findServerForFile(filePath: string): LspServerConfig {
