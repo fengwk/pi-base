@@ -299,15 +299,59 @@ function applyOccurrenceToDocument(
 }
 
 /**
+ * Emit a context block into `output`, applying the unified "head + ... + tail" rule:
+ *   - if the block is short enough to fit two `contextLines` windows back-to-back
+ *     (i.e. its length is at most 2 * contextLines), emit every line verbatim;
+ *   - otherwise emit the first `contextLines` lines, a single "...", and the last
+ *     `contextLines` lines.
+ *
+ * The caller's cursor is advanced by the full block length so line numbers stay
+ * correct even when the middle is elided.
+ */
+function appendContextBlock(
+  output: string[],
+  block: string[],
+  cursor: { oldLineNum: number; newLineNum: number; lineNumberWidth: number },
+  contextLines: number,
+): void {
+  const { lineNumberWidth } = cursor;
+  let runningOld = cursor.oldLineNum;
+  let runningNew = cursor.newLineNum;
+  const emit = (line: string) => {
+    output.push(formatDiffLine(" ", runningOld, lineNumberWidth, line));
+    runningOld++;
+    runningNew++;
+  };
+
+  if (block.length <= 2 * contextLines) {
+    for (const line of block) emit(line);
+  } else {
+    for (let i = 0; i < contextLines; i++) emit(block[i]!);
+    output.push("...");
+    const skipCount = block.length - 2 * contextLines;
+    runningOld += skipCount;
+    runningNew += skipCount;
+    for (let i = block.length - contextLines; i < block.length; i++) emit(block[i]!);
+  }
+
+  cursor.oldLineNum = runningOld;
+  cursor.newLineNum = runningNew;
+}
+
+/**
  * Generate a display-oriented diff with line numbers and context.
+ *
+ * Each context block is rendered with the same rule regardless of where it lives
+ * (leading, inter-hunk, or trailing): short enough → all lines, otherwise the
+ * first `contextLines` lines, a single "...", and the last `contextLines` lines.
+ * Inter-hunk context shorter than 2 * contextLines is therefore rendered as one
+ * continuous block with no "...", matching git's merged-hunk behavior.
  */
 function generateNumberedDiff(oldContent: string, newContent: string, contextLines = 4): { diff: string; firstChangedLine: number | undefined } {
   const parts = Diff.diffLines(oldContent, newContent);
   const output: string[] = [];
   const lineNumberWidth = Math.max(1, String(Math.max(countDisplayedLines(oldContent), countDisplayedLines(newContent), 1)).length);
-  let oldLineNum = 1;
-  let newLineNum = 1;
-  let lastWasChange = false;
+  const cursor = { oldLineNum: 1, newLineNum: 1, lineNumberWidth };
   let firstChangedLine: number | undefined;
 
   for (let index = 0; index < parts.length; index++) {
@@ -316,50 +360,28 @@ function generateNumberedDiff(oldContent: string, newContent: string, contextLin
     if (rawLines[rawLines.length - 1] === "") rawLines.pop();
 
     if (part.added || part.removed) {
-      if (firstChangedLine === undefined) firstChangedLine = newLineNum;
+      if (firstChangedLine === undefined) firstChangedLine = cursor.newLineNum;
       for (const line of rawLines) {
-        if (part.added) output.push(formatDiffLine("+", newLineNum++, lineNumberWidth, line));
-        else output.push(formatDiffLine("-", oldLineNum++, lineNumberWidth, line));
+        if (part.added) {
+          output.push(formatDiffLine("+", cursor.newLineNum, lineNumberWidth, line));
+          cursor.newLineNum++;
+        } else {
+          output.push(formatDiffLine("-", cursor.oldLineNum, lineNumberWidth, line));
+          cursor.oldLineNum++;
+        }
       }
-      lastWasChange = true;
       continue;
     }
 
     const nextPartIsChange = index < parts.length - 1 && (parts[index + 1]!.added || parts[index + 1]!.removed);
-    if (lastWasChange || nextPartIsChange) {
-      let linesToShow = rawLines;
-      let skipStart = 0;
-      let skipEnd = 0;
-
-      if (!lastWasChange) {
-        skipStart = Math.max(0, rawLines.length - contextLines);
-        linesToShow = rawLines.slice(skipStart);
-      }
-      if (!nextPartIsChange && linesToShow.length > contextLines) {
-        skipEnd = linesToShow.length - contextLines;
-        linesToShow = linesToShow.slice(0, contextLines);
-      }
-
-      if (skipStart > 0) {
-        output.push("...");
-        oldLineNum += skipStart;
-        newLineNum += skipStart;
-      }
-      for (const line of linesToShow) {
-        output.push(formatDiffLine(" ", oldLineNum, lineNumberWidth, line));
-        oldLineNum++;
-        newLineNum++;
-      }
-      if (skipEnd > 0) {
-        output.push("...");
-        oldLineNum += skipEnd;
-        newLineNum += skipEnd;
-      }
-    } else {
-      oldLineNum += rawLines.length;
-      newLineNum += rawLines.length;
+    const prevPartWasChange = index > 0 && (parts[index - 1]!.added || parts[index - 1]!.removed);
+    if (!prevPartWasChange && !nextPartIsChange) {
+      // File head or tail context that no hunk touches: skip entirely.
+      cursor.oldLineNum += rawLines.length;
+      cursor.newLineNum += rawLines.length;
+      continue;
     }
-    lastWasChange = false;
+    appendContextBlock(output, rawLines, cursor, contextLines);
   }
 
   return { diff: output.join("\n"), firstChangedLine };

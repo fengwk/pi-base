@@ -12,8 +12,11 @@ export function formatWriteSuccess(rawPath: string, existed: boolean): string {
 }
 
 // Number of content lines shown in the collapsed call preview once the tool has finished
-// applying. Matches the upstream write tool's historical collapsed-line cap.
-export const WRITE_COLLAPSED_CALL_PREVIEW_LINES = 10;
+// applying. Aligned with the streaming rolling window's body-line tail (see
+// STREAMING_CALL_PREVIEW_LINES in render.ts: 10 total, with 3 reserved for the title
+// / blank / hint, leaving 7 body lines) so the collapsed call and the streaming
+// call have the same overall height.
+export const WRITE_COLLAPSED_CALL_PREVIEW_LINES = 7;
 
 function splitWriteContentLines(content: string): string[] {
   if (!content) return [];

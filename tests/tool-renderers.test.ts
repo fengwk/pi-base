@@ -394,14 +394,15 @@ describe("tool renderers", () => {
       expect(streaming).not.toContain("line-3");
 
       // Args complete and apply has settled (isPartial=false, which is also the shape
-      // used by history replay). The call body now collapses to a 10-line preview so the
+      // used by history replay). The call body collapses to a 7-line preview so the
       // chat stays scannable; the full body remains available behind `expanded: true`.
       const settled = renderOnce(true);
       expect(settled).not.toContain("earlier lines");
       expect(settled).toContain("line-1");
-      expect(settled).toContain("line-10");
+      expect(settled).toContain("line-7");
+      expect(settled).not.toContain("line-8");
       expect(settled).not.toContain("line-90");
-      expect(settled).toContain("80 more lines");
+      expect(settled).toContain("83 more lines");
       expect(settled).toContain("90 total");
     });
   });
@@ -448,7 +449,7 @@ describe("tool renderers", () => {
       // History restore: the host never calls setArgsComplete/markExecutionStarted,
       // so argsComplete and executionStarted stay false, but updateResult sets
       // isPartial=false. The call must NOT render as a rolling window; once the apply
-      // has settled it should collapse to a 10-line preview in the collapsed state.
+      // has settled it should collapse to a 7-line preview in the collapsed state.
       const restored = render(write.renderCall(args, {} as any, {
         lastComponent: undefined,
         argsComplete: false,
@@ -462,17 +463,20 @@ describe("tool renderers", () => {
 
       expect(restored).not.toContain("earlier lines");
       expect(restored).toContain("line-1");
-      expect(restored).toContain("line-10");
+      expect(restored).toContain("line-7");
+      expect(restored).not.toContain("line-8");
       expect(restored).not.toContain("line-90");
-      expect(restored).toContain("80 more lines");
+      expect(restored).toContain("83 more lines");
       expect(restored).toContain("90 total");
     });
   });
 
   // Intent: once the write tool has actually applied (isPartial=false), the call body
-  // should collapse to a 10-line preview so the chat stays scannable. The full body
-  // must remain available behind `expanded: true` for users who want to read it back.
-  it("collapses write call body to a 10-line preview after the tool applies", async () => {
+  // should collapse to a 7-line preview so the chat stays scannable. The preview size
+  // matches the streaming rolling window's body tail (STREAMING_CALL_PREVIEW_LINES - 3)
+  // so the collapsed call has the same overall height as the streaming call. The full
+  // body must remain available behind `expanded: true` for users who want to read it back.
+  it("collapses write call body to a 7-line preview after the tool applies", async () => {
     await withTempGlobalPiBaseConfig({}, async (root) => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
@@ -493,10 +497,10 @@ describe("tool renderers", () => {
       } as any));
 
       expect(applied).toContain("line-1");
-      expect(applied).toContain("line-10");
-      expect(applied).not.toContain("line-11");
+      expect(applied).toContain("line-7");
+      expect(applied).not.toContain("line-8");
       expect(applied).not.toContain("line-40");
-      expect(applied).toContain("30 more lines");
+      expect(applied).toContain("33 more lines");
       expect(applied).toContain("40 total");
     });
   });
@@ -522,7 +526,7 @@ describe("tool renderers", () => {
       } as any));
 
       expect(expanded).toContain("line-1");
-      expect(expanded).toContain("line-10");
+      expect(expanded).toContain("line-7");
       expect(expanded).toContain("line-40");
       expect(expanded).not.toContain("more lines");
     });
@@ -551,7 +555,7 @@ describe("tool renderers", () => {
       } as any));
 
       expect(inFlight).toContain("line-1");
-      expect(inFlight).toContain("line-10");
+      expect(inFlight).toContain("line-7");
       expect(inFlight).toContain("line-40");
       expect(inFlight).not.toContain("more lines");
     });
