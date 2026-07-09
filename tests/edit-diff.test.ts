@@ -328,4 +328,65 @@ describe("edit diff renderer", () => {
       expect(diff).toContain("...");
     });
   });
+
+  it("folds the inter-hunk-and-trailing tail of a real-world long edit (replace_all, 15-line file)", async () => {
+    // Regression test for a real-world case: a short story where the same 3-char
+    // string appears at line 1 and line 3, and replace_all rewrites both. The
+    // 12 trailing context lines (4-15) used to be rendered verbatim in the
+    // legacy implementation; the unified head+...+tail rule must fold them to
+    // 4 + "..." + 4. The 1-line blank between the two hunks is also part of
+    // the inter-hunk block and renders without an elision marker (≤ 2*contextLines).
+    await withWorkspace(async (root, registry) => {
+      const lines: string[] = [
+        "时光旅人",
+        "",
+        "时光旅人。",
+        "我叫苏晚，今年二十八岁，是一个普通的图书管理员。",
+        "每天的工作就是整理书籍，帮读者查找资料。这样的生活平淡而安稳，像一潭静水。直到那个雨夜，一切都改变了。",
+        "那天晚上，我正准备下班关门，忽然发现门口有一封信。信是白色的，没有信封，只有折叠整齐的信纸，上面用漂亮的手写字体写着我的名字。我从未见过这样的信，没有寄件人地址，没有邮戳，没有任何能表明它来源的标记。它就那样静静地躺在图书馆门口的台阶上，被雨水打湿了一角，却奇迹般地没有完全浸透。",
+        "带着满心的疑虑，我小心翼翼地打开信，里面只有短短几行字：\"苏晚小姐，我们诚邀您参加一场特殊的聚会。时间：明晚子夜时分。地点：城南废弃的钟楼。请务必准时出席，届时您将获得改变一生的机会。--时光的守护者\"",
+        "",
+        "我环顾四周，图书馆早已空无一人。窗外的雨越下越大，雷声隆隆。",
+        "",
+        "我反复读着信上的内容，试图找出一些端倪。但信上没有任何其他线索，纸质摸起来也普普通通。我开始怀疑这是一场恶作剧。",
+        "",
+        "第二天是周六，我有一整天的休息时间。整个白天我都在犹豫要不要赴约。理智告诉我这很可能是一个陷阱，但直觉却一次次把我推向那个废弃的钟楼。最终，好奇心战胜了理智。",
+        "",
+        "子夜时分，我站在了城南废弃的钟楼前。这座钟楼建于民国时期，是这座城市最古老的建筑之一。据说在几十年前的一场大火中，钟楼被严重损毁，此后就被一直荒废着。然而此刻，钟楼的大门竟然是敞开的，从门口透出的不是黑暗，而是一片温暖的橘黄色光芒。",
+      ];
+      await writeLines(root, "story.txt", lines);
+
+      const result = await registry.getTool("edit").execute(
+        "test-call",
+        {
+          path: "story.txt",
+          workdir: ".",
+          old_string: "时光旅人",
+          new_string: "时光旅人：觉皇之路",
+          replace_all: true,
+        },
+        undefined,
+        undefined,
+        { cwd: root },
+      );
+      const diff = result.details?.diff ?? "";
+      // Both hunks are present
+      expect(diff).toContain("- 1|时光旅人");
+      expect(diff).toContain("+ 1|时光旅人：觉皇之路");
+      expect(diff).toContain("- 3|时光旅人。");
+      expect(diff).toContain("+ 3|时光旅人：觉皇之路。");
+      // The 1-line blank between the two hunks is rendered (no elision).
+      expect(diff).toContain("  2|");
+      // The 12-line trailing block must fold: head 4 (lines 4-7), "...", tail 4 (lines 12-15).
+      expect(diff).toContain("...");
+      expect(diff).toContain("我叫苏晚"); // head-1
+      expect(diff).toContain("带着满心"); // head-4
+      // Lines 8-11 are in the elided middle and must not appear.
+      expect(diff).not.toContain("我环顾四周");
+      expect(diff).not.toContain("我反复读着");
+      // Last 4 lines are kept.
+      expect(diff).toContain("第二天是周六");
+      expect(diff).toContain("子夜时分");
+    });
+  });
 });
