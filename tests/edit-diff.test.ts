@@ -286,6 +286,47 @@ describe("edit diff renderer (position-aware context folding)", () => {
         expect(diff).not.toContain("ctx-07");
       });
     });
+
+    it("emits exactly two '...' for three hunks with mixed gap sizes", async () => {
+      await withWorkspace(async (root, registry) => {
+        // Three MARKER tokens, 12 lines apart, 3 lines apart, 12 lines apart.
+        // Inter-hunk gap 1 (lines 4-15, 12 lines) folds. Inter-hunk gap 2
+        // (lines 17-19, 3 lines) merges without a separator. Trailing context
+        // (lines 21-40, 20 lines) folds.
+        const lines: string[] = [];
+        for (let i = 0; i < 40; i++) lines.push(`ctx-${String(i + 1).padStart(2, "0")}`);
+        lines[2] = "MARKER";
+        lines[15] = "MARKER";
+        lines[19] = "MARKER";
+        await writeLines(root, "three.txt", lines);
+
+        const result = await callEdit(registry, root, "three.txt", "MARKER", "MARKER-new", true);
+        const diff = result.details?.diff ?? "";
+        // Three MARKER-new replacements.
+        const markerCount = (diff.match(/MARKER-new/g) ?? []).length;
+        expect(markerCount).toBe(3);
+        // Two folds: 12-line inter-hunk + 20-line trailing. The 3-line middle
+        // gap is merged without a separator.
+        const ellipsisCount = (diff.match(/^\.\.\.$/gm) ?? []).length;
+        expect(ellipsisCount).toBe(2);
+      });
+    });
+
+    it("renders three adjacent hunks (no context between them) without any fold", async () => {
+      await withWorkspace(async (root, registry) => {
+        // Three MARKER tokens on three consecutive lines. No context between
+        // any two hunks, so no appendContextBlock is invoked and no "..."
+        // separator appears.
+        const lines: string[] = ["MARKER", "MARKER", "MARKER", "tail"];
+        await writeLines(root, "adjacent.txt", lines);
+
+        const result = await callEdit(registry, root, "adjacent.txt", "MARKER", "MARKER-new", true);
+        const diff = result.details?.diff ?? "";
+        const markerCount = (diff.match(/MARKER-new/g) ?? []).length;
+        expect(markerCount).toBe(3);
+        expect(diff).not.toContain("...");
+      });
+    });
   });
 
   describe("error and degenerate paths", () => {
@@ -317,6 +358,84 @@ describe("edit diff renderer (position-aware context folding)", () => {
         expect(diff).toContain("-1|old");
         expect(diff).toContain("+1|new");
         expect(diff).not.toContain("...");
+      });
+    });
+
+    it("handles a whole-file replacement without invoking appendContextBlock", async () => {
+      await withWorkspace(async (root, registry) => {
+        // old_string matches the entire file content. diffLines produces two
+        // parts (removed + added) and no context block. The renderer must
+        // not crash or insert a stray "...".
+        const oldLines = ["alpha", "beta", "gamma"];
+        await writeLines(root, "all.txt", oldLines);
+        const oldText = oldLines.join("\n") + "\n";
+        const result = await callEdit(
+          registry,
+          root,
+          "all.txt",
+          oldText,
+          "ALPHA\nBETA\nGAMMA\n",
+        );
+        const diff = result.details?.diff ?? "";
+        expect(diff).toContain("-1|alpha");
+        expect(diff).toContain("-2|beta");
+        expect(diff).toContain("-3|gamma");
+        expect(diff).toContain("+1|ALPHA");
+        expect(diff).toContain("+2|BETA");
+        expect(diff).toContain("+3|GAMMA");
+        expect(diff).not.toContain("...");
+      });
+    });
+
+    it("renders a hunk at the very first line with long trailing context", async () => {
+      // No leading context (block.length = 0). Caller must skip the empty
+      // block instead of trying to fold it.
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = ["FIRST-LINE-EDITED"];
+        for (let i = 0; i < 12; i++) lines.push(`tail-${String(i + 1).padStart(2, "0")}`);
+        await writeLines(root, "first.txt", lines);
+
+        const result = await callEdit(
+          registry,
+          root,
+          "first.txt",
+          "FIRST-LINE-EDITED",
+          "FIRST-LINE-NEW",
+        );
+        const diff = result.details?.diff ?? "";
+        expect(diff).toContain("- 1|FIRST-LINE-EDITED");
+        expect(diff).toContain("+ 1|FIRST-LINE-NEW");
+        // Trailing 12 lines → head 4 (tail-01..tail-04) + "...".
+        expect(diff).toContain("tail-01");
+        expect(diff).toContain("tail-04");
+        expect(diff).not.toContain("tail-05");
+        expect(diff).toContain("...");
+      });
+    });
+
+    it("renders a hunk at the very last line with long leading context", async () => {
+      // No trailing context. Long leading context must fold.
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = [];
+        for (let i = 0; i < 12; i++) lines.push(`head-${String(i + 1).padStart(2, "0")}`);
+        lines.push("LAST-LINE-EDITED");
+        await writeLines(root, "last.txt", lines);
+
+        const result = await callEdit(
+          registry,
+          root,
+          "last.txt",
+          "LAST-LINE-EDITED",
+          "LAST-LINE-NEW",
+        );
+        const diff = result.details?.diff ?? "";
+        expect(diff).toContain("-13|LAST-LINE-EDITED");
+        expect(diff).toContain("+13|LAST-LINE-NEW");
+        // Leading 12 lines → head-09..head-12 kept, "...", head-01..head-08 elided.
+        expect(diff).toContain("head-09");
+        expect(diff).toContain("head-12");
+        expect(diff).not.toContain("head-08");
+        expect(diff).toContain("...");
       });
     });
   });
