@@ -299,11 +299,14 @@ function applyOccurrenceToDocument(
 }
 
 /**
- * Emit a context block into `output`, applying the unified "head + ... + tail" rule:
- *   - if the block is short enough to fit two `contextLines` windows back-to-back
- *     (i.e. its length is at most 2 * contextLines), emit every line verbatim;
- *   - otherwise emit the first `contextLines` lines, a single "...", and the last
- *     `contextLines` lines.
+ * Emit a context block into `output`, applying the unified "head + ... + tail" rule
+ * for inter-hunk blocks and the position-aware "single-side" rule for leading or
+ * trailing context. The leading/trailing distinction is what makes the result match
+ * git's `diff -U<N>`: a trailing context block keeps only its first `contextLines`
+ * lines (the ones closest to the preceding hunk), a leading context block keeps
+ * only its last `contextLines` lines (the ones closest to the following hunk), and
+ * an inter-hunk block keeps `contextLines` lines on each side. Blocks that fit
+ * within the merge threshold for their position are emitted verbatim.
  *
  * The caller's cursor is advanced by the full block length so line numbers stay
  * correct even when the middle is elided.
@@ -313,6 +316,7 @@ function appendContextBlock(
   block: string[],
   cursor: { oldLineNum: number; newLineNum: number; lineNumberWidth: number },
   contextLines: number,
+  position: "leading" | "inter-hunk" | "trailing",
 ): void {
   const { lineNumberWidth } = cursor;
   let runningOld = cursor.oldLineNum;
@@ -323,15 +327,44 @@ function appendContextBlock(
     runningNew++;
   };
 
-  if (block.length <= 2 * contextLines) {
-    for (const line of block) emit(line);
+  if (position === "inter-hunk") {
+    // Two hunks share this block. Short enough that both windows fit back-to-back
+    // → emit everything; otherwise keep head + "..." + tail.
+    if (block.length <= 2 * contextLines) {
+      for (const line of block) emit(line);
+    } else {
+      for (let i = 0; i < contextLines; i++) emit(block[i]!);
+      output.push("...");
+      const skipCount = block.length - 2 * contextLines;
+      runningOld += skipCount;
+      runningNew += skipCount;
+      for (let i = block.length - contextLines; i < block.length; i++) emit(block[i]!);
+    }
+  } else if (position === "trailing") {
+    // Only the lines closest to the preceding hunk matter; elide the rest.
+    if (block.length <= contextLines) {
+      for (const line of block) emit(line);
+    } else {
+      const shownLines = block.slice(0, contextLines);
+      const skippedLines = block.length - shownLines.length;
+      for (const line of shownLines) emit(line);
+      output.push("...");
+      runningOld += skippedLines;
+      runningNew += skippedLines;
+    }
   } else {
-    for (let i = 0; i < contextLines; i++) emit(block[i]!);
-    output.push("...");
-    const skipCount = block.length - 2 * contextLines;
-    runningOld += skipCount;
-    runningNew += skipCount;
-    for (let i = block.length - contextLines; i < block.length; i++) emit(block[i]!);
+    // leading: only the lines closest to the following hunk matter. The elided
+    // head of the block lands first, so the cursor must skip ahead before we
+    // start emitting the surviving tail.
+    if (block.length <= contextLines) {
+      for (const line of block) emit(line);
+    } else {
+      const skippedLines = block.length - contextLines;
+      runningOld += skippedLines;
+      runningNew += skippedLines;
+      output.push("...");
+      for (const line of block.slice(skippedLines)) emit(line);
+    }
   }
 
   cursor.oldLineNum = runningOld;
@@ -341,11 +374,15 @@ function appendContextBlock(
 /**
  * Generate a display-oriented diff with line numbers and context.
  *
- * Each context block is rendered with the same rule regardless of where it lives
- * (leading, inter-hunk, or trailing): short enough → all lines, otherwise the
- * first `contextLines` lines, a single "...", and the last `contextLines` lines.
- * Inter-hunk context shorter than 2 * contextLines is therefore rendered as one
- * continuous block with no "...", matching git's merged-hunk behavior.
+ * Each context block is classified by its position relative to the surrounding
+ * hunks (leading, inter-hunk, trailing) and rendered with the rule that matches
+ * git's `diff -U<N>`:
+ *   - leading: keep the last `contextLines` lines (closest to the following hunk)
+ *   - inter-hunk: keep `contextLines` lines on each side
+ *   - trailing: keep the first `contextLines` lines (closest to the preceding hunk)
+ * Adjacent hunks whose context windows would touch are merged into a single
+ * inter-hunk block (no "..." separator) so the output reads as one continuous
+ * region around the change.
  */
 function generateNumberedDiff(oldContent: string, newContent: string, contextLines = 4): { diff: string; firstChangedLine: number | undefined } {
   const parts = Diff.diffLines(oldContent, newContent);
@@ -381,7 +418,11 @@ function generateNumberedDiff(oldContent: string, newContent: string, contextLin
       cursor.newLineNum += rawLines.length;
       continue;
     }
-    appendContextBlock(output, rawLines, cursor, contextLines);
+    const position: "leading" | "inter-hunk" | "trailing" =
+      prevPartWasChange && nextPartIsChange ? "inter-hunk"
+      : prevPartWasChange ? "trailing"
+      : "leading";
+    appendContextBlock(output, rawLines, cursor, contextLines, position);
   }
 
   return { diff: output.join("\n"), firstChangedLine };

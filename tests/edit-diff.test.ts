@@ -37,356 +37,351 @@ async function callEdit(
   );
 }
 
-describe("edit diff renderer", () => {
-  it("folds the leading context to contextLines + ... when it is longer than 2*contextLines", async () => {
-    await withWorkspace(async (root, registry) => {
-      // 12 lines of leading context, then the change.
-      // 12 > 2 * contextLines (8), so the renderer must keep only the first
-      // contextLines (4) lines and "..." the rest.
-      const lines: string[] = [];
-      for (let i = 0; i < 12; i++) lines.push(`head-${String(i + 1).padStart(2, "0")}`);
-      lines.push("TO-EDIT");
-      await writeLines(root, "lead.txt", lines);
+describe("edit diff renderer (position-aware context folding)", () => {
+  describe("trailing context", () => {
+    it("keeps the first contextLines lines closest to the preceding hunk and elides the rest", async () => {
+      await withWorkspace(async (root, registry) => {
+        // Trailing context = 12 lines. Per git semantics, only the first 4
+        // (closest to the preceding hunk) are shown; lines 5-12 are elided.
+        const lines: string[] = ["head-1"];
+        lines.push("TO-EDIT");
+        for (let i = 0; i < 12; i++) lines.push(`tail-${String(i + 1).padStart(2, "0")}`);
+        await writeLines(root, "trail.txt", lines);
 
-      const result = await callEdit(registry, root, "lead.txt", "TO-EDIT", "EDITED", false);
-      const diff = result.details?.diff ?? "";
+        const result = await callEdit(registry, root, "trail.txt", "TO-EDIT", "EDITED", false);
+        const diff = result.details?.diff ?? "";
 
-      // First 4 context lines are kept
-      expect(diff).toContain("head-01");
-      expect(diff).toContain("head-02");
-      expect(diff).toContain("head-03");
-      expect(diff).toContain("head-04");
-      // Lines beyond the head window are elided
-      expect(diff).not.toContain("head-05");
-      // Elision marker
-      expect(diff).toContain("...");
-      // The change itself
-      expect(diff).toContain("EDITED");
+        // First 4 trailing context lines (closest to the hunk) are kept.
+        expect(diff).toContain("tail-01");
+        expect(diff).toContain("tail-02");
+        expect(diff).toContain("tail-03");
+        expect(diff).toContain("tail-04");
+        // Lines beyond the trailing window are elided (no tail rows past tail-04).
+        expect(diff).not.toContain("tail-05");
+        expect(diff).not.toContain("tail-12");
+        // Elision marker.
+        expect(diff).toContain("...");
+      });
+    });
+
+    it("emits no '...' for trailing context of exactly contextLines lines", async () => {
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = ["head-1"];
+        lines.push("TO-EDIT");
+        for (let i = 0; i < 4; i++) lines.push(`tail-${String(i + 1).padStart(2, "0")}`);
+        await writeLines(root, "trail4.txt", lines);
+
+        const result = await callEdit(registry, root, "trail4.txt", "TO-EDIT", "EDITED", false);
+        const diff = result.details?.diff ?? "";
+        expect(diff).not.toContain("...");
+        for (let i = 1; i <= 4; i++) {
+          expect(diff).toContain(`tail-${String(i).padStart(2, "0")}`);
+        }
+      });
+    });
+
+    it("emits a single '...' for trailing context of contextLines + 1 lines", async () => {
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = ["head-1"];
+        lines.push("TO-EDIT");
+        for (let i = 0; i < 5; i++) lines.push(`tail-${String(i + 1).padStart(2, "0")}`);
+        await writeLines(root, "trail5.txt", lines);
+
+        const result = await callEdit(registry, root, "trail5.txt", "TO-EDIT", "EDITED", false);
+        const diff = result.details?.diff ?? "";
+        // 5 > 4 → must fold: tail-01..tail-04 kept, "...", tail-05 elided.
+        expect(diff).toContain("...");
+        expect(diff).toContain("tail-01");
+        expect(diff).toContain("tail-04");
+        // tail-05 is in the elided tail and must not appear.
+        expect(diff).not.toContain("tail-05");
+      });
+    });
+
+    it("does not preserve the trailing tail (matches git, not head+...+tail)", async () => {
+      // Regression test for the previous bug: trailing context used to keep
+      // the last N lines as a "tail" after the "...". Git's diff -U<N> only
+      // keeps the lines closest to the preceding hunk; this test pins that
+      // behavior so the head+...+tail algorithm cannot regress.
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = ["head-1"];
+        lines.push("TO-EDIT");
+        for (let i = 0; i < 50; i++) lines.push(`tail-${String(i + 1).padStart(2, "0")}`);
+        await writeLines(root, "trail50.txt", lines);
+
+        const result = await callEdit(registry, root, "trail50.txt", "TO-EDIT", "EDITED", false);
+        const diff = result.details?.diff ?? "";
+        expect(diff).toContain("tail-01");
+        expect(diff).toContain("tail-04");
+        // Critical: none of the last 4 lines should appear.
+        expect(diff).not.toContain("tail-47");
+        expect(diff).not.toContain("tail-48");
+        expect(diff).not.toContain("tail-49");
+        expect(diff).not.toContain("tail-50");
+      });
     });
   });
 
-  it("folds the trailing context to contextLines + ... + contextLines when it is longer than 2*contextLines", async () => {
-    await withWorkspace(async (root, registry) => {
-      const lines: string[] = ["head-1"];
-      lines.push("TO-EDIT");
-      for (let i = 0; i < 12; i++) lines.push(`tail-${String(i + 1).padStart(2, "0")}`);
-      await writeLines(root, "trail.txt", lines);
+  describe("leading context", () => {
+    it("keeps the last contextLines lines closest to the following hunk and elides the rest", async () => {
+      await withWorkspace(async (root, registry) => {
+        // Leading context = 12 lines. Per git semantics, only the last 4
+        // (closest to the following hunk) are shown; lines 1-8 are elided.
+        const lines: string[] = [];
+        for (let i = 0; i < 12; i++) lines.push(`head-${String(i + 1).padStart(2, "0")}`);
+        lines.push("TO-EDIT");
+        await writeLines(root, "lead.txt", lines);
 
-      const result = await callEdit(registry, root, "trail.txt", "TO-EDIT", "EDITED", false);
-      const diff = result.details?.diff ?? "";
+        const result = await callEdit(registry, root, "lead.txt", "TO-EDIT", "EDITED", false);
+        const diff = result.details?.diff ?? "";
 
-      // The head context window (4 lines after the change) is kept verbatim.
-      expect(diff).toContain("tail-01");
-      expect(diff).toContain("tail-02");
-      expect(diff).toContain("tail-03");
-      expect(diff).toContain("tail-04");
-      // Middle window elided
-      expect(diff).not.toContain("tail-05");
-      expect(diff).not.toContain("tail-06");
-      expect(diff).not.toContain("tail-07");
-      expect(diff).not.toContain("tail-08");
-      // The tail context window (last 4 lines) is kept verbatim.
-      expect(diff).toContain("tail-09");
-      expect(diff).toContain("tail-10");
-      expect(diff).toContain("tail-11");
-      expect(diff).toContain("tail-12");
-      // Elision marker
-      expect(diff).toContain("...");
+        // Last 4 leading context lines (closest to the hunk) are kept.
+        expect(diff).toContain("head-09");
+        expect(diff).toContain("head-10");
+        expect(diff).toContain("head-11");
+        expect(diff).toContain("head-12");
+        // Earlier lines are elided.
+        expect(diff).not.toContain("head-08");
+        expect(diff).not.toContain("head-01");
+        // Elision marker.
+        expect(diff).toContain("...");
+      });
+    });
+
+    it("emits no '...' for leading context of exactly contextLines lines", async () => {
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = [];
+        for (let i = 0; i < 4; i++) lines.push(`head-${String(i + 1).padStart(2, "0")}`);
+        lines.push("TO-EDIT");
+        await writeLines(root, "lead4.txt", lines);
+
+        const result = await callEdit(registry, root, "lead4.txt", "TO-EDIT", "EDITED", false);
+        const diff = result.details?.diff ?? "";
+        expect(diff).not.toContain("...");
+        for (let i = 1; i <= 4; i++) {
+          expect(diff).toContain(`head-${String(i).padStart(2, "0")}`);
+        }
+      });
+    });
+
+    it("emits a single '...' for leading context of contextLines + 1 lines", async () => {
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = [];
+        for (let i = 0; i < 5; i++) lines.push(`head-${String(i + 1).padStart(2, "0")}`);
+        lines.push("TO-EDIT");
+        await writeLines(root, "lead5.txt", lines);
+
+        const result = await callEdit(registry, root, "lead5.txt", "TO-EDIT", "EDITED", false);
+        const diff = result.details?.diff ?? "";
+        // 5 > 4 → fold: head-01 elided, "...", head-02..head-05 kept.
+        expect(diff).toContain("...");
+        expect(diff).toContain("head-05");
+        expect(diff).toContain("head-02");
+        // head-01 is in the elided head and must not appear.
+        expect(diff).not.toContain("head-01");
+      });
     });
   });
 
-  it("emits no '...' for short context blocks (single hunk, file fits in window)", async () => {
-    await withWorkspace(async (root, registry) => {
-      // Total file is 8 lines, change in the middle: every line is within
-      // 2 * contextLines of the change, so the renderer keeps it all.
-      const lines = ["L1", "L2", "L3", "L4", "CHANGE", "L6", "L7", "L8"];
-      await writeLines(root, "short.txt", lines);
+  describe("inter-hunk context", () => {
+    it("keeps both ends when the gap is short enough to fit two context windows back-to-back", async () => {
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = ["L1", "L2", "L3", "L4", "CHANGE", "L6", "L7", "L8"];
+        await writeLines(root, "short.txt", lines);
 
-      const result = await callEdit(registry, root, "short.txt", "CHANGE", "EDITED", false);
-      const diff = result.details?.diff ?? "";
-      expect(diff).not.toContain("...");
-      expect(diff).toContain("EDITED");
+        const result = await callEdit(registry, root, "short.txt", "CHANGE", "EDITED", false);
+        const diff = result.details?.diff ?? "";
+        expect(diff).not.toContain("...");
+        expect(diff).toContain("EDITED");
+      });
+    });
+
+    it("inserts exactly one '...' when two hunks are separated by more than 2*contextLines", async () => {
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = [];
+        for (let i = 0; i < 30; i++) lines.push(`ctx-${String(i + 1).padStart(2, "0")}`);
+        lines[2] = "MARKER";
+        lines[27] = "MARKER";
+        await writeLines(root, "g.txt", lines);
+
+        const result = await callEdit(registry, root, "g.txt", "MARKER", "MARKER-new", true);
+        const diff = result.details?.diff ?? "";
+        expect(diff).toBeDefined();
+        const ellipsisCount = (diff.match(/^\.\.\.$/gm) ?? []).length;
+        expect(ellipsisCount).toBe(1);
+        const markerCount = (diff.match(/MARKER-new/g) ?? []).length;
+        expect(markerCount).toBe(2);
+      });
+    });
+
+    it("merges two hunks without a '...' when their gap fits within 2*contextLines", async () => {
+      await withWorkspace(async (root, registry) => {
+        // Two MARKER tokens separated by 7 unchanged context lines (≤ 2 * contextLines
+        // = 8), so a single replace_all should merge them into one continuous
+        // inter-hunk block. Trailing context after the second MARKER is kept
+        // short (4 lines = contextLines) so it renders verbatim too, keeping the
+        // test focused on the inter-hunk merge behavior.
+        const lines: string[] = [];
+        for (let i = 0; i < 13; i++) lines.push(`ctx-${String(i + 1).padStart(2, "0")}`);
+        lines[2] = "MARKER";
+        lines[10] = "MARKER";
+        // lines after the last MARKER = ctx-11..ctx-13 = 3 lines, no fold.
+        await writeLines(root, "h.txt", lines);
+
+        const result = await callEdit(registry, root, "h.txt", "MARKER", "MARKER-new", true);
+        const diff = result.details?.diff ?? "";
+        // Inter-hunk gap (lines 4-10) is 7 lines, ≤ 8, so no "..." separator.
+        expect(diff).not.toContain("...");
+        const markerCount = (diff.match(/MARKER-new/g) ?? []).length;
+        expect(markerCount).toBe(2);
+      });
+    });
+
+    it("emits no '...' for an inter-hunk block of exactly 2*contextLines lines (boundary)", async () => {
+      await withWorkspace(async (root, registry) => {
+        // Two MARKER tokens separated by exactly 8 unchanged context lines.
+        // The block fits two context windows back-to-back and renders verbatim.
+        // Trailing context after the second MARKER is exactly 4 lines (≤ contextLines)
+        // so it renders verbatim too, keeping the test focused on the inter-hunk
+        // boundary alone.
+        const lines: string[] = [];
+        for (let i = 0; i < 14; i++) lines.push(`ctx-${String(i + 1).padStart(2, "0")}`);
+        lines[1] = "MARKER";
+        lines[10] = "MARKER";
+        // lines after the last MARKER = ctx-11..ctx-14 = 4 lines = contextLines, no fold.
+        await writeLines(root, "h8.txt", lines);
+
+        const result = await callEdit(registry, root, "h8.txt", "MARKER", "MARKER-new", true);
+        const diff = result.details?.diff ?? "";
+        expect(diff).not.toContain("...");
+        const markerCount = (diff.match(/MARKER-new/g) ?? []).length;
+        expect(markerCount).toBe(2);
+      });
+    });
+
+    it("emits a single '...' for an inter-hunk block of 2*contextLines + 1 lines (boundary, just over)", async () => {
+      await withWorkspace(async (root, registry) => {
+        // Two MARKER tokens separated by 9 unchanged context lines. The block
+        // is just over the merge threshold, so it folds to head + "..." + tail.
+        // Trailing context after the second MARKER is kept short to avoid
+        // adding an extra trailing-context "...".
+        const lines: string[] = [];
+        for (let i = 0; i < 15; i++) lines.push(`ctx-${String(i + 1).padStart(2, "0")}`);
+        lines[1] = "MARKER";
+        lines[11] = "MARKER";
+        // lines after the last MARKER = ctx-12..ctx-15 = 4 lines = contextLines, no fold.
+        await writeLines(root, "h9.txt", lines);
+
+        const result = await callEdit(registry, root, "h9.txt", "MARKER", "MARKER-new", true);
+        const diff = result.details?.diff ?? "";
+        const ellipsisCount = (diff.match(/^\.\.\.$/gm) ?? []).length;
+        // Exactly one "..." from the inter-hunk fold.
+        expect(ellipsisCount).toBe(1);
+        // Inter-hunk head (4 lines closest to hunk1, lines 3-6) and tail
+        // (4 lines closest to hunk2, lines 8-11) are kept; line 7 is elided.
+        expect(diff).toContain("ctx-03");
+        expect(diff).toContain("ctx-06");
+        expect(diff).toContain("ctx-08");
+        expect(diff).toContain("ctx-11");
+        expect(diff).not.toContain("ctx-07");
+      });
     });
   });
 
-  it("inserts a single '...' between two hunks when their gap exceeds 2*contextLines", async () => {
-    await withWorkspace(async (root, registry) => {
-      // Two distinct MARKER tokens far apart. Both share the same old_string
-      // pattern via replace_all so a single edit produces two hunks in one diff.
-      const lines: string[] = [];
-      for (let i = 0; i < 30; i++) lines.push(`ctx-${String(i + 1).padStart(2, "0")}`);
-      lines[2] = "MARKER";
-      lines[27] = "MARKER";
-      await writeLines(root, "g.txt", lines);
+  describe("error and degenerate paths", () => {
+    it("handles a file with no changes by emitting an empty diff", async () => {
+      await withWorkspace(async (root, registry) => {
+        await writeLines(root, "nochange.txt", ["L1", "L2", "L3", "L4", "L5"]);
+        const result = await registry.getTool("edit").execute(
+          "test-call",
+          { path: "nochange.txt", workdir: ".", old_string: "L3", new_string: "L3" },
+          undefined,
+          undefined,
+          { cwd: root },
+        );
+        expect(result.isError).toBe(true);
+        const text = (result.content ?? [])
+          .filter((c: any) => c.type === "text" && typeof c.text === "string")
+          .map((c: any) => c.text)
+          .join("\n");
+        expect(text).toMatch(/identical|no changes/i);
+        expect(result.details?.diff).toBeUndefined();
+      });
+    });
 
-      const result = await callEdit(registry, root, "g.txt", "MARKER", "MARKER-new", true);
-      const diff = result.details?.diff ?? "";
-      expect(diff).toBeDefined();
-      // Two single-line hunks, ~24 lines apart. The inter-hunk gap is > 8
-      // lines, so the renderer must insert exactly one "...".
-      const ellipsisCount = (diff.match(/^\.\.\.$/gm) ?? []).length;
-      expect(ellipsisCount).toBe(1);
-      // Both replacements show up
-      const markerCount = (diff.match(/MARKER-new/g) ?? []).length;
-      expect(markerCount).toBe(2);
+    it("handles a single-line change with no surrounding context", async () => {
+      await withWorkspace(async (root, registry) => {
+        await writeFile(join(root, "single.txt"), "old\n", "utf8");
+        const result = await callEdit(registry, root, "single.txt", "old", "new", false);
+        const diff = result.details?.diff ?? "";
+        expect(diff).toContain("-1|old");
+        expect(diff).toContain("+1|new");
+        expect(diff).not.toContain("...");
+      });
     });
   });
 
-  it("merges two hunks without a '...' when their gap fits within 2*contextLines", async () => {
-    await withWorkspace(async (root, registry) => {
-      // Two MARKER tokens 7 unchanged context lines apart (≤ 2*contextLines=8),
-      // so a single replace_all should merge them into one continuous block.
-      const lines: string[] = [];
-      for (let i = 0; i < 20; i++) lines.push(`ctx-${String(i + 1).padStart(2, "0")}`);
-      lines[2] = "MARKER";
-      lines[11] = "MARKER";
-      await writeLines(root, "h.txt", lines);
+  describe("real-world regression", () => {
+    it("renders a long-edit 3-line block + 10-line trailing context as a tight fold", async () => {
+      // Real-world 13-line file: a single edit replaces lines 1-3 (the title
+      // line, the blank line, and the opening paragraph). The 10 trailing
+      // context lines (4-13) used to be rendered as 4 + '...' + 4 under the
+      // unified algorithm. The position-aware algorithm keeps only the 4
+      // lines closest to the hunk and elides the rest, matching git.
+      await withWorkspace(async (root, registry) => {
+        const lines: string[] = [
+          "时光旅人",
+          "",
+          "我叫苏晚，今年二十八岁，是一个普通的图书管理员。每天的工作就是整理书籍、帮读者查找资料。这样的生活平淡而安稳，像一潭静水。直到那个雨夜，一切都改变了。",
+          "",
+          "那天晚上，我正准备下班关门，忽然发现门口有一封信。信是白色的，没有信封，只有折叠整齐的信纸，上面用漂亮的手写字体写着我的名字。我从未见过这样的信，没有寄件人地址，没有邮戳，没有任何能表明它来源的标记。它就那样静静地躺在图书馆门口的台阶上，被雨水打湿了一角，却奇迹般地没有完全浸透。",
+          "",
+          "带着满心的疑惑，我小心翼翼地打开信，里面只有短短几行字：\"苏晚小姐，我们诚邀请您参加一场特殊的聚会。时间：明晚子夜时分。地点：城南废弃的钟楼。请务必准时出席，届时您将获得改变一生的机会。——时光的守护者\"",
+          "",
+          "读完这封信，我第一反应是觉得荒谬。这年头还有人用这种方式邀请人？还什么\"改变一生的机会\"，听起来就像是骗子精心设计的骗局。可是，手指却不听使唤，把那封信收进了包里。也许是直觉，也许是命运，总之我没有拒绝这份神秘的邀请。",
+          "",
+          "那天晚上回到家，我躺在床上辗转反侧，脑海里不断浮现信上的那些字。\"时光的守护者\"是什么意思？\"改变一生的机会\"又指的是什么？作为一个从小就对神秘事物充满好奇的人，我的内心深处有一个声音在不断怂恿我：去吧，去看看吧，万一是真的呢？",
+          "",
+          "第二天是周六，我有一整天的休息时间。整个白天我都在犹豫要不要赴约。理智告诉我这很可能是一个陷阱，但直觉却一次次把我推向那个废弃的钟楼。最终，好奇心战胜了理智。",
+          "",
+          "子夜时分，我站在了城南废弃的钟楼前。这座钟楼建于民国时期，是这座城市最古老的建筑之一。据说在几十年前的一场大火中，钟楼被严重损毁，此后就被一直荒废着。然而此刻，钟楼的大门竟然是敞开的，从门口透出的不是黑暗，而是一片温暖的橘黄色光芒。",
+        ];
+        await writeLines(root, "story.txt", lines);
 
-      const result = await callEdit(registry, root, "h.txt", "MARKER", "MARKER-new", true);
-      const diff = result.details?.diff ?? "";
-      // Gap is 7 lines (ctx-03..ctx-10) which is ≤ 2 * contextLines (8), so
-      // the two hunks should merge into a single context block with no "...".
-      expect(diff).not.toContain("...");
-      const markerCount = (diff.match(/MARKER-new/g) ?? []).length;
-      expect(markerCount).toBe(2);
-    });
-  });
-
-  it("emits a single '...' when context block is exactly 2*contextLines + 1 lines long (just over the merge threshold)", async () => {
-    await withWorkspace(async (root, registry) => {
-      // Trailing context = 9 lines (== 2*contextLines + 1). The boundary check
-      // is strict: < or <= triggers different branches, so a 9-line block must
-      // fold while an 8-line block must not.
-      const lines: string[] = ["head-1"];
-      lines.push("TO-EDIT");
-      for (let i = 0; i < 9; i++) lines.push(`tail-${String(i + 1).padStart(2, "0")}`);
-      await writeLines(root, "edge9.txt", lines);
-
-      const result = await callEdit(registry, root, "edge9.txt", "TO-EDIT", "EDITED", false);
-      const diff = result.details?.diff ?? "";
-      // 9 > 8 → must fold: head 4 lines, "...", tail 4 lines (line 9 elided).
-      expect(diff).toContain("...");
-      expect(diff).toContain("tail-01");
-      expect(diff).toContain("tail-04");
-      expect(diff).toContain("tail-06"); // 9 - 4 = 5, so tail-06..tail-09 are the last 4
-      expect(diff).toContain("tail-09");
-      // tail-05 is in the elided middle and must not appear
-      expect(diff).not.toContain("tail-05");
-    });
-  });
-
-  it("emits no '...' when context block is exactly 2*contextLines lines long (boundary, no fold)", async () => {
-    await withWorkspace(async (root, registry) => {
-      // Trailing context = 8 lines (== 2*contextLines). This is the boundary
-      // case where the block fits in two context windows back-to-back and
-      // must be rendered verbatim with no "..." separator.
-      const lines: string[] = ["head-1"];
-      lines.push("TO-EDIT");
-      for (let i = 0; i < 8; i++) lines.push(`tail-${String(i + 1).padStart(2, "0")}`);
-      await writeLines(root, "edge8.txt", lines);
-
-      const result = await callEdit(registry, root, "edge8.txt", "TO-EDIT", "EDITED", false);
-      const diff = result.details?.diff ?? "";
-      // 8 ≤ 8 → all 8 lines verbatim, no elision marker
-      expect(diff).not.toContain("...");
-      for (let i = 1; i <= 8; i++) {
-        expect(diff).toContain(`tail-${String(i).padStart(2, "0")}`);
-      }
-    });
-  });
-
-  it("handles a file with no changes by emitting an empty diff", async () => {
-    await withWorkspace(async (root, registry) => {
-      await writeLines(root, "nochange.txt", ["L1", "L2", "L3", "L4", "L5"]);
-      const result = await registry.getTool("edit").execute(
-        "test-call",
-        { path: "nochange.txt", workdir: ".", old_string: "L3", new_string: "L3" },
-        undefined,
-        undefined,
-        { cwd: root },
-      );
-      // No change to apply: the tool should refuse before reaching the renderer.
-      // The error result has no diff details.
-      expect(result.isError).toBe(true);
-      const text = (result.content ?? [])
-        .filter((c: any) => c.type === "text" && typeof c.text === "string")
-        .map((c: any) => c.text)
-        .join("\n");
-      expect(text).toMatch(/identical|no changes/i);
-      expect(result.details?.diff).toBeUndefined();
-    });
-  });
-
-  it("handles a single-line change with no surrounding context", async () => {
-    await withWorkspace(async (root, registry) => {
-      // File is exactly one line that gets replaced. No context blocks at all.
-      await writeFile(join(root, "single.txt"), "old\n", "utf8");
-      const result = await callEdit(registry, root, "single.txt", "old", "new", false);
-      const diff = result.details?.diff ?? "";
-      expect(diff).toContain("-1|old");
-      expect(diff).toContain("+1|new");
-      expect(diff).not.toContain("...");
-    });
-  });
-
-  it("folds a 3-hunk file with mixed gap sizes correctly", async () => {
-    await withWorkspace(async (root, registry) => {
-      // Three MARKER tokens: 12 lines apart, 3 lines apart, 12 lines apart.
-      // Expected diff layout:
-      //   - hunk1 (line 3)
-      //   - 12-line gap ctx-04..ctx-15 → folded: ctx-04..ctx-07 + "..." + ctx-12..ctx-15
-      //   - hunk2 (line 16)
-      //   - 3-line gap ctx-17..ctx-19 → merged (≤ 8), no "..."
-      //   - hunk3 (line 20)
-      //   - 40-line trailing context → folded: ctx-21..ctx-24 + "..." + ctx-57..ctx-60
-      // Total: exactly 2 "..." markers.
-      const lines: string[] = [];
-      for (let i = 0; i < 60; i++) lines.push(`ctx-${String(i + 1).padStart(2, "0")}`);
-      lines[2] = "MARKER";
-      lines[15] = "MARKER";
-      lines[19] = "MARKER";
-      await writeLines(root, "three.txt", lines);
-
-      const result = await registry.getTool("edit").execute(
-        "test-call",
-        { path: "three.txt", workdir: ".", old_string: "MARKER", new_string: "MARKER-new", replace_all: true },
-        undefined,
-        undefined,
-        { cwd: root },
-      );
-      const diff = result.details?.diff ?? "";
-      const markerCount = (diff.match(/MARKER-new/g) ?? []).length;
-      expect(markerCount).toBe(3);
-      // Exactly two folds: 12-line inter-hunk + 40-line trailing. The 3-line
-      // middle gap is merged without a separator.
-      const ellipsisCount = (diff.match(/^\.\.\.$/gm) ?? []).length;
-      expect(ellipsisCount).toBe(2);
-    });
-  });
-
-  it("emits no '...' for a leading context block of exactly 2*contextLines (boundary, no fold)", async () => {
-    await withWorkspace(async (root, registry) => {
-      // Leading context = 8 lines (== 2*contextLines). Same boundary as the
-      // trailing-context test; if appendContextBlock is genuinely position-
-      // agnostic, this must pass identically.
-      const lines: string[] = [];
-      for (let i = 0; i < 8; i++) lines.push(`head-${String(i + 1).padStart(2, "0")}`);
-      lines.push("TO-EDIT");
-      lines.push("tail-1");
-      await writeLines(root, "leading8.txt", lines);
-
-      const result = await callEdit(registry, root, "leading8.txt", "TO-EDIT", "EDITED", false);
-      const diff = result.details?.diff ?? "";
-      // 8 ≤ 8 → all 8 head lines verbatim, no elision marker.
-      expect(diff).not.toContain("...");
-      for (let i = 1; i <= 8; i++) {
-        expect(diff).toContain(`head-${String(i).padStart(2, "0")}`);
-      }
-    });
-  });
-
-  it("emits a '...' for a leading context block of exactly 2*contextLines + 1 (boundary, fold)", async () => {
-    await withWorkspace(async (root, registry) => {
-      // Leading context = 9 lines (== 2*contextLines + 1). Mirror of the
-      // trailing 9-line boundary case.
-      const lines: string[] = [];
-      for (let i = 0; i < 9; i++) lines.push(`head-${String(i + 1).padStart(2, "0")}`);
-      lines.push("TO-EDIT");
-      lines.push("tail-1");
-      await writeLines(root, "leading9.txt", lines);
-
-      const result = await callEdit(registry, root, "leading9.txt", "TO-EDIT", "EDITED", false);
-      const diff = result.details?.diff ?? "";
-      // 9 > 8 → must fold: head 4, "...", tail 4 (head-05 elided).
-      expect(diff).toContain("...");
-      expect(diff).toContain("head-01");
-      expect(diff).toContain("head-04");
-      expect(diff).toContain("head-06");
-      expect(diff).toContain("head-09");
-      expect(diff).not.toContain("head-05");
-    });
-  });
-
-  it("folds a file with a single leading context block longer than 2*contextLines", async () => {
-    await withWorkspace(async (root, registry) => {
-      // Pure leading context > 8, then change, then short tail. Exercises the
-      // !nextPartIsChange=false path (the block is preceded by nothing, followed
-      // by a change) and confirms it folds the same way as trailing context.
-      const lines: string[] = [];
-      for (let i = 0; i < 20; i++) lines.push(`head-${String(i + 1).padStart(2, "0")}`);
-      lines.push("TO-EDIT");
-      await writeLines(root, "leading20.txt", lines);
-
-      const result = await callEdit(registry, root, "leading20.txt", "TO-EDIT", "EDITED", false);
-      const diff = result.details?.diff ?? "";
-      // 20 > 8 → head 4 + "..." + head-17..head-20 (last 4).
-      expect(diff).toContain("head-01");
-      expect(diff).toContain("head-04");
-      expect(diff).not.toContain("head-10");
-      expect(diff).toContain("head-17");
-      expect(diff).toContain("head-20");
-      expect(diff).toContain("...");
-    });
-  });
-
-  it("folds the inter-hunk-and-trailing tail of a real-world long edit (replace_all, 15-line file)", async () => {
-    // Regression test for a real-world case: a short story where the same 3-char
-    // string appears at line 1 and line 3, and replace_all rewrites both. The
-    // 12 trailing context lines (4-15) used to be rendered verbatim in the
-    // legacy implementation; the unified head+...+tail rule must fold them to
-    // 4 + "..." + 4. The 1-line blank between the two hunks is also part of
-    // the inter-hunk block and renders without an elision marker (≤ 2*contextLines).
-    await withWorkspace(async (root, registry) => {
-      const lines: string[] = [
-        "时光旅人",
-        "",
-        "时光旅人。",
-        "我叫苏晚，今年二十八岁，是一个普通的图书管理员。",
-        "每天的工作就是整理书籍，帮读者查找资料。这样的生活平淡而安稳，像一潭静水。直到那个雨夜，一切都改变了。",
-        "那天晚上，我正准备下班关门，忽然发现门口有一封信。信是白色的，没有信封，只有折叠整齐的信纸，上面用漂亮的手写字体写着我的名字。我从未见过这样的信，没有寄件人地址，没有邮戳，没有任何能表明它来源的标记。它就那样静静地躺在图书馆门口的台阶上，被雨水打湿了一角，却奇迹般地没有完全浸透。",
-        "带着满心的疑虑，我小心翼翼地打开信，里面只有短短几行字：\"苏晚小姐，我们诚邀您参加一场特殊的聚会。时间：明晚子夜时分。地点：城南废弃的钟楼。请务必准时出席，届时您将获得改变一生的机会。--时光的守护者\"",
-        "",
-        "我环顾四周，图书馆早已空无一人。窗外的雨越下越大，雷声隆隆。",
-        "",
-        "我反复读着信上的内容，试图找出一些端倪。但信上没有任何其他线索，纸质摸起来也普普通通。我开始怀疑这是一场恶作剧。",
-        "",
-        "第二天是周六，我有一整天的休息时间。整个白天我都在犹豫要不要赴约。理智告诉我这很可能是一个陷阱，但直觉却一次次把我推向那个废弃的钟楼。最终，好奇心战胜了理智。",
-        "",
-        "子夜时分，我站在了城南废弃的钟楼前。这座钟楼建于民国时期，是这座城市最古老的建筑之一。据说在几十年前的一场大火中，钟楼被严重损毁，此后就被一直荒废着。然而此刻，钟楼的大门竟然是敞开的，从门口透出的不是黑暗，而是一片温暖的橘黄色光芒。",
-      ];
-      await writeLines(root, "story.txt", lines);
-
-      const result = await registry.getTool("edit").execute(
-        "test-call",
-        {
-          path: "story.txt",
-          workdir: ".",
-          old_string: "时光旅人",
-          new_string: "时光旅人：觉皇之路",
-          replace_all: true,
-        },
-        undefined,
-        undefined,
-        { cwd: root },
-      );
-      const diff = result.details?.diff ?? "";
-      // Both hunks are present
-      expect(diff).toContain("- 1|时光旅人");
-      expect(diff).toContain("+ 1|时光旅人：觉皇之路");
-      expect(diff).toContain("- 3|时光旅人。");
-      expect(diff).toContain("+ 3|时光旅人：觉皇之路。");
-      // The 1-line blank between the two hunks is rendered (no elision).
-      expect(diff).toContain("  2|");
-      // The 12-line trailing block must fold: head 4 (lines 4-7), "...", tail 4 (lines 12-15).
-      expect(diff).toContain("...");
-      expect(diff).toContain("我叫苏晚"); // head-1
-      expect(diff).toContain("带着满心"); // head-4
-      // Lines 8-11 are in the elided middle and must not appear.
-      expect(diff).not.toContain("我环顾四周");
-      expect(diff).not.toContain("我反复读着");
-      // Last 4 lines are kept.
-      expect(diff).toContain("第二天是周六");
-      expect(diff).toContain("子夜时分");
+        const result = await registry.getTool("edit").execute(
+          "test-call",
+          {
+            path: "story.txt",
+            workdir: ".",
+            old_string:
+              "时光旅人\n\n我叫苏晚，今年二十八岁，是一个普通的图书管理员。",
+            new_string:
+              "时光旅人：觉醒之路\n\n我叫苏晚，今年二十八岁，是一名普通的图书管理员。",
+          },
+          undefined,
+          undefined,
+          { cwd: root },
+        );
+        const diff = result.details?.diff ?? "";
+        // The 3-line hunk (line 1 title, blank line 2, line 3 paragraph) is
+        // rendered as two +/- pairs plus the unchanged blank line.
+        expect(diff).toContain("- 1|时光旅人");
+        expect(diff).toContain("+ 1|时光旅人：觉醒之路");
+        expect(diff).toContain("- 3|我叫苏晚");
+        expect(diff).toContain("+ 3|我叫苏晚");
+        // Inter-hunk blank rendered.
+        expect(diff).toContain("  2|");
+        // Trailing context: only head 4 (lines 4-7) are kept; the rest is elided.
+        expect(diff).toContain("...");
+        expect(diff).toContain("那天晚上");
+        expect(diff).toContain("带着满心");
+        // Critical: lines 8-13 (the "tail") must NOT appear. Use the leading
+        // verb of each line to disambiguate from substrings earlier in the file.
+        expect(diff).not.toContain("读完这封信");
+        expect(diff).not.toContain("我反复读着信");
+        expect(diff).not.toContain("第二天是周六，我");
+        expect(diff).not.toContain("子夜时分，我站");
+      });
     });
   });
 });
