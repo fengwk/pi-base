@@ -155,9 +155,11 @@ function formatCompletedEditCall(header: string, diff: string | undefined, theme
   return `${header}\n\n${colorizeCompletedEditDiff(diff, theme)}`;
 }
 
-function formatSuccessfulEditResult(context: any, replacements: number): string {
+function formatSuccessfulEditResult(context: any, replacements: number, diff: string): string {
   const rawPath = String(context?.args?.path ?? "<unknown-path>");
-  return `Edited ${rawPath} successfully.\nReplacements: ${replacements}`;
+  return diff.trim()
+    ? `Edited ${rawPath} successfully.\nReplacements: ${replacements}\n\ndiff:\n${diff}`
+    : `Edited ${rawPath} successfully.\nReplacements: ${replacements}`;
 }
 
 function formatDiffLine(prefix: " " | "+" | "-", lineNumber: number, lineNumberWidth: number, line: string): string {
@@ -477,7 +479,7 @@ export function registerEditTool(
           queueMicrotask(() => context?.invalidate?.());
         }
         if (typeof replacements === "number") {
-          result = { ...result, content: [{ type: "text" as const, text: formatSuccessfulEditResult(context, replacements) }] };
+          result = { ...result, content: [{ type: "text" as const, text: formatSuccessfulEditResult(context, replacements, diff ?? "") }] };
         }
       } else {
         state.completedKey = undefined;
