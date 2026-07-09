@@ -71,7 +71,15 @@ function formatEditCall(args: any, theme: any, cwd?: string): string {
 function formatEditCallPreview(args: any, theme: any): string {
   const oldText = String(args?.old_string ?? "");
   const newText = String(args?.new_string ?? "");
-  return formatEditPreview(oldText, newText, theme);
+  if (!oldText && !newText) return "";
+  try {
+    const { diff } = generateNumberedDiff(oldText, newText);
+    if (!diff.trim()) return "";
+    return colorizeCompletedEditDiff(diff, theme);
+  } catch {
+    // Fall back to the raw preview if the diff generator fails for any reason.
+    return formatEditPreview(oldText, newText, theme);
+  }
 }
 
 function formatEditPreview(oldText: string, newText: string, theme: any): string {

@@ -193,8 +193,8 @@ describe("tool renderers", () => {
       ));
       expect(editCall).toContain("edit");
       expect(editCall).toContain("a.ts");
-      expect(editCall).toContain("-old");
-      expect(editCall).toContain("+new");
+      expect(editCall).toContain("-1|old");
+      expect(editCall).toContain("+1|new");
       const writeCall = render(registry.getTool("write").renderCall(
         { path: "b.ts", content: "line1\nline2" },
         { fg: (_role: string, text: string) => text } as any,
@@ -214,8 +214,8 @@ describe("tool renderers", () => {
         { fg: (role: string, text: string) => `<${role}>${text}</${role}>` } as any,
         { lastComponent: undefined, argsComplete: true, cwd: "/tmp/ws" },
       ));
-      expect(rendered).toContain("<toolDiffRemoved>-old</toolDiffRemoved>");
-      expect(rendered).toContain("<toolDiffAdded>+new</toolDiffAdded>");
+      expect(rendered).toContain("<toolDiffRemoved>-1|old</toolDiffRemoved>");
+      expect(rendered).toContain("<toolDiffAdded>+1|new</toolDiffAdded>");
     });
   });
 
@@ -243,8 +243,8 @@ describe("tool renderers", () => {
         {} as any,
         { lastComponent: undefined, state: {}, executionStarted: true, argsComplete: true, isPartial: false, cwd: "/tmp/ws" },
       ));
-      expect(rendered).toContain("-old");
-      expect(rendered).toContain("+new");
+      expect(rendered).toContain("-1|old");
+      expect(rendered).toContain("+1|new");
       expect(rendered).not.toContain("working");
     });
   });
@@ -345,7 +345,7 @@ describe("tool renderers", () => {
         {} as any,
         streamingContext as any,
       ));
-      expect(editRendered).toContain("-old-14");
+      expect(editRendered).toContain("-14|old-14");
 
       // A write whose path has not streamed in yet must still render the content that has
       // arrived, without filler "..." or synthetic missing-path placeholders.
