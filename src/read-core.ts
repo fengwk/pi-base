@@ -21,6 +21,7 @@ import {
 } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { readSchema } from "./schemas/read.js";
+import { mapFilePathToPath } from "./tool-arg-aliases.js";
 import { decodeTextFile } from "./text-codec.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -129,6 +130,9 @@ export function registerReadTool(
     description: loadToolDescription("read"),
     promptSnippet: loadToolPromptSnippet("read"),
     parameters: readSchema,
+    prepareArguments(args: unknown) {
+      return mapFilePathToPath(args);
+    },
     renderCall(args: any, theme: any, context: any) {
       return renderStreamingCallText(formatReadCall(args, theme, context?.cwd), theme, context);
     },

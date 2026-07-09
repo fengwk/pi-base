@@ -31,6 +31,7 @@ import {
 } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { editSchema } from "./schemas/edit.js";
+import { mapFilePathToPath } from "./tool-arg-aliases.js";
 import { decodeTextFile, encodeTextFile } from "./text-codec.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -52,7 +53,7 @@ function prepareEditArguments(args: unknown, validationTool: any): any {
       type: "toolCall",
       id: "edit-argument-validation",
       name: "edit",
-      arguments: args as any,
+      arguments: mapFilePathToPath(args) as any,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

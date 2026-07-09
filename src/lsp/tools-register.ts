@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
 import { withPiBaseErrorMarker } from "../tool-error-marker.js";
 import { lspDiagnosticsSchema, lspGotoDefinitionSchema, lspJavaDecompileSchema, lspWorkspaceSymbolsSchema } from "../schemas/lsp.js";
+import { mapFilePathToPath } from "../tool-arg-aliases.js";
 import { lspManager } from "./client.js";
 import {
   executeLspDiagnostics,
@@ -25,6 +26,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     label: "lsp_diagnostics",
     description: loadToolDescription("lsp_diagnostics"),
     promptSnippet: loadToolPromptSnippet("lsp_diagnostics"),
+    prepareArguments(args: unknown) {
+      return mapFilePathToPath(args);
+    },
     parameters: lspDiagnosticsSchema,
     renderCall(args: any, theme: any, context: any) {
       return renderLspCall(formatLspDiagnosticsCall(args, theme, context?.cwd), theme, context);
@@ -42,6 +46,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     label: "lsp_goto_definition",
     description: loadToolDescription("lsp_goto_definition"),
     promptSnippet: loadToolPromptSnippet("lsp_goto_definition"),
+    prepareArguments(args: unknown) {
+      return mapFilePathToPath(args);
+    },
     parameters: lspGotoDefinitionSchema,
     renderCall(args: any, theme: any, context: any) {
       return renderLspCall(formatLspGotoDefinitionCall(args, theme, context?.cwd), theme, context);
@@ -59,6 +66,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     label: "lsp_workspace_symbols",
     description: loadToolDescription("lsp_workspace_symbols"),
     promptSnippet: loadToolPromptSnippet("lsp_workspace_symbols"),
+    prepareArguments(args: unknown) {
+      return mapFilePathToPath(args);
+    },
     parameters: lspWorkspaceSymbolsSchema,
     renderCall(args: any, theme: any, context: any) {
       return renderLspCall(formatLspWorkspaceSymbolsCall(args, theme, context?.cwd), theme, context);
@@ -76,6 +86,9 @@ export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: 
     label: "lsp_java_decompile",
     description: loadToolDescription("lsp_java_decompile"),
     promptSnippet: loadToolPromptSnippet("lsp_java_decompile"),
+    prepareArguments(args: unknown) {
+      return mapFilePathToPath(args);
+    },
     parameters: lspJavaDecompileSchema,
     renderCall(args: any, theme: any, context: any) {
       return renderLspCall(formatLspJavaDecompileCall(args, theme, context?.cwd), theme, context);

@@ -13,6 +13,7 @@ import { lspManager } from "./lsp/client.js";
 import { registerLspTools, type LspResolverFactory } from "./lsp/tools.js";
 import { LspDiscoveryResolver } from "./lsp/discovery.js";
 import { applyUnifiedOutputTruncation } from "./tool-output.js";
+import { mapFilePathToPath } from "./tool-arg-aliases.js";
 import { findSchema } from "./schemas/find.js";
 import { inferToolResultIsError } from "./tool-result.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -126,6 +127,9 @@ export function registerFindTool(
   const template = createToolDefinition(process.cwd());
   const tool = withPiBaseErrorMarker({
     ...template,
+    prepareArguments(args: unknown) {
+      return mapFilePathToPath(args);
+    },
     parameters: findSchema,
     description: loadToolDescription("find"),
     promptSnippet: loadToolPromptSnippet("find"),

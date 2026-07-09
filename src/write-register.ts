@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { renderCallText, renderStreamingCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./render.js";
 import { writeSchema } from "./schemas/write.js";
+import { mapFilePathToPath } from "./tool-arg-aliases.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { executeWrite, formatWriteCall } from "./write-core.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
@@ -43,6 +44,9 @@ export function registerWriteTool(
     label: "write",
     description: loadToolDescription("write"),
     promptSnippet: loadToolPromptSnippet("write"),
+    prepareArguments(args: unknown) {
+      return mapFilePathToPath(args);
+    },
     parameters: writeSchema,
     renderCall(args: any, theme: any, context: any) {
       // While the model is still streaming args, route through renderStreamingCallText so

@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { renderStreamingCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./render.js";
 import { grepSchema } from "./schemas/grep.js";
+import { mapFilePathToPath } from "./tool-arg-aliases.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { executeGrep, formatGrepCall, type GrepFactory } from "./grep-core.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
@@ -14,6 +15,9 @@ export function registerGrepTool(
     label: "grep",
     description: loadToolDescription("grep"),
     promptSnippet: loadToolPromptSnippet("grep"),
+    prepareArguments(args: unknown) {
+      return mapFilePathToPath(args);
+    },
     parameters: grepSchema,
     renderCall(args: any, theme: any, context: any) {
       return renderStreamingCallText(formatGrepCall(args, theme, context?.cwd), theme, context);
