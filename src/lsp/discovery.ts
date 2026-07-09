@@ -218,19 +218,18 @@ export class LspDiscoveryResolver {
   /**
    * Find the workspace root for a file.
    *
-   * Two phases:
-   * 1. Walk up once to locate the nearest `.git` (file or directory) and use
-   *    it as a hard boundary — this prevents git worktree leak into the main
-   *    repository (same intent as `vim.fs.root` / nvim-lspconfig's
-   *    `search_ancestors` + `.git` in the marker list).
-   * 2. Walk up again from the file, stopping before crossing the `.git`
-   *    boundary, and collect:
-   *    - `rootMarkers`:  topmost / shallowest hit (closest to filesystem root).
-   *    - `firstMatchMarkers`: first hit (closest to the file, matching
-   *      `util.root_pattern` behaviour).
+   * Two-phase walk up from the file:
+   * 1. Locate the nearest `.git` (file or directory) and use it as a hard
+   *    boundary — prevents git worktree leak into the main repository.
+   * 2. Within that boundary, collect:
+   *    - `rootMarkers`:  topmost / shallowest hit.
+   *    - `firstMatchMarkers`: first hit (closest to the file).
    *
-   * Return priority:
-   *   rootMarkers > firstMatchMarkers > gitRoot > file's parent directory
+   * Return: topmostRoot > firstRoot > dirname(filePath)
+   *
+   * `.git` is only a boundary, never a fallback root (a bare .git means
+   * nothing to a build-aware LSP).  Users who want .git as the root
+   * should list it in firstMatchMarkers.
    *
    * Non-git projects skip the boundary and behave identically to the
    * previous implementation.
@@ -277,11 +276,11 @@ export class LspDiscoveryResolver {
       dir = dirname(dir);
     }
 
-    // Build markers take priority within the .git boundary so monorepos
-    // correctly resolve sub-project roots (e.g. backend/pom.xml below the
-    // repo-level .git).  The .git root is only used as a last-resort
-    // project boundary when no marker was found.
-    return topmostRoot || firstRoot || gitRoot || dirname(resolvedFile);
+    // Build markers take priority.  The .git boundary only prevents
+    // worktree leak — it is not a project root by itself (a bare .git
+    // directory means nothing to a build-aware LSP like jdtls).  Users
+    // who want .git as a project root should add it to firstMatchMarkers.
+    return topmostRoot || firstRoot || dirname(resolvedFile);
   }
 
   findServerForFile(filePath: string): LspServerConfig {
