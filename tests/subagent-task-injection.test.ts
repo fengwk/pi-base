@@ -91,9 +91,8 @@ describe("task tool injection", () => {
     expect(registry.getActiveTools()).not.toContain("task");
   });
 
-  it("injects the available subagents (name + description) into the system prompt when delegating", async () => {
-    // Intent: like OpenCode, the model must see which subagent_types are valid and what they do —
-    // exposed via the system prompt (pi tool descriptions are static). Only when `task` is active.
+  it("injects task instructions and available subagents into the system prompt when delegating", async () => {
+    // Intent: task instructions and the valid subagent types must be exposed only when `task` is active.
     const { root } = await setupAgents();
     const registry = createToolRegistry({ model: defaultModel, models: [defaultModel] });
     piBaseExtension(registry.pi as never);
@@ -106,6 +105,10 @@ describe("task tool injection", () => {
       { cwd: root },
     );
     const prompt = String(result?.systemPrompt ?? "");
+    expect(prompt).toContain("You can delegate self-contained subtasks with the `task` tool.");
+    expect(prompt).toContain("The main agent remains responsible for task decomposition, decisions, integration, validation, and final judgment.");
+    expect(prompt).toContain("After 2-3 well-directed attempts without meaningful progress, take over the work, switch approaches, or report the blocker.");
+    expect(prompt).toContain("Set `subagent_type` to one of the names listed below.");
     expect(prompt).toContain("<available_subagents>");
     expect(prompt).toContain("</available_subagents>");
     expect(prompt).toContain("<name>worker</name>");

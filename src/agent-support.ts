@@ -5,6 +5,7 @@ import { formatSkillsForPrompt, getAgentDir, parseFrontmatter, type BuildSystemP
 import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
 
 const DEFAULT_AGENT_NAME = "default";
+const TASK_SYSTEM_PROMPT = readFileSync(new URL("../prompts/task-system.md", import.meta.url), "utf8").trim();
 /** Custom session entry naming the active agent; also written into subagent sessions at spawn. */
 export const AGENT_STATE_ENTRY = "pi-base-agent-state";
 const AGENTS_DIR = "agents";
@@ -126,7 +127,7 @@ export function registerAgentSupport(
       ].join("\n");
     });
     return [
-      "You can delegate a self-contained task to a subagent with the `task` tool. Set `subagent_type` to one of the names listed below.",
+      TASK_SYSTEM_PROMPT,
       "",
       "<available_subagents>",
       entries.join("\n"),
