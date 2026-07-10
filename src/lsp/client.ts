@@ -30,6 +30,7 @@ const MAX_INIT_RETRIES = 3;
 const INIT_RETRY_DELAY_MS = 500;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_SHUTDOWN_GRACE_MS = 1000;
 const NOOP = () => undefined;
 
 function isJdtlsCommand(command: string[]): boolean {
@@ -123,6 +124,20 @@ function abortError(): Error {
   return new Error("Operation aborted");
 }
 
+async function waitForGracefulShutdown(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 function isTransientPullDiagnosticsInternalError(error: (Error & { code?: number }) | null | undefined): boolean {
   return error?.code == null && error?.message === "Internal error";
 }
@@ -148,6 +163,8 @@ export class LspClient {
   private readonly onActivity: () => void;
   private publishedDiagnosticsWarm = false;
   private coldStartDiagnosticsQueueTail: Promise<void> = Promise.resolve();
+  private stopping = false;
+  private stopPromise: Promise<void> | undefined;
 
   constructor(private readonly root: string, private readonly server: LspServerConfig, options: { onActivity?: () => void } = {}) {
     this.requestTimeoutMs = server.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
@@ -155,6 +172,7 @@ export class LspClient {
   }
 
   async start(): Promise<void> {
+    if (this.stopping) throw new Error("LSP client stopped");
     const jdtlsEnhancedCommand = isJdtlsCommand(this.server.command) ? enhanceJdtlsCommand(this.server.command, this.root, this.server.workspaceData) : this.server.command;
     const jdtlsEnv = enhanceJdtlsEnv(jdtlsEnhancedCommand, process.env);
     this.proc = spawn(jdtlsEnhancedCommand[0], jdtlsEnhancedCommand.slice(1), {
@@ -176,6 +194,7 @@ export class LspClient {
     this.proc.stderr?.on("data", () => undefined);
     // Wait briefly for the process to either die (e.g. missing binary) or survive.
     await new Promise((resolve) => setTimeout(resolve, 100));
+    if (this.stopping || !this.proc) throw new Error("LSP client stopped");
     if (this.proc.exitCode !== null || this.proc.killed) {
       const detail = this.proc.exitCode === null ? "killed before start" : `exited with code ${this.proc.exitCode}`;
       throw new Error(`LSP server '${this.server.command.join(" ")}' ${detail} for ${this.root}. Check that the server is installed and reachable on PATH.`);
@@ -212,11 +231,13 @@ export class LspClient {
     let result: any = null;
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < MAX_INIT_RETRIES; attempt++) {
+      if (this.stopping) throw new Error("LSP client stopped");
       try {
         result = await this.send("initialize", initParams);
         lastError = null;
         break;
       } catch (error) {
+        if (this.stopping) throw error;
         lastError = error as Error;
         await new Promise((resolve) => setTimeout(resolve, INIT_RETRY_DELAY_MS));
       }
@@ -381,19 +402,33 @@ export class LspClient {
     return typeof result === "string" ? result : null;
   }
 
-  async stop(): Promise<void> {
+  stop(options: { shutdownGraceMs?: number } = {}): Promise<void> {
+    if (!this.stopPromise) {
+      this.stopPromise = this.stopImpl(options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS);
+    }
+    return this.stopPromise;
+  }
+
+  private async stopImpl(shutdownGraceMs: number): Promise<void> {
+    const proc = this.proc;
+    this.stopping = true;
+    this.rejectAllPending("LSP client stopped");
     this.rejectAllDiagnosticsWaiters("LSP client stopped");
-    try {
-      await this.send("shutdown", null);
-    } catch {
-      // best-effort
+
+    if (proc && proc.exitCode === null && !proc.killed) {
+      try {
+        await waitForGracefulShutdown(this.send("shutdown", null), shutdownGraceMs);
+      } catch {
+        // Best-effort graceful shutdown. The process is force-killed below.
+      }
+      try {
+        this.notify("exit", {});
+      } catch {
+        // best-effort
+      }
     }
-    try {
-      this.notify("exit", {});
-    } catch {
-      // best-effort
-    }
-    try { this.proc?.kill(); } catch { /* ignore */ }
+
+    try { proc?.kill(); } catch { /* ignore */ }
     this.proc = null;
     this.openedFiles.clear();
     this.fileVersions.clear();
@@ -513,6 +548,7 @@ export class LspClient {
   }
 
   private send(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
+    if (this.stopping && method !== "shutdown") throw new Error("LSP client stopped");
     if (!this.proc || this.proc.exitCode !== null || this.proc.killed) throw new Error("LSP client not started");
     if (signal?.aborted) throw abortError();
     const id = ++this.requestId;
@@ -628,9 +664,15 @@ export class LspClient {
   }
 }
 
+interface PendingLspClient {
+  client: LspClient;
+  promise: Promise<LspClient>;
+}
+
 export class LspManager {
   private clients = new Map<string, LspClient>();
-  private pendingClients = new Map<string, Promise<LspClient>>();
+  private pendingClients = new Map<string, PendingLspClient>();
+  private generation = 0;
   /**
    * Per-key timestamp of the last observed activity. "Activity" means:
    *   - `getClient` returned a live client for this key;
@@ -649,9 +691,11 @@ export class LspManager {
    */
   private idleCheckTimer: NodeJS.Timeout | null = null;
   private readonly idleTimeoutMs: number;
+  private readonly shutdownGraceMs: number;
 
-  constructor(options: { idleTimeoutMs?: number } = {}) {
+  constructor(options: { idleTimeoutMs?: number; shutdownGraceMs?: number } = {}) {
     this.idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+    this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
   }
 
   /**
@@ -666,15 +710,20 @@ export class LspManager {
     const server = resolver.findServerForFile(filePath);
     const root = resolver.findWorkspaceRoot(filePath, server);
     const key = `${root}::${server.id}`;
+    const generation = this.generation;
     this.noteActivity(key);
     let client = this.clients.get(key);
     if (!client || !client.isAlive()) {
       const pending = this.pendingClients.get(key);
       if (pending) {
-        client = await pending;
+        client = await pending.promise;
       } else {
         const staleClient = client;
-        const boot = (async () => {
+        const nextClient = new LspClient(root, server, {
+          onActivity: () => this.noteActivity(key),
+        });
+        let boot!: Promise<LspClient>;
+        boot = (async () => {
           if (staleClient) {
             // Drop the dead/being-replaced client from the maps BEFORE
             // we attempt the new boot, so a failed new boot does not
@@ -682,25 +731,24 @@ export class LspManager {
             // otherwise have to clean up.
             this.clients.delete(key);
             this.lastUsedAt.delete(key);
-            await staleClient.stop().catch(() => undefined);
+            await staleClient.stop({ shutdownGraceMs: this.shutdownGraceMs }).catch(() => undefined);
           }
-          const nextClient = new LspClient(root, server, {
-            onActivity: () => this.noteActivity(key),
-          });
           try {
+            if (generation !== this.generation) throw new Error("LSP client startup cancelled");
             await nextClient.start();
             await nextClient.initialize();
+            if (generation !== this.generation) throw new Error("LSP client startup cancelled");
             this.clients.set(key, nextClient);
             return nextClient;
           } catch (error) {
-            await nextClient.stop().catch(() => undefined);
+            await nextClient.stop({ shutdownGraceMs: this.shutdownGraceMs }).catch(() => undefined);
             throw error;
           } finally {
-            this.pendingClients.delete(key);
+            if (this.pendingClients.get(key)?.promise === boot) this.pendingClients.delete(key);
             this.noteActivity(key);
           }
         })();
-        this.pendingClients.set(key, boot);
+        this.pendingClients.set(key, { client: nextClient, promise: boot });
         client = await boot;
       }
     }
@@ -788,15 +836,20 @@ export class LspManager {
   }
 
   async shutdownAll(): Promise<void> {
+    this.generation++;
     if (this.idleCheckTimer) {
       clearTimeout(this.idleCheckTimer);
       this.idleCheckTimer = null;
     }
-    await Promise.all(Array.from(this.pendingClients.values()).map((client) => client.catch(() => undefined)));
-    this.pendingClients.clear();
-    await Promise.all(Array.from(this.clients.values()).map((client) => client.stop().catch(() => undefined)));
+
+    const clients = new Set<LspClient>([
+      ...this.clients.values(),
+      ...Array.from(this.pendingClients.values(), (pending) => pending.client),
+    ]);
     this.clients.clear();
+    this.pendingClients.clear();
     this.lastUsedAt.clear();
+    await Promise.all(Array.from(clients, (client) => client.stop({ shutdownGraceMs: this.shutdownGraceMs }).catch(() => undefined)));
   }
 }
 

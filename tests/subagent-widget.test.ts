@@ -77,4 +77,21 @@ describe("renderSubagentWidget", () => {
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toBeUndefined();
   });
+
+  it("clears the widget and cancels queued renders on session shutdown", async () => {
+    // Intent: a render scheduled before session teardown must not restore stale UI after shutdown.
+    const root = await createTempWorkspace();
+    const registry = createToolRegistry({ model: defaultModel, models: [defaultModel] });
+    piBaseExtension(registry.pi as never);
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    subagentRegistry.upsert(node({ sessionId: "x", agentType: "mathworker", status: "running" }));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toEqual(["⟳ subagents running (1)", "• mathworker"]);
+
+    subagentRegistry.update("x", { toolCount: 1 });
+    await registry.emit("session_shutdown", { reason: "quit" }, { cwd: root });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toBeUndefined();
+  });
 });

@@ -646,6 +646,29 @@ describe("LspClient internals", () => {
       await expect(pending).rejects.toThrow("LSP client stopped");
     });
 
+    it("force-kills an unresponsive client after the bounded shutdown grace period", async () => {
+      // Intent: reload must not inherit the server's normal request timeout when shutdown is ignored.
+      vi.useFakeTimers();
+      try {
+        const kill = vi.fn();
+        const client = new LspClient("/tmp/demo", { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+        (client as any).proc = {
+          stdin: { write: () => undefined },
+          exitCode: null,
+          killed: false,
+          kill,
+        };
+
+        const stopping = client.stop({ shutdownGraceMs: 100 });
+        await vi.advanceTimersByTimeAsync(100);
+        await stopping;
+
+        expect(kill).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("surfaces a generic actionable hint when transient Internal error fallback times out", async () => {
       vi.useFakeTimers();
       try {
@@ -758,6 +781,47 @@ describe("LspClient internals", () => {
         expect(initializeSpy).not.toHaveBeenCalled();
       } finally {
         await lspManager.shutdownAll();
+        startSpy.mockRestore();
+        initializeSpy.mockRestore();
+        stopSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("manager shutdown", () => {
+    it("stops a booting client without waiting for its initialization to settle", async () => {
+      // Intent: reload must terminate an in-flight boot and prevent it from repopulating the client cache later.
+      const root = await createTempWorkspace();
+      const binDir = join(root, "bin");
+      await mkdir(binDir, { recursive: true });
+      const executable = join(binDir, "fake-lsp");
+      await writeFile(executable, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
+      const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
+      const resolver = new LspDiscoveryResolver({
+        servers: { typescript: { command: [executable], extensions: [".ts"] } },
+      });
+      let releaseStart!: () => void;
+      const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+      const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
+        await startGate;
+        (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
+      });
+      const initializeSpy = vi.spyOn(LspClient.prototype, "initialize").mockResolvedValue(undefined);
+      const stopSpy = vi.spyOn(LspClient.prototype, "stop").mockResolvedValue(undefined);
+      const manager = new LspManager({ shutdownGraceMs: 10 });
+      const boot = manager.getClient(filePath, resolver);
+
+      try {
+        await Promise.resolve();
+        await manager.shutdownAll();
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+
+        releaseStart();
+        await expect(boot).rejects.toThrow("LSP client startup cancelled");
+        expect((manager as any).clients.size).toBe(0);
+      } finally {
+        releaseStart();
+        await manager.shutdownAll();
         startSpy.mockRestore();
         initializeSpy.mockRestore();
         stopSpy.mockRestore();

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import piBaseExtension from "../index.js";
 import { lspManager } from "../src/lsp/client.js";
+import { DEPTH_ENTRY } from "../src/subagent/depth.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 
 function render(component: any): string {
@@ -10,7 +11,7 @@ function render(component: any): string {
 }
 
 describe("index lifecycle behavior", () => {
-  it("reloads runtime settings and shuts down lsp only on session reload", async () => {
+  it("shuts down root LSP clients on session shutdown and reload", async () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     let shutdownCalls = 0;
@@ -22,10 +23,28 @@ describe("index lifecycle behavior", () => {
     try {
       await registry.emit("session_start", { reason: "startup" }, { cwd: process.cwd() });
       await registry.emit("session_shutdown", { reason: "quit" }, { cwd: process.cwd() });
-      expect(shutdownCalls).toBe(0);
+      expect(shutdownCalls).toBe(1);
 
       await registry.emit("session_start", { reason: "reload" }, { cwd: process.cwd() });
-      expect(shutdownCalls).toBe(1);
+      expect(shutdownCalls).toBe(2);
+    } finally {
+      lspManager.shutdownAll = original;
+    }
+  });
+
+  it("keeps root-owned LSP clients alive when a subagent session shuts down", async () => {
+    const registry = createToolRegistry();
+    registry.pi.appendEntry(DEPTH_ENTRY, { depth: 2 });
+    piBaseExtension(registry.pi as any);
+    let shutdownCalls = 0;
+    const original = lspManager.shutdownAll.bind(lspManager);
+    lspManager.shutdownAll = async () => {
+      shutdownCalls += 1;
+    };
+
+    try {
+      await registry.emit("session_shutdown", { reason: "quit" }, { cwd: process.cwd() });
+      expect(shutdownCalls).toBe(0);
     } finally {
       lspManager.shutdownAll = original;
     }

@@ -194,11 +194,11 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   const syncLsp = (absolutePath: string) => {
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
-  pi.on("session_start", async (event) => {
+  pi.on("session_start", async (event, ctx) => {
     if (event.reason === "reload") {
       reloadRuntimePiBaseSettings();
       resolverFactory.clear();
-      await lspManager.shutdownAll();
+      if (isRootSession(ctx)) await lspManager.shutdownAll();
     } else {
       resolverFactory.clear();
     }
@@ -213,8 +213,9 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       pi.setActiveTools(withoutTask.length > 0 ? withoutTask : [...BASE_TOOL_NAMES]);
     }
   });
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     resolverFactory.clear();
+    if (isRootSession(ctx)) await lspManager.shutdownAll();
   });
 
   registerReadTool(pi, {
@@ -307,6 +308,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   let registeredHostRootSessionId: string | null = null;
   let hostChain: Promise<unknown> = Promise.resolve();
   let unsubscribeWidget: (() => void) | null = null;
+  let widgetRenderTimer: ReturnType<typeof setTimeout> | null = null;
   pi.on("session_start", async (_event, ctx?: ExtensionContext) => {
     if (!ctx?.hasUI || !isRootSession(ctx)) return;
     const rootSessionId = readRootSessionId(ctx);
@@ -328,19 +330,22 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     // Live subagent tree widget: re-render (throttled) whenever the registry changes, so parallel
     // and nested delegation is visible while a `task` call blocks the parent turn.
     if (unsubscribeWidget) unsubscribeWidget();
-    let scheduled = false;
+    if (widgetRenderTimer) {
+      clearTimeout(widgetRenderTimer);
+      widgetRenderTimer = null;
+    }
     const render = () => {
-      scheduled = false;
+      widgetRenderTimer = null;
       ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, renderSubagentWidget(subagentRegistry.forRoot(rootSessionId), rootSessionId));
     };
     const scheduleRender = () => {
-      if (scheduled) return;
-      scheduled = true;
-      setTimeout(render, 50);
+      if (widgetRenderTimer) return;
+      widgetRenderTimer = setTimeout(render, 50);
     };
+    render();
     unsubscribeWidget = subagentRegistry.onChange(scheduleRender);
   });
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     if (registeredHost) {
       if (registeredHostRootSessionId === null) clearSubagentPermissionHost(registeredHost);
       else clearSubagentPermissionHost(registeredHostRootSessionId, registeredHost);
@@ -350,6 +355,13 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     if (unsubscribeWidget) {
       unsubscribeWidget();
       unsubscribeWidget = null;
+    }
+    if (widgetRenderTimer) {
+      clearTimeout(widgetRenderTimer);
+      widgetRenderTimer = null;
+    }
+    if (ctx.hasUI && isRootSession(ctx)) {
+      ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
     }
   });
 
