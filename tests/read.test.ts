@@ -189,6 +189,7 @@ describe("read tool", () => {
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: absoluteFile }, undefined, undefined, { cwd: rootA });
     expect(result.isError).not.toBe(true);
     expect(seenBaseDir).toBe(join(rootB, "src"));
+    expect(getText(result)).toContain("lsp: unsupported");
   });
 
   it("reads directories", async () => {

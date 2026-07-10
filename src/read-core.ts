@@ -102,14 +102,11 @@ function buildTextReadHeader(args: {
   endsWithNewline: boolean;
   lsp: LspSupportInfo;
 }): string[] {
-  const header = [
+  return [
     `path: ${args.rawPath}`,
     `ends_with_newline: ${args.endsWithNewline ? "yes" : "no"}`,
+    formatLspStatus(args.lsp),
   ];
-  if (args.lsp.supported) {
-    header.push(formatLspStatus(args.lsp));
-  }
-  return header;
 }
 
 export type ReadLspResolverFactory = (cwd: string) => LspDiscoveryResolver;
