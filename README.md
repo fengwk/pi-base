@@ -125,7 +125,7 @@ Agent 正文（覆盖 system prompt）
 | model / thinkingLevel | 仅显式切换时 best-effort 应用；resume/reload 不覆盖 session 的值；失败输出 warning 不阻塞切换 |
 | tools | allowlist 机制；LSP/MCP 工具同样受控；task 工具由 subagents + depth 动态注入 |
 | skills | allowlist 过滤后统一重建 prompt；仅 `read` 可用时注入 `<available_skills>`；`disable-model-invocation` skill 不暴露给模型；不影响 `/skill:name` |
-| subagents | 不存在的 agent 从 allowlist 剔除并 warning；非空 + depth<maxDepth → 注入 task 并在 prompt 中列出 |
+| subagents | 不存在的 agent 从 allowlist 剔除并 warning；非空 + depth<maxDepth → 注入 task 并在 prompt 中以 `<available_subagents>` XML 列出 |
 | session 恢复 | 最近一次 `/agent` 写入 session entry；下次 `session_start` 自动恢复；已持久化 agent 不存在时回退 default |
 | 启动顺序 | 已持久化 agent > `--agent` > `defaultAgent` > `default`；`/agent default` 不重置 model/thinkingLevel |
 

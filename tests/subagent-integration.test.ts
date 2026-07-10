@@ -120,8 +120,9 @@ Return SLOW_DONE.
       { cwd: root },
     );
     const systemPrompt = String(promptResult?.systemPrompt ?? "");
-    expect(systemPrompt).toContain("## Subagents");
-    expect(systemPrompt).toContain("- it-slowworker: Integration-test worker");
+    expect(systemPrompt).toContain("<available_subagents>");
+    expect(systemPrompt).toContain("<name>it-slowworker</name>");
+    expect(systemPrompt).toContain("<description>Integration-test worker</description>");
 
     const result = await registry.getTool("task").execute(
       "task-1",

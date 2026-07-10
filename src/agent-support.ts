@@ -107,16 +107,31 @@ export function registerAgentSupport(
   // System-prompt section listing the subagents the active agent may delegate to (name +
   // description). Gated on `task` being active this turn — applyTaskInjection already encoded
   // the depth/subagents decision into the active tool set, so this stays a single source of truth.
+  //
+  // Mirrors opencode's <available_skills>/<available_references> pattern: a clear XML envelope
+  // (`<available_subagents>` containing one `<subagent>` element per delegate) is much easier for
+  // the model to parse than nested bullet lists, and matches the rest of pi-base's prompt XML.
   const buildSubagentSection = (agent: AgentDefinition, activeTools: string[]): string => {
     if (!subagentControls || !activeTools.includes(subagentControls.taskToolName)) return "";
     const names = agent.subagents ?? [];
     if (names.length === 0) return "";
-    const lines = names.map((name) => {
+    const entries = names.map((name) => {
       const sub = resolveAgent(name);
-      const description = sub?.description?.trim();
-      return `- ${name}: ${description || (sub ? "(no description)" : "(agent not found)")}`;
+      const description = sub?.description?.trim() || (sub ? "(no description)" : "(agent not found)");
+      return [
+        "  <subagent>",
+        `    <name>${escapeXml(name)}</name>`,
+        `    <description>${escapeXml(description)}</description>`,
+        "  </subagent>",
+      ].join("\n");
     });
-    return `## Subagents\nYou can delegate a self-contained task to a subagent with the \`task\` tool by setting \`subagent_type\` to one of:\n${lines.join("\n")}`;
+    return [
+      "You can delegate a self-contained task to a subagent with the `task` tool. Set `subagent_type` to one of the names listed below.",
+      "",
+      "<available_subagents>",
+      entries.join("\n"),
+      "</available_subagents>",
+    ].join("\n");
   };
 
   const refreshCatalog = (): AgentCatalog => {
@@ -505,6 +520,20 @@ function isFullwidthCodePoint(codePoint: number): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Escape a string for safe insertion into an XML text node or attribute value.
+ * Mirrors pi-coding-agent's `formatSkillsForPrompt` helper so every XML section in the prompt
+ * uses the same escaping rules.
+ */
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 function filterKnownTools(toolNames: string[] | undefined, allToolNames: string[]): string[] {

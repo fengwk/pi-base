@@ -55,7 +55,7 @@ async function setupAgents(): Promise<{ root: string }> {
   await writeAgentFile(
     agentDir,
     "worker.md",
-    `---\nname: worker\nmodel: ${defaultModel.provider}/${defaultModel.id}\ntools:\n  - read\n---\nWork.\n`,
+    `---\nname: worker\ndescription: Run focused unit-of-work tasks.\nmodel: ${defaultModel.provider}/${defaultModel.id}\ntools:\n  - read\n---\nWork.\n`,
   );
   return { root };
 }
@@ -106,8 +106,10 @@ describe("task tool injection", () => {
       { cwd: root },
     );
     const prompt = String(result?.systemPrompt ?? "");
-    expect(prompt).toContain("## Subagents");
-    expect(prompt).toContain("- worker:");
+    expect(prompt).toContain("<available_subagents>");
+    expect(prompt).toContain("</available_subagents>");
+    expect(prompt).toContain("<name>worker</name>");
+    expect(prompt).toContain("<description>Run focused unit-of-work tasks.</description>");
 
     // A non-delegating agent must not get the section.
     await registry.runCommand("agent", "worker", { cwd: root });
@@ -116,7 +118,7 @@ describe("task tool injection", () => {
       { systemPrompt: "BASE", systemPromptOptions: { cwd: root, selectedTools: registry.getActiveTools() } },
       { cwd: root },
     );
-    expect(String(workerResult?.systemPrompt ?? "")).not.toContain("## Subagents");
+    expect(String(workerResult?.systemPrompt ?? "")).not.toContain("<available_subagents>");
   });
 
   it("filters unknown subagents at load time so task is never injected for them", async () => {
