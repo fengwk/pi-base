@@ -558,18 +558,25 @@ function resolveCustomPrompt(agent: AgentDefinition, fallbackCustomPrompt: strin
 }
 
 /**
- * Keep this aligned with Pi's `buildSystemPrompt` custom-prompt branch until the core package
- * exports that helper as a stable public API. When no custom prompt source exists, preserve
- * Pi's prebuilt system prompt as the fallback.
+ * pi-base owns the final system prompt structure: the body comes from either a custom prompt
+ * (built locally, mirroring upstream's custom-prompt branch) or upstream's prebuilt prompt
+ * (used as a body source). The trailing `<env>` block is always emitted by pi-base via
+ * `formatEnvBlock` so the model sees one consistent envelope regardless of body source.
+ *
+ * When we reuse upstream's prebuilt prompt as the body, we first strip its own trailing
+ * date/cwd lines (`stripUpstreamEnvInfo`) so the final prompt has exactly one env section.
  */
 function buildAgentSystemPrompt(options: BuildSystemPromptOptions, fallbackSystemPrompt: string): string {
   const customPrompt = options.customPrompt?.trim();
-  if (!customPrompt) {
-    return fallbackSystemPrompt;
-  }
+  const body = customPrompt
+    ? buildCustomPromptBody(customPrompt, options)
+    : stripUpstreamEnvInfo(fallbackSystemPrompt);
+  if (!options.cwd) return body;
+  return body + formatEnvBlock(options.cwd);
+}
 
+function buildCustomPromptBody(customPrompt: string, options: BuildSystemPromptOptions): string {
   const appendSection = options.appendSystemPrompt ? `\n\n${options.appendSystemPrompt}` : "";
-  const promptCwd = options.cwd.replace(/\\/g, "/");
   const contextFiles = options.contextFiles ?? [];
   const selectedTools = options.selectedTools;
   const skills = options.skills ?? [];
@@ -592,13 +599,42 @@ function buildAgentSystemPrompt(options: BuildSystemPromptOptions, fallbackSyste
     prompt += formatSkillsForPrompt(skills);
   }
 
+  return prompt;
+}
+
+/**
+ * Environment metadata block (date + cwd) appended to every system prompt. Matches opencode's
+ * `<env>` XML envelope so the model can parse it the same way it parses `<available_skills>`
+ * and the new `<available_subagents>` block. The two leading empty entries ensure a blank line
+ * separates `<env>` from whatever precedes it (skills, custom prompt, etc.) regardless of
+ * whether the body ends with a trailing newline.
+ */
+function formatEnvBlock(cwd: string): string {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
-  prompt += `\nCurrent date: ${year}-${month}-${day}`;
-  prompt += `\nCurrent working directory: ${promptCwd}`;
-  return prompt;
+  const date = `${year}-${month}-${day}`;
+  const normalizedCwd = cwd.replace(/\\/g, "/");
+  return [
+    "",
+    "",
+    "<env>",
+    `  Current date: ${date}`,
+    `  Current working directory: ${normalizedCwd}`,
+    "</env>",
+  ].join("\n");
+}
+
+/**
+ * Upstream's `buildSystemPrompt` always appends two trailing lines to its output:
+ *   `\nCurrent date: <date>\nCurrent working directory: <cwd>`
+ * Strip them so `formatEnvBlock` can emit exactly one consistent `<env>` envelope at the end
+ * of the final prompt. This is the only place we touch upstream's output structure, and the
+ * intent (normalize body → then `formatEnvBlock` appends the envelope) is explicit.
+ */
+function stripUpstreamEnvInfo(prompt: string): string {
+  return prompt.replace(/\nCurrent date: \S+\nCurrent working directory: \S+$/, "");
 }
 
 function loadAgentCatalog(): AgentCatalog {

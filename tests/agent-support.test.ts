@@ -139,10 +139,18 @@ You are the planner.
 
       expect(plannerPrompt.systemPrompt).toContain("You are the planner.");
       expect(plannerPrompt.systemPrompt).not.toContain("Default system prompt.\nCurrent date:");
+      expect(plannerPrompt.systemPrompt).toContain("<env>");
+      expect(plannerPrompt.systemPrompt).toContain("</env>");
+      expect(plannerPrompt.systemPrompt).toContain(`  Current working directory: ${root}`);
+      // <env> must be preceded by a blank line so it does not glue to whatever came before.
+      expect(plannerPrompt.systemPrompt).toMatch(/\n\n<env>/);
+      // Exactly one <env> block: env info is owned by pi-base, not duplicated by upstream.
+      expect((plannerPrompt.systemPrompt.match(/<env>/g) ?? []).length).toBe(1);
+      expect((plannerPrompt.systemPrompt.match(/Current date:/g) ?? []).length).toBe(1);
+      expect((plannerPrompt.systemPrompt.match(/Current working directory:/g) ?? []).length).toBe(1);
       expect(plannerPrompt.systemPrompt).toContain("Appendix");
       expect(plannerPrompt.systemPrompt).toContain("<name>spec</name>");
       expect(plannerPrompt.systemPrompt).not.toContain("<name>other</name>");
-      expect(plannerPrompt.systemPrompt).toContain(`Current working directory: ${root}`);
       expect(plannerPrompt.systemPrompt).toContain("**Your tool usage:**");
 
       await registry.pi.setModel(defaultModel as any);
