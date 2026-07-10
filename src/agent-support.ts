@@ -587,11 +587,14 @@ function buildCustomPromptBody(customPrompt: string, options: BuildSystemPromptO
   }
 
   if (contextFiles.length > 0) {
-    prompt += "\n\n# Project Context\n\n";
+    // Mirror upstream buildSystemPrompt's <project_context> envelope so all prompt sections
+    // (skills, env, subagents, project context) share the same XML shape.
+    prompt += "\n\n<project_context>\n\n";
     prompt += "Project-specific instructions and guidelines:\n\n";
     for (const { path: filePath, content } of contextFiles) {
-      prompt += `## ${filePath}\n\n${content}\n\n`;
+      prompt += `<project_instructions path="${escapeXml(filePath)}">\n${escapeXml(content)}\n</project_instructions>\n\n`;
     }
+    prompt += "</project_context>\n";
   }
 
   const customPromptHasRead = !selectedTools || selectedTools.includes("read");

@@ -939,8 +939,10 @@ skills:
       expect(filtered.systemPrompt).toContain(customPrompt);
       expect(filtered.systemPrompt).not.toContain("Incoming prompt should be ignored.");
       expect(filtered.systemPrompt).toContain("Appendix");
-      expect(filtered.systemPrompt).toContain("# Project Context");
-      expect(filtered.systemPrompt).toContain(`## ${join(root, "AGENTS.md")}`);
+      expect(filtered.systemPrompt).toContain("<project_context>");
+      expect(filtered.systemPrompt).toContain("</project_context>");
+      expect(filtered.systemPrompt).toContain(`<project_instructions path="${join(root, "AGENTS.md")}">`);
+      expect(filtered.systemPrompt).toContain("Project rules");
       expect(filtered.systemPrompt).toContain("<name>spec</name>");
       expect(filtered.systemPrompt).not.toContain("<name>other</name>");
       expect(filtered.systemPrompt).toContain("**Your tool usage:**");
