@@ -1,0 +1,7 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8-ntes.9",
+  "base_commit_sha": "e5fa9e46960037d295591a0c1c5693e61dfd4057",
+  "prompts": {}
+}
