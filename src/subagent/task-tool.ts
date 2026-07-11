@@ -35,6 +35,7 @@ const MAX_PROGRESS_ENTRIES = 60;
 const TASK_DEFAULT_COLLAPSED_RESULT_LINES = 10;
 const pendingSessionReservations = new Map<string, number>();
 const pendingRootReservations = new Map<string, number>();
+const pendingResumeSessionIds = new Set<string>();
 
 interface TaskToolDetails {
   progress?: boolean;
@@ -345,12 +346,15 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
       const parentSessionId = ctx.sessionManager.getSessionId();
       const rootSessionId = readRootSessionId(ctx) || parentSessionId;
       let releaseSessionReservation: (() => void) | undefined;
+      let releaseResumeReservation: (() => void) | undefined;
       if (sessionId) {
         const existing = subagentRegistry.get(sessionId);
         if (existing?.status === "running") {
           return errorResult(`subagent session "${sessionId}" is currently running; cannot resume until it finishes.`);
         }
       }
+      const childDepth = readDepth(ctx) + 1;
+      const reportProgress = createProgressReporter(onUpdate);
       const max = deps.getMaxConcurrency(ctx.cwd);
       const maxTotal = deps.getMaxTotalConcurrency(ctx.cwd);
       const reservation = tryReserveSessionSlot(parentSessionId, rootSessionId, max, maxTotal);
@@ -367,9 +371,16 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
         );
       }
       releaseSessionReservation = reservation.release;
+      if (sessionId) {
+        if (pendingResumeSessionIds.has(sessionId)) {
+          releaseSessionReservation();
+          releaseSessionReservation = undefined;
+          return errorResult(`subagent session "${sessionId}" is currently running; cannot resume until it finishes.`);
+        }
+        pendingResumeSessionIds.add(sessionId);
+        releaseResumeReservation = () => pendingResumeSessionIds.delete(sessionId);
+      }
 
-      const childDepth = readDepth(ctx) + 1;
-      const reportProgress = createProgressReporter(onUpdate);
       try {
         const result = await runSubagent(
           ctx,
@@ -392,6 +403,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
         return { content: [{ type: "text" as const, text: formatRunResult(result) }], details: { result }, isError: result.state !== "completed" };
       } finally {
         releaseSessionReservation?.();
+        releaseResumeReservation?.();
       }
     },
   });

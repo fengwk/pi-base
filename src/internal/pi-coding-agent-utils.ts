@@ -205,6 +205,7 @@ const TOOLS: Record<SupportedTool, ToolConfig> = {
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+const toolInstallPromises = new Map<SupportedTool, Promise<string | undefined>>();
 
 function isOfflineModeEnabled(): boolean {
   const value = process.env.PI_OFFLINE;
@@ -422,13 +423,24 @@ export async function ensureTool(tool: SupportedTool, silent = false): Promise<s
     return undefined;
   }
 
-  logInfo(silent, `${config.name} not found. Downloading...`);
+  const pendingInstall = toolInstallPromises.get(tool);
+  if (pendingInstall) return pendingInstall;
+
+  const installPromise = (async () => {
+    logInfo(silent, `${config.name} not found. Downloading...`);
+    try {
+      const path = await downloadTool(tool);
+      logInfo(silent, `${config.name} installed to ${path}`);
+      return path;
+    } catch (e) {
+      logWarn(silent, `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
+  })();
+  toolInstallPromises.set(tool, installPromise);
   try {
-    const path = await downloadTool(tool);
-    logInfo(silent, `${config.name} installed to ${path}`);
-    return path;
-  } catch (e) {
-    logWarn(silent, `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`);
-    return undefined;
+    return await installPromise;
+  } finally {
+    if (toolInstallPromises.get(tool) === installPromise) toolInstallPromises.delete(tool);
   }
 }

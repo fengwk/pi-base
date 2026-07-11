@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import piBaseExtension from "../index.js";
 import { executeGrep } from "../src/grep-core.js";
-import { createTempWorkspace, getText } from "./helpers.js";
+import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";
 
 const fakeToolState = vi.hoisted(() => ({ rgPath: "" }));
 
@@ -133,6 +134,58 @@ describe("executeGrep native ripgrep path", () => {
     expect(getText(result)).toContain("Some lines truncated to 500 chars");
     expect((result as any).details.matchLimitReached).toBe(1);
     expect((result as any).details.linesTruncated).toBe(true);
+  });
+
+  it("leaves byte truncation to the shared tool-output layer", async () => {
+    // Intent: native grep must return its complete match-limited payload so the shared output
+    // policy can persist the full text before presenting a truncated preview.
+    const root = await createTempWorkspace();
+    await installFakeRg(root);
+    const filePath = join(root, "large.txt");
+    await writeFile(filePath, "match\n", "utf8");
+    process.env.PI_BASE_FAKE_RG_FILE = filePath;
+    process.env.PI_BASE_FAKE_RG_TEXT = `${"x".repeat(490)}\n`;
+    process.env.PI_BASE_FAKE_RG_COUNT = "120";
+
+    const result = await executeGrep("grep-large", {
+      workdir: ".",
+      path: "large.txt",
+      pattern: "x",
+      limit: 120,
+    }, undefined, undefined, { cwd: root });
+
+    expect(getText(result).length).toBeGreaterThan(50 * 1024);
+    expect((result as any).details.truncation).toBeUndefined();
+  });
+
+  it("persists complete native grep output before returning the shared truncated preview", async () => {
+    // Intent: the registered tool must connect native grep's complete payload to the shared output
+    // policy, preserving a recoverable full-output file for results above the byte budget.
+    const root = await createTempWorkspace();
+    await installFakeRg(root);
+    const filePath = join(root, "large.txt");
+    await writeFile(filePath, "match\n", "utf8");
+    process.env.PI_BASE_FAKE_RG_FILE = filePath;
+    process.env.PI_BASE_FAKE_RG_TEXT = `${"x".repeat(490)}\n`;
+    process.env.PI_BASE_FAKE_RG_COUNT = "120";
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+
+    const result = await registry.getTool("grep").execute(
+      "grep-shared-output",
+      { workdir: ".", path: "large.txt", pattern: "x", limit: 120 },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    const outputPath = (result as any).details?.truncation?.outputPath;
+    const preview = getText(result);
+    expect(outputPath).toBeTruthy();
+    const saved = await readFile(outputPath, "utf8");
+    expect(preview).toContain("Full output (");
+    expect(preview.length).toBeLessThan(saved.length);
+    expect(saved.length).toBeGreaterThan(50 * 1024);
   });
 
   it("returns no-match and ripgrep failure results distinctly", async () => {

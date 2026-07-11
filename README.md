@@ -56,7 +56,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `find` | `pattern`, `path` | limit=1000, 无默认超时 | `path` 无隐式默认值，搜当前目录需显式写 `"."`；底层使用 `fd` |
 | `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
 | `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
-| `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；沿用原编码/BOM/换行风格；新文件默认 UTF-8 |
+| `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
 | `lsp_diagnostics` | `path` | severity=all | 需 `lsp.servers` 声明 server；不做能力前置检查 |
 | `lsp_goto_definition` | `path`, `line` | character=0 | 需 server 声明 `textDocument/definition` |
 | `lsp_workspace_symbols` | `path`, `query` | limit=50 | 需 server 声明 `workspace/symbol` |

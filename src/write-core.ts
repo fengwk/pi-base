@@ -11,6 +11,10 @@ export function formatWriteSuccess(rawPath: string, existed: boolean): string {
   return `${action} ${rawPath} successfully.`;
 }
 
+function isFileNotFoundError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
 // Number of content lines shown in the collapsed call preview once the tool has finished
 // applying. Aligned with the streaming rolling window's body-line tail (see
 // STREAMING_CALL_PREVIEW_LINES in render.ts: 10 total, with 3 reserved for the title
@@ -99,7 +103,8 @@ export async function executeWrite(
         const detected = detectTextFileEncoding(currentBytes);
         outputEncoding = detected.encoding;
         outputBom = detected.bom !== "none" ? detected.bom : (textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none");
-      } catch {
+      } catch (error) {
+        if (!isFileNotFoundError(error)) throw error;
         existed = false;
       }
       const output = encodeTextFile(content, outputEncoding, outputBom);

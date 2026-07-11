@@ -402,6 +402,40 @@ describe("task tool", () => {
     expect(text(r3)).toContain("total concurrency limit");
   });
 
+  it("refuses concurrent resumes before the first session finishes opening", async () => {
+    // Intent: the resume guard must cover the factory-open window before the child appears as
+    // running in the registry, otherwise two SessionManagers can write the same JSONL session.
+    let resumeCalls = 0;
+    let releaseResume!: () => void;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const factory: SubagentSessionFactory = {
+      spawn: async () => { throw new Error("unused"); },
+      resume: async ({ sessionId }) => {
+        resumeCalls += 1;
+        await resumeGate;
+        return {
+          sessionId,
+          prompt: async () => undefined,
+          collect: () => ({ report: "ok", toolCount: 0 }),
+          abort: vi.fn(),
+          dispose: vi.fn(),
+        };
+      },
+    };
+    const tool = registerAndCapture(baseDeps({ factory }));
+
+    const first = tool.execute("1", { subagent_type: "worker", prompt: "go-a", session_id: "same" }, undefined, undefined, ctx());
+    const second = await tool.execute("2", { subagent_type: "worker", prompt: "go-b", session_id: "same" }, undefined, undefined, ctx());
+
+    expect(second.isError).toBe(true);
+    expect(text(second)).toContain("currently running");
+    expect(resumeCalls).toBe(1);
+    releaseResume();
+    expect((await first).isError).not.toBe(true);
+  });
+
   it("refuses to resume a session that is currently running", async () => {
     // Intent: prevent double-driving one subagent session (P13).
     subagentRegistry.upsert({ sessionId: "s1", parentSessionId: "parent", rootSessionId: "parent", agentType: "worker", depth: 2, status: "running", toolCount: 0, startedAt: 0 });

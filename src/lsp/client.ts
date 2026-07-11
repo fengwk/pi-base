@@ -214,7 +214,7 @@ export class LspClient {
           publishDiagnostics: { relatedInformation: true },
           hover: { contentFormat: ["markdown", "plaintext"] },
         },
-        workspace: { workspaceFolders: true, configuration: true },
+        workspace: { workspaceFolders: true },
       },
     };
     if (isJdtlsCommand(this.server.command)) {

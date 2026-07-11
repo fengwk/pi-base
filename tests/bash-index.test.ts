@@ -426,7 +426,7 @@ describe("bash tool and index", () => {
     expect(bashResult.isError).toBe(true);
   });
 
-  it("enables the default base tool set and injects the base guide", async () => {
+  it("enables the default base tool set without injecting an empty base guide", async () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" });
@@ -437,9 +437,8 @@ describe("bash tool and index", () => {
       systemPromptOptions: { selectedTools: registry.getActiveTools() },
     });
 
-    expect(injected.systemPrompt).toContain("base system prompt");
-    expect(injected.systemPrompt).toContain("**Your tool usage:**");
-    expect(injected.systemPrompt).toContain("Use `bash` only for build, test, git");
+    expect(injected.systemPrompt).toBe("base system prompt");
+    expect(injected.systemPrompt).not.toContain("**Your tool usage:**");
     expect(injected.systemPrompt).not.toContain("<available_subagents>");
   });
 

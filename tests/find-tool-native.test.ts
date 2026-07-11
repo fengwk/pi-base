@@ -49,14 +49,15 @@ if (mode === "wait") {
   const count = Number(process.env.PI_BASE_FAKE_FD_COUNT || "0");
   if (count > 0) {
     const root = process.env.PI_BASE_FAKE_FD_ROOT || process.cwd();
+    const lines = [];
     for (let i = 0; i < count; i++) {
-      process.stdout.write(root + "/src/very-long-file-name-" + String(i).padStart(4, "0") + "-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ts\\n");
+      lines.push(root + "/src/very-long-file-name-" + String(i).padStart(4, "0") + "-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ts");
     }
-    process.exit(0);
+    process.stdout.write(lines.join("\\n") + "\\n");
+  } else {
+    const output = process.env.PI_BASE_FAKE_FD_OUTPUT || "";
+    if (output) process.stdout.write(output);
   }
-  const output = process.env.PI_BASE_FAKE_FD_OUTPUT || "";
-  if (output) process.stdout.write(output);
-  process.exit(0);
 }
 `,
     { mode: 0o755 },
@@ -126,6 +127,21 @@ describe("createFindToolDefinition native fd path", () => {
     process.env.PI_BASE_FAKE_FD_OUTPUT = `${join(root, "src", "partial.ts")}\n`;
     const partial = await tool.execute("find-partial", { path: ".", pattern: "*.ts" });
     expect(getText(partial)).toContain("src/partial.ts");
+  });
+
+  it("leaves byte truncation to the shared tool-output layer", async () => {
+    // Intent: native find must return all result-limited paths so the shared output policy can
+    // save the complete list before presenting a smaller preview.
+    const root = await createTempWorkspace();
+    await installFakeFd(root);
+    process.env.PI_BASE_FAKE_FD_ROOT = root;
+    process.env.PI_BASE_FAKE_FD_COUNT = "1000";
+    const tool = createFindToolDefinition(root);
+
+    const result = await tool.execute("find-large", { path: ".", pattern: "*", limit: 1000 });
+
+    expect(getText(result).length).toBeGreaterThan(50 * 1024);
+    expect((result as any).details?.truncation).toBeUndefined();
   });
 
   it("aborts before and during fd execution", async () => {

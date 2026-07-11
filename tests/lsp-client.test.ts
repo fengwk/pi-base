@@ -316,6 +316,7 @@ describe("LspClient internals", () => {
         const [_method, params] = args as [string, any];
         expect(params.rootUri).toBe(pathToFileURL("/tmp/demo").href);
         expect(params.capabilities.general.positionEncodings).toEqual(["utf-32", "utf-16", "utf-8"]);
+        expect(params.capabilities.workspace).toEqual({ workspaceFolders: true });
         expect(params.initializationOptions.extendedClientCapabilities.classFileContentsSupport).toBe(true);
         return { capabilities: { positionEncoding: "utf-8", workspaceSymbolProvider: true } };
       });

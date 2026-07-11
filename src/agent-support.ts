@@ -391,8 +391,9 @@ export function registerAgentSupport(
   pi.on("before_agent_start", async (event) => {
     const activeAgent = resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
     if (!activeAgent) {
+      const baseToolGuide = options.baseToolGuide.trim();
       return {
-        systemPrompt: `${event.systemPrompt}\n\n${options.baseToolGuide}`,
+        systemPrompt: baseToolGuide ? `${event.systemPrompt}\n\n${baseToolGuide}` : event.systemPrompt,
       };
     }
 
@@ -409,10 +410,12 @@ export function registerAgentSupport(
       event.systemPrompt,
     );
 
-    const subagentSection = buildSubagentSection(activeAgent, selectedTools);
-    const guide = subagentSection ? `${options.baseToolGuide}\n\n${subagentSection}` : options.baseToolGuide;
+    const guide = [options.baseToolGuide, buildSubagentSection(activeAgent, selectedTools)]
+      .map((section) => section.trim())
+      .filter(Boolean)
+      .join("\n\n");
     return {
-      systemPrompt: `${systemPrompt}\n\n${guide}`,
+      systemPrompt: guide ? `${systemPrompt}\n\n${guide}` : systemPrompt,
     };
   });
 

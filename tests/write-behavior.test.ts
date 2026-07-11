@@ -37,6 +37,26 @@ describe("write behavior", () => {
     expect(await readFile(join(root, "x.ts"), "utf8")).toBe("x");
   });
 
+  it("writes caller-provided line endings when overwriting an existing file", async () => {
+    // Intent: whole-file write follows the supplied content while still preserving the existing
+    // encoding/BOM; unlike edit, it does not silently restore the previous newline style.
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "existing.txt", "old\r\ntext\r\n");
+    const registry = createToolRegistry();
+    registerWriteTool(registry.pi as any);
+
+    const result = await registry.getTool("write").execute(
+      "1",
+      { path: "existing.txt", content: "new\ntext\n" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(await readFile(join(root, "existing.txt"), "utf8")).toBe("new\ntext\n");
+  });
+
   it("calls onSuccessfulWrite hook and reports overwrites", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/existing.ts", "old\n");

@@ -356,11 +356,7 @@ export class McpManager {
       const waitTimeoutMs = runtime.state === "starting"
         ? Math.max(this.callWaitTimeoutMs, runtime.config.startupTimeoutMs ?? 60_000)
         : this.callWaitTimeoutMs;
-      await Promise.race([
-        connectPromise.catch(() => undefined),
-        delay(waitTimeoutMs),
-        waitForAbort(signal),
-      ]);
+      await waitForCompletion(connectPromise, waitTimeoutMs, signal);
     }
 
     if (signal?.aborted) {
@@ -520,13 +516,20 @@ function isRecoverableConnectionError(error: unknown): boolean {
   return false;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
-  if (!signal) return new Promise(() => undefined);
-  if (signal.aborted) return Promise.resolve();
+function waitForCompletion(promise: Promise<unknown>, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    timer = setTimeout(finish, timeoutMs);
+    signal?.addEventListener("abort", finish, { once: true });
+    promise.then(finish, finish);
   });
 }

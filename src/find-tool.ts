@@ -1,12 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import {
-  createFindToolDefinition as createUpstreamFindToolDefinition,
-  DEFAULT_MAX_BYTES,
-  formatSize,
-  truncateHead,
-} from "@earendil-works/pi-coding-agent";
+import { createFindToolDefinition as createUpstreamFindToolDefinition } from "@earendil-works/pi-coding-agent";
 import { ensureTool } from "./internal/pi-coding-agent-utils.js";
 import { resolveToCwd } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
@@ -124,18 +119,12 @@ export function createFindToolDefinition(cwd: string): any {
               }
 
               const resultLimitReached = relativized.length >= effectiveLimit;
-              const rawOutput = relativized.join("\n");
-              const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-              let resultOutput = truncation.content;
+              let resultOutput = relativized.join("\n");
               const details: Record<string, unknown> = {};
               const notices: string[] = [];
               if (resultLimitReached) {
                 notices.push(`${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`);
                 details.resultLimitReached = effectiveLimit;
-              }
-              if (truncation.truncated) {
-                notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-                details.truncation = truncation;
               }
               if (notices.length > 0) resultOutput += `\n\n[${notices.join(". ")}]`;
 

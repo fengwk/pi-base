@@ -46,6 +46,8 @@ function fakeSession(
     messages,
     subscribe: vi.fn(() => () => undefined),
     abort: vi.fn(),
+    extensionRunner: { emit: vi.fn(async () => undefined) },
+    dispose: vi.fn(),
   };
 }
 
@@ -106,6 +108,26 @@ describe("createRealSubagentFactory", () => {
     expect(child.collect()).toEqual({ report: "final answer", toolCount: 1 });
     child.abort();
     expect(session.abort).toHaveBeenCalledTimes(1);
+    await child.dispose();
+    expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+    await child.dispose();
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes a child session when initial agent activation fails", async () => {
+    // Intent: a child that fails before the task handle is returned must still run extension shutdown
+    // and release its AgentSession resources.
+    const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
+    const session = fakeSession();
+    session.prompt.mockRejectedValueOnce(new Error("activation failed"));
+    mocked.createAgentSession.mockResolvedValue({ session });
+    mocked.sessionManagerCreate.mockReturnValue(fakeManager("child-failed"));
+
+    const factory = createRealSubagentFactory();
+    await expect(factory.spawn({ ctx: fakeCtx(), agentType: "worker", childDepth: 2 })).rejects.toThrow("activation failed");
+    expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+    expect(session.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("reopens matching legacy session files and refreshes the requested agent type on resume", async () => {

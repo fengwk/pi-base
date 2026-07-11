@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { open, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import { ensureTool } from "./internal/pi-coding-agent-utils.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
@@ -193,18 +192,12 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
         }
       }
 
-      const rawOutput = outputLines.join("\n");
-      const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-      let output = truncation.content;
+      let output = outputLines.join("\n");
       const details: Record<string, unknown> = {};
       const notices: string[] = [];
       if (matchLimitReached) {
         notices.push(`${options.limit} matches limit reached. Use limit=${options.limit * 2} for more, or refine pattern`);
         details.matchLimitReached = options.limit;
-      }
-      if (truncation.truncated) {
-        notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-        details.truncation = truncation;
       }
       if (linesTruncated) {
         notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`);

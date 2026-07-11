@@ -25,7 +25,7 @@ export interface SubagentSession {
   followUp?: (text: string) => Promise<void>;
   /** Abort the child session. Implementations may complete synchronously or asynchronously. */
   abort: () => void | Promise<void>;
-  dispose: () => void;
+  dispose: () => void | Promise<void>;
 }
 
 export interface SubagentSessionFactory {
@@ -244,7 +244,7 @@ export async function runSubagent(
     args.signal?.removeEventListener("abort", onAbort);
     unsubscribeProgress?.();
     liveHandles.delete(handle.sessionId);
-    handle.dispose();
+    await Promise.resolve(handle.dispose()).catch(() => undefined);
   }
 }
 
@@ -461,10 +461,25 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       model: ctx.model,
       modelRegistry: ctx.modelRegistry,
     });
-    await session.bindExtensions({});
-    // Force a real agent activation pass inside the child session so delegated agents honor their
-    // own model/thinking/tool policy instead of inheriting the parent's runtime state.
-    await session.prompt(`/agent ${agentType}`);
+    let disposed = false;
+    const dispose = async () => {
+      if (disposed) return;
+      disposed = true;
+      try {
+        await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      } finally {
+        session.dispose();
+      }
+    };
+    try {
+      await session.bindExtensions({});
+      // Force a real agent activation pass inside the child session so delegated agents honor their
+      // own model/thinking/tool policy instead of inheriting the parent's runtime state.
+      await session.prompt(`/agent ${agentType}`);
+    } catch (error) {
+      await dispose().catch(() => undefined);
+      throw error;
+    }
     return {
       sessionId,
       prompt: (text: string) => session.prompt(text),
@@ -472,7 +487,7 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       subscribe: (listener: (event: unknown) => void) => session.subscribe(listener as (event: AgentSessionEvent) => void),
       followUp: (text: string) => session.followUp(text),
       abort: () => session.abort(),
-      dispose: () => undefined,
+      dispose,
     };
   };
 

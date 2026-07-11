@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getEventListeners } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
@@ -785,6 +786,31 @@ describe("mcp support", () => {
 
     await expect(manager.start(ctx as any, pi as any)).resolves.toBeUndefined();
     await expect(manager.shutdown()).resolves.toBeUndefined();
+  });
+
+  it("cleans connection-wait timers and abort listeners when connect settles first", async () => {
+    // Intent: each MCP call may wait on an in-flight connection; the losing timeout and abort
+    // branches must be removed immediately instead of accumulating for the rest of the session.
+    vi.useFakeTimers();
+    try {
+      const manager = createMcpManager({
+        loadSettings: () => ({ settings: { mcp: { servers: {} } } } as any),
+        callWaitTimeoutMs: 60_000,
+      });
+      const controller = new AbortController();
+      const runtime = {
+        key: "mm",
+        config: { type: "local", command: ["mock-mcp"], startupTimeoutMs: 60_000 },
+        state: "starting",
+        connectPromise: Promise.resolve(),
+      };
+
+      await expect((manager as any).waitForConnected(runtime, 0, controller.signal)).rejects.toThrow("not connected");
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries failed MCP connections until the server becomes available", async () => {
