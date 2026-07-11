@@ -628,6 +628,50 @@ Verbose prompt.
     }
   });
 
+  it("excludes built-ins and preserves extension tools when an agent inherits all registered tools", async () => {
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "unrestricted.md",
+        `---
+name: unrestricted
+---
+
+Unrestricted prompt.
+`,
+      );
+
+      const registry = createToolRegistry();
+      registry.pi.registerTool({
+        name: "ls",
+        sourceInfo: { source: "builtin" },
+        execute: async () => ({ content: [] }),
+      });
+      registry.pi.registerTool({
+        name: "other_extension_tool",
+        sourceInfo: { source: "local" },
+        execute: async () => ({ content: [] }),
+      });
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "unrestricted", { cwd: root });
+
+      expect(registry.getActiveTools()).toContain("read");
+      expect(registry.getActiveTools()).toContain("other_extension_tool");
+      expect(registry.getActiveTools()).not.toContain("ls");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("treats explicit empty tool and skill arrays as disabled instead of inheriting all", async () => {
     // Intent: omitted fields mean "all", while an explicit empty array must
     // remain a real empty allowlist so users can disable tools and skills.

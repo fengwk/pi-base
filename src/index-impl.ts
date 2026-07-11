@@ -58,6 +58,16 @@ const BASE_TOOL_NAMES = [
 ] as const;
 const BASE_TOOL_GUIDE = readFileSync(new URL("../prompts/base.md", import.meta.url), "utf8").trim();
 
+type RegisteredToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];
+
+function isBuiltinTool(tool: RegisteredToolInfo): boolean {
+  return tool.sourceInfo?.source === "builtin";
+}
+
+function resolveBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): ReadonlySet<string> {
+  return new Set(pi.getAllTools().filter(isBuiltinTool).map((tool) => tool.name));
+}
+
 export interface PiBaseExtensionOptions {
   mcp?: RegisterMcpSupportOptions;
   notify?: RegisterNotifySupportOptions;
@@ -205,12 +215,21 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     const activeTools = pi.getActiveTools();
     if (activeTools.length === 0) {
       pi.setActiveTools([...BASE_TOOL_NAMES]);
-    } else if (activeTools.includes(TASK_TOOL_NAME)) {
-      // Baseline (default agent) never delegates, so `task` is not part of the default active set.
-      // A delegating agent re-adds `task` via agent-support's task injection. This also cleans up
-      // any retired core `task` left in a resumed session.
-      const withoutTask = activeTools.filter((name) => name !== TASK_TOOL_NAME);
-      pi.setActiveTools(withoutTask.length > 0 ? withoutTask : [...BASE_TOOL_NAMES]);
+      return;
+    }
+
+    // pi-base replaces Pi's built-in tool set. Keep extension/SDK/MCP tools, but
+    // remove final registry entries that still come from the built-in source.
+    // `task` is an extension tool and is handled separately: agent-support
+    // re-injects it only for agents that may delegate.
+    const builtinToolNames = resolveBuiltinToolNames(pi);
+    const withoutBuiltins = activeTools.filter((name) => !builtinToolNames.has(name));
+    const withoutTask = withoutBuiltins.filter((name) => name !== TASK_TOOL_NAME);
+    const nextTools = withoutBuiltins.includes(TASK_TOOL_NAME)
+      ? (withoutTask.length > 0 ? withoutTask : [...BASE_TOOL_NAMES])
+      : withoutBuiltins;
+    if (nextTools.length !== activeTools.length || nextTools.some((name, index) => name !== activeTools[index])) {
+      pi.setActiveTools(nextTools);
     }
   });
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -262,7 +281,8 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
     getConfiguredDefaultAgentName: (cwd: string) => loadSettings(cwd).settings.defaultAgent,
-    isToolActivatable: (toolName: string) => !inactiveDynamicToolNames.has(toolName),
+    isToolActivatable: (tool) =>
+      !isBuiltinTool(tool) && !inactiveDynamicToolNames.has(tool.name),
   });
   registerMcpSupport(pi, {
     ...options.mcp,

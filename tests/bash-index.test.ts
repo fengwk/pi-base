@@ -7,6 +7,14 @@ import piBaseExtension from "../index.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 import { lspManager } from "../src/lsp/client.js";
 
+function registerMockTool(registry: ReturnType<typeof createToolRegistry>, name: string, source: string): void {
+  registry.pi.registerTool({
+    name,
+    sourceInfo: { source },
+    execute: async () => ({ content: [] }),
+  });
+}
+
 describe("bash tool and index", () => {
   it("detects WSL from environment variables and proc fallbacks", () => {
     expect(detectOsLabelFrom({ platform: "linux", env: { WSL_DISTRO_NAME: "Ubuntu" } })).toBe("wsl");
@@ -457,6 +465,43 @@ describe("bash tool and index", () => {
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" });
     expect(registry.getActiveTools()).toEqual(["read", "grep", "find", "bash", "edit", "write", "lsp_diagnostics", "lsp_goto_definition", "lsp_workspace_symbols", "lsp_java_decompile"]);
+  });
+
+  it("removes built-in tools from explicit active tool sets", async () => {
+    const registry = createToolRegistry();
+    registerMockTool(registry, "ls", "builtin");
+    registry.pi.setActiveTools(["read", "ls"]);
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" });
+    expect(registry.getActiveTools()).toEqual(["read"]);
+  });
+
+  it("removes built-ins before cleaning the automatic `task` tool", async () => {
+    const registry = createToolRegistry();
+    registerMockTool(registry, "ls", "builtin");
+    registry.pi.setActiveTools(["read", "ls", "task"]);
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" });
+    expect(registry.getActiveTools()).toEqual(["read"]);
+  });
+
+  it("leaves no active tools when only a built-in tool was explicitly active", async () => {
+    const registry = createToolRegistry();
+    registerMockTool(registry, "ls", "builtin");
+    registry.pi.setActiveTools(["ls"]);
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" });
+    expect(registry.getActiveTools()).toEqual([]);
+  });
+
+  it("preserves tools supplied by other extensions, including built-in name overrides", async () => {
+    const registry = createToolRegistry();
+    registerMockTool(registry, "ls", "local");
+    registerMockTool(registry, "other_extension_tool", "local");
+    registry.pi.setActiveTools(["ls", "other_extension_tool"]);
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" });
+    expect(registry.getActiveTools()).toEqual(["ls", "other_extension_tool"]);
   });
 
   it("syncs LSP after successful write", async () => {

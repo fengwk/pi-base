@@ -23,6 +23,7 @@ const VALID_THINKING_LEVELS = new Set<ReturnType<ExtensionAPI["getThinkingLevel"
 ]);
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
+type RegisteredToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];
 
 interface AgentFrontmatter {
   name?: unknown;
@@ -85,7 +86,7 @@ export function registerAgentSupport(
     getStartupAgentName?: () => string | undefined;
     getConfiguredDefaultAgentName?: (cwd: string) => string | undefined;
     /** Filters registered tool definitions that should not be offered to agents right now. */
-    isToolActivatable?: (toolName: string) => boolean;
+    isToolActivatable?: (tool: RegisteredToolInfo) => boolean;
   },
 ): AgentSupportHandle {
   let catalog = loadAgentCatalog();
@@ -156,8 +157,8 @@ export function registerAgentSupport(
   };
 
   const allRegisteredToolNames = (): string[] => pi.getAllTools()
-    .map((tool) => tool.name)
-    .filter((toolName) => options.isToolActivatable?.(toolName) ?? true);
+    .filter((tool) => options.isToolActivatable?.(tool) ?? true)
+    .map((tool) => tool.name);
 
   const updateStatus = (ctx: ExtensionContext, agentName: string): void => {
     if (!ctx.hasUI) return;
