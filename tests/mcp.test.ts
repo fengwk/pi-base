@@ -3,7 +3,8 @@ import { getEventListeners } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
-import { createMcpManager } from "../src/mcp/manager.js";
+import { McpSessionBinding } from "../src/mcp/binding.js";
+import { createMcpHub } from "../src/mcp/hub.js";
 import { createMcpToolDefinition } from "../src/mcp/adapter.js";
 import type { McpClientFactory, McpProtocolClient, McpTool, McpToolCallResult } from "../src/mcp/types.js";
 import { convertJsonSchemaToTypeBox } from "../src/mcp/schema.js";
@@ -36,9 +37,14 @@ function hasTool(registry: ReturnType<typeof createToolRegistry>, name: string):
 interface FakeClientStep {
   connectDelayMs?: number;
   connectError?: string;
+  onConnect?: (timeoutMs: number) => void;
   tools?: McpTool[];
   toolsSequence?: McpTool[][];
-  callResult?: (name: string, args: Record<string, unknown>) => McpToolCallResult;
+  callResult?: (
+    name: string,
+    args: Record<string, unknown>,
+    options?: { signal?: AbortSignal; timeout?: number },
+  ) => McpToolCallResult | Promise<McpToolCallResult>;
 }
 
 class FakeMcpClient implements McpProtocolClient {
@@ -47,7 +53,8 @@ class FakeMcpClient implements McpProtocolClient {
 
   constructor(private readonly step: FakeClientStep) {}
 
-  async connect(_timeoutMs: number): Promise<void> {
+  async connect(timeoutMs: number): Promise<void> {
+    this.step.onConnect?.(timeoutMs);
     if (this.step.connectDelayMs) {
       await new Promise((resolve) => setTimeout(resolve, this.step.connectDelayMs));
     }
@@ -69,9 +76,9 @@ class FakeMcpClient implements McpProtocolClient {
     return this.step.tools ?? [];
   }
 
-  async callTool(name: string, args: Record<string, unknown>, _options?: { signal?: AbortSignal }): Promise<McpToolCallResult> {
+  async callTool(name: string, args: Record<string, unknown>, options?: { signal?: AbortSignal; timeout?: number }): Promise<McpToolCallResult> {
     if (!this.connected) throw new Error("MCP client is not connected.");
-    if (this.step.callResult) return this.step.callResult(name, args);
+    if (this.step.callResult) return this.step.callResult(name, args, options);
     return { content: [{ type: "text", text: `${name}:${JSON.stringify(args)}` }] };
   }
 
@@ -737,9 +744,10 @@ describe("mcp support", () => {
       },
     });
 
-    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    const startPromise = registry.emit("session_start", { reason: "startup" }, { cwd: root });
     await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 0/1 servers connecting");
-    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers");
+    await startPromise;
+    expect(registry.getStatuses().get("02-pi-base-mcp")).toBe("MCP: 1/1 servers");
   });
 
   it("shows a failed suffix after a connection attempt fails", async () => {
@@ -769,23 +777,24 @@ describe("mcp support", () => {
     await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 0/1 servers connection failed");
   });
   it("treats MCP status UI updates as best-effort", async () => {
-    const manager = createMcpManager({
-      loadSettings: () => ({ settings: { mcp: { servers: {} } } } as any),
+    const hub = createMcpHub();
+    const binding = new McpSessionBinding({
+      hub,
+      pi: {
+        registerTool() {},
+        getAllTools: () => [],
+        getActiveTools: () => [],
+        setActiveTools() {},
+      },
       onSnapshotChange: () => {
         throw new Error("stale ctx");
       },
     });
-
-    const pi = {
-      registerTool() {},
-      getAllTools: () => [],
-      getActiveTools: () => [],
-      setActiveTools() {},
-    };
     const ctx = { cwd: await createTempWorkspace() };
 
-    await expect(manager.start(ctx as any, pi as any)).resolves.toBeUndefined();
-    await expect(manager.shutdown()).resolves.toBeUndefined();
+    await expect(binding.start(ctx as any, { servers: {} }, {})).resolves.toBeUndefined();
+    await expect(binding.stop()).resolves.toBeUndefined();
+    await expect(hub.shutdown()).resolves.toBeUndefined();
   });
 
   it("cleans connection-wait timers and abort listeners when connect settles first", async () => {
@@ -793,10 +802,8 @@ describe("mcp support", () => {
     // branches must be removed immediately instead of accumulating for the rest of the session.
     vi.useFakeTimers();
     try {
-      const manager = createMcpManager({
-        loadSettings: () => ({ settings: { mcp: { servers: {} } } } as any),
-        callWaitTimeoutMs: 60_000,
-      });
+      const hub = createMcpHub();
+      (hub as any).callWaitTimeoutMs = 60_000;
       const controller = new AbortController();
       const runtime = {
         key: "mm",
@@ -805,7 +812,7 @@ describe("mcp support", () => {
         connectPromise: Promise.resolve(),
       };
 
-      await expect((manager as any).waitForConnected(runtime, 0, controller.signal)).rejects.toThrow("not connected");
+      await expect((hub as any).waitForConnected(runtime, 0, controller.signal)).rejects.toThrow("not connected");
       expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -954,6 +961,157 @@ describe("mcp support", () => {
     expect(second.isError).toBe(true);
     expect(getText(second)).toContain("field closedAt is required");
     expect(getText(second)).not.toContain("unexpected-reconnect");
+  });
+
+  it("does not reconnect the server for an SDK request timeout", async () => {
+    // Intent: a request timeout bounds one slow tool invocation but does not prove
+    // the transport is broken, so it must not restart the whole MCP server.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: { type: "local", command: ["mock-mcp"], toolPrefix: "", callTimeoutMs: 20 },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [
+            {
+              tools: [echoTool],
+              callResult: () => {
+                throw new Error("MCP error -32001: Request timed out");
+              },
+            },
+            {
+              tools: [echoTool],
+              callResult: () => ({ content: [{ type: "text", text: "unexpected-reconnect" }] }),
+            },
+          ],
+        }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "echo"));
+
+    const first = await registry.getTool("echo").execute("1", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(getText(first)).toContain("Request timed out");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const second = await registry.getTool("echo").execute("2", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(getText(second)).toContain("Request timed out");
+    expect(getText(second)).not.toContain("unexpected-reconnect");
+  });
+
+  it("passes per-server startup and call timeouts to the MCP client", async () => {
+    // Intent: server-level configuration must override both global defaults at the
+    // protocol-client boundary where startup and request cancellation are owned.
+    let seenStartupTimeout: number | undefined;
+    let seenCallTimeout: number | undefined;
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        startupTimeoutMs: 40,
+        callTimeoutMs: 50,
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+            startupTimeoutMs: 15,
+            callTimeoutMs: 25,
+          },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [{
+            tools: [echoTool],
+            onConnect: (timeoutMs) => {
+              seenStartupTimeout = timeoutMs;
+            },
+            callResult: (_name, _args, options) => {
+              seenCallTimeout = options?.timeout;
+              return { content: [{ type: "text", text: "ok" }] };
+            },
+          }],
+        }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "echo"));
+    await registry.getTool("echo").execute("1", { text: "hello" }, undefined, undefined, { cwd: root });
+
+    expect(seenStartupTimeout).toBe(15);
+    expect(seenCallTimeout).toBe(25);
+  });
+
+  it("uses global MCP timeouts and resets both to 60000ms after reload", async () => {
+    // Intent: reload must not retain removed global timeouts; each start resolves
+    // the current config against the built-in defaults from scratch.
+    const seenStartupTimeouts: number[] = [];
+    const seenCallTimeouts: Array<number | undefined> = [];
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        startupTimeoutMs: 10,
+        callTimeoutMs: 20,
+        servers: {
+          mm: { type: "local", command: ["mock-mcp"], toolPrefix: "" },
+        },
+      },
+    });
+
+    const callResult: NonNullable<FakeClientStep["callResult"]> = (_name, _args, options) => {
+      seenCallTimeouts.push(options?.timeout);
+      return { content: [{ type: "text", text: "ok" }] };
+    };
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [
+            { tools: [echoTool], onConnect: (timeoutMs) => seenStartupTimeouts.push(timeoutMs), callResult },
+            { tools: [echoTool], onConnect: (timeoutMs) => seenStartupTimeouts.push(timeoutMs), callResult },
+          ],
+        }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "echo"));
+    await registry.getTool("echo").execute("1", { text: "first" }, undefined, undefined, { cwd: root });
+
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: { type: "local", command: ["mock-mcp"], toolPrefix: "" },
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "reload" }, { cwd: root });
+    await waitFor(() => registry.getStatuses().get("02-pi-base-mcp") === "MCP: 1/1 servers");
+    await registry.getTool("echo").execute("2", { text: "second" }, undefined, undefined, { cwd: root });
+
+    expect(seenStartupTimeouts).toEqual([10, 60_000]);
+    expect(seenCallTimeouts).toEqual([20, 60_000]);
   });
 
   it("prints a tree view for /mcp-status", async () => {

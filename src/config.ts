@@ -430,6 +430,9 @@ function sanitizeMcpLocalServerConfig(value: unknown, path: string): LocalMcpSer
   if (input.startupTimeoutMs !== undefined) {
     output.startupTimeoutMs = sanitizePositiveInteger(input.startupTimeoutMs, `${path}.startupTimeoutMs`);
   }
+  if (input.callTimeoutMs !== undefined) {
+    output.callTimeoutMs = sanitizePositiveInteger(input.callTimeoutMs, `${path}.callTimeoutMs`);
+  }
   return output;
 }
 
@@ -460,6 +463,9 @@ function sanitizeMcpRemoteServerConfig(value: unknown, path: string): RemoteMcpS
   if (input.startupTimeoutMs !== undefined) {
     output.startupTimeoutMs = sanitizePositiveInteger(input.startupTimeoutMs, `${path}.startupTimeoutMs`);
   }
+  if (input.callTimeoutMs !== undefined) {
+    output.callTimeoutMs = sanitizePositiveInteger(input.callTimeoutMs, `${path}.callTimeoutMs`);
+  }
   return output;
 }
 
@@ -474,15 +480,22 @@ function sanitizeMcpServerConfig(value: unknown, path: string): McpServerConfig 
 function sanitizeMcpConfig(value: unknown): McpConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("mcp must be an object.");
   const input = value as Record<string, unknown>;
-  if (!input.servers || typeof input.servers !== "object" || Array.isArray(input.servers)) {
+  if (input.servers !== undefined && (typeof input.servers !== "object" || input.servers === null || Array.isArray(input.servers))) {
     throw new Error("mcp.servers must be an object keyed by server name.");
   }
   const servers: Record<string, McpServerConfig> = {};
-  for (const [serverKey, config] of Object.entries(input.servers as Record<string, unknown>)) {
+  for (const [serverKey, config] of Object.entries((input.servers ?? {}) as Record<string, unknown>)) {
     if (!serverKey.trim()) throw new Error("mcp.servers contains an empty server name.");
     servers[serverKey] = sanitizeMcpServerConfig(config, `mcp.servers.${serverKey}`);
   }
-  return { servers };
+  const output: McpConfig = { servers };
+  if (input.startupTimeoutMs !== undefined) {
+    output.startupTimeoutMs = sanitizePositiveInteger(input.startupTimeoutMs, "mcp.startupTimeoutMs");
+  }
+  if (input.callTimeoutMs !== undefined) {
+    output.callTimeoutMs = sanitizePositiveInteger(input.callTimeoutMs, "mcp.callTimeoutMs");
+  }
+  return output;
 }
 function sanitizeSettings(value: unknown): PiBaseSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("settings must be a JSON object.");
@@ -540,6 +553,7 @@ function normalizeDirectoryPath(value: string, path: string): string {
 function normalizeMcpConfigPaths(config: McpConfig | undefined): McpConfig | undefined {
   if (!config?.servers) return config;
   return {
+    ...config,
     servers: Object.fromEntries(Object.entries(config.servers).map(([id, entry]) => {
       if (entry.type !== "local") return [id, entry];
       const [command0, ...rest] = entry.command;
@@ -621,7 +635,13 @@ function mergeYolo(base: YoloMode | undefined, override: YoloMode | undefined): 
 function mergeMcp(base: McpConfig | undefined, override: McpConfig | undefined): McpConfig | undefined {
   if (!base && !override) return undefined;
   const servers = { ...(base?.servers ?? {}), ...(override?.servers ?? {}) };
-  return Object.keys(servers).length > 0 ? { servers } : undefined;
+  const startupTimeoutMs = override?.startupTimeoutMs ?? base?.startupTimeoutMs;
+  const callTimeoutMs = override?.callTimeoutMs ?? base?.callTimeoutMs;
+  if (Object.keys(servers).length === 0 && startupTimeoutMs === undefined && callTimeoutMs === undefined) return undefined;
+  const output: McpConfig = { servers };
+  if (startupTimeoutMs !== undefined) output.startupTimeoutMs = startupTimeoutMs;
+  if (callTimeoutMs !== undefined) output.callTimeoutMs = callTimeoutMs;
+  return output;
 }
 
 function mergeSubagent(base: SubagentConfig | undefined, override: SubagentConfig | undefined): SubagentConfig | undefined {

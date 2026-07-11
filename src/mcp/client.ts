@@ -71,12 +71,12 @@ class SdkMcpClient implements McpProtocolClient {
     await closeClient(client);
   }
 
-  async listTools(): Promise<McpTool[]> {
-    const response = await this.requireClient().listTools();
+  async listTools(options?: { signal?: AbortSignal; timeout?: number }): Promise<McpTool[]> {
+    const response = await this.requireClient().listTools(undefined, options);
     return Array.isArray(response.tools) ? (response.tools as McpTool[]) : [];
   }
 
-  async callTool(name: string, args: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<McpToolCallResult> {
+  async callTool(name: string, args: Record<string, unknown>, options?: { signal?: AbortSignal; timeout?: number }): Promise<McpToolCallResult> {
     return this.requireClient().callTool({ name, arguments: args }, undefined, options) as Promise<McpToolCallResult>;
   }
 

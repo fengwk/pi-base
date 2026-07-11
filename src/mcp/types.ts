@@ -8,6 +8,7 @@ export interface LocalMcpServerConfig {
   enabled?: boolean;
   toolPrefix?: string;
   startupTimeoutMs?: number;
+  callTimeoutMs?: number;
 }
 
 export interface RemoteMcpServerConfig {
@@ -18,12 +19,20 @@ export interface RemoteMcpServerConfig {
   enabled?: boolean;
   toolPrefix?: string;
   startupTimeoutMs?: number;
+  callTimeoutMs?: number;
 }
 
 export type McpServerConfig = LocalMcpServerConfig | RemoteMcpServerConfig;
 
 export interface McpConfig {
   servers?: Record<string, McpServerConfig>;
+  /** Default server startup timeout. Server-level `startupTimeoutMs` takes precedence. */
+  startupTimeoutMs?: number;
+  /**
+   * Default per-tool call timeout applied when a server entry does not set its own
+   * `callTimeoutMs`. Defaults to 60000 ms (matches the MCP SDK's DEFAULT_REQUEST_TIMEOUT_MSEC).
+   */
+  callTimeoutMs?: number;
 }
 
 export interface McpTool {
@@ -47,8 +56,8 @@ export interface McpToolCallResult {
 export interface McpProtocolClient {
   connect(timeoutMs: number): Promise<void>;
   disconnect(): Promise<void>;
-  listTools(): Promise<McpTool[]>;
-  callTool(name: string, args: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<McpToolCallResult>;
+  listTools(options?: { signal?: AbortSignal; timeout?: number }): Promise<McpTool[]>;
+  callTool(name: string, args: Record<string, unknown>, options?: { signal?: AbortSignal; timeout?: number }): Promise<McpToolCallResult>;
   isConnected(): boolean;
 }
 

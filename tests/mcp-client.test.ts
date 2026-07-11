@@ -80,7 +80,8 @@ describe("mcp client config resolution", () => {
     // must delegate listTools/callTool while tracking connection state.
     let connectCalls = 0;
     let closeCalls = 0;
-    let seenCall: unknown;
+    const seenListCalls: unknown[] = [];
+    const seenCalls: unknown[] = [];
 
     Client.prototype.connect = (async () => {
       connectCalls += 1;
@@ -88,11 +89,12 @@ describe("mcp client config resolution", () => {
     Client.prototype.close = (async () => {
       closeCalls += 1;
     }) as any;
-    Client.prototype.listTools = (async () => ({
-      tools: [{ name: "echo", description: "Echo" }],
-    })) as any;
+    Client.prototype.listTools = (async (...args: unknown[]) => {
+      seenListCalls.push(args);
+      return { tools: [{ name: "echo", description: "Echo" }] };
+    }) as any;
     Client.prototype.callTool = (async (...args: unknown[]) => {
-      seenCall = args;
+      seenCalls.push(args);
       return { content: [{ type: "text", text: "ok" }] };
     }) as any;
 
@@ -103,8 +105,16 @@ describe("mcp client config resolution", () => {
     expect(client.isConnected()).toBe(true);
     expect(connectCalls).toBe(1);
     await expect(client.listTools()).resolves.toEqual([{ name: "echo", description: "Echo" }]);
+    await expect(client.listTools({ timeout: 321 })).resolves.toEqual([{ name: "echo", description: "Echo" }]);
+    expect(seenListCalls).toEqual([[undefined, undefined], [undefined, { timeout: 321 }]]);
     await expect(client.callTool("echo", { text: "hello" })).resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
-    expect(seenCall).toEqual([{ name: "echo", arguments: { text: "hello" } }, undefined, undefined]);
+    const controller = new AbortController();
+    await expect(client.callTool("echo", { text: "bounded" }, { signal: controller.signal, timeout: 123 }))
+      .resolves.toEqual({ content: [{ type: "text", text: "ok" }] });
+    expect(seenCalls).toEqual([
+      [{ name: "echo", arguments: { text: "hello" } }, undefined, undefined],
+      [{ name: "echo", arguments: { text: "bounded" } }, undefined, { signal: controller.signal, timeout: 123 }],
+    ]);
 
     await client.disconnect();
     expect(client.isConnected()).toBe(false);

@@ -346,6 +346,8 @@ tool 执行中会在 UI 展示简洁进展日志；root UI 展示运行中 subag
 ```json
 {
   "mcp": {
+    "startupTimeoutMs": 60000,
+    "callTimeoutMs": 60000,
     "servers": {
       "local-example": {
         "type": "local",
@@ -353,7 +355,8 @@ tool 执行中会在 UI 展示简洁进展日志；root UI 展示运行中 subag
         "cwd": "~/work/mm",
         "env": { "API_KEY": "${API_KEY}" },
         "toolPrefix": "",
-        "startupTimeoutMs": 60000
+        "startupTimeoutMs": 60000,
+        "callTimeoutMs": 60000
       },
       "remote-example": {
         "type": "remote",
@@ -375,9 +378,11 @@ tool 执行中会在 UI 展示简洁进展日志；root UI 展示运行中 subag
 | `env` / `headers` | 仅支持 `$VAR` 或 `${VAR}` 整值引用，不支持字符串内插；引用不存在则连接失败 |
 | `toolPrefix` | 默认等于 server key；`""`=保留原始 tool 名 |
 | `enabled` | `false` 禁用该 server |
-| `startupTimeoutMs` | 默认 `60000` |
+| `startupTimeoutMs` | server 启动超时，覆盖 `mcp.startupTimeoutMs` 全局默认；默认 `60000` |
+| `callTimeoutMs` | 单次工具调用超时，覆盖 `mcp.callTimeoutMs` 全局默认；默认 `60000`。超时由 MCP SDK 取消对应请求，不会因单次慢调用重启 server |
+| `mcp.startupTimeoutMs` / `mcp.callTimeoutMs` | 全局默认，可在未声明 `servers` 时单独配置 |
 
-MCP 异步启动不阻塞 session；`pi-base` 维护重连 + heartbeat，状态显示在 footer。
+同一 Pi 进程内，每个 MCP server 配置只建立一个共享连接/本地进程，root 与所有 subagent 共用。首次 `session_start` 会并行等待所有 enabled server 完成首次连接或达到 `startupTimeoutMs`，因此首个 prompt 只会在 MCP readiness 确定后开始；后续 subagent 直接复用同一 readiness 和工具列表。`pi-base` 继续在后台维护重连 + heartbeat，状态显示在 footer。
 
 ---
 

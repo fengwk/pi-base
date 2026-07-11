@@ -41,6 +41,38 @@ describe("pi-base config", () => {
     });
   });
 
+  it("merges global MCP timeouts with project servers and lets the project override them", async () => {
+    // Intent: timeout defaults are useful independently from server declarations,
+    // so global and project files must merge both scalars alongside server entries.
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async (globalPath) => {
+      await writeFile(globalPath, JSON.stringify({ mcp: { startupTimeoutMs: 80, callTimeoutMs: 90 } }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        mcp: {
+          servers: { mm: { type: "local", command: ["mock-mcp"], callTimeoutMs: 30 } },
+        },
+      }), "utf8");
+
+      const inherited = loadPiBaseSettings(root);
+      expect(inherited.settings.mcp?.startupTimeoutMs).toBe(80);
+      expect(inherited.settings.mcp?.callTimeoutMs).toBe(90);
+      expect(inherited.settings.mcp?.servers?.mm?.callTimeoutMs).toBe(30);
+
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        mcp: {
+          startupTimeoutMs: 40,
+          callTimeoutMs: 45,
+          servers: { mm: { type: "local", command: ["mock-mcp"] } },
+        },
+      }), "utf8");
+      const overridden = loadPiBaseSettings(root);
+      expect(overridden.settings.mcp?.startupTimeoutMs).toBe(40);
+      expect(overridden.settings.mcp?.callTimeoutMs).toBe(45);
+    });
+  });
+
   it("loads project settings from the nearest ancestor settings file", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
@@ -228,17 +260,21 @@ describe("pi-base config", () => {
     ["invalid enabled providers", { contextCompression: { enabledProviders: "openai" } }, /enabledProviders must be an array of strings/],
     ["invalid disabled providers", { contextCompression: { disabledProviders: ["  "] } }, /disabledProviders/],
     ["invalid mcp shape", { mcp: [] }, /mcp must be an object/],
-    ["missing mcp servers", { mcp: {} }, /mcp\.servers must be an object/],
+    ["invalid mcp servers", { mcp: { servers: null } }, /mcp\.servers must be an object/],
     ["empty mcp server key", { mcp: { servers: { "": { type: "local", command: ["x"] } } } }, /empty server name/],
     ["invalid mcp server type", { mcp: { servers: { x: { type: "stdio", command: ["x"] } } } }, /type must be either/],
     ["empty local command", { mcp: { servers: { x: { type: "local", command: [] } } } }, /command must contain at least one entry/],
     ["invalid local env", { mcp: { servers: { x: { type: "local", command: ["x"], env: { A: 1 } } } } }, /env\.A must be a string/],
     ["invalid local cwd", { mcp: { servers: { x: { type: "local", command: ["x"], cwd: 1 } } } }, /cwd must be a string/],
     ["invalid local startup timeout", { mcp: { servers: { x: { type: "local", command: ["x"], startupTimeoutMs: 0 } } } }, /startupTimeoutMs/],
+    ["invalid local call timeout", { mcp: { servers: { x: { type: "local", command: ["x"], callTimeoutMs: 0 } } } }, /callTimeoutMs/],
+    ["invalid global startup timeout", { mcp: { startupTimeoutMs: 0 } }, /mcp\.startupTimeoutMs/],
+    ["invalid global call timeout", { mcp: { callTimeoutMs: -1 } }, /mcp\.callTimeoutMs/],
     ["invalid remote url type", { mcp: { servers: { x: { type: "remote", transport: "sse", url: 1 } } } }, /url must be a string/],
     ["invalid remote transport", { mcp: { servers: { x: { type: "remote", transport: "http", url: "https://example.com" } } } }, /transport/],
     ["invalid remote url", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "not a url" } } } }, /url must be a valid URL/],
     ["invalid remote headers", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "https://example.com", headers: [] } } } }, /headers must be an object/],
+    ["invalid remote call timeout", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "https://example.com", callTimeoutMs: 1.5 } } } }, /callTimeoutMs/],
     ["invalid yolo", { yolo: "yes" }, /yolo must be a boolean/],
     ["invalid defaultAgent", { defaultAgent: "   " }, /defaultAgent must be a non-empty string/],
   ])("rejects invalid config: %s", async (_name, settings, expected) => {
