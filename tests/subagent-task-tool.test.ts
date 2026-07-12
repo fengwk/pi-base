@@ -88,9 +88,9 @@ describe("task tool", () => {
     expect(text(result)).toContain("state=\"completed\"");
   });
 
-  it("renders the task call without labels and shows summarized live output separately from the final report", () => {
-    // Intent: delegated prompts must remain inspectable without noisy labels,
-    // while the running view should expose a live summary + rolling transcript.
+  it("keeps collapsed running tasks stable and shows live logs only when expanded", () => {
+    // Intent: delegated prompts remain visible while volatile progress stays out of collapsed history;
+    // expanded running tasks still expose a rolling transcript, and final reports render normally.
     const tool = registerAndCapture(baseDeps());
     const call = render(
       tool.renderCall(
@@ -106,26 +106,27 @@ describe("task tool", () => {
     expect(call).not.toContain("Command");
     expect(call).not.toContain("Prompt");
 
-    const partial = render(
-      tool.renderResult(
-        {
-          content: [{ type: "text", text: "" }],
-          details: {
-            progress: true,
-            progressEntries: ['→ read {"path":"src/a.ts"}', '✓ read {"path":"src/a.ts"}'],
-            turns: 1,
-            toolCalls: 1,
-          },
-        },
-        { isPartial: true },
-        {},
-        { lastComponent: undefined },
-      ),
+    const partialResult = {
+      content: [{ type: "text", text: "" }],
+      details: {
+        progress: true,
+        progressEntries: ['→ read {"path":"src/a.ts"}', '✓ read {"path":"src/a.ts"}'],
+        turns: 1,
+        toolCalls: 1,
+      },
+    };
+    const collapsedPartial = render(
+      tool.renderResult(partialResult, { isPartial: true, expanded: false }, {}, { lastComponent: undefined }),
     );
-    expect(partial).toContain("running · turns: 1 · tool calls: 1");
-    expect(partial).toContain('→ read {"path":"src/a.ts"}');
-    expect(partial).toContain('✓ read {"path":"src/a.ts"}');
-    expect(partial).not.toContain("1|alpha");
+    expect(collapsedPartial).toBe("");
+
+    const expandedPartial = render(
+      tool.renderResult(partialResult, { isPartial: true, expanded: true }, {}, { lastComponent: undefined }),
+    );
+    expect(expandedPartial).not.toContain("running · turns:");
+    expect(expandedPartial).toContain('→ read {"path":"src/a.ts"}');
+    expect(expandedPartial).toContain('✓ read {"path":"src/a.ts"}');
+    expect(expandedPartial).not.toContain("1|alpha");
 
     const final = render(
       tool.renderResult(
@@ -170,12 +171,12 @@ describe("task tool", () => {
             toolCalls: 3,
           },
         },
-        { isPartial: true },
+        { isPartial: true, expanded: true },
         {},
         { lastComponent: undefined },
       ),
     );
-    expect(partial).toContain("running · turns: 1 · tool calls: 3");
+    expect(partial).not.toContain("running · turns:");
     expect(partial).not.toContain("start");
     expect(partial).not.toContain('→ read {"path":"a"}');
     expect(partial).toContain('✓ read {"path":"a"}');
@@ -197,7 +198,7 @@ describe("task tool", () => {
           toolCalls: 1,
         },
       },
-      { isPartial: true },
+      { isPartial: true, expanded: true },
       {},
       { lastComponent: undefined },
     ).render(200);
@@ -285,6 +286,7 @@ describe("task tool", () => {
       agentType: "worker",
       depth: 2,
       status: "running",
+      turns: 0,
       toolCount: 0,
       startedAt: 0,
     });
@@ -337,7 +339,7 @@ describe("task tool", () => {
 
   it("applies maxConcurrency to resumed subagent sessions too", async () => {
     // Intent: resume should consume the same concurrency budget as a new child run.
-    subagentRegistry.upsert({ sessionId: "other", parentSessionId: "parent", rootSessionId: "parent", agentType: "worker", depth: 2, status: "running", toolCount: 0, startedAt: 0 });
+    subagentRegistry.upsert({ sessionId: "other", parentSessionId: "parent", rootSessionId: "parent", agentType: "worker", depth: 2, status: "running", turns: 0, toolCount: 0, startedAt: 0 });
     const tool = registerAndCapture(baseDeps({ getMaxConcurrency: () => 1 }));
     const result = await tool.execute("1", { subagent_type: "worker", prompt: "go", session_id: "resume-me" }, undefined, undefined, ctx());
     expect(result.isError).toBe(true);
@@ -354,6 +356,7 @@ describe("task tool", () => {
       agentType: "worker",
       depth: 2,
       status: "running",
+      turns: 0,
       toolCount: 0,
       startedAt: 0,
     });
@@ -438,7 +441,7 @@ describe("task tool", () => {
 
   it("refuses to resume a session that is currently running", async () => {
     // Intent: prevent double-driving one subagent session (P13).
-    subagentRegistry.upsert({ sessionId: "s1", parentSessionId: "parent", rootSessionId: "parent", agentType: "worker", depth: 2, status: "running", toolCount: 0, startedAt: 0 });
+    subagentRegistry.upsert({ sessionId: "s1", parentSessionId: "parent", rootSessionId: "parent", agentType: "worker", depth: 2, status: "running", turns: 0, toolCount: 0, startedAt: 0 });
     const tool = registerAndCapture(baseDeps());
     const result = await tool.execute("1", { subagent_type: "worker", prompt: "go", session_id: "s1" }, undefined, undefined, ctx());
     expect(result.isError).toBe(true);

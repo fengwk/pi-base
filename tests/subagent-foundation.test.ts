@@ -67,6 +67,7 @@ describe("SubagentRegistry", () => {
     agentType: "worker",
     depth: 2,
     status,
+    turns: 0,
     toolCount: 0,
     startedAt: 0,
   });

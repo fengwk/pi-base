@@ -12,6 +12,7 @@ export interface SubagentNode {
   agentType: string;
   depth: number;
   status: SubagentStatus;
+  turns: number;
   toolCount: number;
   startedAt: number;
   endedAt?: number;

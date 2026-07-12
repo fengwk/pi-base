@@ -208,16 +208,16 @@ function renderTaskCall(args: Static<typeof taskSchema>, theme: any, lastCompone
   return text;
 }
 
-function renderLiveOutput(result: unknown, theme: any) {
+function renderLiveOutput(result: unknown, expanded: boolean | undefined, theme: any) {
+  if (!expanded) return new Text("", 0, 0);
+
   const details = (result as { details?: TaskToolDetails })?.details;
   const entries = details?.progressEntries
     ?? details?.progressLines
     ?? textContent(result).split("\n\n").map((block) => block.trim()).filter(Boolean);
-  const summary = formatProgressSummary(details?.turns ?? 0, details?.toolCalls ?? 0);
   const visible = formatVisibleProgress(entries);
   const container = new Container();
   container.addChild(new Spacer(1));
-  container.addChild(new Text(paint(theme, "muted", summary), 0, 0));
   const bg = theme?.bg ? (text: string) => theme.bg("toolPendingBg", text) : undefined;
   const box = new Box(1, 0, bg);
   box.addChild(new Spacer(1));
@@ -315,7 +315,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
       return renderTaskCall(args ?? {}, theme, context.lastComponent);
     },
     renderResult(result, renderOptions, theme, context) {
-      if (renderOptions.isPartial) return renderLiveOutput(result, theme);
+      if (renderOptions.isPartial) return renderLiveOutput(result, renderOptions.expanded, theme);
       return renderFinalResult(result, renderOptions.expanded, theme, context.isError, context, deps);
     },
     async execute(

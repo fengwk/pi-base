@@ -35,8 +35,7 @@ export function renderSubagentWidget(nodes: SubagentNode[], rootSessionId?: stri
     if (visited.has(node.sessionId)) return;
     visited.add(node.sessionId);
     const indent = "  ".repeat(Math.max(0, level));
-    const tools = node.toolCount <= 0 ? "" : node.toolCount === 1 ? " · 1 tool" : ` · ${node.toolCount} tools`;
-    lines.push(`${indent}• ${node.agentType}${tools}`);
+    lines.push(`${indent}• ${node.agentType} - turns: ${node.turns} · tool calls: ${node.toolCount}`);
     for (const child of childrenByParent.get(node.sessionId) ?? []) renderNode(child, level + 1);
   };
 

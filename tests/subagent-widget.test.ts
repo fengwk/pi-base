@@ -12,6 +12,7 @@ function node(overrides: Partial<SubagentNode>): SubagentNode {
     agentType: "worker",
     depth: 2,
     status: "running",
+    turns: 0,
     toolCount: 0,
     startedAt: 1,
     ...overrides,
@@ -34,26 +35,26 @@ describe("renderSubagentWidget", () => {
     // Intent: the widget must follow parentSessionId, not global depth/start ordering, so
     // concurrent sibling branches remain unambiguous.
     const lines = renderSubagentWidget([
-      node({ sessionId: "a", parentSessionId: "root", agentType: "planner", depth: 2, toolCount: 4, startedAt: 10 }),
-      node({ sessionId: "b", parentSessionId: "root", agentType: "builder", depth: 2, startedAt: 20 }),
-      node({ sessionId: "b1", parentSessionId: "b", agentType: "builder-child", depth: 3, startedAt: 25 }),
-      node({ sessionId: "a1", parentSessionId: "a", agentType: "planner-child", depth: 3, toolCount: 1, startedAt: 30 }),
+      node({ sessionId: "a", parentSessionId: "root", agentType: "planner", depth: 2, turns: 3, toolCount: 4, startedAt: 10 }),
+      node({ sessionId: "b", parentSessionId: "root", agentType: "builder", depth: 2, turns: 2, startedAt: 20 }),
+      node({ sessionId: "b1", parentSessionId: "b", agentType: "builder-child", depth: 3, turns: 1, startedAt: 25 }),
+      node({ sessionId: "a1", parentSessionId: "a", agentType: "planner-child", depth: 3, turns: 5, toolCount: 1, startedAt: 30 }),
       node({ sessionId: "c", agentType: "ignored", status: "done", startedAt: 5 }),
     ], "root");
     expect(lines).toEqual([
       "⟳ subagents running (4)",
-      "• planner · 4 tools",
-      "  • planner-child · 1 tool",
-      "• builder",
-      "  • builder-child",
+      "• planner - turns: 3 · tool calls: 4",
+      "  • planner-child - turns: 5 · tool calls: 1",
+      "• builder - turns: 2 · tool calls: 0",
+      "  • builder-child - turns: 1 · tool calls: 0",
     ]);
   });
 
-  it("omits the tool suffix while a running subagent has no observed tool calls yet", () => {
-    // Intent: during execution, 0 does not mean a confirmed final count, so the widget should not mislead.
-    expect(renderSubagentWidget([node({ agentType: "mathworker", toolCount: 0 })])).toEqual([
+  it("shows zero live counters before a running subagent reports progress", () => {
+    // Intent: the widget owns live task counters, so its shape stays stable from startup through completion.
+    expect(renderSubagentWidget([node({ agentType: "mathworker" })])).toEqual([
       "⟳ subagents running (1)",
-      "• mathworker",
+      "• mathworker - turns: 0 · tool calls: 0",
     ]);
   });
 
@@ -71,7 +72,17 @@ describe("renderSubagentWidget", () => {
 
     subagentRegistry.upsert(node({ sessionId: "x", agentType: "mathworker", status: "running" }));
     await new Promise((resolve) => setTimeout(resolve, 80)); // let the 50ms throttle flush
-    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toEqual(["⟳ subagents running (1)", "• mathworker"]);
+    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toEqual([
+      "⟳ subagents running (1)",
+      "• mathworker - turns: 0 · tool calls: 0",
+    ]);
+
+    subagentRegistry.update("x", { turns: 58, toolCount: 58 });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toEqual([
+      "⟳ subagents running (1)",
+      "• mathworker - turns: 58 · tool calls: 58",
+    ]);
 
     subagentRegistry.update("x", { status: "done" });
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -87,7 +98,10 @@ describe("renderSubagentWidget", () => {
 
     subagentRegistry.upsert(node({ sessionId: "x", agentType: "mathworker", status: "running" }));
     await new Promise((resolve) => setTimeout(resolve, 80));
-    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toEqual(["⟳ subagents running (1)", "• mathworker"]);
+    expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toEqual([
+      "⟳ subagents running (1)",
+      "• mathworker - turns: 0 · tool calls: 0",
+    ]);
 
     subagentRegistry.update("x", { toolCount: 1 });
     await registry.emit("session_shutdown", { reason: "quit" }, { cwd: root });

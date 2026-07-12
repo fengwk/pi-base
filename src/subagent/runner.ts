@@ -132,6 +132,7 @@ export async function runSubagent(
     agentType: args.agentType,
     depth: args.childDepth,
     status: "running",
+    turns: 0,
     toolCount: 0,
     startedAt: Date.now(),
   });
@@ -144,6 +145,7 @@ export async function runSubagent(
 
   let idleTimedOut = false;
   let assistantTurns = 0;
+  let toolCalls = 0;
   let activeToolCalls = 0;
   let finishReminderQueued = false;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -189,6 +191,10 @@ export async function runSubagent(
     resetIdleTimer();
     const update = formatProgressEvent(event, activeToolArgs);
     if (update?.turns) assistantTurns += update.turns;
+    if (update?.toolCalls) toolCalls += update.toolCalls;
+    if (update?.turns || update?.toolCalls) {
+      subagentRegistry.update(handle.sessionId, { turns: assistantTurns, toolCount: toolCalls });
+    }
     if (update) args.onProgress?.(update);
     const assistantToolCalls = assistantToolCallCountFromEvent(event);
     maybeQueueFinishReminder(assistantToolCalls);
