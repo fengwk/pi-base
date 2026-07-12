@@ -1,10 +1,10 @@
 import type { Static } from "@sinclair/typebox";
 import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { TASK_TOOL_NAME } from "./constants.js";
 import { readDepth, readRootSessionId } from "./depth.js";
 import { subagentRegistry } from "./registry.js";
-import { formatRunResult, runSubagent, type RunResult, type SubagentProgressUpdate, type SubagentSessionFactory } from "./runner.js";
+import { formatRunResult, runSubagent, type RunResult, type SubagentSessionFactory } from "./runner.js";
 import { taskSchema } from "./schema.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
 import {
@@ -30,19 +30,12 @@ export interface SubagentTaskToolDeps {
 
 const TASK_DESCRIPTION = loadToolDescription(TASK_TOOL_NAME);
 const TASK_PROMPT_SNIPPET = loadToolPromptSnippet(TASK_TOOL_NAME);
-const LIVE_OUTPUT_ENTRIES = 5;
-const MAX_PROGRESS_ENTRIES = 60;
 const TASK_DEFAULT_COLLAPSED_RESULT_LINES = 10;
 const pendingSessionReservations = new Map<string, number>();
 const pendingRootReservations = new Map<string, number>();
 const pendingResumeSessionIds = new Set<string>();
 
 interface TaskToolDetails {
-  progress?: boolean;
-  progressEntries?: string[];
-  progressLines?: string[];
-  turns?: number;
-  toolCalls?: number;
   result?: RunResult;
 }
 
@@ -84,47 +77,6 @@ function dimBlock(text: string, theme: any): string {
     .split("\n")
     .map((line) => paint(theme, "dim", line))
     .join("\n");
-}
-
-function formatProgressSummary(turns: number, toolCalls: number): string {
-  return `running · turns: ${turns} · tool calls: ${toolCalls}`;
-}
-
-function formatVisibleProgress(entries: string[]): string {
-  if (entries.length === 0) return "";
-  return entries.slice(-LIVE_OUTPUT_ENTRIES).join("\n");
-}
-
-function createProgressReporter(onUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined): (update: SubagentProgressUpdate) => void {
-  const entries: string[] = [];
-  let turns = 0;
-  let toolCalls = 0;
-  return (update: SubagentProgressUpdate) => {
-    if (!onUpdate) return;
-    const normalized = update.text.trim();
-    const nextTurns = turns + (update.turns ?? 0);
-    const nextToolCalls = toolCalls + (update.toolCalls ?? 0);
-    const countsChanged = nextTurns !== turns || nextToolCalls !== toolCalls;
-    turns = nextTurns;
-    toolCalls = nextToolCalls;
-    const shouldAppendEntry = normalized.length > 0 && update.kind !== "assistant";
-    if (shouldAppendEntry && entries.at(-1) !== normalized) {
-      entries.push(normalized);
-      while (entries.length > MAX_PROGRESS_ENTRIES) entries.shift();
-    } else if (!countsChanged) {
-      return;
-    }
-    onUpdate({
-      content: [{ type: "text", text: [formatProgressSummary(turns, toolCalls), ...entries].join("\n\n") }],
-      details: {
-        progress: true,
-        progressEntries: [...entries],
-        progressLines: [...entries],
-        turns,
-        toolCalls,
-      },
-    });
-  };
 }
 
 function countPendingSessionReservations(parentSessionId: string): number {
@@ -206,24 +158,6 @@ function renderTaskCall(args: Static<typeof taskSchema>, theme: any, lastCompone
     dimBlock(prompt, theme),
   ].join("\n"));
   return text;
-}
-
-function renderLiveOutput(result: unknown, expanded: boolean | undefined, theme: any) {
-  if (!expanded) return new Text("", 0, 0);
-
-  const details = (result as { details?: TaskToolDetails })?.details;
-  const entries = details?.progressEntries
-    ?? details?.progressLines
-    ?? textContent(result).split("\n\n").map((block) => block.trim()).filter(Boolean);
-  const visible = formatVisibleProgress(entries);
-  const container = new Container();
-  container.addChild(new Spacer(1));
-  const bg = theme?.bg ? (text: string) => theme.bg("toolPendingBg", text) : undefined;
-  const box = new Box(1, 0, bg);
-  box.addChild(new Spacer(1));
-  box.addChild(new Text(visible || paint(theme, "muted", "(running...)"), 0, 0));
-  container.addChild(box);
-  return container;
 }
 
 function renderTaskReportBody(
@@ -315,14 +249,14 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
       return renderTaskCall(args ?? {}, theme, context.lastComponent);
     },
     renderResult(result, renderOptions, theme, context) {
-      if (renderOptions.isPartial) return renderLiveOutput(result, renderOptions.expanded, theme);
+      if (renderOptions.isPartial) return new Text("", 0, 0);
       return renderFinalResult(result, renderOptions.expanded, theme, context.isError, context, deps);
     },
     async execute(
       _toolCallId: string,
       params: Static<typeof taskSchema>,
       signal: AbortSignal | undefined,
-      onUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined,
+      _onUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined,
       ctx: ExtensionContext,
     ) {
       const agentType = readString(params?.subagent_type);
@@ -354,7 +288,6 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
         }
       }
       const childDepth = readDepth(ctx) + 1;
-      const reportProgress = createProgressReporter(onUpdate);
       const max = deps.getMaxConcurrency(ctx.cwd);
       const maxTotal = deps.getMaxTotalConcurrency(ctx.cwd);
       const reservation = tryReserveSessionSlot(parentSessionId, rootSessionId, max, maxTotal);
@@ -396,7 +329,6 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
               releaseSessionReservation?.();
               releaseSessionReservation = undefined;
             },
-            onProgress: reportProgress,
           },
           deps.factory,
         );

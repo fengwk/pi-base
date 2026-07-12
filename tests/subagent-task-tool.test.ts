@@ -88,9 +88,8 @@ describe("task tool", () => {
     expect(text(result)).toContain("state=\"completed\"");
   });
 
-  it("keeps collapsed running tasks stable and shows live logs only when expanded", () => {
-    // Intent: delegated prompts remain visible while volatile progress stays out of collapsed history;
-    // expanded running tasks still expose a rolling transcript, and final reports render normally.
+  it("renders only the task command and prompt while running regardless of expansion", () => {
+    // Intent: live progress belongs in the /subagent panel, so task history remains stable in every state.
     const tool = registerAndCapture(baseDeps());
     const call = render(
       tool.renderCall(
@@ -107,7 +106,7 @@ describe("task tool", () => {
     expect(call).not.toContain("Prompt");
 
     const partialResult = {
-      content: [{ type: "text", text: "" }],
+      content: [{ type: "text", text: "running · turns: 1 · tool calls: 1" }],
       details: {
         progress: true,
         progressEntries: ['→ read {"path":"src/a.ts"}', '✓ read {"path":"src/a.ts"}'],
@@ -115,18 +114,12 @@ describe("task tool", () => {
         toolCalls: 1,
       },
     };
-    const collapsedPartial = render(
+    expect(render(
       tool.renderResult(partialResult, { isPartial: true, expanded: false }, {}, { lastComponent: undefined }),
-    );
-    expect(collapsedPartial).toBe("");
-
-    const expandedPartial = render(
+    )).toBe("");
+    expect(render(
       tool.renderResult(partialResult, { isPartial: true, expanded: true }, {}, { lastComponent: undefined }),
-    );
-    expect(expandedPartial).not.toContain("running · turns:");
-    expect(expandedPartial).toContain('→ read {"path":"src/a.ts"}');
-    expect(expandedPartial).toContain('✓ read {"path":"src/a.ts"}');
-    expect(expandedPartial).not.toContain("1|alpha");
+    )).toBe("");
 
     const final = render(
       tool.renderResult(
@@ -148,61 +141,6 @@ describe("task tool", () => {
     expect(final).toContain("Result");
     expect(final).toContain("REPORT");
     expect(final).not.toContain("running · turns:");
-  });
-
-  it("shows a five-entry rolling tail for live progress", () => {
-    const tool = registerAndCapture(baseDeps());
-    const partial = render(
-      tool.renderResult(
-        {
-          content: [{ type: "text", text: "" }],
-          details: {
-            progress: true,
-            progressEntries: [
-              "start",
-              '→ read {"path":"a"}',
-              '✓ read {"path":"a"}',
-              '→ grep {"pattern":"b"}',
-              '✓ grep {"pattern":"b"}',
-              '→ write {"path":"c"}',
-              '✓ write {"path":"c"}',
-            ],
-            turns: 1,
-            toolCalls: 3,
-          },
-        },
-        { isPartial: true, expanded: true },
-        {},
-        { lastComponent: undefined },
-      ),
-    );
-    expect(partial).not.toContain("running · turns:");
-    expect(partial).not.toContain("start");
-    expect(partial).not.toContain('→ read {"path":"a"}');
-    expect(partial).toContain('✓ read {"path":"a"}');
-    expect(partial).toContain('→ grep {"pattern":"b"}');
-    expect(partial).toContain('✓ grep {"pattern":"b"}');
-    expect(partial).toContain('→ write {"path":"c"}');
-    expect(partial).toContain('✓ write {"path":"c"}');
-  });
-
-  it("does not leave a trailing blank line at the bottom of live task output", () => {
-    const tool = registerAndCapture(baseDeps());
-    const lines = tool.renderResult(
-      {
-        content: [{ type: "text", text: "" }],
-        details: {
-          progress: true,
-          progressEntries: ['→ read {"path":"src/a.ts"}', '✓ read {"path":"src/a.ts"}'],
-          turns: 1,
-          toolCalls: 1,
-        },
-      },
-      { isPartial: true, expanded: true },
-      {},
-      { lastComponent: undefined },
-    ).render(200);
-    expect(lines.at(-1)?.trim()).not.toBe("");
   });
 
   it("uses configured collapsed task result budgets until expanded", () => {
@@ -230,9 +168,8 @@ describe("task tool", () => {
     expect(expanded).not.toContain("ctrl+o to expand");
   });
 
-  it("streams child progress updates through the task tool", async () => {
-    // Intent: child-session events must surface as a concise running tail,
-    // while still reflecting assistant turn counts even for tool-only turns.
+  it("keeps child progress out of task partial updates while updating the registry", async () => {
+    // Intent: live counters belong to the registry-backed widget/overlay, not the historical task block.
     let listener: ((event: unknown) => void) | undefined;
     const factory: SubagentSessionFactory = {
       spawn: async () => ({
@@ -262,11 +199,13 @@ describe("task tool", () => {
     const tool = registerAndCapture(baseDeps({ factory }));
     const result = await tool.execute("1", { subagent_type: "worker", prompt: "go" }, undefined, (partial) => updates.push(text(partial)), ctx());
     expect(result.isError).toBeFalsy();
-    expect(updates.join("\n")).toContain("running · turns: 1 · tool calls: 1");
-    expect(updates.join("\n")).toContain('→ read {"path":"src/a.ts"}');
-    expect(updates.join("\n")).toContain('✓ read {"path":"src/a.ts"}');
-    expect(updates.join("\n")).not.toContain("path: src/a.ts");
-    expect(updates.join("\n")).not.toContain("assistant");
+    expect(updates).toEqual([]);
+    expect(subagentRegistry.get("child-progress")).toMatchObject({
+      status: "done",
+      turns: 1,
+      toolCount: 1,
+      lastActivity: "completed",
+    });
   });
 
   it("passes childDepth = parent depth + 1", async () => {

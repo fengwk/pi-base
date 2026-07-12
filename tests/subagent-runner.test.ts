@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectFromMessages,
   formatRunResult,
+  getLiveSubagentView,
   runSubagent,
   subagentSessionDir,
   type SubagentSession,
@@ -45,6 +46,41 @@ describe("runSubagent", () => {
     expect(node.toolCount).toBe(3);
     expect(node.parentSessionId).toBe("parent");
     expect(node.rootSessionId).toBe("parent");
+  });
+
+  it("publishes only the read-only view while the runner owns the live session", async () => {
+    // Intent: UI observers may inspect a running child, but the source must disappear once runner cleanup begins.
+    let releasePrompt: (() => void) | undefined;
+    const view = {
+      cwd: "/tmp/work",
+      getMessages: () => [],
+      getStreamingMessage: () => undefined,
+      getActiveTools: () => [],
+      getToolDefinition: () => undefined,
+      subscribe: () => () => undefined,
+    };
+    const child: SubagentSession = {
+      sessionId: "child-view",
+      prompt: () => new Promise<void>((resolve) => {
+        releasePrompt = resolve;
+      }),
+      collect: () => ({ report: "done", toolCount: 0 }),
+      view,
+      abort: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const resultPromise = runSubagent(
+      fakeCtx(),
+      { agentType: "worker", prompt: "go", childDepth: 2 },
+      { spawn: async () => child, resume: async () => child },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(getLiveSubagentView("child-view")).toBe(view);
+
+    releasePrompt?.();
+    await resultPromise;
+    expect(getLiveSubagentView("child-view")).toBeUndefined();
   });
 
   it("preserves the caller's persisted root-session id in registry nodes", async () => {

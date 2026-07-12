@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { createAgentSession, getAgentDir, SessionManager, type AgentSessionEvent, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  getAgentDir,
+  SessionManager,
+  type AgentSession,
+  type AgentSessionEvent,
+  type ExtensionContext,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { AGENT_STATE_ENTRY } from "../agent-support.js";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, readRootSessionId, rootSessionEntryData } from "./depth.js";
 import { subagentRegistry, type SubagentStatus } from "./registry.js";
@@ -14,6 +22,30 @@ export interface RunResult {
 }
 
 /** A bound, runnable subagent session. Abstracted so the orchestration is unit-testable with a fake. */
+type MessageEvent = Extract<AgentSessionEvent, { type: "message_start" }>;
+type ToolUpdateEvent = Extract<AgentSessionEvent, { type: "tool_execution_update" }>;
+export type SubagentViewMessage = MessageEvent["message"];
+export type SubagentAssistantMessage = Extract<SubagentViewMessage, { role: "assistant" }>;
+
+export interface SubagentActiveTool {
+  toolCallId: string;
+  toolName: string;
+  args: unknown;
+  executionStarted: boolean;
+  argsComplete: boolean;
+  partialResult?: ToolUpdateEvent["partialResult"];
+}
+
+/** Read-only access used by the interactive subagent transcript panel. */
+export interface SubagentViewSource {
+  cwd: string;
+  getMessages: () => readonly SubagentViewMessage[];
+  getStreamingMessage: () => SubagentAssistantMessage | undefined;
+  getActiveTools: () => readonly SubagentActiveTool[];
+  getToolDefinition: (name: string) => ToolDefinition | undefined;
+  subscribe: (listener: (event: AgentSessionEvent) => void) => () => void;
+}
+
 export interface SubagentSession {
   sessionId: string;
   prompt: (text: string) => Promise<void>;
@@ -21,6 +53,8 @@ export interface SubagentSession {
   collect: () => { report?: string; toolCount: number };
   /** Subscribe to child-session events for best-effort progress reporting. */
   subscribe?: (listener: (event: unknown) => void) => () => void;
+  /** Optional read-only source for the interactive transcript panel. */
+  view?: SubagentViewSource;
   /** Inject a steering message after the current assistant turn. Used for soft stop nudges. */
   steer?: (text: string) => Promise<void>;
   /** Abort the child session. Implementations may complete synchronously or asynchronously. */
@@ -66,6 +100,10 @@ function formatDurationMs(value: number): string {
 }
 
 const liveHandles = new Map<string, SubagentSession>();
+
+export function getLiveSubagentView(sessionId: string): SubagentViewSource | undefined {
+  return liveHandles.get(sessionId)?.view;
+}
 
 function subtreeSessionIds(rootSessionId: string): string[] {
   const nodes = subagentRegistry.all();
@@ -457,6 +495,79 @@ export function collectFromMessages(messages: RuntimeMessage[]): { report?: stri
   return { report, toolCount };
 }
 
+function createLiveViewSource(session: AgentSession, cwd: string): { source: SubagentViewSource; dispose: () => void } {
+  let streamingMessage: SubagentAssistantMessage | undefined;
+  const activeTools = new Map<string, SubagentActiveTool>();
+  const unsubscribe = session.subscribe((event) => {
+    if (event.type === "message_start" && event.message.role === "assistant") {
+      streamingMessage = event.message;
+      return;
+    }
+    if (event.type === "message_update" && event.message.role === "assistant") {
+      streamingMessage = event.message;
+      for (const content of event.message.content) {
+        if (content.type !== "toolCall") continue;
+        const existing = activeTools.get(content.id);
+        activeTools.set(content.id, {
+          toolCallId: content.id,
+          toolName: content.name,
+          args: content.arguments,
+          executionStarted: existing?.executionStarted ?? false,
+          argsComplete: existing?.argsComplete ?? false,
+          ...(existing?.partialResult === undefined ? {} : { partialResult: existing.partialResult }),
+        });
+      }
+      return;
+    }
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      streamingMessage = undefined;
+      for (const content of event.message.content) {
+        if (content.type !== "toolCall") continue;
+        const existing = activeTools.get(content.id);
+        if (existing) activeTools.set(content.id, { ...existing, args: content.arguments, argsComplete: true });
+      }
+      return;
+    }
+    if (event.type === "tool_execution_start") {
+      const existing = activeTools.get(event.toolCallId);
+      activeTools.set(event.toolCallId, {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: event.args,
+        executionStarted: true,
+        argsComplete: existing?.argsComplete ?? true,
+        ...(existing?.partialResult === undefined ? {} : { partialResult: existing.partialResult }),
+      });
+      return;
+    }
+    if (event.type === "tool_execution_update") {
+      const existing = activeTools.get(event.toolCallId);
+      activeTools.set(event.toolCallId, {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: event.args,
+        executionStarted: true,
+        argsComplete: existing?.argsComplete ?? true,
+        partialResult: event.partialResult,
+      });
+      return;
+    }
+    if (event.type === "tool_execution_end") activeTools.delete(event.toolCallId);
+  });
+
+  return {
+    source: {
+      cwd,
+      getMessages: () => session.messages as SubagentViewMessage[],
+      getStreamingMessage: () => streamingMessage,
+      getActiveTools: () => [...activeTools.values()].map((tool) => ({ ...tool })),
+      getToolDefinition: (name) => session.getToolDefinition(name),
+      subscribe: (listener) => session.subscribe(listener),
+    },
+    dispose: unsubscribe,
+  };
+}
+
 /**
  * Default factory: subagent sessions are ordinary persistent pi sessions in the isolated dir,
  * created in-process via `createAgentSession`. The child re-loads pi-base, restores its delegated
@@ -477,6 +588,7 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       model: ctx.model,
       modelRegistry: ctx.modelRegistry,
     });
+    const liveView = createLiveViewSource(session, ctx.cwd);
     let disposed = false;
     const dispose = async () => {
       if (disposed) return;
@@ -484,6 +596,7 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       try {
         await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       } finally {
+        liveView.dispose();
         session.dispose();
       }
     };
@@ -500,7 +613,8 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       sessionId,
       prompt: (text: string) => session.prompt(text),
       collect: () => collectFromMessages(session.messages as unknown as RuntimeMessage[]),
-      subscribe: (listener: (event: unknown) => void) => session.subscribe(listener as (event: AgentSessionEvent) => void),
+      subscribe: (listener: (event: unknown) => void) => liveView.source.subscribe(listener),
+      view: liveView.source,
       steer: (text: string) => session.steer(text),
       abort: () => session.abort(),
       dispose,

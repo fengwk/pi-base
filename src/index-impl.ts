@@ -39,6 +39,7 @@ import { createRealSubagentFactory } from "./subagent/runner.js";
 import { subagentRegistry } from "./subagent/registry.js";
 import { createSubagentWidgetComponent, renderSubagentWidget, SUBAGENT_WIDGET_KEY } from "./subagent/widget.js";
 import { registerSubagentTaskTool } from "./subagent/task-tool.js";
+import { registerSubagentCommand } from "./subagent/command.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
@@ -320,6 +321,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     },
   });
   registerResumeAllCommand(pi);
+  registerSubagentCommand(pi);
 
   // Only the root (UI-owning) session hosts subagent permission prompts. Headless subagent
   // sessions relay their `ask` prompts here via the module-level permission host. The same root
