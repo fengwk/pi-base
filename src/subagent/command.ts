@@ -17,6 +17,8 @@ import { subagentRegistry, type SubagentNode } from "./registry.js";
 import { getLiveSubagentView, getPersistedSubagentView, type SubagentViewSource } from "./runner.js";
 import { SubagentSessionPanel } from "./session-panel.js";
 
+const OVERLAY_VERTICAL_MARGIN = 1;
+
 interface DisposableComponent extends Component {
   dispose?: () => void;
 }
@@ -49,6 +51,28 @@ function createLiveTarget(node: SubagentNode): SubagentPanelTarget | undefined {
     source,
     live: true,
     getNode: () => subagentRegistry.get(node.sessionId),
+  };
+}
+
+function resolveSubagentTarget(
+  cwd: string,
+  nodes: SubagentNode[],
+  query: string,
+): SubagentPanelTarget | "ambiguous" | undefined {
+  const liveNode = resolveRequestedNode(nodes, query);
+  if (liveNode === "ambiguous") return "ambiguous";
+  if (liveNode) {
+    const liveTarget = createLiveTarget(liveNode);
+    if (liveTarget) return liveTarget;
+  }
+
+  const persisted = getPersistedSubagentView(cwd, liveNode?.sessionId ?? query);
+  if (!persisted || persisted === "ambiguous") return persisted;
+  return {
+    sessionId: persisted.sessionId,
+    source: persisted.source,
+    live: false,
+    getNode: () => subagentRegistry.get(persisted.sessionId),
   };
 }
 
@@ -104,11 +128,12 @@ class SubagentSelector implements Component {
   render(width: number): string[] {
     const safeWidth = Math.max(4, width);
     const border = this.theme.fg("borderAccent", "─".repeat(safeWidth));
-    const title = padToWidth(` ${this.theme.fg("accent", "View running subagent")}`, safeWidth);
+    const title = padToWidth(` ${this.theme.fg("accent", "View subagent")}`, safeWidth);
     const choices = this.nodes.map((node, index) => {
       const selected = index === this.selectedIndex;
       const prefix = selected ? "→ " : "  ";
-      const label = truncateToWidth(formatChoice(node), Math.max(1, safeWidth - 3), "…");
+      const currentNode = subagentRegistry.get(node.sessionId) ?? node;
+      const label = truncateToWidth(formatChoice(currentNode), Math.max(1, safeWidth - 3), "…");
       const color = selected ? "accent" : "text";
       return padToWidth(` ${this.theme.fg(color, prefix + label)}`, safeWidth);
     });
@@ -117,7 +142,13 @@ class SubagentSelector implements Component {
       safeWidth,
     );
     const empty = " ".repeat(safeWidth);
-    return [border, empty, title, empty, ...choices, empty, footer, empty, border];
+    const top = [border, empty, title, empty, ...choices];
+    const bottom = [empty, footer, empty, border];
+    const targetHeight = Math.max(
+      top.length + bottom.length,
+      this.tui.terminal.rows - OVERLAY_VERTICAL_MARGIN * 2,
+    );
+    return [...top, ...Array.from({ length: targetHeight - top.length - bottom.length }, () => empty), ...bottom];
   }
 
   invalidate(): void {}
@@ -127,6 +158,7 @@ class SubagentCommandOverlay implements Component {
   private readonly tui: TUI;
   private readonly theme: Theme;
   private readonly keybindings: KeybindingsManager;
+  private readonly cwd: string;
   private readonly done: () => void;
   private readonly notifyUnavailable: (sessionId: string) => void;
   private readonly nodes: SubagentNode[];
@@ -136,6 +168,7 @@ class SubagentCommandOverlay implements Component {
     tui: TUI;
     theme: Theme;
     keybindings: KeybindingsManager;
+    cwd: string;
     done: () => void;
     nodes: SubagentNode[];
     initialTarget?: SubagentPanelTarget;
@@ -144,6 +177,7 @@ class SubagentCommandOverlay implements Component {
     this.tui = options.tui;
     this.theme = options.theme;
     this.keybindings = options.keybindings;
+    this.cwd = options.cwd;
     this.done = options.done;
     this.notifyUnavailable = options.notifyUnavailable;
     this.nodes = options.nodes;
@@ -162,26 +196,31 @@ class SubagentCommandOverlay implements Component {
   }
 
   private createSessionPanel(target: SubagentPanelTarget): DisposableComponent {
-    if (target.live && getLiveSubagentView(target.sessionId) === undefined) {
-      this.notifyUnavailable(target.sessionId);
-      queueMicrotask(this.done);
-      return this.createSelector();
+    let currentTarget = target;
+    if (currentTarget.live && getLiveSubagentView(currentTarget.sessionId) === undefined) {
+      const fallback = resolveSubagentTarget(this.cwd, this.nodes, currentTarget.sessionId);
+      if (!fallback || fallback === "ambiguous") {
+        this.notifyUnavailable(currentTarget.sessionId);
+        queueMicrotask(this.done);
+        return this.createSelector();
+      }
+      currentTarget = fallback;
     }
     return new SubagentSessionPanel({
       tui: this.tui,
       theme: this.theme,
       keybindings: this.keybindings,
       done: this.done,
-      sessionId: target.sessionId,
-      source: target.source,
-      getNode: target.getNode,
+      sessionId: currentTarget.sessionId,
+      source: currentTarget.source,
+      getNode: currentTarget.getNode,
       subscribeRegistry: (listener) => subagentRegistry.onChange(listener),
     });
   }
 
   private showSession(node: SubagentNode): void {
-    const target = createLiveTarget(node);
-    if (!target) {
+    const target = resolveSubagentTarget(this.cwd, this.nodes, node.sessionId);
+    if (!target || target === "ambiguous") {
       this.notifyUnavailable(node.sessionId);
       queueMicrotask(this.done);
       return;
@@ -232,40 +271,28 @@ export function registerSubagentCommand(pi: Pick<ExtensionAPI, "registerCommand"
           return;
         }
       } else {
-        const liveNode = resolveRequestedNode(nodes, query);
-        if (liveNode === "ambiguous") {
+        const resolvedTarget = resolveSubagentTarget(ctx.cwd, nodes, query);
+        if (resolvedTarget === "ambiguous") {
           ctx.ui.notify(`Subagent "${query}" is ambiguous.`, "warning");
           return;
         }
-        if (liveNode) initialTarget = createLiveTarget(liveNode);
-        if (!initialTarget) {
-          const persisted = getPersistedSubagentView(ctx.cwd, query);
-          if (persisted === "ambiguous") {
-            ctx.ui.notify(`Subagent "${query}" is ambiguous.`, "warning");
-            return;
-          }
-          if (!persisted) {
-            ctx.ui.notify(`Subagent "${query}" was not found.`, "warning");
-            return;
-          }
-          initialTarget = {
-            sessionId: persisted.sessionId,
-            source: persisted.source,
-            live: false,
-            getNode: () => subagentRegistry.get(persisted.sessionId),
-          };
+        if (!resolvedTarget) {
+          ctx.ui.notify(`Subagent "${query}" was not found.`, "warning");
+          return;
         }
+        initialTarget = resolvedTarget;
       }
 
       await ctx.ui.custom<void>((tui, theme, keybindings, done) => new SubagentCommandOverlay({
         tui,
         theme,
         keybindings,
+        cwd: ctx.cwd,
         done: () => done(undefined),
         nodes,
         ...(initialTarget ? { initialTarget } : {}),
         notifyUnavailable: (sessionId) => {
-          ctx.ui.notify(`Subagent "${sessionId}" finished before the panel opened.`, "info");
+          ctx.ui.notify(`Subagent "${sessionId}" is no longer available.`, "info");
         },
       }), {
         overlay: true,
@@ -273,7 +300,7 @@ export function registerSubagentCommand(pi: Pick<ExtensionAPI, "registerCommand"
           width: "100%",
           maxHeight: "100%",
           anchor: "center",
-          margin: { top: 1, right: 0, bottom: 1, left: 0 },
+          margin: { top: OVERLAY_VERTICAL_MARGIN, right: 0, bottom: OVERLAY_VERTICAL_MARGIN, left: 0 },
         },
       });
     },
