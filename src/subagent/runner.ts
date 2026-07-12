@@ -21,8 +21,8 @@ export interface SubagentSession {
   collect: () => { report?: string; toolCount: number };
   /** Subscribe to child-session events for best-effort progress reporting. */
   subscribe?: (listener: (event: unknown) => void) => () => void;
-  /** Queue a follow-up message while the child is still running. Used for soft stop nudges. */
-  followUp?: (text: string) => Promise<void>;
+  /** Inject a steering message after the current assistant turn. Used for soft stop nudges. */
+  steer?: (text: string) => Promise<void>;
   /** Abort the child session. Implementations may complete synchronously or asynchronously. */
   abort: () => void | Promise<void>;
   dispose: () => void | Promise<void>;
@@ -145,6 +145,7 @@ export async function runSubagent(
   let idleTimedOut = false;
   let assistantTurns = 0;
   let activeToolCalls = 0;
+  let finishReminderQueued = false;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let cancellationRequested = false;
   const clearIdleTimer = () => {
@@ -168,15 +169,16 @@ export async function runSubagent(
     idleTimer.unref?.();
   };
   const maybeQueueFinishReminder = (assistantToolCalls: number) => {
-    if (assistantToolCalls < 1) return;
-    if (typeof handle.followUp !== "function") return;
+    if (assistantToolCalls < 1 || finishReminderQueued) return;
+    if (typeof handle.steer !== "function") return;
     if (args.maxTurns === undefined || args.maxTurns < 1) return;
     if (assistantTurns < args.maxTurns) return;
+    finishReminderQueued = true;
     args.onProgress?.({
       kind: "status",
       text: `turn limit reached (${assistantTurns}/${args.maxTurns}); asking subagent to finish`,
     });
-    void handle.followUp?.(MAX_TURNS_FINISH_PROMPT).catch(() => undefined);
+    void handle.steer(MAX_TURNS_FINISH_PROMPT).catch(() => undefined);
   };
 
   args.onProgress?.({ kind: "status", text: `started ${args.agentType} session ${handle.sessionId}` });
@@ -485,7 +487,7 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
       prompt: (text: string) => session.prompt(text),
       collect: () => collectFromMessages(session.messages as unknown as RuntimeMessage[]),
       subscribe: (listener: (event: unknown) => void) => session.subscribe(listener as (event: AgentSessionEvent) => void),
-      followUp: (text: string) => session.followUp(text),
+      steer: (text: string) => session.steer(text),
       abort: () => session.abort(),
       dispose,
     };

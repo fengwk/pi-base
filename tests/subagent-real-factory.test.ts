@@ -42,7 +42,7 @@ function fakeSession(
   return {
     bindExtensions: vi.fn(async () => undefined),
     prompt: vi.fn(async () => undefined),
-    followUp: vi.fn(async () => undefined),
+    steer: vi.fn(async () => undefined),
     messages,
     subscribe: vi.fn(() => () => undefined),
     abort: vi.fn(),
@@ -103,8 +103,8 @@ describe("createRealSubagentFactory", () => {
     expect(session.prompt).toHaveBeenNthCalledWith(1, "/agent worker");
     await child.prompt("go");
     expect(session.prompt).toHaveBeenNthCalledWith(2, "go");
-    await child.followUp?.("finish now");
-    expect(session.followUp).toHaveBeenCalledWith("finish now");
+    await child.steer?.("finish now");
+    expect(session.steer).toHaveBeenCalledWith("finish now");
     expect(child.collect()).toEqual({ report: "final answer", toolCount: 1 });
     child.abort();
     expect(session.abort).toHaveBeenCalledTimes(1);

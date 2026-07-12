@@ -1,4 +1,6 @@
 You have reached the delegated task turn limit.
-Return a final answer for the parent agent immediately.
-Do not start another exploratory loop.
-Only call another tool if it is strictly necessary to produce the final report now.
+Stop all further exploration and return a final response to the parent agent immediately.
+
+If you have a final conclusion, state it directly. Otherwise, return the complete progress so far: verified findings and evidence, work completed, unresolved questions, and the precise next steps needed.
+
+Clearly state that this response is ending early because the maximum turn limit was reached. The parent agent can reschedule or resume you if further investigation is needed.

@@ -305,12 +305,12 @@ describe("runSubagent", () => {
     }
   });
 
-  it("repeats finish reminders at and beyond maxTurns without hard-aborting the child", async () => {
-    // Intent: align with opencode-style soft stopping: once the child reaches the
-    // turn budget, every further tool-driving assistant turn gets another finish reminder.
+  it("steers the child once when a tool-driving turn reaches maxTurns without hard-aborting it", async () => {
+    // Intent: steering is consumed before the next model turn, unlike follow-up messages which wait
+    // until the child would otherwise stop. Queue it once so a looping child does not accumulate duplicates.
     const progress: string[] = [];
     let listener: ((event: unknown) => void) | undefined;
-    const followUp = vi.fn(async () => undefined);
+    const steer = vi.fn(async () => undefined);
     const child: SubagentSession = {
       sessionId: "child-turn-limit",
       prompt: async () => {
@@ -332,7 +332,7 @@ describe("runSubagent", () => {
         listener = next;
         return () => undefined;
       },
-      followUp,
+      steer,
       abort: vi.fn(),
       dispose: vi.fn(),
     };
@@ -350,13 +350,12 @@ describe("runSubagent", () => {
       },
       factory,
     );
-    expect(followUp).toHaveBeenCalledTimes(2);
-    expect(followUp).toHaveBeenNthCalledWith(1, expect.stringContaining("delegated task turn limit"));
-    expect(followUp).toHaveBeenNthCalledWith(2, expect.stringContaining("delegated task turn limit"));
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(steer).toHaveBeenCalledWith(expect.stringContaining("delegated task turn limit"));
     expect(child.abort).toHaveBeenCalledTimes(0);
     expect(result).toEqual({ sessionId: "child-turn-limit", state: "completed", report: "final answer" });
     expect(progress.join("\n")).toContain("turn limit reached (1/1)");
-    expect(progress.join("\n")).toContain("turn limit reached (2/1)");
+    expect(progress.join("\n")).not.toContain("turn limit reached (2/1)");
   });
 });
 
