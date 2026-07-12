@@ -1,10 +1,17 @@
 import {
-  ExtensionSelectorComponent,
+  keyHint,
+  rawKeyHint,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  type KeybindingsManager,
+  type TUI,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { isRootSession, readRootSessionId } from "./depth.js";
 import { subagentRegistry, type SubagentNode } from "./registry.js";
 import { getLiveSubagentView, getPersistedSubagentView, type SubagentViewSource } from "./runner.js";
@@ -45,6 +52,77 @@ function createLiveTarget(node: SubagentNode): SubagentPanelTarget | undefined {
   };
 }
 
+function padToWidth(value: string, width: number): string {
+  const clipped = truncateToWidth(value, width, "…");
+  return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
+}
+
+class SubagentSelector implements Component {
+  private readonly tui: TUI;
+  private readonly theme: Theme;
+  private readonly keybindings: KeybindingsManager;
+  private readonly nodes: SubagentNode[];
+  private readonly onSelect: (node: SubagentNode) => void;
+  private readonly onCancel: () => void;
+  private selectedIndex = 0;
+
+  constructor(options: {
+    tui: TUI;
+    theme: Theme;
+    keybindings: KeybindingsManager;
+    nodes: SubagentNode[];
+    onSelect: (node: SubagentNode) => void;
+    onCancel: () => void;
+  }) {
+    this.tui = options.tui;
+    this.theme = options.theme;
+    this.keybindings = options.keybindings;
+    this.nodes = options.nodes;
+    this.onSelect = options.onSelect;
+    this.onCancel = options.onCancel;
+  }
+
+  handleInput(data: string): void {
+    if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
+      this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+      this.tui.requestRender();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.select.down") || data === "j") {
+      this.selectedIndex = Math.min(this.nodes.length - 1, this.selectedIndex + 1);
+      this.tui.requestRender();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.select.confirm") || data === "\n") {
+      const selected = this.nodes[this.selectedIndex];
+      if (selected) this.onSelect(selected);
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.select.cancel")) this.onCancel();
+  }
+
+  render(width: number): string[] {
+    const safeWidth = Math.max(4, width);
+    const border = this.theme.fg("borderAccent", "─".repeat(safeWidth));
+    const title = padToWidth(` ${this.theme.fg("accent", "View running subagent")}`, safeWidth);
+    const choices = this.nodes.map((node, index) => {
+      const selected = index === this.selectedIndex;
+      const prefix = selected ? "→ " : "  ";
+      const label = truncateToWidth(formatChoice(node), Math.max(1, safeWidth - 3), "…");
+      const color = selected ? "accent" : "text";
+      return padToWidth(` ${this.theme.fg(color, prefix + label)}`, safeWidth);
+    });
+    const footer = padToWidth(
+      ` ${rawKeyHint("↑↓", "navigate")}  ${keyHint("tui.select.confirm", "select")}  ${keyHint("tui.select.cancel", "cancel")}`,
+      safeWidth,
+    );
+    const empty = " ".repeat(safeWidth);
+    return [border, empty, title, empty, ...choices, empty, footer, empty, border];
+  }
+
+  invalidate(): void {}
+}
+
 class SubagentCommandOverlay implements Component {
   private readonly tui: TUI;
   private readonly theme: Theme;
@@ -72,23 +150,15 @@ class SubagentCommandOverlay implements Component {
     this.current = options.initialTarget ? this.createSessionPanel(options.initialTarget) : this.createSelector();
   }
 
-  private createSelector(): ExtensionSelectorComponent {
-    const nodeByLabel = new Map<string, SubagentNode>();
-    const labels = this.nodes.map((node) => {
-      const label = formatChoice(node);
-      nodeByLabel.set(label, node);
-      return label;
+  private createSelector(): SubagentSelector {
+    return new SubagentSelector({
+      tui: this.tui,
+      theme: this.theme,
+      keybindings: this.keybindings,
+      nodes: this.nodes,
+      onSelect: (node) => this.showSession(node),
+      onCancel: this.done,
     });
-    return new ExtensionSelectorComponent(
-      "View running subagent",
-      labels,
-      (label) => {
-        const node = nodeByLabel.get(label);
-        if (node) this.showSession(node);
-      },
-      this.done,
-      { tui: this.tui },
-    );
   }
 
   private createSessionPanel(target: SubagentPanelTarget): DisposableComponent {

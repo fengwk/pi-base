@@ -5,7 +5,7 @@ import {
   type ExtensionCommandContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
+import { type Component, type KeybindingsManager, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AGENT_STATE_ENTRY } from "../src/agent-support.js";
 import { registerSubagentCommand } from "../src/subagent/command.js";
@@ -100,14 +100,20 @@ describe("/subagent", () => {
     );
     await Promise.resolve();
     await Promise.resolve();
+    subagentRegistry.update("child-live", {
+      lastActivity: `→ task ${JSON.stringify({ subagent_type: "explorer", prompt: "x".repeat(200) })}`,
+    });
 
     let overlayOptions: unknown;
     const custom = async (factory: OverlayFactory, options?: unknown): Promise<void> => {
       overlayOptions = options;
       const component = renderOverlay(factory);
-      const selectorOutput = component.render(80).join("\n");
+      const selectorLines = component.render(60);
+      const selectorOutput = selectorLines.join("\n");
+      expect(selectorLines.every((line) => visibleWidth(line) <= 60)).toBe(true);
       expect(selectorOutput).toContain("View running subagent");
       expect(selectorOutput).toContain("explorer · running");
+      expect(selectorOutput).toContain("…");
       expect(selectorOutput).not.toContain("subagent explorer · running");
       component.handleInput?.("\n");
       expect(component.render(80).join("\n")).toContain("subagent explorer · running");
