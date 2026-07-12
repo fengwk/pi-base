@@ -183,10 +183,17 @@ describe("runSubagent", () => {
     // Intent: structured progress drives both tool updates and registry-backed widget counters,
     // while auxiliary registration hooks must not break a successful delegation.
     const progress: Array<{ kind: string; text: string; turns?: number; toolCalls?: number }> = [];
-    const registrySnapshots: Array<{ status: string; turns: number; toolCount: number }> = [];
+    const registrySnapshots: Array<{ status: string; turns: number; toolCount: number; lastActivity?: string }> = [];
     const stopObservingRegistry = subagentRegistry.onChange(() => {
       const node = subagentRegistry.get("child-progress");
-      if (node) registrySnapshots.push({ status: node.status, turns: node.turns, toolCount: node.toolCount });
+      if (node) {
+        registrySnapshots.push({
+          status: node.status,
+          turns: node.turns,
+          toolCount: node.toolCount,
+          ...(node.lastActivity ? { lastActivity: node.lastActivity } : {}),
+        });
+      }
     });
     const unsubscribe = vi.fn();
     const child: SubagentSession = {
@@ -225,7 +232,12 @@ describe("runSubagent", () => {
     );
     stopObservingRegistry();
     expect(result).toEqual({ sessionId: "child-progress", state: "completed", report: "done" });
-    expect(registrySnapshots).toContainEqual({ status: "running", turns: 1, toolCount: 1 });
+    expect(registrySnapshots).toContainEqual({
+      status: "running",
+      turns: 1,
+      toolCount: 1,
+      lastActivity: '✓ read {"path":"src/a.ts"}',
+    });
     expect(progress).toEqual([
       { kind: "status", text: "started worker session child-progress" },
       { kind: "tool", text: '→ read {"path":"src/a.ts"}', toolCalls: 1 },

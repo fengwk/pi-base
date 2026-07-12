@@ -14,6 +14,7 @@ export interface SubagentNode {
   status: SubagentStatus;
   turns: number;
   toolCount: number;
+  lastActivity?: string;
   startedAt: number;
   endedAt?: number;
 }

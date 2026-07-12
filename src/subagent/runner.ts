@@ -150,6 +150,17 @@ export async function runSubagent(
   let finishReminderQueued = false;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let cancellationRequested = false;
+  const publishProgress = (update: SubagentProgressUpdate): void => {
+    const lastActivity = update.kind !== "assistant" ? update.text.replace(/\s+/g, " ").trim() : "";
+    if (update.turns || update.toolCalls || lastActivity) {
+      subagentRegistry.update(handle.sessionId, {
+        turns: assistantTurns,
+        toolCount: toolCalls,
+        ...(lastActivity ? { lastActivity } : {}),
+      });
+    }
+    args.onProgress?.(update);
+  };
   const clearIdleTimer = () => {
     if (idleTimer !== undefined) {
       clearTimeout(idleTimer);
@@ -162,7 +173,7 @@ export async function runSubagent(
     if (args.idleTimeoutMs === undefined || args.idleTimeoutMs < 1) return;
     idleTimer = setTimeout(() => {
       idleTimedOut = true;
-      args.onProgress?.({
+      publishProgress({
         kind: "status",
         text: `idle timeout after ${formatDurationMs(args.idleTimeoutMs ?? 0)} without assistant/session progress; aborting`,
       });
@@ -176,14 +187,14 @@ export async function runSubagent(
     if (args.maxTurns === undefined || args.maxTurns < 1) return;
     if (assistantTurns < args.maxTurns) return;
     finishReminderQueued = true;
-    args.onProgress?.({
+    publishProgress({
       kind: "status",
       text: `turn limit reached (${assistantTurns}/${args.maxTurns}); asking subagent to finish`,
     });
     void handle.steer(MAX_TURNS_FINISH_PROMPT).catch(() => undefined);
   };
 
-  args.onProgress?.({ kind: "status", text: `started ${args.agentType} session ${handle.sessionId}` });
+  publishProgress({ kind: "status", text: `started ${args.agentType} session ${handle.sessionId}` });
   const activeToolArgs = new Map<string, string>();
   const unsubscribeProgress = handle.subscribe?.((event) => {
     if (isToolExecutionStartEvent(event)) activeToolCalls += 1;
@@ -192,10 +203,7 @@ export async function runSubagent(
     const update = formatProgressEvent(event, activeToolArgs);
     if (update?.turns) assistantTurns += update.turns;
     if (update?.toolCalls) toolCalls += update.toolCalls;
-    if (update?.turns || update?.toolCalls) {
-      subagentRegistry.update(handle.sessionId, { turns: assistantTurns, toolCount: toolCalls });
-    }
-    if (update) args.onProgress?.(update);
+    if (update) publishProgress(update);
     const assistantToolCalls = assistantToolCallCountFromEvent(event);
     maybeQueueFinishReminder(assistantToolCalls);
   });
@@ -203,7 +211,7 @@ export async function runSubagent(
     if (cancellationRequested) return;
     cancellationRequested = true;
     clearIdleTimer();
-    args.onProgress?.({ kind: "status", text: "cancel requested by user; aborting active subagent tree" });
+    publishProgress({ kind: "status", text: "cancel requested by user; aborting active subagent tree" });
     void abortSubagentTree(handle.sessionId);
   };
   const onAbort = () => {
@@ -217,8 +225,8 @@ export async function runSubagent(
     clearIdleTimer();
     if (args.signal?.aborted) {
       const failure = cancelledByUserMessage(handle.sessionId);
+      publishProgress({ kind: "status", text: "cancelled" });
       finish(handle.sessionId, "cancelled", safeToolCount(handle));
-      args.onProgress?.({ kind: "status", text: "cancelled" });
       return {
         sessionId: handle.sessionId,
         state: "cancelled",
@@ -227,8 +235,8 @@ export async function runSubagent(
     }
     if (idleTimedOut) throw new Error("idle timeout watchdog triggered");
     const { report, toolCount } = handle.collect();
+    publishProgress({ kind: "status", text: "completed" });
     finish(handle.sessionId, "done", toolCount);
-    args.onProgress?.({ kind: "status", text: "completed" });
     return { sessionId: handle.sessionId, state: "completed", report };
   } catch (error) {
     clearIdleTimer();
@@ -239,7 +247,7 @@ export async function runSubagent(
         ? cancelledByUserMessage(handle.sessionId)
         : describeError(error);
     if (!idleTimedOut) {
-      args.onProgress?.({ kind: "status", text: cancelled ? "cancelled" : `error: ${failure}` });
+      publishProgress({ kind: "status", text: cancelled ? "cancelled" : `error: ${failure}` });
     }
     finish(handle.sessionId, cancelled ? "cancelled" : "error", safeToolCount(handle));
     return {

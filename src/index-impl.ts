@@ -37,7 +37,7 @@ import {
 } from "./subagent/permission-host.js";
 import { createRealSubagentFactory } from "./subagent/runner.js";
 import { subagentRegistry } from "./subagent/registry.js";
-import { renderSubagentWidget, SUBAGENT_WIDGET_KEY } from "./subagent/widget.js";
+import { createSubagentWidgetComponent, renderSubagentWidget, SUBAGENT_WIDGET_KEY } from "./subagent/widget.js";
 import { registerSubagentTaskTool } from "./subagent/task-tool.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
@@ -356,7 +356,12 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     }
     const render = () => {
       widgetRenderTimer = null;
-      ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, renderSubagentWidget(subagentRegistry.forRoot(rootSessionId), rootSessionId));
+      const nodes = subagentRegistry.forRoot(rootSessionId);
+      const visible = renderSubagentWidget(nodes, rootSessionId);
+      ctx.ui.setWidget(
+        SUBAGENT_WIDGET_KEY,
+        visible ? () => createSubagentWidgetComponent(nodes, rootSessionId) : undefined,
+      );
     };
     const scheduleRender = () => {
       if (widgetRenderTimer) return;
