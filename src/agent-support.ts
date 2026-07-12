@@ -22,7 +22,7 @@ const VALID_THINKING_LEVELS = new Set<ReturnType<ExtensionAPI["getThinkingLevel"
   "xhigh",
 ]);
 
-type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
+export type AgentThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 type RegisteredToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];
 
 interface AgentFrontmatter {
@@ -36,9 +36,14 @@ interface AgentFrontmatter {
   [key: string]: unknown;
 }
 
-interface AgentModelRef {
+export interface AgentModelRef {
   provider: string;
   modelId: string;
+}
+
+export interface AgentRuntimeConfig {
+  model?: AgentModelRef;
+  thinkingLevel?: AgentThinkingLevel;
 }
 
 interface AgentDefinition {
@@ -47,7 +52,7 @@ interface AgentDefinition {
   filePath: string;
   prompt?: string;
   model?: AgentModelRef;
-  thinkingLevel?: ThinkingLevel;
+  thinkingLevel?: AgentThinkingLevel;
   tools?: string[];
   skills?: string[];
   /** Agent names this agent may delegate to via the `task` tool. Empty/absent => cannot delegate. */
@@ -71,6 +76,7 @@ export interface AgentSupportHandle {
   getActiveAgentSubagents: () => string[];
   getActiveAgentName: () => string;
   hasAgent: (name: string) => boolean;
+  resolveAgentRuntimeConfig: (name: string) => AgentRuntimeConfig | undefined;
   /** Whether the active agent's tool policy allows this tool name when it becomes available later. */
   canActivateTool: (toolName: string) => boolean;
 }
@@ -423,6 +429,14 @@ export function registerAgentSupport(
     getActiveAgentSubagents: () => resolveActiveAgent()?.subagents ?? [],
     getActiveAgentName: () => activeAgentName,
     hasAgent: (name: string) => catalog.byName.has(name),
+    resolveAgentRuntimeConfig: (name: string) => {
+      const agent = resolveAgent(name);
+      if (!agent) return undefined;
+      return {
+        ...(agent.model ? { model: { ...agent.model } } : {}),
+        ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
+      };
+    },
     canActivateTool: (toolName: string) => canActivateToolForActiveAgent(toolName),
   };
 }
@@ -771,14 +785,14 @@ function normalizeModel(value: unknown, filePath: string): AgentModelRef | undef
   };
 }
 
-function normalizeThinkingLevel(value: unknown, filePath?: string): ThinkingLevel | undefined {
+function normalizeThinkingLevel(value: unknown, filePath?: string): AgentThinkingLevel | undefined {
   if (value === undefined) return undefined;
   const level = asTrimmedString(value);
-  if (!level || !VALID_THINKING_LEVELS.has(level as ThinkingLevel)) {
+  if (!level || !VALID_THINKING_LEVELS.has(level as AgentThinkingLevel)) {
     if (!filePath) return undefined;
     throw new Error(`agent file ${filePath} has invalid thinkingLevel "${String(value)}"`);
   }
-  return level as ThinkingLevel;
+  return level as AgentThinkingLevel;
 }
 
 function normalizeStringListField(value: unknown, fieldName: "tools" | "skills" | "subagents", filePath: string): string[] | undefined {

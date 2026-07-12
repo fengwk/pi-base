@@ -80,9 +80,12 @@ async function createPersistedSession(cwd: string, sessionId: string): Promise<v
   session.appendMessage({
     role: "assistant",
     content: [{ type: "text", text: "finished report" }],
+    provider: "actual-provider",
+    model: "actual-model",
     usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
     stopReason: "stop",
   } as never);
+  session.appendModelChange("selected-provider", "selected-but-unused-model");
 }
 
 afterEach(() => subagentRegistry.clear());
@@ -129,7 +132,7 @@ describe("/subagent", () => {
       try {
         const selectorLines = component.render(60);
         const selectorOutput = selectorLines.join("\n");
-        expect(selectorLines).toHaveLength(22);
+        expect(selectorLines).toHaveLength(9);
         expect(selectorLines.every((line) => visibleWidth(line) <= 60)).toBe(true);
         expect(selectorOutput).toContain("View subagent");
         expect(selectorOutput).toContain("explorer · running");
@@ -146,7 +149,12 @@ describe("/subagent", () => {
       await command.handler("", createContext("/tmp/work", custom, notifications));
       expect(overlayOptions).toMatchObject({
         overlay: true,
-        overlayOptions: { width: "100%", maxHeight: "100%", margin: { top: 1, right: 0, bottom: 1, left: 0 } },
+        overlayOptions: {
+          width: "100%",
+          maxHeight: "100%",
+          anchor: "bottom-center",
+          margin: { top: 1, right: 0, bottom: 1, left: 0 },
+        },
       });
       expect(notifications).toEqual([]);
       expect(child.abort).not.toHaveBeenCalled();
@@ -205,7 +213,7 @@ describe("/subagent", () => {
           expect(component.render(80).join("\n")).toContain("explorer · done");
           component.handleInput?.("\n");
           const output = component.render(80).join("\n");
-          expect(output).toContain("subagent explorer · done");
+          expect(output).toContain("subagent explorer · done · model: actual-provider/actual-model");
           expect(output).toContain("finished report");
           expect(output).toContain("session race-child");
         } finally {
@@ -238,9 +246,9 @@ describe("/subagent", () => {
       const custom = async (factory: OverlayFactory): Promise<void> => {
         const component = renderOverlay(factory);
         try {
-          const output = component.render(80).join("\n");
+          const output = component.render(120).join("\n");
           expect(output).not.toContain("View subagent");
-          expect(output).toContain("subagent explorer · done · turns: 1 · tool calls: 0");
+          expect(output).toContain("subagent explorer · done · model: actual-provider/actual-model · turns: 1 · tool calls: 0");
           expect(output).toContain("finished report");
           expect(output).toContain("session completed-child");
         } finally {

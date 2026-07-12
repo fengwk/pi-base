@@ -142,13 +142,7 @@ class SubagentSelector implements Component {
       safeWidth,
     );
     const empty = " ".repeat(safeWidth);
-    const top = [border, empty, title, empty, ...choices];
-    const bottom = [empty, footer, empty, border];
-    const targetHeight = Math.max(
-      top.length + bottom.length,
-      this.tui.terminal.rows - OVERLAY_VERTICAL_MARGIN * 2,
-    );
-    return [...top, ...Array.from({ length: targetHeight - top.length - bottom.length }, () => empty), ...bottom];
+    return [border, empty, title, empty, ...choices, empty, footer, empty, border];
   }
 
   invalidate(): void {}
@@ -299,7 +293,7 @@ export function registerSubagentCommand(pi: Pick<ExtensionAPI, "registerCommand"
         overlayOptions: {
           width: "100%",
           maxHeight: "100%",
-          anchor: "center",
+          anchor: "bottom-center",
           margin: { top: OVERLAY_VERTICAL_MARGIN, right: 0, bottom: OVERLAY_VERTICAL_MARGIN, left: 0 },
         },
       });

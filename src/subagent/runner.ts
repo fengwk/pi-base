@@ -15,7 +15,7 @@ import {
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { AGENT_STATE_ENTRY } from "../agent-support.js";
+import { AGENT_STATE_ENTRY, type AgentRuntimeConfig } from "../agent-support.js";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, readRootSessionId, rootSessionEntryData } from "./depth.js";
 import { subagentRegistry, type SubagentStatus } from "./registry.js";
 
@@ -31,6 +31,11 @@ type MessageEvent = Extract<AgentSessionEvent, { type: "message_start" }>;
 type ToolUpdateEvent = Extract<AgentSessionEvent, { type: "tool_execution_update" }>;
 export type SubagentViewMessage = MessageEvent["message"];
 export type SubagentAssistantMessage = Extract<SubagentViewMessage, { role: "assistant" }>;
+
+export interface SubagentViewModel {
+  provider: string;
+  modelId: string;
+}
 
 export interface SubagentActiveTool {
   toolCallId: string;
@@ -48,6 +53,7 @@ export interface SubagentViewSource {
   status?: string;
   turns?: number;
   toolCount?: number;
+  getModel?: () => SubagentViewModel | undefined;
   getMessages: () => readonly SubagentViewMessage[];
   getStreamingMessage: () => SubagentAssistantMessage | undefined;
   getActiveTools: () => readonly SubagentActiveTool[];
@@ -190,12 +196,27 @@ function readPersistedStatus(messages: RuntimeMessage[]): string {
   return "done";
 }
 
+function readPersistedModel(
+  messages: RuntimeMessage[],
+  fallback: SubagentViewModel | null,
+): SubagentViewModel | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    if (typeof message.provider === "string" && typeof message.model === "string") {
+      return { provider: message.provider, modelId: message.model };
+    }
+  }
+  return fallback ?? undefined;
+}
+
 export function getPersistedSubagentView(cwd: string, query: string): PersistedSubagentViewResult | undefined {
   const record = resolvePersistedSubagentSession(cwd, query);
   if (!record) return undefined;
   if (record === "ambiguous") return "ambiguous";
   const context = buildSessionContext(record.entries);
   const messages = context.messages as RuntimeMessage[];
+  const model = readPersistedModel(messages, context.model);
   const { toolCount } = collectFromMessages(messages);
   return {
     sessionId: record.sessionId,
@@ -205,6 +226,7 @@ export function getPersistedSubagentView(cwd: string, query: string): PersistedS
       status: readPersistedStatus(messages),
       turns: assistantTurnCount(messages),
       toolCount,
+      getModel: () => model,
       getMessages: () => context.messages as SubagentViewMessage[],
       getStreamingMessage: () => undefined,
       getActiveTools: () => [],
@@ -580,6 +602,8 @@ function findSubagentSessionPath(cwd: string, sessionId: string): string | undef
 
 interface RuntimeMessage {
   role?: string;
+  provider?: string;
+  model?: string;
   stopReason?: string;
   content?: Array<{ type?: string; text?: string }>;
 }
@@ -668,6 +692,15 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
   return {
     source: {
       cwd,
+      getModel: () => {
+        if (streamingMessage) {
+          const streamingModel = readPersistedModel([streamingMessage as RuntimeMessage], null);
+          if (streamingModel) return streamingModel;
+        }
+        const selectedModel = session.model;
+        const fallback = selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.id } : null;
+        return readPersistedModel(session.messages as unknown as RuntimeMessage[], fallback);
+      },
       getMessages: () => session.messages as SubagentViewMessage[],
       getStreamingMessage: () => streamingMessage,
       getActiveTools: () => [...activeTools.values()].map((tool) => ({ ...tool })),
@@ -678,24 +711,64 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
   };
 }
 
+export interface RealSubagentFactoryOptions {
+  resolveAgentRuntimeConfig?: (agentType: string) => AgentRuntimeConfig | undefined;
+}
+
+type ResolvedAgentRuntime = {
+  model: ExtensionContext["model"];
+  thinkingLevel?: AgentRuntimeConfig["thinkingLevel"];
+  configuredModel?: { provider: string; modelId: string };
+};
+
+function resolveAgentRuntime(
+  ctx: ExtensionContext,
+  agentType: string,
+  options: RealSubagentFactoryOptions,
+): ResolvedAgentRuntime {
+  const config = options.resolveAgentRuntimeConfig?.(agentType);
+  if (!config) return { model: ctx.model };
+
+  let model = ctx.model;
+  let configuredModel: ResolvedAgentRuntime["configuredModel"];
+  if (config.model) {
+    const candidate = ctx.modelRegistry.find(config.model.provider, config.model.modelId);
+    if (candidate && ctx.modelRegistry.hasConfiguredAuth(candidate)) {
+      model = candidate;
+      configuredModel = { provider: candidate.provider, modelId: candidate.id };
+    } else {
+      console.warn(
+        `Agent "${agentType}": model ${config.model.provider}/${config.model.modelId} is unavailable or has no configured auth. Subagent will keep the parent model.`,
+      );
+    }
+  }
+
+  const canApplyThinkingLevel = config.model === undefined || configuredModel !== undefined;
+  return {
+    model,
+    ...(canApplyThinkingLevel && config.thinkingLevel ? { thinkingLevel: config.thinkingLevel } : {}),
+    ...(configuredModel ? { configuredModel } : {}),
+  };
+}
+
 /**
  * Default factory: subagent sessions are ordinary persistent pi sessions in the isolated dir,
- * created in-process via `createAgentSession`. The child re-loads pi-base, restores its delegated
- * depth/root metadata from persisted entries, then performs a real `/agent <name>` activation pass
- * so the delegated agent's own model/thinking/tool policy takes effect. Sessions are headless
- * (no uiContext) — permission prompts relay to the root via the host.
+ * created in-process via `createAgentSession`. The target agent's model/thinking configuration is
+ * resolved before creation; persisted agent-state activates its system prompt and tools during
+ * extension binding. Sessions are headless (no uiContext) — permission prompts relay to the root.
  */
-export function createRealSubagentFactory(): SubagentSessionFactory {
+export function createRealSubagentFactory(options: RealSubagentFactoryOptions = {}): SubagentSessionFactory {
   const build = async (
     sm: SessionManager,
     sessionId: string,
     ctx: ExtensionContext,
-    agentType: string,
+    runtime: ResolvedAgentRuntime,
   ): Promise<SubagentSession> => {
     const { session } = await createAgentSession({
       cwd: ctx.cwd,
       sessionManager: sm,
-      model: ctx.model,
+      model: runtime.model,
+      thinkingLevel: runtime.thinkingLevel,
       modelRegistry: ctx.modelRegistry,
     });
     const liveView = createLiveViewSource(session, ctx.cwd);
@@ -712,9 +785,6 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
     };
     try {
       await session.bindExtensions({});
-      // Force a real agent activation pass inside the child session so delegated agents honor their
-      // own model/thinking/tool policy instead of inheriting the parent's runtime state.
-      await session.prompt(`/agent ${agentType}`);
     } catch (error) {
       await dispose().catch(() => undefined);
       throw error;
@@ -733,23 +803,29 @@ export function createRealSubagentFactory(): SubagentSessionFactory {
 
   return {
     async spawn({ ctx, agentType, childDepth }) {
+      const runtime = resolveAgentRuntime(ctx, agentType, options);
       const sm = SessionManager.create(ctx.cwd, subagentSessionDir(ctx.cwd));
       sm.appendCustomEntry(AGENT_STATE_ENTRY, { name: agentType });
       sm.appendCustomEntry(DEPTH_ENTRY, { depth: childDepth });
       const rootSessionId = readRootSessionId(ctx);
       if (rootSessionId) sm.appendCustomEntry(ROOT_SESSION_ENTRY, rootSessionEntryData(rootSessionId));
-      return build(sm, sm.getSessionId(), ctx, agentType);
+      return build(sm, sm.getSessionId(), ctx, runtime);
     },
     async resume({ ctx, sessionId, agentType }) {
+      const runtime = resolveAgentRuntime(ctx, agentType, options);
       const path = findSubagentSessionPath(ctx.cwd, sessionId);
       if (!path) throw new Error(`subagent session "${sessionId}" not found`);
       const sm = SessionManager.open(path);
-      // Cross-type resume: append the requested agent so the child applies its latest config
-      // (last agent-state entry wins). Same-type resume is effectively a no-op switch.
+      // Last agent-state/model/thinking entries win when resuming with a different agent type.
       sm.appendCustomEntry(AGENT_STATE_ENTRY, { name: agentType });
+      const hasExistingMessages = sm.buildSessionContext().messages.length > 0;
+      if (hasExistingMessages && runtime.configuredModel) {
+        sm.appendModelChange(runtime.configuredModel.provider, runtime.configuredModel.modelId);
+      }
+      if (hasExistingMessages && runtime.thinkingLevel) sm.appendThinkingLevelChange(runtime.thinkingLevel);
       const rootSessionId = readRootSessionId(ctx);
       if (rootSessionId) sm.appendCustomEntry(ROOT_SESSION_ENTRY, rootSessionEntryData(rootSessionId));
-      return build(sm, sm.getSessionId(), ctx, agentType);
+      return build(sm, sm.getSessionId(), ctx, runtime);
     },
   };
 }

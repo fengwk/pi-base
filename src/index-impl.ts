@@ -307,7 +307,9 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getMaxTurns: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxTurns,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
-    factory: createRealSubagentFactory(),
+    factory: createRealSubagentFactory({
+      resolveAgentRuntimeConfig: agentHandle.resolveAgentRuntimeConfig,
+    }),
   });
   registerPermissionGuard(pi, {
     loadSettings,

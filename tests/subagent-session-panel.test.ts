@@ -12,6 +12,7 @@ function createHarness(initialMessages: readonly SubagentViewMessage[] = []) {
   const unsubscribeRegistry = vi.fn();
   const source: SubagentViewSource = {
     cwd: "/tmp/work",
+    getModel: () => ({ provider: "minimax-cn", modelId: "MiniMax-M3" }),
     getMessages: () => initialMessages,
     getStreamingMessage: () => undefined,
     getActiveTools: () => [],
@@ -87,8 +88,8 @@ describe("SubagentSessionPanel", () => {
       isError: false,
     });
 
-    const output = harness.panel.render(80).join("\n");
-    expect(output).toContain("subagent explorer · running · turns: 1 · tool calls: 1");
+    const output = harness.panel.render(120).join("\n");
+    expect(output).toContain("subagent explorer · running · model: minimax-cn/MiniMax-M3 · turns: 1 · tool calls: 1");
     expect(output).toContain("Inspecting files");
     expect(output).toContain("read");
     expect(harness.requestRender).toHaveBeenCalled();

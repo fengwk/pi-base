@@ -30,6 +30,9 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 function fakeManager(sessionId = "child-session") {
   return {
     appendCustomEntry: vi.fn(),
+    appendModelChange: vi.fn(),
+    appendThinkingLevelChange: vi.fn(),
+    buildSessionContext: vi.fn(() => ({ messages: [{}] })),
     getSessionId: () => sessionId,
   };
 }
@@ -59,7 +62,11 @@ function fakeCtx(
   return {
     cwd,
     model: { provider: "provider", id: "model" },
-    modelRegistry: { find: vi.fn(), isUsingOAuth: vi.fn(() => false) },
+    modelRegistry: {
+      find: vi.fn(),
+      hasConfiguredAuth: vi.fn(() => false),
+      isUsingOAuth: vi.fn(() => false),
+    },
     sessionManager: {
       getSessionId: () => sessionId,
       getEntries: () => entries,
@@ -100,9 +107,9 @@ describe("createRealSubagentFactory", () => {
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(2, DEPTH_ENTRY, { depth: 3 });
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(3, ROOT_SESSION_ENTRY, { rootSessionId: "root-7" });
     expect(session.bindExtensions).toHaveBeenCalledWith({});
-    expect(session.prompt).toHaveBeenNthCalledWith(1, "/agent worker");
+    expect(session.prompt).not.toHaveBeenCalled();
     await child.prompt("go");
-    expect(session.prompt).toHaveBeenNthCalledWith(2, "go");
+    expect(session.prompt).toHaveBeenCalledWith("go");
     await child.steer?.("finish now");
     expect(session.steer).toHaveBeenCalledWith("finish now");
     expect(child.collect()).toEqual({ report: "final answer", toolCount: 1 });
@@ -115,17 +122,44 @@ describe("createRealSubagentFactory", () => {
     expect(session.dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("disposes a child session when initial agent activation fails", async () => {
+  it("creates a new child with the target agent model and thinking level before binding", async () => {
+    // Intent: a new subagent must not be initialized with the parent model and switched later.
+    const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
+    const session = fakeSession();
+    const targetModel = { provider: "target-provider", id: "target-model" };
+    const ctx = fakeCtx();
+    ctx.modelRegistry.find.mockReturnValue(targetModel);
+    ctx.modelRegistry.hasConfiguredAuth.mockReturnValue(true);
+    mocked.createAgentSession.mockResolvedValue({ session });
+    mocked.sessionManagerCreate.mockReturnValue(fakeManager("configured-child"));
+
+    const factory = createRealSubagentFactory({
+      resolveAgentRuntimeConfig: () => ({
+        model: { provider: "target-provider", modelId: "target-model" },
+        thinkingLevel: "high",
+      }),
+    });
+    await factory.spawn({ ctx, agentType: "worker", childDepth: 2 });
+
+    expect(mocked.createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: targetModel,
+      thinkingLevel: "high",
+    }));
+    expect(session.bindExtensions).toHaveBeenCalledWith({});
+    expect(session.prompt).not.toHaveBeenCalled();
+  });
+
+  it("disposes a child session when extension binding fails", async () => {
     // Intent: a child that fails before the task handle is returned must still run extension shutdown
     // and release its AgentSession resources.
     const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
     const session = fakeSession();
-    session.prompt.mockRejectedValueOnce(new Error("activation failed"));
+    session.bindExtensions.mockRejectedValueOnce(new Error("binding failed"));
     mocked.createAgentSession.mockResolvedValue({ session });
     mocked.sessionManagerCreate.mockReturnValue(fakeManager("child-failed"));
 
     const factory = createRealSubagentFactory();
-    await expect(factory.spawn({ ctx: fakeCtx(), agentType: "worker", childDepth: 2 })).rejects.toThrow("activation failed");
+    await expect(factory.spawn({ ctx: fakeCtx(), agentType: "worker", childDepth: 2 })).rejects.toThrow("binding failed");
     expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
     expect(session.dispose).toHaveBeenCalledTimes(1);
   });
@@ -145,16 +179,31 @@ describe("createRealSubagentFactory", () => {
 
     const session = fakeSession([{ role: "assistant", content: [{ type: "text", text: "resumed report" }] }]);
     const manager = fakeManager("resumed-1");
+    const targetModel = { provider: "target-provider", id: "target-model" };
+    const ctx = fakeCtx(cwd, "parent-2");
+    ctx.modelRegistry.find.mockReturnValue(targetModel);
+    ctx.modelRegistry.hasConfiguredAuth.mockReturnValue(true);
     mocked.createAgentSession.mockResolvedValue({ session });
     mocked.sessionManagerOpen.mockReturnValue(manager);
 
-    const factory = createRealSubagentFactory();
-    const child = await factory.resume({ ctx: fakeCtx(cwd, "parent-2"), sessionId: "resumed-1", agentType: "reviewer" });
+    const factory = createRealSubagentFactory({
+      resolveAgentRuntimeConfig: () => ({
+        model: { provider: "target-provider", modelId: "target-model" },
+        thinkingLevel: "high",
+      }),
+    });
+    const child = await factory.resume({ ctx, sessionId: "resumed-1", agentType: "reviewer" });
 
     expect(mocked.sessionManagerOpen).toHaveBeenCalledWith(join(legacyDir, "agent_resumed-1.jsonl"));
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(1, "pi-base-agent-state", { name: "reviewer" });
+    expect(manager.appendModelChange).toHaveBeenCalledWith("target-provider", "target-model");
+    expect(manager.appendThinkingLevelChange).toHaveBeenCalledWith("high");
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(2, ROOT_SESSION_ENTRY, { rootSessionId: "parent-2" });
-    expect(session.prompt).toHaveBeenNthCalledWith(1, "/agent reviewer");
+    expect(mocked.createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: targetModel,
+      thinkingLevel: "high",
+    }));
+    expect(session.prompt).not.toHaveBeenCalled();
     expect(child.collect()).toEqual({ report: "resumed report", toolCount: 0 });
   });
 

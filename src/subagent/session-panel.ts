@@ -314,7 +314,9 @@ export class SubagentSessionPanel implements Component {
     const agentType = node?.agentType ?? this.source.agentType ?? "unknown";
     const turns = node?.turns ?? this.source.turns ?? 0;
     const toolCount = node?.toolCount ?? this.source.toolCount ?? 0;
-    const title = ` subagent ${agentType} · ${status} · turns: ${turns} · tool calls: ${toolCount} `;
+    const model = this.source.getModel?.();
+    const modelLabel = model ? ` · model: ${model.provider}/${model.modelId}` : "";
+    const title = ` subagent ${agentType} · ${status}${modelLabel} · turns: ${turns} · tool calls: ${toolCount} `;
     const footer = this.followTail
       ? " Esc close · ↑/↓ scroll · PgUp/PgDn · Home/End · Ctrl+O expand "
       : " Esc close · End follow latest · ↑/↓ scroll · PgUp/PgDn · Ctrl+O expand ";
