@@ -430,7 +430,18 @@ describe("bash tool and index", () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" });
-    expect(registry.getActiveTools()).toEqual(["read", "grep", "find", "bash", "edit", "write", "lsp_diagnostics", "lsp_goto_definition", "lsp_workspace_symbols", "lsp_java_decompile"]);
+    expect(registry.getActiveTools()).toEqual([
+      "read",
+      "grep",
+      "find",
+      "bash",
+      "edit",
+      "write",
+      // "lsp_diagnostics", // Temporarily disabled with the tool registration.
+      "lsp_goto_definition",
+      "lsp_workspace_symbols",
+      "lsp_java_decompile",
+    ]);
 
     const injected = await registry.emit("before_agent_start", {
       systemPrompt: "base system prompt",
@@ -463,7 +474,18 @@ describe("bash tool and index", () => {
     registry.pi.setActiveTools(["task"]);
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" });
-    expect(registry.getActiveTools()).toEqual(["read", "grep", "find", "bash", "edit", "write", "lsp_diagnostics", "lsp_goto_definition", "lsp_workspace_symbols", "lsp_java_decompile"]);
+    expect(registry.getActiveTools()).toEqual([
+      "read",
+      "grep",
+      "find",
+      "bash",
+      "edit",
+      "write",
+      // "lsp_diagnostics", // Temporarily disabled with the tool registration.
+      "lsp_goto_definition",
+      "lsp_workspace_symbols",
+      "lsp_java_decompile",
+    ]);
   });
 
   it("removes built-in tools from explicit active tool sets", async () => {

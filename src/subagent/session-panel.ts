@@ -310,8 +310,11 @@ export class SubagentSessionPanel implements Component {
     this.lastViewportHeight = viewportHeight;
 
     const node = this.getNode();
-    const status = node?.status ?? "finished";
-    const title = ` subagent ${node?.agentType ?? "unknown"} · ${status} · turns: ${node?.turns ?? 0} · tool calls: ${node?.toolCount ?? 0} `;
+    const status = node?.status ?? this.source.status ?? "finished";
+    const agentType = node?.agentType ?? this.source.agentType ?? "unknown";
+    const turns = node?.turns ?? this.source.turns ?? 0;
+    const toolCount = node?.toolCount ?? this.source.toolCount ?? 0;
+    const title = ` subagent ${agentType} · ${status} · turns: ${turns} · tool calls: ${toolCount} `;
     const footer = this.followTail
       ? " Esc close · ↑/↓ scroll · PgUp/PgDn · Home/End · Ctrl+O expand "
       : " Esc close · End follow latest · ↑/↓ scroll · PgUp/PgDn · Ctrl+O expand ";

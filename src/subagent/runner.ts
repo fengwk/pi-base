@@ -2,10 +2,15 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import {
+  buildSessionContext,
   createAgentSession,
   getAgentDir,
+  migrateSessionEntries,
+  parseSessionEntries,
   SessionManager,
   type AgentSession,
+  type SessionEntry,
+  type SessionHeader,
   type AgentSessionEvent,
   type ExtensionContext,
   type ToolDefinition,
@@ -39,6 +44,10 @@ export interface SubagentActiveTool {
 /** Read-only access used by the interactive subagent transcript panel. */
 export interface SubagentViewSource {
   cwd: string;
+  agentType?: string;
+  status?: string;
+  turns?: number;
+  toolCount?: number;
   getMessages: () => readonly SubagentViewMessage[];
   getStreamingMessage: () => SubagentAssistantMessage | undefined;
   getActiveTools: () => readonly SubagentActiveTool[];
@@ -103,6 +112,106 @@ const liveHandles = new Map<string, SubagentSession>();
 
 export function getLiveSubagentView(sessionId: string): SubagentViewSource | undefined {
   return liveHandles.get(sessionId)?.view;
+}
+
+interface PersistedSubagentSession {
+  sessionId: string;
+  cwd: string;
+  entries: SessionEntry[];
+}
+
+export type PersistedSubagentViewResult =
+  | { sessionId: string; source: SubagentViewSource }
+  | "ambiguous";
+
+function readPersistedSubagentSession(path: string): PersistedSubagentSession | undefined {
+  try {
+    const fileEntries = parseSessionEntries(readFileSync(path, "utf8")) as Array<SessionHeader | SessionEntry>;
+    if (fileEntries.length === 0) return undefined;
+    migrateSessionEntries(fileEntries);
+    const header = fileEntries.find((entry): entry is SessionHeader => entry.type === "session");
+    if (!header) return undefined;
+    const entries = fileEntries.filter((entry): entry is SessionEntry => entry.type !== "session");
+    return { sessionId: header.id, cwd: header.cwd, entries };
+  } catch {
+    return undefined;
+  }
+}
+
+function resolvePersistedSubagentSession(cwd: string, query: string): PersistedSubagentSession | "ambiguous" | undefined {
+  const matches = new Map<string, PersistedSubagentSession>();
+  for (const dir of [subagentSessionDir(cwd), legacySubagentSessionDir(cwd)]) {
+    let files: string[];
+    try {
+      files = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.endsWith(".jsonl")) continue;
+      const record = readPersistedSubagentSession(join(dir, file));
+      if (!record) continue;
+      if (!matches.has(record.sessionId)) matches.set(record.sessionId, record);
+    }
+  }
+  const exact = matches.get(query);
+  if (exact) return exact;
+  const prefixed = [...matches.values()].filter((record) => record.sessionId.startsWith(query));
+  if (prefixed.length === 0) return undefined;
+  return prefixed.length === 1 ? prefixed[0] : "ambiguous";
+}
+
+function assistantTurnCount(messages: RuntimeMessage[]): number {
+  let turns = 0;
+  for (const message of messages) {
+    if (message.role === "assistant") turns += 1;
+  }
+  return turns;
+}
+
+function readPersistedAgentType(entries: SessionEntry[]): string | undefined {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (entry.type !== "custom" || entry.customType !== AGENT_STATE_ENTRY || !isRecord(entry.data)) continue;
+    const name = entry.data.name;
+    if (typeof name === "string" && name.trim()) return name.trim();
+  }
+  return undefined;
+}
+
+function readPersistedStatus(messages: RuntimeMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    if (message.stopReason === "error") return "error";
+    if (message.stopReason === "aborted") return "cancelled";
+    break;
+  }
+  return "done";
+}
+
+export function getPersistedSubagentView(cwd: string, query: string): PersistedSubagentViewResult | undefined {
+  const record = resolvePersistedSubagentSession(cwd, query);
+  if (!record) return undefined;
+  if (record === "ambiguous") return "ambiguous";
+  const context = buildSessionContext(record.entries);
+  const messages = context.messages as RuntimeMessage[];
+  const { toolCount } = collectFromMessages(messages);
+  return {
+    sessionId: record.sessionId,
+    source: {
+      cwd: record.cwd,
+      agentType: readPersistedAgentType(record.entries),
+      status: readPersistedStatus(messages),
+      turns: assistantTurnCount(messages),
+      toolCount,
+      getMessages: () => context.messages as SubagentViewMessage[],
+      getStreamingMessage: () => undefined,
+      getActiveTools: () => [],
+      getToolDefinition: () => undefined,
+      subscribe: () => () => undefined,
+    },
+  };
 }
 
 function subtreeSessionIds(rootSessionId: string): string[] {
@@ -471,6 +580,7 @@ function findSubagentSessionPath(cwd: string, sessionId: string): string | undef
 
 interface RuntimeMessage {
   role?: string;
+  stopReason?: string;
   content?: Array<{ type?: string; text?: string }>;
 }
 

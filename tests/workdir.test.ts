@@ -21,7 +21,7 @@ describe("workdir defaults", () => {
       "bash",
       "edit",
       "write",
-      "lsp_diagnostics",
+      // "lsp_diagnostics", // Temporarily disabled with the tool registration.
       "lsp_goto_definition",
       "lsp_workspace_symbols",
       "lsp_java_decompile",

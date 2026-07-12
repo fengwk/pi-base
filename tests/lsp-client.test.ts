@@ -6,14 +6,16 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { buildJdtlsWorkspaceDataDir, LspClient, LspManager, lspManager } from "../src/lsp/client.js";
 import { LspDiscoveryResolver } from "../src/lsp/discovery.js";
-import { registerLspTools } from "../src/lsp/tools.js";
-import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
+// import { registerLspTools } from "../src/lsp/tools.js"; // Temporarily disabled with lsp_diagnostics tests.
+import { createTempWorkspace, writeWorkspaceFile } from "./helpers.js";
+// import { createToolRegistry, getText } from "./helpers.js"; // Temporarily disabled with lsp_diagnostics tests.
 
 function encodeMessage(payload: unknown): Buffer {
   const body = JSON.stringify(payload);
   return Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`, "utf8");
 }
 
+/* Temporarily disabled with the lsp_diagnostics tests.
 function mockToolLspClient(overrides: Record<string, unknown> = {}): any {
   return {
     supportsMethod: () => true,
@@ -21,6 +23,7 @@ function mockToolLspClient(overrides: Record<string, unknown> = {}): any {
     ...overrides,
   };
 }
+*/
 
 describe("LspClient internals", () => {
   describe("jdtls workspace data", () => {
@@ -690,6 +693,7 @@ describe("LspClient internals", () => {
     });
   });
 
+  /* Temporarily disabled with the lsp_diagnostics tool registration.
   it("uses the target file directory when building the resolver for absolute paths outside cwd", async () => {
     const rootA = await createTempWorkspace();
     const rootB = await createTempWorkspace();
@@ -739,6 +743,7 @@ describe("LspClient internals", () => {
       lspManager.getClient = original;
     }
   });
+  */
 
   describe("resolver isolation", () => {
     it("does not leak server config from one resolver to another", () => {

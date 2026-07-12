@@ -45,7 +45,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 
 ## 工具
 
-启动时 `pi-base` 确保以下 10 个基础工具可用。残留的已退役 `task` 自动移除。
+启动时 `pi-base` 确保以下 9 个基础工具可用。残留的已退役 `task` 自动移除。
 
 ### 工具速查
 
@@ -57,7 +57,9 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
 | `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
 | `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
+<!-- 暂时禁用；恢复注册时一并取消此注释。
 | `lsp_diagnostics` | `path` | severity=all | 需 `lsp.servers` 声明 server；不做能力前置检查 |
+-->
 | `lsp_goto_definition` | `path`, `line` | character=0 | 需 server 声明 `textDocument/definition` |
 | `lsp_workspace_symbols` | `path`, `query` | limit=50 | 需 server 声明 `workspace/symbol` |
 | `lsp_java_decompile` | `path`, `target` | — | 需 server 支持 `java/classFileContents`（通常 jdtls） |
@@ -337,7 +339,7 @@ Agent 正文（覆盖 system prompt）
 | `idleTimeoutMs` | 关闭 | 无 assistant/session 进展时的空闲超时（tool 执行中不触发）；计时 >0 时生效 |
 | `maxTurns` | 50 | 达到此 assistant turn 数后，每轮注入"立即收尾"提示直到子 agent 结束 |
 
-tool 执行中会在 UI 展示简洁进展日志；root UI 展示运行中 subagent 的 parent/child 树。
+root UI 的 editor-adjacent widget 展示运行中 subagent 的 parent/child 树、turn/tool call 计数和最近活动；历史 `task` tool block 保持稳定。`/subagent` 打开运行中 session 选择器，`/subagent <session-id-or-unique-prefix>` 可直接只读查看运行中或已持久化结束的 session transcript。
 
 #### `mcp`
 

@@ -1,22 +1,79 @@
-import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import { mkdir } from "node:fs/promises";
+import {
+  initTheme,
+  SessionManager,
+  type ExtensionCommandContext,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AGENT_STATE_ENTRY } from "../src/agent-support.js";
 import { registerSubagentCommand } from "../src/subagent/command.js";
 import { subagentRegistry } from "../src/subagent/registry.js";
-import { runSubagent, type SubagentSession, type SubagentViewSource } from "../src/subagent/runner.js";
+import {
+  runSubagent,
+  subagentSessionDir,
+  type SubagentSession,
+  type SubagentViewSource,
+} from "../src/subagent/runner.js";
+import { createTempWorkspace } from "./helpers.js";
+
+initTheme("dark", false);
+
+type Command = { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> };
+type OverlayFactory = (
+  tui: TUI,
+  theme: Theme,
+  keybindings: KeybindingsManager,
+  done: (result: void) => void,
+) => Component & { dispose?: () => void };
+
+function captureCommand(): Command {
+  let command: Command | undefined;
+  registerSubagentCommand({
+    registerCommand(_name: string, value: unknown) {
+      command = value as Command;
+    },
+  } as never);
+  if (!command) throw new Error("subagent command was not registered");
+  return command;
+}
+
+function createContext(
+  cwd: string,
+  custom: (factory: OverlayFactory, options?: unknown) => Promise<void>,
+  notifications: string[],
+): ExtensionCommandContext {
+  return {
+    hasUI: true,
+    mode: "tui",
+    cwd,
+    sessionManager: {
+      getSessionId: () => "root",
+      getEntries: () => [],
+    },
+    ui: {
+      custom,
+      notify: (message: string) => notifications.push(message),
+    },
+  } as never;
+}
+
+function renderOverlay(factory: OverlayFactory): Component & { dispose?: () => void } {
+  return factory(
+    { terminal: { rows: 24 }, requestRender: () => undefined } as never,
+    { fg: (_color: string, text: string) => text } as never,
+    { matches: () => false } as never,
+    () => undefined,
+  );
+}
 
 afterEach(() => subagentRegistry.clear());
 
 describe("/subagent", () => {
-  it("opens a full-size overlay for a running child and leaves execution owned by the runner", async () => {
-    // Intent: the command must observe the existing live session instead of opening or replacing it.
-    let command: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> } | undefined;
-    registerSubagentCommand({
-      registerCommand(_name: string, value: unknown) {
-        command = value as { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> };
-      },
-    } as never);
-
+  it("always selects before opening a running session", async () => {
+    // Intent: bare /subagent has one selector path regardless of the number of running children.
+    const command = captureCommand();
     let releasePrompt: (() => void) | undefined;
     const source: SubagentViewSource = {
       cwd: "/tmp/work",
@@ -45,34 +102,19 @@ describe("/subagent", () => {
     await Promise.resolve();
 
     let overlayOptions: unknown;
-    const custom = async (
-      factory: (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: void) => void) => Component & { dispose?: () => void },
-      options?: unknown,
-    ): Promise<void> => {
+    const custom = async (factory: OverlayFactory, options?: unknown): Promise<void> => {
       overlayOptions = options;
-      const component = factory(
-        { terminal: { rows: 24 }, requestRender: () => undefined } as never,
-        { fg: (_color: string, text: string) => text } as never,
-        { matches: () => false } as never,
-        () => undefined,
-      );
+      const component = renderOverlay(factory);
+      const selectorOutput = component.render(80).join("\n");
+      expect(selectorOutput).toContain("View running subagent");
+      expect(selectorOutput).toContain("explorer · running");
+      expect(selectorOutput).not.toContain("subagent explorer · running");
+      component.handleInput?.("\n");
       expect(component.render(80).join("\n")).toContain("subagent explorer · running");
       component.dispose?.();
     };
     const notifications: string[] = [];
-    await command?.handler("child-live", {
-      hasUI: true,
-      mode: "tui",
-      cwd: "/tmp/work",
-      sessionManager: {
-        getSessionId: () => "root",
-        getEntries: () => [],
-      },
-      ui: {
-        custom,
-        notify: (message: string) => notifications.push(message),
-      },
-    } as never);
+    await command.handler("", createContext("/tmp/work", custom, notifications));
 
     expect(overlayOptions).toMatchObject({
       overlay: true,
@@ -85,5 +127,47 @@ describe("/subagent", () => {
     releasePrompt?.();
     await runPromise;
     expect(child.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a completed persisted session directly by explicit id", async () => {
+    // Intent: completed children remain inspectable without recreating or taking ownership of AgentSession.
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = await createTempWorkspace();
+    const cwd = await createTempWorkspace();
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      const sessionDir = subagentSessionDir(cwd);
+      await mkdir(sessionDir, { recursive: true });
+      const session = SessionManager.create(cwd, sessionDir, { id: "completed-child" });
+      session.appendCustomEntry(AGENT_STATE_ENTRY, { name: "explorer" });
+      session.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "inspect persisted state" }],
+      } as never);
+      session.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "finished report" }],
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+        stopReason: "stop",
+      } as never);
+
+      const command = captureCommand();
+      const notifications: string[] = [];
+      const custom = async (factory: OverlayFactory): Promise<void> => {
+        const component = renderOverlay(factory);
+        const output = component.render(80).join("\n");
+        expect(output).not.toContain("View running subagent");
+        expect(output).toContain("subagent explorer · done · turns: 1 · tool calls: 0");
+        expect(output).toContain("finished report");
+        expect(output).toContain("session completed-child");
+        component.dispose?.();
+      };
+
+      await command.handler("completed-child", createContext(cwd, custom, notifications));
+      expect(notifications).toEqual([]);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
   });
 });

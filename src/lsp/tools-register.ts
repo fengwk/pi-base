@@ -1,15 +1,20 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
 import { withPiBaseErrorMarker } from "../tool-error-marker.js";
-import { lspDiagnosticsSchema, lspGotoDefinitionSchema, lspJavaDecompileSchema, lspWorkspaceSymbolsSchema } from "../schemas/lsp.js";
+import {
+  // lspDiagnosticsSchema,
+  lspGotoDefinitionSchema,
+  lspJavaDecompileSchema,
+  lspWorkspaceSymbolsSchema,
+} from "../schemas/lsp.js";
 import { mapFilePathToPath } from "../tool-arg-aliases.js";
 import { lspManager } from "./client.js";
 import {
-  executeLspDiagnostics,
+  // executeLspDiagnostics,
   executeLspGotoDefinition,
   executeLspJavaDecompile,
   executeLspWorkspaceSymbols,
-  formatLspDiagnosticsCall,
+  // formatLspDiagnosticsCall,
   formatLspGotoDefinitionCall,
   formatLspJavaDecompileCall,
   formatLspWorkspaceSymbolsCall,
@@ -21,26 +26,28 @@ import {
 export type { LspResolverFactory } from "./tool-helpers.js";
 
 export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: LspResolverFactory; getCollapsedResultLines?: any; getCollapsedResultMaxChars?: any } = {}) {
-  pi.registerTool(withPiBaseErrorMarker({
-    name: "lsp_diagnostics",
-    label: "lsp_diagnostics",
-    description: loadToolDescription("lsp_diagnostics"),
-    promptSnippet: loadToolPromptSnippet("lsp_diagnostics"),
-    prepareArguments(args: unknown) {
-      return mapFilePathToPath(args);
-    },
-    parameters: lspDiagnosticsSchema,
-    renderCall(args: any, theme: any, context: any) {
-      const mappedArgs = mapFilePathToPath(args);
-      return renderLspCall(formatLspDiagnosticsCall(mappedArgs, theme, context?.cwd), theme, context);
-    },
-    renderResult(result: any, renderOptions: any, theme: any, context: any) {
-      return renderLspResult("lsp_diagnostics", result, renderOptions, theme, context, options);
-    },
-    async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
-      return executeLspDiagnostics(params, signal, ctx, options.resolverFactory, lspManager);
-    },
-  }) as any);
+  // Temporarily disabled while evaluating removal of lsp_diagnostics.
+  // Uncomment this block and its imports above to restore the tool.
+  // pi.registerTool(withPiBaseErrorMarker({
+  //   name: "lsp_diagnostics",
+  //   label: "lsp_diagnostics",
+  //   description: loadToolDescription("lsp_diagnostics"),
+  //   promptSnippet: loadToolPromptSnippet("lsp_diagnostics"),
+  //   prepareArguments(args: unknown) {
+  //     return mapFilePathToPath(args);
+  //   },
+  //   parameters: lspDiagnosticsSchema,
+  //   renderCall(args: any, theme: any, context: any) {
+  //     const mappedArgs = mapFilePathToPath(args);
+  //     return renderLspCall(formatLspDiagnosticsCall(mappedArgs, theme, context?.cwd), theme, context);
+  //   },
+  //   renderResult(result: any, renderOptions: any, theme: any, context: any) {
+  //     return renderLspResult("lsp_diagnostics", result, renderOptions, theme, context, options);
+  //   },
+  //   async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
+  //     return executeLspDiagnostics(params, signal, ctx, options.resolverFactory, lspManager);
+  //   },
+  // }) as any);
 
   pi.registerTool(withPiBaseErrorMarker({
     name: "lsp_goto_definition",

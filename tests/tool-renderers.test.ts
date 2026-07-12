@@ -42,7 +42,8 @@ describe("tool renderers", () => {
           },
         },
         { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" } },
-        { name: "lsp_diagnostics", args: { path: "src/example.ts", workdir: "packages/web", severity: "error" } },
+        // Temporarily disabled with the lsp_diagnostics tool registration.
+        // { name: "lsp_diagnostics", args: { path: "src/example.ts", workdir: "packages/web", severity: "error" } },
         { name: "lsp_goto_definition", args: { path: "src/example.ts", workdir: "services/api", line: 2, character: 0 } },
         { name: "lsp_workspace_symbols", args: { path: "src/example.ts", workdir: "packages/web", query: "Example", limit: 10 } },
         { name: "lsp_java_decompile", args: { path: "src/App.java", workdir: "services/java", target: "jdt://demo" } },
@@ -113,13 +114,13 @@ describe("tool renderers", () => {
     });
   });
 
-  it("honors collapsed result line overrides for grep, edit, and lsp result renderers", async () => {
-    await withTempGlobalPiBaseConfig({ render: { collapsedToolResultLines: { grep: 1, edit: 1, lsp_diagnostics: 1 } } }, async (root) => {
+  it("honors collapsed result line overrides for grep and edit renderers", async () => {
+    await withTempGlobalPiBaseConfig({ render: { collapsedToolResultLines: { grep: 1, edit: 1 } } }, async (root) => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const output = "line-1\nline-2\nline-3";
 
-      for (const toolName of ["grep", "edit", "lsp_diagnostics"]) {
+      for (const toolName of ["grep", "edit"]) {
         const rendered = render(registry.getTool(toolName).renderResult(
           { content: [{ type: "text", text: output }] },
           { expanded: false, isPartial: false },
@@ -255,15 +256,16 @@ describe("tool renderers", () => {
       piBaseExtension(registry.pi as any);
       const output = "line-1\nline-2\nline-3\nline-4";
 
-      const diagnosticsRendered = render(registry.getTool("lsp_diagnostics").renderResult(
-        { content: [{ type: "text", text: output }] },
-        { expanded: false, isPartial: false },
-        {} as any,
-        { lastComponent: undefined, cwd: root },
-      ));
-      expect(diagnosticsRendered).toContain("line-1");
-      expect(diagnosticsRendered).not.toContain("line-2");
-      expect(diagnosticsRendered).toContain("3 more lines");
+      // Temporarily disabled with the lsp_diagnostics tool registration.
+      // const diagnosticsRendered = render(registry.getTool("lsp_diagnostics").renderResult(
+      //   { content: [{ type: "text", text: output }] },
+      //   { expanded: false, isPartial: false },
+      //   {} as any,
+      //   { lastComponent: undefined, cwd: root },
+      // }));
+      // expect(diagnosticsRendered).toContain("line-1");
+      // expect(diagnosticsRendered).not.toContain("line-2");
+      // expect(diagnosticsRendered).toContain("3 more lines");
 
       const symbolsRendered = render(registry.getTool("lsp_workspace_symbols").renderResult(
         { content: [{ type: "text", text: output }] },
@@ -313,9 +315,10 @@ describe("tool renderers", () => {
         { name: "grep", args: { pattern: "demo" } },
         { name: "find", args: { path: "src" } },
         { name: "bash", args: { timeout_seconds: 5 } },
-      { name: "edit", args: { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" } },
+        { name: "edit", args: { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" } },
         { name: "write", args: { path: "src/example.ts", content: Array.from({ length: 14 }, (_, index) => `line-${index + 1}`).join("\n") } },
-        { name: "lsp_diagnostics", args: { severity: "warning" } },
+        // Temporarily disabled with the lsp_diagnostics tool registration.
+        // { name: "lsp_diagnostics", args: { severity: "warning" } },
         { name: "lsp_goto_definition", args: { line: 3 } },
         { name: "lsp_workspace_symbols", args: { query: "Example" } },
         { name: "lsp_java_decompile", args: { target: "jdt://demo" } },
@@ -576,7 +579,8 @@ describe("tool renderers", () => {
       { name: "bash", args: { command: "npm test", workdir: "packages/web", timeout_seconds: 5 }, expected: "$ npm test (timeout 5s) in packages/web" },
       { name: "edit", args: { workdir: "services/api", path: "src/example.ts", old_string: "alpha", new_string: "beta" }, expected: "edit src/example.ts in services/api" },
       { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" }, expected: "write src/example.ts in services/api" },
-      { name: "lsp_diagnostics", args: { path: "src/example.ts", workdir: "packages/web", severity: "error" }, expected: "lsp_diagnostics src/example.ts in packages/web [severity=error]" },
+      // Temporarily disabled with the lsp_diagnostics tool registration.
+      // { name: "lsp_diagnostics", args: { path: "src/example.ts", workdir: "packages/web", severity: "error" }, expected: "lsp_diagnostics src/example.ts in packages/web [severity=error]" },
       { name: "lsp_goto_definition", args: { path: "src/example.ts", workdir: "services/api", line: 2 }, expected: "lsp_goto_definition src/example.ts in services/api [line=2, character=0]" },
       { name: "lsp_workspace_symbols", args: { path: "src/example.ts", workdir: "packages/web", query: "Example", limit: 10 }, expected: "lsp_workspace_symbols src/example.ts in packages/web Example [limit=10]" },
       { name: "lsp_java_decompile", args: { path: "src/App.java", workdir: "services/java", target: "jdt://demo" }, expected: "lsp_java_decompile src/App.java in services/java jdt://demo" },

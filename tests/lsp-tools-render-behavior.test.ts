@@ -13,9 +13,10 @@ describe("lsp tool render behavior", () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
 
-    const diagnostics = render(registry.getTool("lsp_diagnostics").renderCall({ path: "src/example.ts", severity: "warning" }, {} as any, { lastComponent: undefined }));
-    expect(diagnostics).toContain("lsp_diagnostics src/example.ts [severity=warning]");
-    expect(diagnostics).not.toContain("(default)");
+    // Temporarily disabled with the lsp_diagnostics tool registration.
+    // const diagnostics = render(registry.getTool("lsp_diagnostics").renderCall({ path: "src/example.ts", severity: "warning" }, {} as any, { lastComponent: undefined }));
+    // expect(diagnostics).toContain("lsp_diagnostics src/example.ts [severity=warning]");
+    // expect(diagnostics).not.toContain("(default)");
 
     const gotoDefinition = render(registry.getTool("lsp_goto_definition").renderCall({ path: "src/example.ts", line: 3 }, {} as any, { lastComponent: undefined }));
     expect(gotoDefinition).toContain("[line=3, character=0]");

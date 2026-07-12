@@ -20,6 +20,7 @@ function mockLspClient(overrides: Record<string, unknown> = {}, unsupported: str
 }
 
 describe("lsp tools", () => {
+  /* Temporarily disabled with the lsp_diagnostics tool registration.
   it("filters diagnostics by severity", async () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
@@ -150,6 +151,14 @@ describe("lsp tools", () => {
     } finally {
       lspManager.getClient = original;
     }
+  });
+  */
+
+  it("does not register the temporarily disabled diagnostics tool", () => {
+    // Intent: keep the temporary removal explicit so accidental re-registration is caught.
+    const registry = createToolRegistry();
+    registerLspTools(registry.pi as any);
+    expect(() => registry.getTool("lsp_diagnostics")).toThrow("Tool not registered: lsp_diagnostics");
   });
 
   it("supports goto_definition with explicit line", async () => {

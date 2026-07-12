@@ -52,7 +52,7 @@ const BASE_TOOL_NAMES = [
   "bash",
   "edit",
   "write",
-  "lsp_diagnostics",
+  // "lsp_diagnostics", // Temporarily disabled; restore with its registration in lsp/tools-register.ts.
   "lsp_goto_definition",
   "lsp_workspace_symbols",
   "lsp_java_decompile",
