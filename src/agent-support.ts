@@ -20,6 +20,7 @@ const VALID_THINKING_LEVELS = new Set<ReturnType<ExtensionAPI["getThinkingLevel"
   "medium",
   "high",
   "xhigh",
+  "max",
 ]);
 
 export type AgentThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;

@@ -195,6 +195,46 @@ You are the planner.
     }
   });
 
+  it("accepts max thinking level for the configured default agent", async () => {
+    // Intent: cover catalog parsing and configured-default activation together so a supported
+    // thinking level cannot invalidate the named agent and silently trigger fallback.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "maximal.md",
+        `---
+name: maximal
+thinkingLevel: max
+---
+Maximal prompt.
+`,
+      );
+      await writePiBaseConfig(root, { defaultAgent: "maximal" });
+
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+      expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:maximal");
+      expect(registry.pi.getThinkingLevel()).toBe("max");
+      expect(registry.getNotifications()).not.toContainEqual({
+        message: expect.stringContaining('Agent "maximal" (from pi-base.json defaultAgent) not found'),
+        variant: "warning",
+      });
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("keeps resume session model and thinking level when restoring a persisted agent", async () => {
     // Intent: on resume, agent support should restore prompt/tools/skills from the persisted agent
     // without reapplying that agent's model or thinking level over the session's own state.

@@ -114,7 +114,7 @@ Agent 定义在 `~/.pi/agent/agents/**/*.md`，`pi-base` 递归扫描。`default
 name: planner
 description: Planning-focused agent
 model: provider/model-id          # 仅切换时 best-effort 应用
-thinkingLevel: high               # 仅切换时 best-effort 应用
+thinkingLevel: high               # off|minimal|low|medium|high|xhigh|max；仅切换时 best-effort 应用
 tools: [read, grep]               # allowlist；未配置=全部可用；[]=全部禁用
 skills: [spec]                    # allowlist；未配置=全部注入；[]=全部禁用
 subagents: [reviewer]             # allowlist；非空 + depth<maxDepth → 注入 task 工具
