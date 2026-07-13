@@ -5,7 +5,10 @@ import { SubagentSessionPanel } from "../src/subagent/session-panel.js";
 
 initTheme("dark", false);
 
-function createHarness(initialMessages: readonly SubagentViewMessage[] = []) {
+function createHarness(
+  initialMessages: readonly SubagentViewMessage[] = [],
+  sourceOverrides: Partial<SubagentViewSource> = {},
+) {
   const listeners = new Set<(event: AgentSessionEvent) => void>();
   const requestRender = vi.fn();
   const done = vi.fn();
@@ -21,6 +24,7 @@ function createHarness(initialMessages: readonly SubagentViewMessage[] = []) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    ...sourceOverrides,
   };
   const bindings = new Map([
     ["cancel", "tui.select.cancel"],
@@ -93,6 +97,76 @@ describe("SubagentSessionPanel", () => {
     expect(output).toContain("Inspecting files");
     expect(output).toContain("read");
     expect(harness.requestRender).toHaveBeenCalled();
+  });
+
+  it("rebuilds persisted and active tool state, then handles live error and navigation events", () => {
+    // Intent: reopening a panel must reconstruct tool state and continue consuming every live update path.
+    const initialMessages = [
+      { role: "user", content: "inspect the file", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "saved-call", name: "read", arguments: { path: "saved.ts" } }],
+        stopReason: "toolUse",
+        timestamp: 2,
+        api: "test",
+        provider: "test",
+        model: "test",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      },
+      { role: "toolResult", toolCallId: "saved-call", toolName: "read", content: [{ type: "text", text: "saved result" }], isError: false, timestamp: 3 },
+    ] as never;
+    const streaming = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "working" },
+        { type: "toolCall", id: "stream-call", name: "grep", arguments: { pattern: "x" } },
+      ],
+      stopReason: "toolUse",
+      timestamp: 4,
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    };
+    const harness = createHarness(initialMessages, {
+      getStreamingMessage: () => streaming as never,
+      getActiveTools: () => [{
+        toolCallId: "stream-call",
+        toolName: "grep",
+        args: { pattern: "updated" },
+        executionStarted: true,
+        argsComplete: true,
+        partialResult: { content: [{ type: "text", text: "partial" }], details: undefined },
+      }],
+    });
+
+    harness.panel.render(100);
+    harness.panel.handleInput("home");
+    expect(harness.panel.render(100).join("\n")).toContain("inspect the file");
+    harness.panel.handleInput("end");
+    harness.emit({ type: "message_end", message: streaming } as never);
+    const failed = {
+      ...streaming,
+      content: [{ type: "toolCall", id: "failed-call", name: "write", arguments: { path: "a.ts" } }],
+      stopReason: "error",
+      errorMessage: "write failed",
+    } as never;
+    harness.emit({ type: "message_update", message: failed, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "" } } as never);
+    harness.emit({
+      type: "tool_execution_update",
+      toolCallId: "failed-call",
+      toolName: "write",
+      args: { path: "a.ts" },
+      partialResult: { content: [{ type: "text", text: "writing" }], details: undefined },
+    });
+    harness.emit({ type: "message_end", message: failed } as never);
+    expect(harness.panel.render(100).join("\n")).toContain("write failed");
+
+    for (const key of ["down", "page-up", "page-down", "home", "expand"]) harness.panel.handleInput(key);
+    harness.panel.invalidate();
+    harness.panel.dispose();
+    harness.panel.dispose();
+    expect(harness.unsubscribeRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("stops following the tail while scrolling and cleans up on close", () => {

@@ -797,6 +797,69 @@ describe("mcp support", () => {
     await expect(hub.shutdown()).resolves.toBeUndefined();
   });
 
+  it("releases its hub attachment when startup fails", async () => {
+    // Intent: failed configuration must not retain a stale listener or make a later stop release twice.
+    const hub = createMcpHub();
+    const release = vi.fn(async () => undefined);
+    vi.spyOn(hub, "attach").mockReturnValue({ release });
+    vi.spyOn(hub, "configure").mockRejectedValue(new Error("configure failed"));
+    const binding = new McpSessionBinding({
+      hub,
+      pi: {
+        registerTool() {},
+        getAllTools: () => [],
+        getActiveTools: () => [],
+        setActiveTools() {},
+      },
+    });
+
+    await expect(binding.start({ cwd: "/tmp" } as never, { servers: {} }, {})).rejects.toThrow("configure failed");
+    expect(release).toHaveBeenCalledTimes(1);
+    await binding.stop();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores completion from a superseded binding start", async () => {
+    // Intent: a slow startup must not resync state after a reload has installed a newer attachment.
+    const hub = createMcpHub();
+    const firstRelease = vi.fn(async () => undefined);
+    const secondRelease = vi.fn(async () => undefined);
+    vi.spyOn(hub, "attach")
+      .mockReturnValueOnce({ release: firstRelease })
+      .mockReturnValueOnce({ release: secondRelease });
+    let resolveFirst!: () => void;
+    let resolveSecond!: () => void;
+    vi.spyOn(hub, "configure")
+      .mockReturnValueOnce(new Promise<void>((resolve) => { resolveFirst = resolve; }))
+      .mockReturnValueOnce(new Promise<void>((resolve) => { resolveSecond = resolve; }));
+    const getSnapshot = vi.spyOn(hub, "getSnapshot");
+    const binding = new McpSessionBinding({
+      hub,
+      pi: {
+        registerTool() {},
+        getAllTools: () => [],
+        getActiveTools: () => [],
+        setActiveTools() {},
+      },
+    });
+
+    const firstStart = binding.start({ cwd: "/first" } as never, { servers: {} }, {});
+    await vi.waitFor(() => expect(hub.configure).toHaveBeenCalledTimes(1));
+    const secondStart = binding.start({ cwd: "/second" } as never, { servers: {} }, {});
+    await vi.waitFor(() => expect(hub.configure).toHaveBeenCalledTimes(2));
+    expect(firstRelease).toHaveBeenCalledTimes(1);
+
+    resolveFirst();
+    await firstStart;
+    expect(getSnapshot).not.toHaveBeenCalled();
+
+    resolveSecond();
+    await secondStart;
+    expect(getSnapshot).toHaveBeenCalledTimes(1);
+    await binding.stop();
+    expect(secondRelease).toHaveBeenCalledTimes(1);
+  });
+
   it("cleans connection-wait timers and abort listeners when connect settles first", async () => {
     // Intent: each MCP call may wait on an in-flight connection; the losing timeout and abort
     // branches must be removed immediately instead of accumulating for the rest of the session.

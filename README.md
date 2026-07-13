@@ -64,6 +64,8 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `lsp_workspace_symbols` | `path`, `query` | limit=50 | 需 server 声明 `workspace/symbol` |
 | `lsp_java_decompile` | `path`, `target` | — | 需 server 支持 `java/classFileContents`（通常 jdtls） |
 
+`lsp_diagnostics` 在 0.1.x 期间暂时禁用评估；下一个 minor release 前必须明确恢复注册或完整删除其实现。
+
 ### `task`（子 agent 委派）
 
 仅当 agent 配置了 `subagents` allowlist 且 session depth < `subagent.maxDepth` 时注入。
@@ -96,6 +98,8 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 ### LSP 工具
 
 全部通过 `lsp.servers` 显式声明，`pi-base` 不内置 server 表。后缀未命中任何 server → `No LSP server configured for ...`。
+
+LSP client 在进程内共享，由单个活跃 root session 管理；headless subagent 复用 root client，不独立关闭。当前不支持同一进程同时运行多个 UI root session。
 
 ---
 
@@ -243,9 +247,13 @@ Agent 正文（覆盖 system prompt）
 | 整体字符串 | 作用于所有工具 |
 | 单 tool 字符串 | 该工具固定策略 |
 | 单 tool 对象 | 按 wildcard pattern 匹配 command/路径 |
+| 默认行为 | 未匹配任何规则时为 `allow`；需要默认确认时显式配置 `"*": "ask"` |
+| 匹配顺序 | 先检查全局 `*`，再检查 tool 专属规则；最后匹配的规则生效 |
 | `ask` | 有 UI 弹出 Yes/No；无 UI headless subagent 转发给 root UI；其他无 UI 场景直接拦截 |
 | 路径类匹配 | 同时匹配原始路径、相对 workdir 路径、相对项目根路径、绝对路径 |
 | bash 匹配 | 识别 `&&`/`||`/`|`/`;`/换行 分割的顶层 command 段；不展开变量、不解析 `bash -c`/命令替换/eval 等；无法安全分析时未命中 deny 则退回 ask |
+
+配置按 cwd 缓存在当前进程中；修改全局或项目配置后执行 `/reload` 才会生效。
 
 #### `yolo`
 
@@ -340,6 +348,8 @@ Agent 正文（覆盖 system prompt）
 | `maxTurns` | 50 | 达到此 assistant turn 数后，每轮注入"立即收尾"提示直到子 agent 结束 |
 
 root UI 的 editor-adjacent widget 展示运行中 subagent 的 parent/child 树、turn/tool call 计数和最近活动；历史 `task` tool block 保持稳定。`/subagent` 打开运行中 session 选择器，`/subagent <session-id-or-unique-prefix>` 可直接只读查看运行中或已持久化结束的 session transcript。
+
+parent turn 在委派开始前已取消时不会创建或恢复 child session。初始化过程中发生的取消会在 startup 返回后立即传播；不使用只提前返回但无法停止后台初始化的 promise race。
 
 #### `mcp`
 

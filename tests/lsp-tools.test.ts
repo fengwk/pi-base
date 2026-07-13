@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { registerLspTools } from "../src/lsp/tools.js";
+import { executeLspDiagnostics, formatDiagnostics, withAbort } from "../src/lsp/tool-helpers.js";
 import { lspManager } from "../src/lsp/client.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 
@@ -159,6 +160,57 @@ describe("lsp tools", () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
     expect(() => registry.getTool("lsp_diagnostics")).toThrow("Tool not registered: lsp_diagnostics");
+  });
+
+  it("keeps the disabled diagnostics executor independently testable", async () => {
+    // Intent: temporary registration removal must not let the retained implementation silently rot.
+    const manager = {
+      getClient: async () => mockLspClient({
+        diagnostics: async () => [
+          { severity: 1, source: "ts", code: 100, message: "type error", range: { start: { line: 1, character: 2 } } },
+          { severity: 2, message: "warning", range: { start: { line: 2, character: 0 } } },
+        ],
+      }),
+    };
+    const result = await executeLspDiagnostics(
+      { path: "src/example.ts", severity: "error" },
+      undefined,
+      { cwd: process.cwd() },
+      () => ({}) as never,
+      manager as never,
+    );
+
+    expect(getText(result)).toBe("2:2 error [ts 100] type error");
+    expect(formatDiagnostics([])).toBe("No diagnostics found");
+  });
+
+  it("returns the diagnostics-specific hint for transient internal errors", async () => {
+    // Intent: the dormant diagnostics path still provides its actionable first-call guidance.
+    const result = await executeLspDiagnostics(
+      { path: "src/example.ts" },
+      undefined,
+      { cwd: process.cwd() },
+      () => ({}) as never,
+      {
+        getClient: async () => mockLspClient({
+          serverId: () => "mock-lsp",
+          diagnostics: async () => { throw new Error("Internal error"); },
+        }),
+      } as never,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("LSP server 'mock-lsp' returned \"Internal error\"");
+    expect(getText(result)).toContain("configured request timeout");
+  });
+
+  it("handles resolved, rejected, and pre-aborted LSP work", async () => {
+    // Intent: withAbort must preserve the original outcome while giving cancellation priority.
+    const controller = new AbortController();
+    await expect(withAbort(Promise.resolve("ok"), controller.signal)).resolves.toBe("ok");
+    await expect(withAbort(Promise.reject(new Error("failed")), controller.signal)).rejects.toThrow("failed");
+    controller.abort();
+    await expect(withAbort(new Promise(() => undefined), controller.signal)).rejects.toThrow("Operation aborted");
   });
 
   it("supports goto_definition with explicit line", async () => {

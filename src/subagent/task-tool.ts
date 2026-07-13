@@ -92,7 +92,7 @@ function tryReserveSessionSlot(
   rootSessionId: string,
   maxConcurrency: number,
   maxTotalConcurrency: number | undefined,
-): { directActive: number; totalActive: number; release: () => void } | undefined {
+): (() => void) | undefined {
   const running = subagentRegistry.runningChildCount(parentSessionId);
   const pending = countPendingSessionReservations(parentSessionId);
   const directActive = running + pending;
@@ -106,19 +106,15 @@ function tryReserveSessionSlot(
   pendingSessionReservations.set(parentSessionId, pending + 1);
   pendingRootReservations.set(rootSessionId, totalPending + 1);
   let released = false;
-  return {
-    directActive: directActive + 1,
-    totalActive: totalActive + 1,
-    release: () => {
-      if (released) return;
-      released = true;
-      const nextDirect = (pendingSessionReservations.get(parentSessionId) ?? 0) - 1;
-      if (nextDirect > 0) pendingSessionReservations.set(parentSessionId, nextDirect);
-      else pendingSessionReservations.delete(parentSessionId);
-      const nextTotal = (pendingRootReservations.get(rootSessionId) ?? 0) - 1;
-      if (nextTotal > 0) pendingRootReservations.set(rootSessionId, nextTotal);
-      else pendingRootReservations.delete(rootSessionId);
-    },
+  return () => {
+    if (released) return;
+    released = true;
+    const nextDirect = (pendingSessionReservations.get(parentSessionId) ?? 0) - 1;
+    if (nextDirect > 0) pendingSessionReservations.set(parentSessionId, nextDirect);
+    else pendingSessionReservations.delete(parentSessionId);
+    const nextTotal = (pendingRootReservations.get(rootSessionId) ?? 0) - 1;
+    if (nextTotal > 0) pendingRootReservations.set(rootSessionId, nextTotal);
+    else pendingRootReservations.delete(rootSessionId);
   };
 }
 
@@ -303,7 +299,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
           `total concurrency limit reached (${totalActive}/${maxTotal} subagents running or starting in this delegation tree). Wait for one to finish before delegating more.`,
         );
       }
-      releaseSessionReservation = reservation.release;
+      releaseSessionReservation = reservation;
       if (sessionId) {
         if (pendingResumeSessionIds.has(sessionId)) {
           releaseSessionReservation();

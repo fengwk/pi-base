@@ -274,17 +274,27 @@ function cancelledByUserMessage(sessionId: string): string {
 /**
  * Orchestrate one foreground delegation: spawn (or resume) a subagent session, track it in the
  * registry, await completion, and collect the report. Cancellation of the parent turn (signal)
- * fans out to the whole live subagent subtree rooted at this child. Always resolves with the child
- * session id so the caller can resume or inspect it, even on failure.
+ * fans out to the whole live subagent subtree rooted at this child. Returns the child session id
+ * whenever one was created or provided so the caller can resume or inspect it after failure.
  */
 export async function runSubagent(
   ctx: ExtensionContext,
   args: RunSubagentArgs,
   factory: SubagentSessionFactory,
 ): Promise<RunResult> {
+  if (args.signal?.aborted) {
+    const sessionId = args.sessionId ?? "";
+    return {
+      sessionId,
+      state: "cancelled",
+      error: sessionId
+        ? cancelledByUserMessage(sessionId)
+        : "Cancelled by user before subagent session started.",
+    };
+  }
+
   const parentSessionId = ctx.sessionManager.getSessionId();
   const rootSessionId = readRootSessionId(ctx) || parentSessionId;
-
   let handle: SubagentSession;
   try {
     handle = args.sessionId

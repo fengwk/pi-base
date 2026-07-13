@@ -22,10 +22,10 @@ export interface SubagentNode {
 const CHANGE_EVENT = "change";
 
 /**
- * Process-wide, in-memory view of every subagent across the whole delegation tree.
- * Shared across sessions via the pi-base module singleton (same Node module instance);
- * it is the authoritative source for "what is running now". Never persisted — a crash
- * clears it, which is exactly what prevents zombie tree state on resume.
+ * Process-wide, in-memory view of subagents belonging to active root sessions.
+ * Shared across sessions via the pi-base module singleton (same Node module instance).
+ * Finished nodes remain available for selector races until their root shuts down. The registry is
+ * never persisted, so a crash or restart cannot leave zombie tree state on resume.
  */
 export class SubagentRegistry extends EventEmitter {
   private readonly nodes = new Map<string, SubagentNode>();
@@ -92,6 +92,16 @@ export class SubagentRegistry extends EventEmitter {
 
   remove(sessionId: string): void {
     if (this.nodes.delete(sessionId)) this.emit(CHANGE_EVENT);
+  }
+
+  removeForRoot(rootSessionId: string): void {
+    let changed = false;
+    for (const [sessionId, node] of this.nodes) {
+      if (node.rootSessionId !== rootSessionId) continue;
+      this.nodes.delete(sessionId);
+      changed = true;
+    }
+    if (changed) this.emit(CHANGE_EVENT);
   }
 
   clear(): void {

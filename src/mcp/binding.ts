@@ -31,8 +31,14 @@ export class McpSessionBinding {
     this.ctx = ctx;
     const attachment = this.options.hub.attach((snapshot) => this.sync(snapshot));
     this.releaseHub = attachment.release;
-    await this.options.hub.configure(config, hubOptions);
-    this.sync(this.options.hub.getSnapshot());
+    try {
+      await this.options.hub.configure(config, hubOptions);
+      if (this.releaseHub === attachment.release) this.sync(this.options.hub.getSnapshot());
+    } catch (error) {
+      const cleanup = this.releaseHub === attachment.release ? this.stop() : attachment.release();
+      await cleanup.catch(() => undefined);
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {

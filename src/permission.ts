@@ -145,14 +145,9 @@ function evaluateBashRules(command: string, ...rulesets: Array<PermissionRuleEnt
   return action;
 }
 
-
 function updateYoloStatus(ctx: ExtensionContext, enabled: boolean): void {
   if (!ctx.hasUI) return;
   ctx.ui.setStatus(STATUS_KEY, enabled ? ctx.ui.theme.fg("warning", "YOLO") : undefined);
-}
-
-function syncYoloStatusFooter(ctx: ExtensionContext, _pi: Pick<ExtensionAPI, "getThinkingLevel">, enabled: boolean): void {
-  updateYoloStatus(ctx, enabled);
 }
 
 function stringifyPromptArguments(input: unknown): string {
@@ -215,10 +210,8 @@ function buildRejectedReason(toolName: string): string {
   return `Permission denied by user for ${toolName}.`;
 }
 
-
-
 export function registerPermissionGuard(
-  pi: Pick<ExtensionAPI, "on" | "registerCommand" | "getThinkingLevel">,
+  pi: Pick<ExtensionAPI, "on" | "registerCommand">,
   options: {
     loadSettings?: (cwd: string) => LoadedPiBaseSettings;
     toggleYolo?: (cwd: string) => boolean;
@@ -242,13 +235,13 @@ export function registerPermissionGuard(
         return;
       }
       const enabled = toggleYolo(ctx.cwd);
-      syncYoloStatusFooter(ctx, pi, enabled);
+      updateYoloStatus(ctx, enabled);
     },
   });
 
   pi.on("session_start", async (_event, ctx) => {
     const loaded = loadSettings(ctx.cwd);
-    syncYoloStatusFooter(ctx, pi, loaded.settings.yolo === true);
+    updateYoloStatus(ctx, loaded.settings.yolo === true);
   });
 
   pi.on("tool_call", async (event, ctx) => {

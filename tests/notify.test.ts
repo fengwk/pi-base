@@ -486,6 +486,41 @@ describe("notify support", () => {
     });
   });
 
+  it("does not suppress terminal error notifications after permission rejection", async () => {
+    // Intent: suppressCompletedAfterRejectionMs applies only to successful completion, not failures requiring attention.
+    const root = await createTempWorkspace();
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const hooks = registerNotifySupport(registry.pi as any, {
+      loadSettings: () => ({
+        settings: { notify: { agentEnd: true, suppressCompletedAfterRejectionMs: 60_000 } },
+      }) as never,
+      sendNotification: async (payload) => {
+        payloads.push(payload);
+      },
+    });
+    const ctx = {
+      cwd: root,
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "rejected-error-session",
+        getSessionName: () => "Rejected Error Session",
+        getEntries: () => [],
+      },
+    };
+
+    hooks.onPermissionRejected({ ctx: ctx as never });
+    await registry.emit("agent_end", {
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "error", errorMessage: "fatal provider failure", timestamp: 1 }],
+    }, ctx);
+
+    expect(payloads).toEqual([expect.objectContaining({
+      kind: "session.error",
+      sessionID: "rejected-error-session",
+    })]);
+  });
+
   it("collapses multiple permission asks in the same turn into one notification", async () => {
     // Intent: when the model returns several tool calls at once (e.g. 5 edits),
     // permission prompts are serialized but should alert the user only once per
@@ -527,6 +562,40 @@ describe("notify support", () => {
     await runWrite("3", "src/c.ts");
     expect(payloads).toHaveLength(2);
     expect(payloads.every((payload) => payload.kind === "permission.requested" && payload.sessionID === "session-turn")).toBe(true);
+  });
+
+  it("clears completion suppression when the session shuts down", async () => {
+    // Intent: rejected-permission suppression is session-scoped and must not retain stale session ids.
+    const root = await createTempWorkspace();
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    const hooks = registerNotifySupport(registry.pi as any, {
+      loadSettings: () => ({
+        settings: { notify: { agentEnd: true, suppressCompletedAfterRejectionMs: 60_000 } },
+      }) as never,
+      sendNotification: async (payload) => {
+        payloads.push(payload);
+      },
+    });
+    const ctx = {
+      cwd: root,
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "reused-session",
+        getSessionName: () => "Reused Session",
+      },
+    };
+
+    hooks.onPermissionRejected({ ctx: ctx as never });
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, ctx);
+    expect(payloads).toEqual([]);
+
+    await registry.emit("session_shutdown", { type: "session_shutdown", reason: "switch" }, ctx);
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, ctx);
+    expect(payloads).toEqual([expect.objectContaining({
+      kind: "session.completed",
+      sessionID: "reused-session",
+    })]);
   });
 
   it("does not throw when registered without loadSettings", async () => {

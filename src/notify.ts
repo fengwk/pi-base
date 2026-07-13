@@ -67,7 +67,9 @@ export function registerNotifySupport(
 
   pi.on("session_shutdown", async (_event, ctx) => {
     const sessionID = resolveSessionId(ctx);
-    if (sessionID) permissionNotifiedTurns.delete(sessionID);
+    if (!sessionID) return;
+    permissionNotifiedTurns.delete(sessionID);
+    suppressCompletedUntil.delete(sessionID);
   });
 
   pi.on("agent_end", async (event: AgentEndEvent, ctx) => {
@@ -80,7 +82,8 @@ export function registerNotifySupport(
     const payload = buildPayload(kind, ctx);
     if (!payload.sessionID) return;
     const suppressedUntil = suppressCompletedUntil.get(payload.sessionID) ?? 0;
-    if (Date.now() < suppressedUntil) return;
+    if (kind === "session.completed" && Date.now() < suppressedUntil) return;
+    suppressCompletedUntil.delete(payload.sessionID);
 
     await sendNotification(payload, ctx);
   });

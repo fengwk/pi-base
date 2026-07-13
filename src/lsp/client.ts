@@ -672,6 +672,8 @@ interface PendingLspClient {
 export class LspManager {
   private clients = new Map<string, LspClient>();
   private pendingClients = new Map<string, PendingLspClient>();
+  // Prevent a same-workspace replacement from starting before idle eviction finishes shutdown.
+  private retiringClients = new Map<string, Promise<void>>();
   private generation = 0;
   /**
    * Per-key timestamp of the last observed activity. "Activity" means:
@@ -683,11 +685,10 @@ export class LspManager {
   private lastUsedAt = new Map<string, number>();
   /**
    * Single-shot timer for the next idle-eviction check. We deliberately do
-   * not use `setInterval`: arming a fresh timer on each activity makes the
-   * check semantics trivial (one deadline = one decision: kill or re-arm)
-   * and means tests using `vi.useFakeTimers()` only ever have to clear a
-   * single handle. A quiet manager (no LSP calls) never arms the timer at
-   * all, so the cost is zero.
+   * not use `setInterval`: activity updates `lastUsedAt`, and the pending check
+   * either evicts an idle client or re-arms itself for the updated deadline.
+   * Tests using `vi.useFakeTimers()` only ever have to clear one handle. A
+   * quiet manager (no LSP calls) never arms the timer, so the cost is zero.
    */
   private idleCheckTimer: NodeJS.Timeout | null = null;
   private readonly idleTimeoutMs: number;
@@ -711,6 +712,8 @@ export class LspManager {
     const root = resolver.findWorkspaceRoot(filePath, server);
     const key = `${root}::${server.id}`;
     const generation = this.generation;
+    const retirement = this.retiringClients.get(key);
+    if (retirement) await retirement;
     this.noteActivity(key);
     let client = this.clients.get(key);
     if (!client || !client.isAlive()) {
@@ -777,9 +780,9 @@ export class LspManager {
   }
 
   /**
-   * Arm the eviction timer if it isn't already. The timer fires at
-   * `lastUsedAt + idleTimeoutMs` for the earliest-active key, so a steady
-   * stream of activity keeps re-arming it without ever firing.
+   * Arm the eviction timer if it isn't already. Activity does not replace an
+   * existing timer; when that check fires, it uses the latest timestamps and
+   * re-arms for the earliest remaining deadline.
    */
   private scheduleIdleCheck(): void {
     if (this.idleCheckTimer) return;
@@ -807,7 +810,11 @@ export class LspManager {
       // so we skip it and let the `finally` re-arm the timer.
       if (lastUsed === undefined) continue;
       if (now - lastUsed >= this.idleTimeoutMs) {
-        client.stop().catch(() => undefined);
+        const retirement = client.stop({ shutdownGraceMs: this.shutdownGraceMs }).catch(() => undefined);
+        this.retiringClients.set(key, retirement);
+        void retirement.finally(() => {
+          if (this.retiringClients.get(key) === retirement) this.retiringClients.delete(key);
+        });
         this.clients.delete(key);
         this.lastUsedAt.delete(key);
       }
@@ -846,10 +853,15 @@ export class LspManager {
       ...this.clients.values(),
       ...Array.from(this.pendingClients.values(), (pending) => pending.client),
     ]);
+    const retirements = [...this.retiringClients.values()];
     this.clients.clear();
     this.pendingClients.clear();
+    this.retiringClients.clear();
     this.lastUsedAt.clear();
-    await Promise.all(Array.from(clients, (client) => client.stop({ shutdownGraceMs: this.shutdownGraceMs }).catch(() => undefined)));
+    await Promise.all([
+      ...Array.from(clients, (client) => client.stop({ shutdownGraceMs: this.shutdownGraceMs }).catch(() => undefined)),
+      ...retirements,
+    ]);
   }
 }
 

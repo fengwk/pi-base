@@ -93,6 +93,25 @@ describe("SubagentRegistry", () => {
     expect(registry.forRoot("other-root").map((n) => n.sessionId)).toEqual(["b"]);
   });
 
+  it("removes one root snapshot without affecting other roots", () => {
+    // Intent: root teardown should release its tree snapshot without clearing concurrent roots.
+    const registry = new SubagentRegistry();
+    const listener = vi.fn();
+    registry.upsert(node("a", "root"));
+    registry.upsert(node("b", "a", "done"));
+    registry.upsert({ ...node("foreign", "other-parent"), rootSessionId: "other-root" });
+    const off = registry.onChange(listener);
+
+    registry.removeForRoot("root");
+
+    expect(registry.forRoot("root")).toEqual([]);
+    expect(registry.forRoot("other-root").map((entry) => entry.sessionId)).toEqual(["foreign"]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    registry.removeForRoot("missing");
+    expect(listener).toHaveBeenCalledTimes(1);
+    off();
+  });
+
   it("emits change events on upsert/update/remove", () => {
     // Intent: the widget re-renders by subscribing to change; every mutation must notify.
     const registry = new SubagentRegistry();

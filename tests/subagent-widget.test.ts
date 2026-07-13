@@ -120,6 +120,7 @@ describe("renderSubagentWidget", () => {
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
     subagentRegistry.upsert(node({ sessionId: "x", agentType: "mathworker", status: "running" }));
+    subagentRegistry.upsert(node({ sessionId: "foreign", rootSessionId: "other-root", status: "done" }));
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toEqual([
       "⟳ subagents running (1)",
@@ -130,5 +131,7 @@ describe("renderSubagentWidget", () => {
     await registry.emit("session_shutdown", { reason: "quit" }, { cwd: root });
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(registry.getWidget(SUBAGENT_WIDGET_KEY)).toBeUndefined();
+    expect(subagentRegistry.get("x")).toBeUndefined();
+    expect(subagentRegistry.get("foreign")?.rootSessionId).toBe("other-root");
   });
 });

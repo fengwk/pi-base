@@ -138,6 +138,7 @@ describe("/subagent", () => {
         expect(selectorOutput).toContain("explorer · running");
         expect(selectorOutput).toContain("…");
         expect(selectorOutput).not.toContain("subagent explorer · running");
+        for (const key of ["j", "k", "down", "up"]) component.handleInput?.(key);
         component.handleInput?.("\n");
         expect(component.render(80).join("\n")).toContain("subagent explorer · running");
       } finally {
@@ -164,6 +165,52 @@ describe("/subagent", () => {
       await runPromise;
     }
     expect(child.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects unsupported contexts and reports empty or missing selections without opening an overlay", async () => {
+    // Intent: command validation should remain side-effect free when no view can be opened.
+    const command = captureCommand();
+    const notifications: string[] = [];
+    const custom = vi.fn(async () => undefined);
+    const nonInteractive = {
+      ...createContext("/tmp/work", custom, notifications),
+      hasUI: false,
+      mode: "rpc",
+    } as never;
+
+    await command.handler("", nonInteractive);
+    await command.handler("", createContext("/tmp/work", custom, notifications));
+    await command.handler("missing", createContext("/tmp/work", custom, notifications));
+
+    expect(custom).not.toHaveBeenCalled();
+    expect(notifications).toEqual([
+      "/subagent requires the root interactive UI.",
+      "No running subagents are available to view.",
+      'Subagent "missing" was not found.',
+    ]);
+  });
+
+  it("reports ambiguous persisted session prefixes", async () => {
+    // Intent: a prefix must identify exactly one persisted session before the overlay is created.
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = await createTempWorkspace();
+    const cwd = await createTempWorkspace();
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await createPersistedSession(cwd, "shared-prefix-a");
+      await createPersistedSession(cwd, "shared-prefix-b");
+      const command = captureCommand();
+      const notifications: string[] = [];
+      const custom = vi.fn(async () => undefined);
+
+      await command.handler("shared-prefix", createContext(cwd, custom, notifications));
+
+      expect(custom).not.toHaveBeenCalled();
+      expect(notifications).toEqual(['Subagent "shared-prefix" is ambiguous.']);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
   });
 
   it("opens the persisted transcript when a selected running session finishes", async () => {

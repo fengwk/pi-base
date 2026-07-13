@@ -215,6 +215,43 @@ describe("runSubagent", () => {
     expect(result.error).toContain("spawn failed");
   });
 
+  it("does not create or resume a session when cancellation already happened", async () => {
+    // Intent: an already-cancelled parent turn must not pay startup cost or create an orphan session.
+    const controller = new AbortController();
+    controller.abort();
+    const spawn = vi.fn(async () => handle("unexpected", {}));
+    const resume = vi.fn(async () => handle("unexpected", {}));
+    const factory: SubagentSessionFactory = { spawn, resume };
+    const staleCtx = {
+      sessionManager: {
+        getSessionId: () => { throw new Error("cancelled calls must not inspect session context"); },
+      },
+    } as never;
+
+    const fresh = await runSubagent(
+      staleCtx,
+      { agentType: "w", prompt: "p", childDepth: 2, signal: controller.signal },
+      factory,
+    );
+    const resumed = await runSubagent(
+      staleCtx,
+      { agentType: "w", prompt: "p", sessionId: "saved-session", childDepth: 2, signal: controller.signal },
+      factory,
+    );
+
+    expect(fresh).toEqual({
+      sessionId: "",
+      state: "cancelled",
+      error: "Cancelled by user before subagent session started.",
+    });
+    expect(resumed.state).toBe("cancelled");
+    expect(resumed.sessionId).toBe("saved-session");
+    expect(resumed.error).toContain("resume later");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
+    expect(subagentRegistry.all()).toEqual([]);
+  });
+
   it("emits live progress, updates widget counters, and ignores registration hook failures", async () => {
     // Intent: structured progress drives both tool updates and registry-backed widget counters,
     // while auxiliary registration hooks must not break a successful delegation.

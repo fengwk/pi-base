@@ -52,7 +52,7 @@ const BASE_TOOL_NAMES = [
   "bash",
   "edit",
   "write",
-  // "lsp_diagnostics", // Temporarily disabled; restore with its registration in lsp/tools-register.ts.
+  // "lsp_diagnostics", // Disabled for 0.1.x evaluation; restore or remove before the next minor release.
   "lsp_goto_definition",
   "lsp_workspace_symbols",
   "lsp_java_decompile",
@@ -235,6 +235,8 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     resolverFactory.clear();
+    // The process-wide manager is owned by the single active root session; headless subagents must
+    // not shut down clients shared with that root.
     if (isRootSession(ctx)) await lspManager.shutdownAll();
   });
 
@@ -389,8 +391,9 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       clearTimeout(widgetRenderTimer);
       widgetRenderTimer = null;
     }
-    if (ctx.hasUI && isRootSession(ctx)) {
-      ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
+    if (isRootSession(ctx)) {
+      subagentRegistry.removeForRoot(readRootSessionId(ctx));
+      if (ctx.hasUI) ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
     }
   });
 

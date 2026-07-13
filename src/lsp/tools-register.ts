@@ -26,7 +26,7 @@ import {
 export type { LspResolverFactory } from "./tool-helpers.js";
 
 export function registerLspTools(pi: ExtensionAPI, options: { resolverFactory?: LspResolverFactory; getCollapsedResultLines?: any; getCollapsedResultMaxChars?: any } = {}) {
-  // Temporarily disabled while evaluating removal of lsp_diagnostics.
+  // Disabled for 0.1.x evaluation; restore or remove before the next minor release.
   // Uncomment this block and its imports above to restore the tool.
   // pi.registerTool(withPiBaseErrorMarker({
   //   name: "lsp_diagnostics",

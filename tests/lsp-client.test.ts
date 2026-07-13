@@ -852,13 +852,60 @@ describe("LspClient internals", () => {
         });
         const initSpy = vi.spyOn(LspClient.prototype, "initialize").mockResolvedValue(undefined);
         const stopSpy = vi.spyOn(LspClient.prototype, "stop").mockResolvedValue(undefined);
-        const manager = new LspManager({ idleTimeoutMs: 1000 });
+        const manager = new LspManager({ idleTimeoutMs: 1000, shutdownGraceMs: 25 });
         try {
           await manager.getClient(filePath, resolver);
           expect(stopSpy).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1500);
           expect(stopSpy).toHaveBeenCalledTimes(1);
+          expect(stopSpy).toHaveBeenCalledWith({ shutdownGraceMs: 25 });
         } finally {
+          await manager.shutdownAll();
+          startSpy.mockRestore();
+          initSpy.mockRestore();
+          stopSpy.mockRestore();
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("waits for idle retirement before starting a same-workspace replacement", async () => {
+      // Intent: graceful shutdown must finish before a replacement can reuse a workspace such as jdtls -data.
+      vi.useFakeTimers();
+      let releaseStop!: () => void;
+      try {
+        const root = await createTempWorkspace();
+        const binDir = join(root, "bin");
+        await mkdir(binDir, { recursive: true });
+        await writeFile(join(binDir, "fake-lsp"), "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
+        const filePath = await writeWorkspaceFile(root, "src/example.ts", "x\n");
+        const resolver = new LspDiscoveryResolver({
+          servers: { typescript: { command: [join(binDir, "fake-lsp")], extensions: [".ts"] } },
+        });
+        const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
+          (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
+        });
+        const initSpy = vi.spyOn(LspClient.prototype, "initialize").mockResolvedValue(undefined);
+        const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+        const stopSpy = vi.spyOn(LspClient.prototype, "stop")
+          .mockImplementationOnce(() => stopGate)
+          .mockResolvedValue(undefined);
+        const manager = new LspManager({ idleTimeoutMs: 1000 });
+        try {
+          await manager.getClient(filePath, resolver);
+          await vi.advanceTimersByTimeAsync(1500);
+          expect(stopSpy).toHaveBeenCalledTimes(1);
+
+          const replacement = manager.getClient(filePath, resolver);
+          await Promise.resolve();
+          expect(startSpy).toHaveBeenCalledTimes(1);
+
+          releaseStop();
+          await replacement;
+          expect(startSpy).toHaveBeenCalledTimes(2);
+        } finally {
+          releaseStop?.();
           await manager.shutdownAll();
           startSpy.mockRestore();
           initSpy.mockRestore();
