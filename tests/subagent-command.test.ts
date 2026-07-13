@@ -260,7 +260,7 @@ describe("/subagent", () => {
           expect(component.render(80).join("\n")).toContain("explorer · done");
           component.handleInput?.("\n");
           const output = component.render(80).join("\n");
-          expect(output).toContain("subagent explorer · done · model: actual-provider/actual-model");
+          expect(output).toContain("subagent explorer · done · actual-provider/actual-model");
           expect(output).toContain("finished report");
           expect(output).toContain("session race-child");
         } finally {
@@ -274,6 +274,40 @@ describe("/subagent", () => {
       expect(notifications).toEqual([]);
       expect(child.dispose).toHaveBeenCalledTimes(1);
     } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
+  it("prevents concurrent viewer overlays and allows reopening after close", async () => {
+    // Intent: concurrent command dispatch must not create a second overlay while one is active.
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = await createTempWorkspace();
+    const cwd = await createTempWorkspace();
+    let closeViewer = (): void => undefined;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await createPersistedSession(cwd, "completed-child");
+      const command = captureCommand();
+      const notifications: string[] = [];
+      const viewerClosed = new Promise<void>((resolve) => { closeViewer = resolve; });
+      const custom = vi.fn(async () => viewerClosed);
+      const ctx = createContext(cwd, custom, notifications);
+
+      const firstOpen = command.handler("completed-child", ctx);
+      const concurrentOpen = command.handler("completed-child", ctx);
+      await concurrentOpen;
+      await vi.waitFor(() => expect(custom).toHaveBeenCalledTimes(1));
+
+      expect(custom).toHaveBeenCalledTimes(1);
+      expect(notifications).toEqual(["The subagent viewer is already open."]);
+
+      closeViewer();
+      await firstOpen;
+      await command.handler("completed-child", ctx);
+      expect(custom).toHaveBeenCalledTimes(2);
+    } finally {
+      closeViewer();
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     }
@@ -295,7 +329,7 @@ describe("/subagent", () => {
         try {
           const output = component.render(120).join("\n");
           expect(output).not.toContain("View subagent");
-          expect(output).toContain("subagent explorer · done · model: actual-provider/actual-model · turns: 1 · tool calls: 0");
+          expect(output).toContain("subagent explorer · done · actual-provider/actual-model · turns: 1 · tool calls: 0");
           expect(output).toContain("finished report");
           expect(output).toContain("session completed-child");
         } finally {

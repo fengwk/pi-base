@@ -243,6 +243,7 @@ class SubagentCommandOverlay implements Component {
 }
 
 export function registerSubagentCommand(pi: Pick<ExtensionAPI, "registerCommand">): void {
+  let commandOpen = false;
   pi.registerCommand("subagent", {
     description: "View a subagent session",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -250,53 +251,62 @@ export function registerSubagentCommand(pi: Pick<ExtensionAPI, "registerCommand"
         ctx.ui.notify("/subagent requires the root interactive UI.", "warning");
         return;
       }
-
-      const rootSessionId = readRootSessionId(ctx) || ctx.sessionManager.getSessionId();
-      const nodes = subagentRegistry
-        .forRoot(rootSessionId)
-        .filter((node) => node.status === "running" && getLiveSubagentView(node.sessionId) !== undefined)
-        .sort((left, right) => left.startedAt - right.startedAt);
-      const query = args.trim();
-      let initialTarget: SubagentPanelTarget | undefined;
-
-      if (!query) {
-        if (nodes.length === 0) {
-          ctx.ui.notify("No running subagents are available to view.", "info");
-          return;
-        }
-      } else {
-        const resolvedTarget = resolveSubagentTarget(ctx.cwd, nodes, query);
-        if (resolvedTarget === "ambiguous") {
-          ctx.ui.notify(`Subagent "${query}" is ambiguous.`, "warning");
-          return;
-        }
-        if (!resolvedTarget) {
-          ctx.ui.notify(`Subagent "${query}" was not found.`, "warning");
-          return;
-        }
-        initialTarget = resolvedTarget;
+      if (commandOpen) {
+        ctx.ui.notify("The subagent viewer is already open.", "info");
+        return;
       }
 
-      await ctx.ui.custom<void>((tui, theme, keybindings, done) => new SubagentCommandOverlay({
-        tui,
-        theme,
-        keybindings,
-        cwd: ctx.cwd,
-        done: () => done(undefined),
-        nodes,
-        ...(initialTarget ? { initialTarget } : {}),
-        notifyUnavailable: (sessionId) => {
-          ctx.ui.notify(`Subagent "${sessionId}" is no longer available.`, "info");
-        },
-      }), {
-        overlay: true,
-        overlayOptions: {
-          width: "100%",
-          maxHeight: "100%",
-          anchor: "bottom-center",
-          margin: { top: OVERLAY_VERTICAL_MARGIN, right: 0, bottom: OVERLAY_VERTICAL_MARGIN, left: 0 },
-        },
-      });
+      commandOpen = true;
+      try {
+        const rootSessionId = readRootSessionId(ctx) || ctx.sessionManager.getSessionId();
+        const nodes = subagentRegistry
+          .forRoot(rootSessionId)
+          .filter((node) => node.status === "running" && getLiveSubagentView(node.sessionId) !== undefined)
+          .sort((left, right) => left.startedAt - right.startedAt);
+        const query = args.trim();
+        let initialTarget: SubagentPanelTarget | undefined;
+
+        if (!query) {
+          if (nodes.length === 0) {
+            ctx.ui.notify("No running subagents are available to view.", "info");
+            return;
+          }
+        } else {
+          const resolvedTarget = resolveSubagentTarget(ctx.cwd, nodes, query);
+          if (resolvedTarget === "ambiguous") {
+            ctx.ui.notify(`Subagent "${query}" is ambiguous.`, "warning");
+            return;
+          }
+          if (!resolvedTarget) {
+            ctx.ui.notify(`Subagent "${query}" was not found.`, "warning");
+            return;
+          }
+          initialTarget = resolvedTarget;
+        }
+
+        await ctx.ui.custom<void>((tui, theme, keybindings, done) => new SubagentCommandOverlay({
+          tui,
+          theme,
+          keybindings,
+          cwd: ctx.cwd,
+          done: () => done(undefined),
+          nodes,
+          ...(initialTarget ? { initialTarget } : {}),
+          notifyUnavailable: (sessionId) => {
+            ctx.ui.notify(`Subagent "${sessionId}" is no longer available.`, "info");
+          },
+        }), {
+          overlay: true,
+          overlayOptions: {
+            width: "100%",
+            maxHeight: "100%",
+            anchor: "bottom-center",
+            margin: { top: OVERLAY_VERTICAL_MARGIN, right: 0, bottom: OVERLAY_VERTICAL_MARGIN, left: 0 },
+          },
+        });
+      } finally {
+        commandOpen = false;
+      }
     },
   });
 }

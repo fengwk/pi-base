@@ -93,7 +93,7 @@ describe("SubagentSessionPanel", () => {
     });
 
     const output = harness.panel.render(120).join("\n");
-    expect(output).toContain("subagent explorer · running · model: minimax-cn/MiniMax-M3 · turns: 1 · tool calls: 1");
+    expect(output).toContain("subagent explorer · running · minimax-cn/MiniMax-M3 · turns: 1 · tool calls: 1");
     expect(output).toContain("Inspecting files");
     expect(output).toContain("read");
     expect(harness.requestRender).toHaveBeenCalled();
