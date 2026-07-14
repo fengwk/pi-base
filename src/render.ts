@@ -11,6 +11,7 @@ const INTERNAL_DEFAULT_COLLAPSED_RESULT_LINES = {
 const MISSING_CALL_ARG_RE = / *<missing-[^>]+>/g;
 const KEY_VALUE_RE = /^([A-Za-z][A-Za-z0-9]*):(?!\/\/)(?:\s*(.*))?$/;
 const SECTION_HEADER_RE = /^([A-Za-z][A-Za-z0-9 ]*):$/;
+const APPLY_PATCH_FILE_HEADING_RE = /^[AMD] .+ \(\+\d+ -\d+\)$/;
 
 function paint(theme: any, color: string, text: string): string {
   return theme?.fg ? theme.fg(color, text) : text;
@@ -304,6 +305,10 @@ function colorizeDiffLine(line: string, theme: any): string {
 function colorizeResultLine(line: string, theme: any, state: { inDiff: boolean }, isError: boolean): string {
   if (!line) return "";
 
+  if (APPLY_PATCH_FILE_HEADING_RE.test(line)) {
+    state.inDiff = false;
+    return emphasize(theme, line);
+  }
   if (state.inDiff) return colorizeDiffLine(line, theme);
   if (line === "diff:") {
     state.inDiff = true;
@@ -312,7 +317,12 @@ function colorizeResultLine(line: string, theme: any, state: { inDiff: boolean }
 
   if (line.startsWith("Error:")) return paint(theme, "error", line);
   if (line.startsWith("Hint:")) return paint(theme, "warning", line);
-  if (line.startsWith("Edited ") || line.startsWith("Created ") || line.startsWith("Overwrote ")) return paint(theme, "success", line);
+  if (
+    line.startsWith("Edited ")
+    || line.startsWith("Created ")
+    || line.startsWith("Overwrote ")
+    || line.startsWith("Applied patch successfully")
+  ) return paint(theme, "success", line);
   if (line.startsWith("Replacements:")) return paint(theme, "muted", line);
   if (isError && line.startsWith("Validation failed")) return paint(theme, "error", line);
 

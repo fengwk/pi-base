@@ -343,6 +343,25 @@ export class LspClient {
     this.notify("textDocument/didSave", { textDocument: { uri } });
   }
 
+  closeFile(filePath: string): void {
+    const absPath = resolve(filePath);
+    const uri = pathToFileURL(absPath).href;
+    try {
+      if (this.openedFiles.has(absPath)) {
+        this.notify("textDocument/didClose", { textDocument: { uri } });
+      }
+    } finally {
+      this.openedFiles.delete(absPath);
+      this.fileVersions.delete(absPath);
+      this.fileMtimes.delete(absPath);
+      this.fileContents.delete(absPath);
+      this.diagnosticsStore.delete(uri);
+      const waiters = this.diagnosticsWaiters.get(uri) ?? [];
+      this.diagnosticsWaiters.delete(uri);
+      for (const waiter of waiters) waiter.reject(new Error(`LSP file closed: ${absPath}`));
+    }
+  }
+
   async diagnostics(filePath: string, signal?: AbortSignal): Promise<unknown[]> {
     const absPath = resolve(filePath);
     const uri = pathToFileURL(absPath).href;
@@ -637,16 +656,6 @@ export class LspClient {
     }
   }
 
-  private closeFile(filePath: string): void {
-    const absPath = resolve(filePath);
-    if (!this.openedFiles.has(absPath)) return;
-    this.notify("textDocument/didClose", { textDocument: { uri: pathToFileURL(absPath).href } });
-    this.openedFiles.delete(absPath);
-    this.fileVersions.delete(absPath);
-    this.fileMtimes.delete(absPath);
-    this.fileContents.delete(absPath);
-  }
-
   private rejectAllPending(reason: string): void {
     for (const [id, handler] of this.pending) {
       clearTimeout(handler.timer);
@@ -839,6 +848,12 @@ export class LspManager {
   async syncFileIfOpen(filePath: string): Promise<void> {
     for (const client of this.clients.values()) {
       if (client.isAlive() && client.isOpen(filePath)) client.syncFile(filePath);
+    }
+  }
+
+  async closeFileIfOpen(filePath: string): Promise<void> {
+    for (const client of this.clients.values()) {
+      if (client.isAlive() && client.isOpen(filePath)) client.closeFile(filePath);
     }
   }
 

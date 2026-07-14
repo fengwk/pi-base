@@ -2,8 +2,9 @@ import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative } from "node:path";
 import { normalizeSlashes, resolveToCwd, stripAtPrefix } from "./path-utils.js";
 import type { ContextCompressionConfig } from "./config.js";
+import { getApplyPatchIntents, parseApplyPatch } from "./apply-patch-core.js";
 
-type AnchorHygieneToolName = "read" | "edit";
+type AnchorHygieneToolName = "read" | "edit" | "apply_patch";
 
 type CompressionReason = "file_changed_later" | "older_tool_output";
 
@@ -56,7 +57,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isAnchorHygieneToolName(value: unknown): value is AnchorHygieneToolName {
-  return value === "read" || value === "edit";
+  return value === "read" || value === "edit" || value === "apply_patch";
 }
 
 
@@ -88,9 +89,55 @@ function resolveInputPaths(input: unknown, cwd: string): string[] {
   return [];
 }
 
+function resolveApplyPatchInputPaths(input: unknown, cwd: string): string[] {
+  if (!isRecord(input) || typeof input.patchText !== "string") return [];
+  try {
+    const baseCwd = resolveInputBaseCwd(input.workdir, cwd);
+    return getApplyPatchIntents(parseApplyPatch(input.patchText))
+      .map((intent) => canonicalizePath(resolveToCwd(stripAtPrefix(intent.path), baseCwd)));
+  } catch {
+    return [];
+  }
+}
+
+function resolveAppliedDetailPaths(details: unknown, cwd: string): string[] {
+  if (!isRecord(details) || !Array.isArray(details.files)) return [];
+  const paths: string[] = [];
+  for (const file of details.files) {
+    if (!isRecord(file)) continue;
+    if (typeof file.absolutePath === "string" && file.absolutePath.trim().length > 0) {
+      paths.push(canonicalizePath(resolvePromptPath(file.absolutePath, cwd)));
+    }
+  }
+  return paths;
+}
+
+function resolveUnknownFailedDetailPath(details: unknown, input: unknown, cwd: string): string | undefined {
+  if (
+    !isRecord(details)
+    || details.failedPathState !== "unknown"
+    || typeof details.failedPath !== "string"
+    || details.failedPath.trim().length === 0
+  ) return undefined;
+  const baseCwd = isRecord(input) ? resolveInputBaseCwd(input.workdir, cwd) : cwd;
+  return canonicalizePath(resolveToCwd(details.failedPath, baseCwd));
+}
+
+function resolveToolPaths(toolName: string, input: unknown, message: ToolResultMessageLike, cwd: string): string[] {
+  if (toolName !== "apply_patch") return resolveInputPaths(input, cwd);
+  if (message.isError === true) {
+    const failedPath = resolveUnknownFailedDetailPath(message.details, input, cwd);
+    return [...new Set([
+      ...resolveAppliedDetailPaths(message.details, cwd),
+      ...(failedPath === undefined ? [] : [failedPath]),
+    ])];
+  }
+  const inputPaths = resolveApplyPatchInputPaths(input, cwd);
+  return inputPaths.length > 0 ? inputPaths : resolveAppliedDetailPaths(message.details, cwd);
+}
+
 function resolvePromptPath(path: string, cwd: string): string {
-  const stripped = stripAtPrefix(path.trim());
-  return canonicalizePath(isAbsolute(stripped) ? stripped : resolveToCwd(stripped, cwd));
+  return canonicalizePath(resolveToCwd(path.trim(), cwd));
 }
 
 function buildToolCallIndex(messages: readonly ToolResultMessageLike[]): Map<string, ToolCallInfo> {
@@ -249,19 +296,19 @@ function buildAgeCompressionEligibility(
 }
 
 function isFileContextResult(toolName: string, message: ToolResultMessageLike): boolean {
-  // read carries file content; edit carries a success message + diff that references
-  // a file version that may no longer be current. Both become stale after a later mutation.
-  // write acks are intentionally kept as timeline anchors and never masked here.
-  if (toolName === "read" || toolName === "edit") return message.isError !== true;
+  // read/edit/apply_patch expose file-version context that becomes stale after a later
+  // mutation. write acknowledgements remain timeline anchors and are never masked here.
+  if (toolName === "read" || toolName === "edit" || toolName === "apply_patch") return message.isError !== true;
   return false;
 }
 
-function isSuccessfulMutation(toolName: string, message: ToolResultMessageLike): boolean {
+function shouldMarkMutationPathsDirty(toolName: string, message: ToolResultMessageLike, paths: readonly string[]): boolean {
+  if (toolName === "apply_patch") return paths.length > 0;
   return (toolName === "write" || toolName === "edit") && message.isError !== true;
 }
 
 function placeholderForToolName(toolName: string): string {
-  if (toolName === "write" || toolName === "edit") return WRITE_EDIT_OUTPUT_PLACEHOLDER;
+  if (toolName === "write" || toolName === "edit" || toolName === "apply_patch") return WRITE_EDIT_OUTPUT_PLACEHOLDER;
   if (toolName === "bash") return BASH_OUTPUT_PLACEHOLDER;
   return GENERIC_TOOL_OUTPUT_PLACEHOLDER;
 }
@@ -315,12 +362,19 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role !== "toolResult") continue;
-    if (message.isError === true) continue;
 
     const call = resolveToolCall(message, toolCalls);
     if (!call) continue;
     const toolName = call.toolName;
-    const paths = resolveInputPaths(call.input, cwd);
+    const paths = resolveToolPaths(toolName, call.input, message, cwd);
+    if (message.isError === true) {
+      // Partial apply_patch failures remain visible. Confirmed commits and a failed
+      // path whose state is explicitly unknown both invalidate older file context.
+      if (shouldMarkMutationPathsDirty(toolName, message, paths)) {
+        for (const candidate of paths) dirtyFiles.add(candidate);
+      }
+      continue;
+    }
     const skillRead = toolName === "read" && paths.some((candidate) => isSkillReadPath(candidate, skillRoots));
 
     let reason: CompressionReason | undefined;
@@ -335,7 +389,7 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
       changed = true;
     }
 
-    if (isSuccessfulMutation(toolName, message)) {
+    if (shouldMarkMutationPathsDirty(toolName, message, paths)) {
       for (const candidate of paths) dirtyFiles.add(candidate);
     }
   }

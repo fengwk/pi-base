@@ -88,6 +88,28 @@ describe("render helpers", () => {
     expect(rendered).toContain("<toolDiffContext> 2|unchanged line</toolDiffContext>");
   });
 
+  it("resets diff styling between apply_patch file sections", () => {
+    const raw = [
+      "Applied patch successfully (2 files): A a.txt, M b.txt",
+      "",
+      "A a.txt (+1 -0)",
+      "diff:",
+      "+added",
+      "",
+      "M b.txt (+1 -1)",
+      "diff:",
+      "-old",
+      "+new",
+    ].join("\n");
+
+    const rendered = render(renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: true }, theme, { lastComponent: undefined }));
+    expect(rendered).toContain("<success>Applied patch successfully (2 files): A a.txt, M b.txt</success>");
+    expect(rendered).toContain("<toolTitle><b>A a.txt (+1 -0)</b></toolTitle>");
+    expect(rendered).toContain("<toolTitle><b>M b.txt (+1 -1)</b></toolTitle>");
+    expect(rendered).toContain("<toolDiffRemoved>-old</toolDiffRemoved>");
+    expect(rendered).toContain("<toolDiffAdded>+new</toolDiffAdded>");
+  });
+
   it("colorizes write success message", () => {
     const raw = "Created src/demo.ts successfully.";
 

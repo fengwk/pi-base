@@ -47,7 +47,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 
 ## 工具
 
-启动时 `pi-base` 确保以下 9 个基础工具可用。残留的已退役 `task` 自动移除。
+启动时 `pi-base` 注册以下 10 个基础工具；文件修改能力会按当前模型在 `apply_patch` 与 `edit`/`write` 之间投影。残留的已退役 `task` 自动移除。
 
 ### 工具速查
 
@@ -59,6 +59,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
 | `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
 | `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
+| `apply_patch` | `patchText` | session cwd | OpenCode `*** Begin Patch` 协议；支持 Add/Update/Delete，多文件先整体 preflight、再按顺序提交；调用、权限确认和持久化 diff 元数据均有界，行数统计保持完整；不支持 Move |
 <!-- 暂时禁用；恢复注册时一并取消此注释。
 | `lsp_diagnostics` | `path` | severity=all | 需 `lsp.servers` 声明 server；不做能力前置检查 |
 -->
@@ -67,6 +68,40 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `lsp_java_decompile` | `path`, `target` | — | 需 server 支持 `java/classFileContents`（通常 jdtls） |
 
 `lsp_diagnostics` 在 0.1.x 期间暂时禁用评估；下一个 minor release 前必须明确恢复注册或完整删除其实现。
+
+### 文件修改工具的模型路由
+
+三个工具始终注册，但隐式/default agent 只暴露一组文件修改能力：
+
+- model id（大小写不敏感）包含 `gpt-`、且不包含 `oss` 或 `gpt-4` 时，暴露 `apply_patch`，隐藏 `edit`/`write`。这覆盖当前 GPT-5/Codex 及带 namespace 的同类 ID。
+- GPT-4、GPT-OSS、Anthropic、无 model 等其他情况暴露 `edit`/`write`，隐藏 `apply_patch`。
+- agent 显式列出 `apply_patch` 时，任何模型都保留它；匹配 GPT 策略的模型只会在同时具备 `edit` 和 `write` 时将二者投影成一个 `apply_patch`。
+- 仅有 `edit` 或仅有 `write` 的显式 allowlist、以及用户手动缩减后的 active tools，会保留原工具而不会换成能力更宽的 `apply_patch`；完全没有文件修改能力时也不会因模型切换获得该能力。
+
+`/model`/模型循环触发的 `model_select`、`/agent` model 激活、session resume/reload 以及 subagent 启动都会按当前 session model 重新投影；模型判断集中在同一纯函数中。
+
+### `apply_patch` 协议与提交语义
+
+```text
+*** Begin Patch
+*** Add File: src/new.ts
++export const value = 1;
+*** Update File: src/existing.ts
+@@ optional function or section context
+-old line
++new line
+*** End of File
+*** Delete File: src/obsolete.ts
+*** End Patch
+```
+
+`apply_patch` 对模型暴露与 OpenCode 相同的单一 `{ patchText }` function-tool 参数。`patchText` 可直接传协议正文，也兼容常见 heredoc 包装；`*** Begin Patch`/`*** End Patch` 两侧以及 heredoc closing delimiter 后可带水平空白。Add body 每行以 `+` 开头；Delete 无 body；Update 使用一个或多个 `@@` chunk，context/删除/新增行分别以空格、`-`、`+` 开头。所有相对路径统一相对当前 session cwd 解析。
+
+执行分两阶段：先解析并 preflight 全部文件（路径、存在性、文本编码、hunk 唯一匹配、输出可编码性等），任一失败则完全不写；preflight 全部成功后按 patch 顺序逐文件提交。提交阶段若后续文件因竞态或文件系统错误失败，前面已提交文件不会回滚，错误会明确标记 partial application，并在 details 中列出实际已提交文件及 diff 元数据；失败文件可能已被底层写操作部分修改，因此同时报告 `failedPathState: "unknown"`，调用方不能假定它保持原样。每次成功提交（包括最终部分失败之前的提交）都会更新 LSP：Add/Update 同步内容，Delete 对已打开文档发送 `didClose` 并清理缓存；状态未知的失败路径也会保守关闭已打开的 LSP 文档，避免继续使用可能陈旧的缓存。LSP 处理失败不会覆盖原始文件系统结果。
+
+结果中的逐文件 diff 使用 LF 展示视图和 4 行上下文；每个文件最多保留 400 行、单行最多 500 字符，但 `addedLines`/`removedLines` 始终统计完整变更。实际写回仍保留源文件支持的编码、BOM、逐行 EOL 和无最终换行状态。
+
+`*** Move to:` 仅为协议解析兼容保留，**Move 不受支持**，会在任何文件变更前失败。
 
 ### `task`（子 agent 委派）
 
@@ -117,7 +152,7 @@ name: planner
 description: Planning-focused agent
 model: provider/model-id          # 仅切换时 best-effort 应用
 thinkingLevel: high               # off|minimal|low|medium|high|xhigh|max；仅切换时 best-effort 应用
-tools: [read, grep]               # allowlist；未配置=全部可用；[]=全部禁用
+tools: [read, grep]               # allowlist；未配置=按模型暴露全部可用工具；[]=全部禁用
 skills: [spec]                    # allowlist；未配置=全部注入；[]=全部禁用
 subagents: [reviewer]             # allowlist；非空 + depth<maxDepth → 注入 task 工具
 ---
@@ -131,7 +166,7 @@ Agent 正文（覆盖 system prompt）
 |------|------|
 | prompt | agent 正文非空覆盖 system prompt；空则回退 Pi customPrompt；都没有保留 Pi 预构建兜底 |
 | model / thinkingLevel | 仅显式切换时 best-effort 应用；resume/reload 不覆盖 session 的值；失败输出 warning 不阻塞切换 |
-| tools | allowlist 机制；LSP/MCP 工具同样受控；task 工具由 subagents + depth 动态注入 |
+| tools | allowlist 机制；文件修改工具再按 model 路由投影（显式 apply_patch 跨模型保留，GPT 上仅完整 edit+write 能力 → apply_patch，单独 edit/write 和空能力均不增权）；LSP/MCP 同样受控；task 由 subagents + depth 动态注入 |
 | skills | allowlist 过滤后统一重建 prompt；仅 `read` 可用时注入 `<available_skills>`；`disable-model-invocation` skill 不暴露给模型；不影响 `/skill:name` |
 | subagents | 不存在的 agent 从 allowlist 剔除并 warning；非空 + depth<maxDepth → 注入 task 并在 prompt 中以 `<available_subagents>` XML 列出 |
 | session 恢复 | 最近一次 `/agent` 写入 session entry；下次 `session_start` 自动恢复；已持久化 agent 不存在时回退 default |
@@ -239,6 +274,8 @@ Agent 正文（覆盖 system prompt）
   "permission": {
     "*": "allow",
     "edit": "ask",
+    "write": "ask",
+    "apply_patch": { "vendor/**": "deny" },
     "bash": { "*": "ask", "git *": "allow", "npm test": "deny" }
   }
 }
@@ -253,6 +290,8 @@ Agent 正文（覆盖 system prompt）
 | 匹配顺序 | 先检查全局 `*`，再检查 tool 专属规则；最后匹配的规则生效 |
 | `ask` | 有 UI 弹出 Yes/No；无 UI headless subagent 转发给 root UI；其他无 UI 场景直接拦截 |
 | 路径类匹配 | 同时匹配原始路径、相对 workdir 路径、相对项目根路径、绝对路径 |
+| apply_patch 继承 | 执行前解析全部 target；Update 继承 `edit` 路径规则，Add/Delete 继承 `write` 路径规则；随后叠加 `permission.apply_patch` 作为覆盖层 |
+| apply_patch 聚合 | 对所有 target 取 `deny > ask > allow`；有效 patch 的确认框列出全部 `A/M/D path`，并展示由请求 patch 派生的 bounded 变更预览（确认前不读取目标文件）；畸形 patch 不执行文件操作，仅退回全局 `*` + `apply_patch` 通用规则 |
 | bash 匹配 | 识别 `&&`/`||`/`|`/`;`/换行 分割的顶层 command 段；不展开变量；动态命令头、命令头/前置重定向、复合/控制流语法、命令替换、可展开 heredoc、process substitution、shell/eval/source 动态执行，以及 command/env/exec/nohup 执行包装器无法保守分析时，显式整条命令 deny 仍 deny，否则退回 ask |
 
 `permission` 是用于防误操作的词法规则，不是安全沙箱。它不会执行完整 shell 解析或提供文件系统隔离；文件路径检查也不防御 symlink 穿透或 TOCTOU 竞态。需要强隔离时应在 Pi 之外使用容器、受限账户或其他系统级沙箱。
@@ -307,7 +346,7 @@ Agent 正文（覆盖 system prompt）
 {
   "contextCompression": {
     "anchorHygiene": true,
-    "tools": ["bash", "grep", "find", "read", "write", "edit"],
+    "tools": ["bash", "grep", "find", "read", "write", "edit", "apply_patch"],
     "retainedUserMessageRounds": 2,
     "retainedAssistantTurns": 4,
     "enabledProviders": ["openai"]
@@ -317,7 +356,7 @@ Agent 正文（覆盖 system prompt）
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `anchorHygiene` | false | 后续 write/edit 成功后，折叠同路径旧的 read/edit 结果；write ack 不参与折叠 |
+| `anchorHygiene` | false | 后续 write/edit/apply_patch 成功后，折叠同路径旧的 read/edit/apply_patch 文件上下文；write ack 不参与折叠；partial apply_patch 会把已提交路径及 `failedPathState: "unknown"` 的失败路径标脏，但不影响尚未执行的后续目标 |
 | `tools` | — | 按 `toolCall.name` 精确匹配，需压缩的工具名列表 |
 | `retainedUserMessageRounds` | 2 | 保留最近的 N 轮 user 消息 |
 | `retainedAssistantTurns` | 4 | 保留最近的 N 次 assistant turn |

@@ -21,7 +21,8 @@
     "src/",
     "skills/",
     "scripts/",
-    "prompts/"
+    "prompts/",
+    "THIRD_PARTY_NOTICES"
   ],
   "scripts": {
     "test": "vitest run",

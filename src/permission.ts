@@ -6,15 +6,30 @@ import { describeToolWorkdirForDisplay, expandHomePath, normalizeSlashes, resolv
 import { PI_BASE_PERMISSION_STATUS_KEY } from "./yolo-footer.js";
 import { loadRuntimePiBaseSettings, toggleRuntimeYolo } from "./runtime-settings.js";
 import { askSubagentPermissionHost } from "./subagent/permission-host.js";
+import { getApplyPatchIntents, parseApplyPatch, type ApplyPatchIntent, type ParsedApplyPatch } from "./apply-patch-core.js";
+import { applyPatchOperationLabel, buildApplyPatchPreview, formatApplyPatchPreview } from "./apply-patch-display.js";
 
 const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
 const ALLOW_LABEL = "Yes";
 const DENY_LABEL = "No";
 const PROMPT_ARGUMENTS_MAX_CHARS = 120;
+const APPLY_PATCH_PROMPT_PREVIEW_MAX_LINES = 28;
+const APPLY_PATCH_PROMPT_PREVIEW_MAX_LINE_CHARS = 200;
 
 
 interface TargetDescriptor {
   candidates: string[];
+}
+
+interface ApplyPatchPermissionTarget {
+  intent: ApplyPatchIntent;
+  descriptor: TargetDescriptor;
+}
+
+interface PermissionEvaluation {
+  action: PermissionAction;
+  applyPatchTargets?: ApplyPatchIntent[];
+  applyPatch?: ParsedApplyPatch;
 }
 
 
@@ -145,6 +160,48 @@ function evaluateBashRules(command: string, ...rulesets: Array<PermissionRuleEnt
   return action;
 }
 
+function aggregatePermissionActions(actions: readonly PermissionAction[]): PermissionAction {
+  if (actions.includes("deny")) return "deny";
+  if (actions.includes("ask")) return "ask";
+  return "allow";
+}
+
+function inheritedApplyPatchToolName(intent: ApplyPatchIntent): "edit" | "write" {
+  return intent.operation === "update" ? "edit" : "write";
+}
+
+function evaluateApplyPatchPermission(
+  input: Record<string, unknown>,
+  cwd: string,
+  loaded: LoadedPiBaseSettings,
+): PermissionEvaluation {
+  const permission = loaded.settings.permission;
+  if (!permission || typeof input.patchText !== "string") {
+    return { action: evaluateRules(["*"], permission?.["*"], permission?.apply_patch) };
+  }
+
+  try {
+    const { cwd: targetCwd } = resolveToolWorkdir(input.workdir, cwd);
+    const applyPatch = parseApplyPatch(input.patchText);
+    const intents = getApplyPatchIntents(applyPatch);
+    const targets: ApplyPatchPermissionTarget[] = intents.map((intent) => ({
+      intent,
+      descriptor: buildPathTargetDescriptor(intent.path, targetCwd, loaded),
+    }));
+    const actions = targets.map(({ intent, descriptor }) => evaluateRules(
+      descriptor.candidates,
+      permission["*"],
+      permission[inheritedApplyPatchToolName(intent)],
+      permission.apply_patch,
+    ));
+    return { action: aggregatePermissionActions(actions), applyPatchTargets: intents, applyPatch };
+  } catch {
+    // Parsing and workdir validation belong to the tool. Permission falls back to
+    // generic apply_patch rules without attempting to infer malformed targets.
+    return { action: evaluateRules(["*"], permission["*"], permission.apply_patch) };
+  }
+}
+
 function updateYoloStatus(ctx: ExtensionContext, enabled: boolean): void {
   if (!ctx.hasUI) return;
   ctx.ui.setStatus(STATUS_KEY, enabled ? ctx.ui.theme.fg("warning", "YOLO") : undefined);
@@ -181,14 +238,39 @@ function getPromptWorkdir(input: unknown, cwd: string): string {
   return `${truncateSingleLine(rawWorkdir)}${usedDefault ? " (default)" : ""}`;
 }
 
-function buildPrompt(toolName: string, input: unknown, cwd: string): string {
-  const argumentsPreview = truncateSingleLine(stringifyPromptArguments(input)) || "{}";
+function formatApplyPatchPromptTargets(targets: readonly ApplyPatchIntent[]): string[] {
+  return targets.map((target) => {
+    const operation = applyPatchOperationLabel(target.operation);
+    const destination = target.moveTo === undefined ? "" : ` -> ${truncateSingleLine(target.moveTo)}`;
+    return `${operation} ${truncateSingleLine(target.path)}${destination}`;
+  });
+}
+
+function formatApplyPatchPromptPreview(applyPatch: ParsedApplyPatch): string[] {
+  const preview = formatApplyPatchPreview(buildApplyPatchPreview(applyPatch, {
+    maxLines: APPLY_PATCH_PROMPT_PREVIEW_MAX_LINES,
+    maxLineChars: APPLY_PATCH_PROMPT_PREVIEW_MAX_LINE_CHARS,
+  }));
+  return ["Requested changes:", ...preview.split("\n").map((line) => `  ${line}`)];
+}
+
+function buildPrompt(
+  toolName: string,
+  input: unknown,
+  cwd: string,
+  applyPatchTargets?: readonly ApplyPatchIntent[],
+  applyPatch?: ParsedApplyPatch,
+): string {
+  const targetLines = applyPatchTargets && applyPatchTargets.length > 0
+    ? ["Targets:", ...formatApplyPatchPromptTargets(applyPatchTargets).map((target) => `  ${target}`)]
+    : [`Arguments: ${truncateSingleLine(stringifyPromptArguments(input)) || "{}"}`];
   return [
     "Permission request",
     "",
     `Tool: ${toolName}`,
     `Workdir: ${getPromptWorkdir(input, cwd)}`,
-    `Arguments: ${argumentsPreview}`,
+    ...targetLines,
+    ...(applyPatch === undefined ? [] : ["", ...formatApplyPatchPromptPreview(applyPatch)]),
     "",
     "Allow this tool call?",
   ].join("\n");
@@ -253,10 +335,18 @@ export function registerPermissionGuard(
     const permission = loaded.settings.permission;
     if (!permission) return undefined;
 
-    const target = describeTarget(event.toolName, event.input, ctx.cwd, loaded);
-    const action = event.toolName === "bash" && typeof event.input.command === "string"
-      ? evaluateBashRules(event.input.command, permission["*"], permission[event.toolName])
-      : evaluateRules(target.candidates, permission["*"], permission[event.toolName]);
+    let evaluation: PermissionEvaluation;
+    if (event.toolName === "apply_patch") {
+      evaluation = evaluateApplyPatchPermission(event.input, ctx.cwd, loaded);
+    } else {
+      const target = describeTarget(event.toolName, event.input, ctx.cwd, loaded);
+      evaluation = {
+        action: event.toolName === "bash" && typeof event.input.command === "string"
+          ? evaluateBashRules(event.input.command, permission["*"], permission[event.toolName])
+          : evaluateRules(target.candidates, permission["*"], permission[event.toolName]),
+      };
+    }
+    const { action } = evaluation;
 
     if (action === "allow") return undefined;
     if (action === "deny") {
@@ -271,7 +361,7 @@ export function registerPermissionGuard(
           agentType: info.agentType,
           depth: info.depth,
           rootSessionId: info.rootSessionId,
-          prompt: buildPrompt(event.toolName, event.input, ctx.cwd),
+          prompt: buildPrompt(event.toolName, event.input, ctx.cwd, evaluation.applyPatchTargets, evaluation.applyPatch),
           signal: (event as { signal?: AbortSignal }).signal,
         });
         if (decision !== null) {
@@ -284,7 +374,10 @@ export function registerPermissionGuard(
     }
 
     await onPermissionAsked?.({ ctx });
-    const choice = await ctx.ui.select(buildPrompt(event.toolName, event.input, ctx.cwd), [ALLOW_LABEL, DENY_LABEL]);
+    const choice = await ctx.ui.select(
+      buildPrompt(event.toolName, event.input, ctx.cwd, evaluation.applyPatchTargets, evaluation.applyPatch),
+      [ALLOW_LABEL, DENY_LABEL],
+    );
     if (choice === ALLOW_LABEL) return undefined;
     onPermissionRejected?.({ ctx });
     return { block: true, reason: buildRejectedReason(event.toolName) };

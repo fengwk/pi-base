@@ -3,6 +3,7 @@ import { basename, extname, join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { formatSkillsForPrompt, getAgentDir, parseFrontmatter, type BuildSystemPromptOptions, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
 import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
+import { projectFileMutationTools } from "./model-tool-routing.js";
 
 const DEFAULT_AGENT_NAME = "default";
 const TASK_SYSTEM_PROMPT = readFileSync(new URL("../prompts/task-system.md", import.meta.url), "utf8").trim();
@@ -98,6 +99,7 @@ export function registerAgentSupport(
 ): AgentSupportHandle {
   let catalog = loadAgentCatalog();
   let activeAgentName = DEFAULT_AGENT_NAME;
+  let activeModelId: string | undefined;
   const subagentControls = options.subagentControls;
 
   // Add/remove the `task` delegation tool for the active agent: present only when the agent
@@ -184,10 +186,14 @@ export function registerAgentSupport(
     return catalog.byName.get(name);
   };
   const resolveActiveAgent = (): AgentDefinition | undefined => resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
+  const projectAgentTools = (agent: AgentDefinition, modelId: string | undefined): string[] => {
+    const validTools = filterKnownTools(agent.tools, allRegisteredToolNames());
+    return projectFileMutationTools(validTools, modelId, agent.tools === undefined ? "implicit" : "explicit");
+  };
   const canActivateToolForActiveAgent = (toolName: string): boolean => {
     const agent = resolveActiveAgent();
-    if (!agent?.tools) return agent?.tools === undefined;
-    return agent.tools.includes(toolName);
+    if (!agent) return false;
+    return projectAgentTools(agent, activeModelId).includes(toolName);
   };
 
   const applyAgent = async (
@@ -203,8 +209,7 @@ export function registerAgentSupport(
       return false;
     }
 
-    const validTools = filterKnownTools(agent.tools, allRegisteredToolNames());
-
+    let modelId = ctx.model?.id;
     let canApplyThinkingLevel = options.applyModelThinking;
     if (options.applyModelThinking && agent.model) {
       const model = findModel(ctx, agent.model);
@@ -220,6 +225,7 @@ export function registerAgentSupport(
       } else {
         try {
           const success = await pi.setModel(model);
+          if (success) modelId = model.id;
           if (!success) {
             console.warn(`Agent "${agent.name}": no auth configured for ${agent.model.provider}/${agent.model.modelId}. Agent switch will keep the current session model.`);
             if (ctx.hasUI) {
@@ -256,9 +262,10 @@ export function registerAgentSupport(
       }
     }
 
-    pi.setActiveTools(applyTaskInjection(validTools, agent, ctx));
+    pi.setActiveTools(applyTaskInjection(projectAgentTools(agent, modelId), agent, ctx));
 
     activeAgentName = agent.name;
+    activeModelId = modelId;
     updateStatus(ctx, agent.name);
     if (options.persist) {
       persistActiveAgent(agent.name);
@@ -383,6 +390,7 @@ export function registerAgentSupport(
         }
       }
       activeAgentName = DEFAULT_AGENT_NAME;
+      activeModelId = ctx.model?.id;
       updateStatus(ctx, DEFAULT_AGENT_NAME);
       return;
     }
@@ -393,6 +401,20 @@ export function registerAgentSupport(
     if (!applied && requested.name !== DEFAULT_AGENT_NAME) {
       await safeApplyAgent(DEFAULT_AGENT_NAME, ctx, { persist: false, notify: false, applyModelThinking: false });
     }
+  });
+
+  pi.on("model_select", async (event, ctx) => {
+    activeModelId = event.model.id;
+    const agent = resolveActiveAgent();
+    if (!agent) return;
+    if (agent.tools === undefined) {
+      // The implicit/default agent is user-configurable at runtime. A model switch
+      // only changes the representation of an existing file-mutation capability;
+      // it must not rebuild the set from every registered tool and undo manual choices.
+      pi.setActiveTools(projectFileMutationTools(pi.getActiveTools(), activeModelId, "implicit"));
+      return;
+    }
+    pi.setActiveTools(applyTaskInjection(projectAgentTools(agent, activeModelId), agent, ctx));
   });
 
   pi.on("before_agent_start", async (event) => {

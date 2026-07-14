@@ -38,6 +38,7 @@ describe("path utilities", () => {
     const cwd = resolve("/tmp", "pi-base-path-utils");
     expect(resolveToCwd("@src/index.ts", cwd)).toBe(resolve(cwd, "src/index.ts"));
     expect(resolveToCwd("${HOME}/src/index.ts", cwd)).toBe(join(home, "src", "index.ts"));
+    expect(resolveToCwd(`${cwd}/nested/../file.txt`, "/unused")).toBe(resolve(cwd, "file.txt"));
 
     const relative = resolveToolWorkdir("@packages/app", cwd);
     expect(relative.rawWorkdir).toBe("packages/app");

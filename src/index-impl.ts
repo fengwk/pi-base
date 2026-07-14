@@ -5,6 +5,7 @@ import { registerReadTool } from "./read.js";
 import { registerEditTool } from "./edit.js";
 import { registerGrepTool } from "./grep.js";
 import { registerWriteTool } from "./write.js";
+import { registerApplyPatchTool } from "./apply-patch.js";
 import { registerBashRendererTool } from "./bash-renderer.js";
 import { type LoadedPiBaseSettings } from "./config.js";
 import { registerPermissionGuard } from "./permission.js";
@@ -40,6 +41,7 @@ import { subagentRegistry } from "./subagent/registry.js";
 import { createSubagentWidgetComponent, renderSubagentWidget, SUBAGENT_WIDGET_KEY } from "./subagent/widget.js";
 import { registerSubagentTaskTool } from "./subagent/task-tool.js";
 import { registerSubagentCommand } from "./subagent/command.js";
+import { projectFileMutationTools } from "./model-tool-routing.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
@@ -52,6 +54,7 @@ const BASE_TOOL_NAMES = [
   "bash",
   "edit",
   "write",
+  "apply_patch",
   // "lsp_diagnostics", // Disabled for 0.1.x evaluation; restore or remove before the next minor release.
   "lsp_goto_definition",
   "lsp_workspace_symbols",
@@ -205,6 +208,9 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   const syncLsp = (absolutePath: string) => {
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
+  const closeLsp = (absolutePath: string) => {
+    void lspManager.closeFileIfOpen(absolutePath).catch(() => undefined);
+  };
   pi.on("session_start", async (event, ctx) => {
     if (event.reason === "reload") {
       reloadRuntimePiBaseSettings();
@@ -214,8 +220,9 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       resolverFactory.clear();
     }
     const activeTools = pi.getActiveTools();
+    const defaultTools = projectFileMutationTools(BASE_TOOL_NAMES, ctx.model?.id, "implicit");
     if (activeTools.length === 0) {
-      pi.setActiveTools([...BASE_TOOL_NAMES]);
+      pi.setActiveTools(defaultTools);
       return;
     }
 
@@ -226,9 +233,10 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     const builtinToolNames = resolveBuiltinToolNames(pi);
     const withoutBuiltins = activeTools.filter((name) => !builtinToolNames.has(name));
     const withoutTask = withoutBuiltins.filter((name) => name !== TASK_TOOL_NAME);
-    const nextTools = withoutBuiltins.includes(TASK_TOOL_NAME)
-      ? (withoutTask.length > 0 ? withoutTask : [...BASE_TOOL_NAMES])
+    const preservedTools = withoutBuiltins.includes(TASK_TOOL_NAME)
+      ? (withoutTask.length > 0 ? withoutTask : defaultTools)
       : withoutBuiltins;
+    const nextTools = projectFileMutationTools(preservedTools, ctx.model?.id, "implicit");
     if (nextTools.length !== activeTools.length || nextTools.some((name, index) => name !== activeTools[index])) {
       pi.setActiveTools(nextTools);
     }
@@ -258,6 +266,17 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
   registerWriteTool(pi, {
     onSuccessfulWrite: syncLsp,
+    getCollapsedResultLines,
+    getCollapsedResultMaxChars,
+  });
+  registerApplyPatchTool(pi, {
+    onCommitted: (result) => {
+      if (result.operation === "delete") closeLsp(result.absolutePath);
+      else syncLsp(result.absolutePath);
+    },
+    onCommitFailed: (failure) => {
+      closeLsp(failure.absolutePath);
+    },
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
   });

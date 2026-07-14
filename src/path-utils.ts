@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 
 export function stripAtPrefix(value: string): string {
   return value.startsWith("@") ? value.slice(1) : value;
@@ -33,7 +33,7 @@ export function isHomeShortcutPath(value: string): boolean {
 
 export function resolveToCwd(filePath: string, cwd: string): string {
   const expanded = expandHomePath(stripAtPrefix(filePath));
-  return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
+  return resolvePath(cwd, expanded);
 }
 
 export interface ResolvedToolWorkdir {

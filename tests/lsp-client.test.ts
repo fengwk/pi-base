@@ -272,6 +272,36 @@ describe("LspClient internals", () => {
       expect((client as any).fileContents.has(missingPath)).toBe(false);
     });
 
+    it("closes an open file and clears all per-file client state", async () => {
+      // Intent: apply_patch Delete cannot call syncFile after unlink; it needs a
+      // direct didClose transition that also removes stale diagnostics and caches.
+      const root = await createTempWorkspace();
+      const filePath = await writeWorkspaceFile(root, "src/deleted.ts", "export const value = 1;\n");
+      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      const notifySpy = vi.spyOn(client as any, "notify").mockImplementation(() => undefined);
+      await client.openFile(filePath);
+      notifySpy.mockClear();
+
+      const uri = pathToFileURL(filePath).href;
+      const rejectWaiter = vi.fn();
+      (client as any).diagnosticsStore.set(uri, [{ message: "stale" }]);
+      (client as any).diagnosticsWaiters.set(uri, [{ resolve: vi.fn(), reject: rejectWaiter }]);
+      client.closeFile(filePath);
+
+      expect(notifySpy).toHaveBeenCalledOnce();
+      expect(notifySpy).toHaveBeenCalledWith("textDocument/didClose", { textDocument: { uri } });
+      expect(client.isOpen(filePath)).toBe(false);
+      expect((client as any).fileVersions.has(filePath)).toBe(false);
+      expect((client as any).fileMtimes.has(filePath)).toBe(false);
+      expect((client as any).fileContents.has(filePath)).toBe(false);
+      expect((client as any).diagnosticsStore.has(uri)).toBe(false);
+      expect((client as any).diagnosticsWaiters.has(uri)).toBe(false);
+      expect(rejectWaiter).toHaveBeenCalledWith(expect.objectContaining({ message: `LSP file closed: ${filePath}` }));
+
+      client.closeFile(filePath);
+      expect(notifySpy).toHaveBeenCalledOnce();
+    });
+
     it("maps high-level helper methods to the expected JSON-RPC requests", async () => {
       // Intent: LSP tools rely on these helpers to translate user-facing
       // arguments into protocol requests, including encoded character offsets.
