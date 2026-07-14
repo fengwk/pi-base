@@ -170,6 +170,11 @@ function isFileDirective(line: string): boolean {
   return FILE_DIRECTIVE_PREFIXES.some((prefix) => line.startsWith(prefix));
 }
 
+function isPaddedFileDirective(line: string): boolean {
+  const trimmed = line.trim();
+  return FILE_DIRECTIVE_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+}
+
 function parseRequiredPath(line: string, prefix: string): string {
   const path = line.slice(prefix.length).trim();
   if (path.length === 0) throw new Error(`${prefix.slice(4, -1)} path must not be empty.`);
@@ -201,13 +206,14 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
       index++;
       break;
     }
+    const directiveLine = line.trim();
 
-    if (line.startsWith("*** Add File:")) {
-      const path = parseRequiredPath(line, "*** Add File:");
+    if (directiveLine.startsWith("*** Add File:")) {
+      const path = parseRequiredPath(directiveLine, "*** Add File:");
       assertUniquePath(path, seenPaths);
       index++;
       const content: string[] = [];
-      while (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isFileDirective(lines[index]!)) {
+      while (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isPaddedFileDirective(lines[index]!)) {
         const bodyLine = lines[index]!;
         if (!bodyLine.startsWith("+")) {
           throw new Error(`Malformed Add File body for ${path}: every line must start with +.`);
@@ -219,19 +225,19 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
       continue;
     }
 
-    if (line.startsWith("*** Delete File:")) {
-      const path = parseRequiredPath(line, "*** Delete File:");
+    if (directiveLine.startsWith("*** Delete File:")) {
+      const path = parseRequiredPath(directiveLine, "*** Delete File:");
       assertUniquePath(path, seenPaths);
       index++;
-      if (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isFileDirective(lines[index]!)) {
+      if (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isPaddedFileDirective(lines[index]!)) {
         throw new Error(`Delete File ${path} must not have a body.`);
       }
       files.push({ operation: "delete", path });
       continue;
     }
 
-    if (line.startsWith("*** Update File:")) {
-      const path = parseRequiredPath(line, "*** Update File:");
+    if (directiveLine.startsWith("*** Update File:")) {
+      const path = parseRequiredPath(directiveLine, "*** Update File:");
       assertUniquePath(path, seenPaths);
       index++;
       let moveTo: string | undefined;
@@ -276,7 +282,7 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
         if (chunkLines.length === 0) throw new Error(`Malformed Update File ${path}: chunk must contain at least one line.`);
         chunks.push({ changeContext, lines: chunkLines, endOfFile });
       }
-      if (chunks.length === 0) throw new Error(`Update File ${path} must contain at least one @@ chunk.`);
+      if (chunks.length === 0 && moveTo === undefined) throw new Error(`Update File ${path} must contain at least one @@ chunk.`);
       files.push({ operation: "update", path, ...(moveTo === undefined ? {} : { moveTo }), chunks });
       continue;
     }
@@ -638,6 +644,7 @@ async function buildMutationPlans(
   const { cwd } = resolveToolWorkdir(options.workdir, options.cwd ?? process.cwd());
   const resolved = patch.files.map((file) => ({ file, absolutePath: resolveToCwd(file.path, cwd) }));
   const seenAbsolutePaths = new Map<string, string>();
+  const addPaths = new Map<string, string>();
   for (const item of resolved) {
     const key = mutationPathKey(item.absolutePath);
     const previous = seenAbsolutePaths.get(key);
@@ -645,6 +652,19 @@ async function buildMutationPlans(
       throw new Error(`Duplicate resolved patch path: ${previous} and ${item.file.path}.`);
     }
     seenAbsolutePaths.set(key, item.file.path);
+    if (item.file.operation === "add") addPaths.set(key, item.file.path);
+  }
+  for (const item of resolved) {
+    if (item.file.operation !== "add") continue;
+    const key = mutationPathKey(item.absolutePath);
+    for (let index = 1; index < key.length; index++) {
+      const isSeparator = key[index] === "/" || (process.platform === "win32" && key[index] === "\\");
+      if (!isSeparator) continue;
+      const ancestor = addPaths.get(key.slice(0, index));
+      if (ancestor !== undefined) {
+        throw new Error(`Conflicting Add File paths: ${ancestor} cannot be an ancestor of ${item.file.path}.`);
+      }
+    }
   }
 
   const plans: MutationPlan[] = [];

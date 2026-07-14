@@ -130,6 +130,38 @@ describe("apply_patch parser", () => {
       .toThrow(/start with/);
   });
 
+  it("accepts padded file headers without reclassifying update context", () => {
+    // Intent: Codex permits cosmetic whitespace around top-level hunk headers,
+    // while a single leading space inside Update remains a context marker.
+    const parsed = parseApplyPatch(patch(
+      "  *** Add File: add.txt  ",
+      "+added",
+      "\t*** Delete File: delete.txt\t",
+      "  *** Update File: update.txt  ",
+      "@@",
+      " *** Add File: literal context",
+      "-old",
+      "+new",
+    ));
+    expect(parsed.files).toEqual([
+      { operation: "add", path: "add.txt", lines: ["added"] },
+      { operation: "delete", path: "delete.txt" },
+      {
+        operation: "update",
+        path: "update.txt",
+        chunks: [{
+          changeContext: undefined,
+          lines: [
+            { kind: "context", text: "*** Add File: literal context" },
+            { kind: "delete", text: "old" },
+            { kind: "add", text: "new" },
+          ],
+          endOfFile: false,
+        }],
+      },
+    ]);
+  });
+
   it("accepts CRLF/CR patches and quoted or unquoted heredoc wrappers", () => {
     // Intent: shell-shaped model output and Windows transports should reach the
     // same parser without leaking carriage returns into patch content.
@@ -188,10 +220,15 @@ describe("apply_patch parser", () => {
     expect(() => parseApplyPatch(input)).toThrow(expected);
   });
 
-  it("parses Move for compatibility but rejects it before filesystem work", async () => {
+  it.each([
+    ["move-only", patch("*** Update File: old.txt", "*** Move to: new.txt")],
+    ["move with update chunks", patch("*** Update File: old.txt", "*** Move to: new.txt", "@@", "-old", "+new")],
+  ])("parses %s for compatibility but rejects it before filesystem work", async (_name, input) => {
+    // Intent: the Codex grammar permits a move without content chunks, but all
+    // Move forms remain an execution-level unsupported operation in pi-base.
     const root = await createRoot();
     await put(root, "old.txt", "old\n");
-    const input = patch("*** Update File: old.txt", "*** Move to: new.txt", "@@", "-old", "+new");
+    expect(parseApplyPatch(input).files[0]).toMatchObject({ operation: "update", path: "old.txt", moveTo: "new.txt" });
     await expect(executeApplyPatch(input, { cwd: root })).rejects.toThrow(/Move operations are not supported/);
     expect(await readFile(join(root, "old.txt"), "utf8")).toBe("old\n");
   });
@@ -576,9 +613,46 @@ describe("apply_patch filesystem execution", () => {
     expect(await exists(join(root, "absolute.txt"))).toBe(false);
   });
 
-  it("treats Windows-resolved paths case-insensitively when checking duplicates", async () => {
-    // Intent: two spellings of the same ordinary Windows path must not become
-    // separate plans that can partially commit against one file.
+  it.each([
+    ["parent first", ["tree", "tree/child.txt"]],
+    ["child first", ["tree/child.txt", "tree"]],
+  ] as const)("rejects hierarchical Add paths before mutation when the %s", async (_name, paths) => {
+    // Intent: every Add target is a file, so one Add cannot also be a directory
+    // needed by another Add; this deterministic conflict belongs in preflight.
+    const root = await createRoot();
+    const committed: string[] = [];
+    const failed: string[] = [];
+    await expect(executeApplyPatch(patch(
+      `*** Add File: ${paths[0]}`,
+      "+first",
+      `*** Add File: ${paths[1]}`,
+      "+second",
+    ), {
+      cwd: root,
+      onCommitted: (file) => { committed.push(file.path); },
+      onCommitFailed: (file) => { failed.push(file.path); },
+    })).rejects.toThrow(/Conflicting Add File paths/);
+    expect(committed).toEqual([]);
+    expect(failed).toEqual([]);
+    expect(await exists(join(root, "tree"))).toBe(false);
+  });
+
+  it("does not confuse a path-component prefix with an Add ancestor", async () => {
+    // Intent: ancestor detection must use path boundaries, not raw string prefixes.
+    const root = await createRoot();
+    await executeApplyPatch(patch(
+      "*** Add File: tree",
+      "+file",
+      "*** Add File: tree-other/child.txt",
+      "+child",
+    ), { cwd: root });
+    expect(await readFile(join(root, "tree"), "utf8")).toBe("file\n");
+    expect(await readFile(join(root, "tree-other/child.txt"), "utf8")).toBe("child\n");
+  });
+
+  it("treats Windows-resolved paths case-insensitively when checking conflicts", async () => {
+    // Intent: Windows aliases must not become separate plans that can partially
+    // commit against either the same file or a case-varied ancestor path.
     const root = await createRoot();
     const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
@@ -589,6 +663,12 @@ describe("apply_patch filesystem execution", () => {
         `*** Add File: ${root}/case.txt`,
         "+two",
       ), { cwd: root })).rejects.toThrow(/Duplicate resolved patch path/);
+      await expect(executeApplyPatch(patch(
+        `*** Add File: ${root}/Parent`,
+        "+one",
+        `*** Add File: ${root}/parent/child.txt`,
+        "+two",
+      ), { cwd: root })).rejects.toThrow(/Conflicting Add File paths/);
     } finally {
       if (descriptor) Object.defineProperty(process, "platform", descriptor);
     }

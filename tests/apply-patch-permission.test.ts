@@ -62,7 +62,7 @@ describe("apply_patch permission integration", () => {
 
     const writeOperations = await registry.getTool("apply_patch").execute("write-ops", {
       workdir: root,
-      patchText: patch("*** Add File: add.txt", "+added", "*** Delete File: delete.txt"),
+      patchText: patch("  *** Add File: add.txt  ", "+added", "\t*** Delete File: delete.txt\t"),
     }, undefined, undefined, { cwd: root, hasUI: false });
     expect(writeOperations.isError).not.toBe(true);
     expect(await readFile(join(root, "add.txt"), "utf8")).toBe("added\n");
