@@ -407,14 +407,17 @@ export function registerAgentSupport(
     const selectedTools = event.systemPromptOptions.selectedTools ?? pi.getActiveTools();
     const allSkills = event.systemPromptOptions.skills ?? [];
     const visibleSkills = skillsRenderableInPrompt(filterVisibleSkills(allSkills, activeAgent.skills));
+    const customPrompt = resolveCustomPrompt(activeAgent, event.systemPromptOptions.customPrompt);
     const systemPrompt = buildAgentSystemPrompt(
       {
         ...event.systemPromptOptions,
-        customPrompt: resolveCustomPrompt(activeAgent, event.systemPromptOptions.customPrompt),
+        customPrompt,
         selectedTools,
         skills: visibleSkills,
       },
       event.systemPrompt,
+      allSkills,
+      activeAgent.skills !== undefined,
     );
 
     const guide = [options.baseToolGuide, buildSubagentSection(activeAgent, selectedTools)]
@@ -584,13 +587,25 @@ function resolveCustomPrompt(agent: AgentDefinition, fallbackCustomPrompt: strin
  * `formatEnvBlock` so the model sees one consistent envelope regardless of body source.
  *
  * When we reuse upstream's prebuilt prompt as the body, we first strip its own trailing
- * date/cwd lines (`stripUpstreamEnvInfo`) so the final prompt has exactly one env section.
+ * date/cwd lines (`stripUpstreamEnvInfo`) so the final prompt has exactly one env section. An
+ * explicit agent skills allowlist also replaces upstream's already-rendered skill section.
  */
-function buildAgentSystemPrompt(options: BuildSystemPromptOptions, fallbackSystemPrompt: string): string {
+function buildAgentSystemPrompt(
+  options: BuildSystemPromptOptions,
+  fallbackSystemPrompt: string,
+  fallbackSkills: Skill[],
+  replaceFallbackSkills: boolean,
+): string {
   const customPrompt = options.customPrompt?.trim();
-  const body = customPrompt
+  let body = customPrompt
     ? buildCustomPromptBody(customPrompt, options)
     : stripUpstreamEnvInfo(fallbackSystemPrompt);
+  if (!customPrompt && replaceFallbackSkills) {
+    const upstreamSkillsSection = formatSkillsForPrompt(fallbackSkills);
+    if (upstreamSkillsSection) body = body.replace(upstreamSkillsSection, "");
+    const canReadSkills = !options.selectedTools || options.selectedTools.includes("read");
+    if (canReadSkills) body += formatSkillsForPrompt(options.skills ?? []);
+  }
   if (!options.cwd) return body;
   return body + formatEnvBlock(options.cwd);
 }
@@ -657,7 +672,7 @@ function formatEnvBlock(cwd: string): string {
  * intent (normalize body → then `formatEnvBlock` appends the envelope) is explicit.
  */
 function stripUpstreamEnvInfo(prompt: string): string {
-  return prompt.replace(/\nCurrent date: \S+\nCurrent working directory: \S+$/, "");
+  return prompt.replace(/\r?\nCurrent date: [^\r\n]+\r?\nCurrent working directory: [^\r\n]+$/, "");
 }
 
 function loadAgentCatalog(): AgentCatalog {

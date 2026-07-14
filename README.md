@@ -28,10 +28,12 @@
 ### 安装
 
 ```bash
-# 作为 Pi package 安装（推荐，支持自动加载和 /reload）
-# 或从源码入口启动：
+# 作为 Pi package 安装（推荐，支持自动加载、/reload 和 task 子 agent）
+# 或仅从源码入口启动：
 pi -e /path/to/pi-base/index.ts
 ```
+
+`pi -e` 只把源码扩展加载到当前 session；`task` 创建的默认 Pi 子 session 不继承该 flag。需要使用 `task` 时，必须通过 Pi package（推荐）或持久扩展配置让父子 session 从同一加载路径复用同一 `pi-base` 模块实例；否则会 fail-fast，而不会在进程级 registry/permission host 断开的情况下继续运行。若已配置相同路径但缓存曾被其他工作区刷新，请 reload 或重启父 session。
 
 ### 启动 Agent 选择
 
@@ -84,7 +86,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 </task>
 ```
 
-并发限制：`subagent.maxConcurrency`（单父 session）+ `subagent.maxTotalConcurrency`（整棵 delegation tree）。
+并发限制：`subagent.maxConcurrency`（单父 session）+ `subagent.maxTotalConcurrency`（整棵 delegation tree）。从 `pi -e` 源码模式启动时，子 session 仍须从持久配置复用父 session 的同一 `pi-base` 模块实例，否则会明确报错并安全退出。
 
 ### MCP 工具
 
@@ -251,7 +253,9 @@ Agent 正文（覆盖 system prompt）
 | 匹配顺序 | 先检查全局 `*`，再检查 tool 专属规则；最后匹配的规则生效 |
 | `ask` | 有 UI 弹出 Yes/No；无 UI headless subagent 转发给 root UI；其他无 UI 场景直接拦截 |
 | 路径类匹配 | 同时匹配原始路径、相对 workdir 路径、相对项目根路径、绝对路径 |
-| bash 匹配 | 识别 `&&`/`||`/`|`/`;`/换行 分割的顶层 command 段；不展开变量、不解析 `bash -c`/命令替换/eval 等；无法安全分析时未命中 deny 则退回 ask |
+| bash 匹配 | 识别 `&&`/`||`/`|`/`;`/换行 分割的顶层 command 段；不展开变量；动态命令头、命令头/前置重定向、复合/控制流语法、命令替换、可展开 heredoc、process substitution、shell/eval/source 动态执行，以及 command/env/exec/nohup 执行包装器无法保守分析时，显式整条命令 deny 仍 deny，否则退回 ask |
+
+`permission` 是用于防误操作的词法规则，不是安全沙箱。它不会执行完整 shell 解析或提供文件系统隔离；文件路径检查也不防御 symlink 穿透或 TOCTOU 竞态。需要强隔离时应在 Pi 之外使用容器、受限账户或其他系统级沙箱。
 
 配置按 cwd 缓存在当前进程中；修改全局或项目配置后执行 `/reload` 才会生效。
 
@@ -306,8 +310,7 @@ Agent 正文（覆盖 system prompt）
     "tools": ["bash", "grep", "find", "read", "write", "edit"],
     "retainedUserMessageRounds": 2,
     "retainedAssistantTurns": 4,
-    "enabledProviders": ["openai"],
-    "disabledProviders": []
+    "enabledProviders": ["openai"]
   }
 }
 ```
@@ -345,7 +348,7 @@ Agent 正文（覆盖 system prompt）
 | `maxConcurrency` | 10 | 单父 session 直接子 agent 并发上限；超限直接报错 |
 | `maxTotalConcurrency` | 关闭 | 整棵 delegation tree 并发上限；超限即使父 session 未达 maxConcurrency 也报错 |
 | `idleTimeoutMs` | 关闭 | 无 assistant/session 进展时的空闲超时（tool 执行中不触发）；计时 >0 时生效 |
-| `maxTurns` | 50 | 达到此 assistant turn 数后，每轮注入"立即收尾"提示直到子 agent 结束 |
+| `maxTurns` | 50 | 达到此 assistant turn 数后一次性注入软收尾提示；不会强制终止子 agent |
 
 root UI 的 editor-adjacent widget 展示运行中 subagent 的 parent/child 树、turn/tool call 计数和最近活动；历史 `task` tool block 保持稳定。`/subagent` 打开运行中 session 选择器，`/subagent <session-id-or-unique-prefix>` 可直接只读查看运行中或已持久化结束的 session transcript。
 

@@ -48,6 +48,28 @@ describe("runSubagent", () => {
     expect(node.rootSessionId).toBe("parent");
   });
 
+  it("passes the current child depth when resuming through a new delegation layer", async () => {
+    // Intent: resumed sessions must persist the caller's latest delegation depth rather than
+    // inheriting the depth recorded by the layer that originally created them.
+    const resume = vi.fn(async () => handle("child-resumed", { report: "resumed" }));
+    const factory: SubagentSessionFactory = {
+      spawn: async () => handle("unused", {}),
+      resume,
+    };
+
+    await runSubagent(
+      fakeCtx("new-parent"),
+      { agentType: "reviewer", prompt: "continue", sessionId: "child-resumed", childDepth: 4 },
+      factory,
+    );
+
+    expect(resume).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "child-resumed",
+      agentType: "reviewer",
+      childDepth: 4,
+    }));
+  });
+
   it("publishes only the read-only view while the runner owns the live session", async () => {
     // Intent: UI observers may inspect a running child, but the source must disappear once runner cleanup begins.
     let releasePrompt: (() => void) | undefined;

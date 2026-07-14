@@ -25,18 +25,18 @@ export function createFindToolDefinition(cwd: string): any {
 
         let settled = false;
         let aborted = false;
-        const settle = (fn: () => void) => {
+        const settle = (fn: () => void, keepTermination = false) => {
           if (settled) return;
           settled = true;
-          cleanup();
+          cleanup(keepTermination);
           fn();
         };
-        let cleanup = () => undefined;
+        let cleanup = (_keepTermination?: boolean) => undefined;
 
         const onAbort = () => {
           aborted = true;
           terminator?.terminate();
-          settle(() => reject(new Error("Operation aborted")));
+          settle(() => reject(new Error("Operation aborted")), true);
         };
         signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -72,10 +72,10 @@ export function createFindToolDefinition(cwd: string): any {
             const lines: string[] = [];
             let stderr = "";
 
-            cleanup = () => {
+            cleanup = (keepTermination = false) => {
               rl.close();
               signal?.removeEventListener("abort", onAbort);
-              terminator?.cleanup();
+              if (!keepTermination) terminator?.cleanup();
             };
 
             child.stderr?.on("data", (chunk) => {
@@ -89,6 +89,7 @@ export function createFindToolDefinition(cwd: string): any {
             });
             child.on("close", (code) => {
               if (aborted) {
+                terminator?.cleanup();
                 settle(() => reject(new Error("Operation aborted")));
                 return;
               }

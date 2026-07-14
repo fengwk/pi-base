@@ -1,10 +1,17 @@
 import type { Static } from "@sinclair/typebox";
-import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { defineTool, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { TASK_TOOL_NAME } from "./constants.js";
 import { readDepth, readRootSessionId } from "./depth.js";
 import { subagentRegistry } from "./registry.js";
-import { formatRunResult, runSubagent, type RunResult, type SubagentSessionFactory } from "./runner.js";
+import {
+  formatRunResult,
+  PI_BASE_MODULE_INSTANCE_MARKER,
+  PI_BASE_MODULE_INSTANCE_TOKEN,
+  runSubagent,
+  type RunResult,
+  type SubagentSessionFactory,
+} from "./runner.js";
 import { taskSchema } from "./schema.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
 import {
@@ -234,7 +241,7 @@ function renderFinalResult(
  * to `runSubagent`.
  */
 export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">, deps: SubagentTaskToolDeps): void {
-  pi.registerTool({
+  const tool = defineTool({
     name: TASK_TOOL_NAME,
     label: "Task",
     description: TASK_DESCRIPTION,
@@ -335,4 +342,6 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
       }
     },
   });
+  Object.defineProperty(tool, PI_BASE_MODULE_INSTANCE_MARKER, { value: PI_BASE_MODULE_INSTANCE_TOKEN });
+  pi.registerTool(tool);
 }

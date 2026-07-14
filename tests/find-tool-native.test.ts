@@ -20,6 +20,7 @@ afterEach(() => {
   delete process.env.PI_BASE_FAKE_FD_COUNT;
   delete process.env.PI_BASE_FAKE_FD_ROOT;
   delete process.env.PI_BASE_FAKE_FD_ARGS_FILE;
+  delete process.env.PI_BASE_FAKE_FD_PID_FILE;
 });
 
 async function installFakeFd(root: string): Promise<string> {
@@ -39,6 +40,10 @@ if (process.env.PI_BASE_FAKE_FD_ARGS_FILE) {
 }
 const mode = process.env.PI_BASE_FAKE_FD_MODE || "match";
 if (mode === "wait") {
+  setInterval(() => {}, 1000);
+} else if (mode === "ignore-term") {
+  process.on("SIGTERM", () => {});
+  fs.writeFileSync(process.env.PI_BASE_FAKE_FD_PID_FILE, String(process.pid));
   setInterval(() => {}, 1000);
 } else if (mode === "error") {
   const output = process.env.PI_BASE_FAKE_FD_OUTPUT || "";
@@ -64,6 +69,37 @@ if (mode === "wait") {
   );
   fakeToolState.fdPath = fdPath;
   return fdPath;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`process ${pid} did not exit within ${timeoutMs}ms`);
+}
+
+async function waitForPidFile(pidFile: string, timeoutMs: number): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return Number(await readFile(pidFile, "utf8"));
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error(`pid file was not written within ${timeoutMs}ms`);
 }
 
 describe("createFindToolDefinition native fd path", () => {
@@ -162,4 +198,31 @@ describe("createFindToolDefinition native fd path", () => {
     inFlight.abort();
     await expect(pending).rejects.toThrow("Operation aborted");
   });
+
+  it("keeps the default force-kill watchdog after cancellation rejects", async () => {
+    // Intent: callers should receive prompt cancellation while an fd that ignores SIGTERM is
+    // still guaranteed to die when the shared default SIGKILL window expires.
+    const root = await createTempWorkspace();
+    await installFakeFd(root);
+    const pidFile = join(root, "fd.pid");
+    process.env.PI_BASE_FAKE_FD_MODE = "ignore-term";
+    process.env.PI_BASE_FAKE_FD_PID_FILE = pidFile;
+    const controller = new AbortController();
+    const pending = createFindToolDefinition(root).execute("find-force-kill", { path: ".", pattern: "*" }, controller.signal);
+    let pid: number | undefined;
+
+    try {
+      pid = await waitForPidFile(pidFile, 2_000);
+      const abortedAt = Date.now();
+      controller.abort();
+      await expect(pending).rejects.toThrow("Operation aborted");
+      expect(Date.now() - abortedAt).toBeLessThan(1_000);
+
+      await waitForProcessExit(pid, 5_000);
+      expect(isProcessAlive(pid)).toBe(false);
+    } finally {
+      controller.abort();
+      if (pid !== undefined && isProcessAlive(pid)) process.kill(pid, "SIGKILL");
+    }
+  }, 8_000);
 });

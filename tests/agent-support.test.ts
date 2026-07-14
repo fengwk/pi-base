@@ -1109,8 +1109,11 @@ skills:
     }
   });
 
-  it("falls back to Pi's prebuilt prompt when no custom prompt source exists", async () => {
+  it("rebuilds filtered skills in Pi's prebuilt fallback and strips env tails with spaced cwd paths", async () => {
+    // Intent: when neither prompt source exists, explicit agent skills must still replace the
+    // upstream skill block, and a cwd containing spaces must not leave duplicate raw env lines.
     const root = await createTempWorkspace();
+    const spacedCwd = join(root, "project with spaces");
     const agentDir = await createTempWorkspace();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -1127,24 +1130,73 @@ skills:
       );
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
-      await registry.runCommand("agent", "skill-filter", { cwd: root });
+      await registry.runCommand("agent", "skill-filter", { cwd: spacedCwd });
 
+      const specSkill = makeSkill("spec", "Spec workflow");
+      const otherSkill = makeSkill("other", "Other workflow");
+      const upstreamSkills = formatSkillsForPrompt([specSkill, otherSkill]);
       const result = await registry.emit(
         "before_agent_start",
         {
-          systemPrompt: "Pi fallback prompt.",
+          systemPrompt: `Pi fallback prompt.${upstreamSkills}\nCurrent date: 2026-07-14\nCurrent working directory: ${spacedCwd}`,
           systemPromptOptions: {
-            cwd: root,
+            cwd: spacedCwd,
             selectedTools: ["read"],
-            skills: [makeSkill("spec", "Spec workflow")],
+            skills: [specSkill, otherSkill],
           },
         },
-        { cwd: root },
+        { cwd: spacedCwd },
       );
 
       expect(result.systemPrompt).toContain("Pi fallback prompt.");
-      expect(result.systemPrompt).not.toContain("<name>spec</name>");
+      expect(result.systemPrompt).toContain("<name>spec</name>");
+      expect(result.systemPrompt).not.toContain("<name>other</name>");
+      expect((result.systemPrompt.match(/The following skills provide specialized instructions/g) ?? [])).toHaveLength(1);
+      expect(result.systemPrompt).not.toContain("\nCurrent date: 2026-07-14\nCurrent working directory:");
+      expect((result.systemPrompt.match(/Current working directory:/g) ?? [])).toHaveLength(1);
+      expect(result.systemPrompt).toContain(`  Current working directory: ${spacedCwd}`);
       expect(result.systemPrompt).not.toContain("**Your tool usage:**");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("removes fallback skills for an empty allowlist but preserves upstream fallback when skills are omitted", async () => {
+    // Intent: `skills: []` is an explicit empty policy, while an omitted field must keep Pi's
+    // existing prebuilt skill section unchanged.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(agentDir, "no-skills.md", `---\nname: no-skills\nskills: []\n---\n`);
+      await writeAgentFile(agentDir, "inherit-skills.md", `---\nname: inherit-skills\n---\n`);
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const specSkill = makeSkill("spec", "Spec workflow");
+      const fallback = `Pi fallback.${formatSkillsForPrompt([specSkill])}`;
+
+      await registry.runCommand("agent", "no-skills", { cwd: root });
+      const removed = await registry.emit(
+        "before_agent_start",
+        { systemPrompt: fallback, systemPromptOptions: { cwd: root, selectedTools: ["read"], skills: [specSkill] } },
+        { cwd: root },
+      );
+      expect(removed.systemPrompt).not.toContain("<available_skills>");
+      expect(removed.systemPrompt).not.toContain("<name>spec</name>");
+
+      await registry.runCommand("agent", "inherit-skills", { cwd: root });
+      const inherited = await registry.emit(
+        "before_agent_start",
+        { systemPrompt: fallback, systemPromptOptions: { cwd: root, selectedTools: ["read"], skills: [specSkill] } },
+        { cwd: root },
+      );
+      expect(inherited.systemPrompt).toContain("<available_skills>");
+      expect(inherited.systemPrompt).toContain("<name>spec</name>");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

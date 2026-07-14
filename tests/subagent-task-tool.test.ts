@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerSubagentTaskTool, type SubagentTaskToolDeps } from "../src/subagent/task-tool.js";
-import { type SubagentSession, type SubagentSessionFactory } from "../src/subagent/runner.js";
+import {
+  PI_BASE_MODULE_INSTANCE_MARKER,
+  PI_BASE_MODULE_INSTANCE_TOKEN,
+  type SubagentSession,
+  type SubagentSessionFactory,
+} from "../src/subagent/runner.js";
 import { subagentRegistry, type SubagentNode } from "../src/subagent/registry.js";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, rootSessionEntryData } from "../src/subagent/depth.js";
 
@@ -58,6 +63,13 @@ const text = (r: { content: Array<{ text: string }> }): string => r.content.map(
 const render = (component: { render: (width: number) => string[] }): string => component.render(200).join("\n");
 
 describe("task tool", () => {
+  it("marks the definition with the owning pi-base module instance", () => {
+    // Intent: child session startup uses this non-enumerable identity marker to reject a second
+    // module copy whose process-local registries and permission hosts would be disconnected.
+    const tool = registerAndCapture(baseDeps()) as unknown as Record<PropertyKey, unknown>;
+    expect(tool[PI_BASE_MODULE_INSTANCE_MARKER]).toBe(PI_BASE_MODULE_INSTANCE_TOKEN);
+  });
+
   it("rejects missing required args", async () => {
     const tool = registerAndCapture(baseDeps());
     expect((await tool.execute("1", { subagent_type: "worker" }, undefined, undefined, ctx())).isError).toBe(true);

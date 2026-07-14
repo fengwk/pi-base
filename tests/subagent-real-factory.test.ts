@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { join } from "node:path";
+import { mkdtemp, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, rootSessionEntryData } from "../src/subagent/depth.js";
+import { PI_BASE_MODULE_INSTANCE_MARKER, PI_BASE_MODULE_INSTANCE_TOKEN } from "../src/subagent/runner.js";
+
+const CURRENT_PI_BASE_EXTENSION_ENTRY = resolve(fileURLToPath(new URL("../index.ts", import.meta.url)));
 
 const mocked = vi.hoisted(() => ({
   readdirSync: vi.fn(),
@@ -34,6 +40,18 @@ function fakeManager(sessionId = "child-session") {
     appendThinkingLevelChange: vi.fn(),
     buildSessionContext: vi.fn(() => ({ messages: [{}] })),
     getSessionId: () => sessionId,
+  };
+}
+
+function loadedExtensions(
+  resolvedPath = CURRENT_PI_BASE_EXTENSION_ENTRY,
+  moduleToken: object = PI_BASE_MODULE_INSTANCE_TOKEN,
+) {
+  return {
+    extensions: [{
+      resolvedPath,
+      tools: new Map([["task", { definition: { [PI_BASE_MODULE_INSTANCE_MARKER]: moduleToken } }]]),
+    }],
   };
 }
 
@@ -87,13 +105,13 @@ afterEach(() => {
 });
 
 describe("createRealSubagentFactory", () => {
-  it("persists agent/depth/root metadata before spawning an isolated child session", async () => {
-    // Intent: spawned children must carry enough persisted metadata for prompt
-    // rebuilding, depth limits, and root-owned permission relay.
+  it("persists agent/depth/root metadata before binding an isolated child session", async () => {
+    // Intent: after extension identity is verified, children must carry enough persisted metadata
+    // for prompt rebuilding, depth limits, and root-owned permission relay before session_start.
     const { createRealSubagentFactory, subagentSessionDir } = await import("../src/subagent/runner.js");
     const session = fakeSession();
     const manager = fakeManager("child-1");
-    mocked.createAgentSession.mockResolvedValue({ session });
+    mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
     mocked.sessionManagerCreate.mockReturnValue(manager);
 
     const ctx = fakeCtx("/work/repo", "parent-session", [
@@ -106,6 +124,7 @@ describe("createRealSubagentFactory", () => {
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(1, "pi-base-agent-state", { name: "worker" });
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(2, DEPTH_ENTRY, { depth: 3 });
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(3, ROOT_SESSION_ENTRY, { rootSessionId: "root-7" });
+    expect(manager.appendCustomEntry.mock.invocationCallOrder[0]).toBeLessThan(session.bindExtensions.mock.invocationCallOrder[0]);
     expect(session.bindExtensions).toHaveBeenCalledWith({});
     expect(session.prompt).not.toHaveBeenCalled();
     await child.prompt("go");
@@ -122,6 +141,79 @@ describe("createRealSubagentFactory", () => {
     expect(session.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a symlinked path that would load a second pi-base module instance", async () => {
+    // Intent: Pi/Jiti keys its module cache by load-path string. Even when a symlink reaches this
+    // checkout, accepting it would split process-local registries and permission hosts.
+    const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
+    const root = await mkdtemp(join(tmpdir(), "pi-base-extension-identity-"));
+    const checkoutLink = join(root, "pi-base-link");
+    await symlink(dirname(CURRENT_PI_BASE_EXTENSION_ENTRY), checkoutLink, process.platform === "win32" ? "junction" : "dir");
+    const session = fakeSession();
+    const manager = fakeManager("symlinked-child");
+    mocked.createAgentSession.mockResolvedValue({
+      session,
+      extensionsResult: loadedExtensions(join(checkoutLink, "index.ts"), {}),
+    });
+    mocked.sessionManagerCreate.mockReturnValue(manager);
+
+    await expect(createRealSubagentFactory().spawn({
+      ctx: fakeCtx(),
+      agentType: "worker",
+      childDepth: 2,
+    })).rejects.toThrow(/same load path as a persistent Pi extension/);
+
+    expect(manager.appendCustomEntry).not.toHaveBeenCalled();
+    expect(session.bindExtensions).not.toHaveBeenCalled();
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["no pi-base extension", loadedExtensions().extensions.slice(0, 0)],
+    ["the same path from a reloaded module instance", loadedExtensions(CURRENT_PI_BASE_EXTENSION_ENTRY, {}).extensions],
+    ["the current marker at a different load path", loadedExtensions("/old/pi-base/index.ts").extensions],
+  ])("fails fast and disposes when the child loader contains %s", async (_caseName, extensions) => {
+    // Intent: source-only or stale package discovery must never run a child without this exact
+    // pi-base module instance, and startup failure must release the partially-created session.
+    const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
+    const session = fakeSession();
+    const manager = fakeManager("unbound-child");
+    mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: { extensions } });
+    mocked.sessionManagerCreate.mockReturnValue(manager);
+
+    const factory = createRealSubagentFactory();
+    await expect(factory.spawn({ ctx: fakeCtx(), agentType: "worker", childDepth: 2 })).rejects.toThrow(
+      /Register the same load path as a persistent Pi extension.*source-only `pi -e`/,
+    );
+    expect(manager.appendCustomEntry).not.toHaveBeenCalled();
+    expect(session.bindExtensions).not.toHaveBeenCalled();
+    expect(session.extensionRunner.emit).not.toHaveBeenCalled();
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mutate a persisted session when resume fails the extension identity check", async () => {
+    // Intent: fail-fast must leave resumable agent/depth/model metadata unchanged when the child
+    // cannot load this pi-base checkout.
+    const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
+    const session = fakeSession();
+    const manager = fakeManager("guarded-resume");
+    mocked.readdirSync.mockReturnValue(["agent_guarded-resume.jsonl"]);
+    mocked.sessionManagerOpen.mockReturnValue(manager);
+    mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: { extensions: [] } });
+
+    await expect(createRealSubagentFactory().resume({
+      ctx: fakeCtx(),
+      sessionId: "guarded-resume",
+      agentType: "reviewer",
+      childDepth: 4,
+    })).rejects.toThrow(/Register the same load path as a persistent Pi extension/);
+
+    expect(manager.appendCustomEntry).not.toHaveBeenCalled();
+    expect(manager.appendModelChange).not.toHaveBeenCalled();
+    expect(manager.appendThinkingLevelChange).not.toHaveBeenCalled();
+    expect(session.bindExtensions).not.toHaveBeenCalled();
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+  });
+
   it("creates a new child with the target agent model and thinking level before binding", async () => {
     // Intent: a new subagent must not be initialized with the parent model and switched later.
     const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
@@ -130,7 +222,7 @@ describe("createRealSubagentFactory", () => {
     const ctx = fakeCtx();
     ctx.modelRegistry.find.mockReturnValue(targetModel);
     ctx.modelRegistry.hasConfiguredAuth.mockReturnValue(true);
-    mocked.createAgentSession.mockResolvedValue({ session });
+    mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
     mocked.sessionManagerCreate.mockReturnValue(fakeManager("configured-child"));
 
     const factory = createRealSubagentFactory({
@@ -155,7 +247,7 @@ describe("createRealSubagentFactory", () => {
     const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
     const session = fakeSession();
     session.bindExtensions.mockRejectedValueOnce(new Error("binding failed"));
-    mocked.createAgentSession.mockResolvedValue({ session });
+    mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
     mocked.sessionManagerCreate.mockReturnValue(fakeManager("child-failed"));
 
     const factory = createRealSubagentFactory();
@@ -183,7 +275,7 @@ describe("createRealSubagentFactory", () => {
     const ctx = fakeCtx(cwd, "parent-2");
     ctx.modelRegistry.find.mockReturnValue(targetModel);
     ctx.modelRegistry.hasConfiguredAuth.mockReturnValue(true);
-    mocked.createAgentSession.mockResolvedValue({ session });
+    mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
     mocked.sessionManagerOpen.mockReturnValue(manager);
 
     const factory = createRealSubagentFactory({
@@ -192,13 +284,14 @@ describe("createRealSubagentFactory", () => {
         thinkingLevel: "high",
       }),
     });
-    const child = await factory.resume({ ctx, sessionId: "resumed-1", agentType: "reviewer" });
+    const child = await factory.resume({ ctx, sessionId: "resumed-1", agentType: "reviewer", childDepth: 4 });
 
     expect(mocked.sessionManagerOpen).toHaveBeenCalledWith(join(legacyDir, "agent_resumed-1.jsonl"));
     expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(1, "pi-base-agent-state", { name: "reviewer" });
+    expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(2, DEPTH_ENTRY, { depth: 4 });
     expect(manager.appendModelChange).toHaveBeenCalledWith("target-provider", "target-model");
     expect(manager.appendThinkingLevelChange).toHaveBeenCalledWith("high");
-    expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(2, ROOT_SESSION_ENTRY, { rootSessionId: "parent-2" });
+    expect(manager.appendCustomEntry).toHaveBeenNthCalledWith(3, ROOT_SESSION_ENTRY, { rootSessionId: "parent-2" });
     expect(mocked.createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
       model: targetModel,
       thinkingLevel: "high",
@@ -214,7 +307,7 @@ describe("createRealSubagentFactory", () => {
     mocked.readdirSync.mockReturnValue([]);
 
     const factory = createRealSubagentFactory();
-    await expect(factory.resume({ ctx: fakeCtx(), sessionId: "missing", agentType: "worker" })).rejects.toThrow(
+    await expect(factory.resume({ ctx: fakeCtx(), sessionId: "missing", agentType: "worker", childDepth: 2 })).rejects.toThrow(
       'subagent session "missing" not found',
     );
   });

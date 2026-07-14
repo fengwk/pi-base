@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   buildSessionContext,
   createAgentSession,
@@ -16,8 +17,13 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { AGENT_STATE_ENTRY, type AgentRuntimeConfig } from "../agent-support.js";
+import { TASK_TOOL_NAME } from "./constants.js";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, readRootSessionId, rootSessionEntryData } from "./depth.js";
 import { subagentRegistry, type SubagentStatus } from "./registry.js";
+
+/** Marks tools registered by this exact in-process pi-base module instance. */
+export const PI_BASE_MODULE_INSTANCE_MARKER = Symbol.for("pi-base.module-instance");
+export const PI_BASE_MODULE_INSTANCE_TOKEN = Object.freeze({});
 
 export interface RunResult {
   sessionId: string;
@@ -79,7 +85,7 @@ export interface SubagentSession {
 
 export interface SubagentSessionFactory {
   spawn: (params: { ctx: ExtensionContext; agentType: string; childDepth: number }) => Promise<SubagentSession>;
-  resume: (params: { ctx: ExtensionContext; sessionId: string; agentType: string }) => Promise<SubagentSession>;
+  resume: (params: { ctx: ExtensionContext; sessionId: string; agentType: string; childDepth: number }) => Promise<SubagentSession>;
 }
 
 export interface SubagentProgressUpdate {
@@ -298,7 +304,7 @@ export async function runSubagent(
   let handle: SubagentSession;
   try {
     handle = args.sessionId
-      ? await factory.resume({ ctx, sessionId: args.sessionId, agentType: args.agentType })
+      ? await factory.resume({ ctx, sessionId: args.sessionId, agentType: args.agentType, childDepth: args.childDepth })
       : await factory.spawn({ ctx, agentType: args.agentType, childDepth: args.childDepth });
   } catch (error) {
     return { sessionId: args.sessionId ?? "", state: "error", error: describeError(error) };
@@ -761,6 +767,31 @@ function resolveAgentRuntime(
   };
 }
 
+const CURRENT_PI_BASE_EXTENSION_ENTRY = resolve(fileURLToPath(new URL("../../index.ts", import.meta.url)));
+
+type LoadedExtensionIdentity = {
+  resolvedPath: string;
+  tools?: { get: (name: string) => { definition?: unknown } | undefined };
+};
+
+function hasCurrentPiBaseExtension(extensionsResult: { extensions: LoadedExtensionIdentity[] }): boolean {
+  // Path equality is insufficient: Pi/Jiti can reload the same file into a second module instance
+  // after cache invalidation or through a symlink. The task-tool marker proves that child and parent
+  // share the process-local registries and permission hosts owned by this exact module instance.
+  return extensionsResult.extensions.some((extension) => {
+    if (resolve(extension.resolvedPath) !== CURRENT_PI_BASE_EXTENSION_ENTRY) return false;
+    const definition = extension.tools?.get(TASK_TOOL_NAME)?.definition as Record<PropertyKey, unknown> | undefined;
+    return definition?.[PI_BASE_MODULE_INSTANCE_MARKER] === PI_BASE_MODULE_INSTANCE_TOKEN;
+  });
+}
+
+function missingCurrentPiBaseExtensionError(): Error {
+  return new Error(
+    `Cannot start the subagent because its resource loader did not reuse this pi-base module instance (${CURRENT_PI_BASE_EXTENSION_ENTRY}). `
+      + "Register the same load path as a persistent Pi extension (normally by installing it as a Pi package); source-only `pi -e` loading is not inherited by child sessions. If that path is already configured, reload or restart the parent session so both sessions share one module instance.",
+  );
+}
+
 /**
  * Default factory: subagent sessions are ordinary persistent pi sessions in the isolated dir,
  * created in-process via `createAgentSession`. The target agent's model/thinking configuration is
@@ -773,8 +804,9 @@ export function createRealSubagentFactory(options: RealSubagentFactoryOptions = 
     sessionId: string,
     ctx: ExtensionContext,
     runtime: ResolvedAgentRuntime,
+    prepareSession: () => void,
   ): Promise<SubagentSession> => {
-    const { session } = await createAgentSession({
+    const { session, extensionsResult } = await createAgentSession({
       cwd: ctx.cwd,
       sessionManager: sm,
       model: runtime.model,
@@ -783,17 +815,21 @@ export function createRealSubagentFactory(options: RealSubagentFactoryOptions = 
     });
     const liveView = createLiveViewSource(session, ctx.cwd);
     let disposed = false;
+    let extensionBindingStarted = false;
     const dispose = async () => {
       if (disposed) return;
       disposed = true;
       try {
-        await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+        if (extensionBindingStarted) await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       } finally {
         liveView.dispose();
         session.dispose();
       }
     };
     try {
+      if (!hasCurrentPiBaseExtension(extensionsResult)) throw missingCurrentPiBaseExtensionError();
+      prepareSession();
+      extensionBindingStarted = true;
       await session.bindExtensions({});
     } catch (error) {
       await dispose().catch(() => undefined);
@@ -815,27 +851,30 @@ export function createRealSubagentFactory(options: RealSubagentFactoryOptions = 
     async spawn({ ctx, agentType, childDepth }) {
       const runtime = resolveAgentRuntime(ctx, agentType, options);
       const sm = SessionManager.create(ctx.cwd, subagentSessionDir(ctx.cwd));
-      sm.appendCustomEntry(AGENT_STATE_ENTRY, { name: agentType });
-      sm.appendCustomEntry(DEPTH_ENTRY, { depth: childDepth });
-      const rootSessionId = readRootSessionId(ctx);
-      if (rootSessionId) sm.appendCustomEntry(ROOT_SESSION_ENTRY, rootSessionEntryData(rootSessionId));
-      return build(sm, sm.getSessionId(), ctx, runtime);
+      return build(sm, sm.getSessionId(), ctx, runtime, () => {
+        sm.appendCustomEntry(AGENT_STATE_ENTRY, { name: agentType });
+        sm.appendCustomEntry(DEPTH_ENTRY, { depth: childDepth });
+        const rootSessionId = readRootSessionId(ctx);
+        if (rootSessionId) sm.appendCustomEntry(ROOT_SESSION_ENTRY, rootSessionEntryData(rootSessionId));
+      });
     },
-    async resume({ ctx, sessionId, agentType }) {
+    async resume({ ctx, sessionId, agentType, childDepth }) {
       const runtime = resolveAgentRuntime(ctx, agentType, options);
       const path = findSubagentSessionPath(ctx.cwd, sessionId);
       if (!path) throw new Error(`subagent session "${sessionId}" not found`);
       const sm = SessionManager.open(path);
-      // Last agent-state/model/thinking entries win when resuming with a different agent type.
-      sm.appendCustomEntry(AGENT_STATE_ENTRY, { name: agentType });
       const hasExistingMessages = sm.buildSessionContext().messages.length > 0;
-      if (hasExistingMessages && runtime.configuredModel) {
-        sm.appendModelChange(runtime.configuredModel.provider, runtime.configuredModel.modelId);
-      }
-      if (hasExistingMessages && runtime.thinkingLevel) sm.appendThinkingLevelChange(runtime.thinkingLevel);
-      const rootSessionId = readRootSessionId(ctx);
-      if (rootSessionId) sm.appendCustomEntry(ROOT_SESSION_ENTRY, rootSessionEntryData(rootSessionId));
-      return build(sm, sm.getSessionId(), ctx, runtime);
+      return build(sm, sm.getSessionId(), ctx, runtime, () => {
+        // Last agent-state/depth/model/thinking entries win when resuming in a new delegation layer.
+        sm.appendCustomEntry(AGENT_STATE_ENTRY, { name: agentType });
+        sm.appendCustomEntry(DEPTH_ENTRY, { depth: childDepth });
+        if (hasExistingMessages && runtime.configuredModel) {
+          sm.appendModelChange(runtime.configuredModel.provider, runtime.configuredModel.modelId);
+        }
+        if (hasExistingMessages && runtime.thinkingLevel) sm.appendThinkingLevelChange(runtime.thinkingLevel);
+        const rootSessionId = readRootSessionId(ctx);
+        if (rootSessionId) sm.appendCustomEntry(ROOT_SESSION_ENTRY, rootSessionEntryData(rootSessionId));
+      });
     },
   };
 }

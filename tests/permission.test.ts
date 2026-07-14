@@ -585,7 +585,47 @@ describe("permission guard", () => {
     expect(getText(result)).toContain("Permission denied for bash");
   });
 
-  it("does not inspect runtime bash content inside static shell wrappers", async () => {
+  it("applies command rules through static executable quoting, escaping, and paths", async () => {
+    // Intent: shell quote removal and executable paths are static; a deny rule for `rm *` must
+    // still match them without requiring a full shell expansion engine.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: {
+        bash: {
+          "*": "allow",
+          "rm *": "deny",
+        },
+      },
+    });
+
+    const registry = createToolRegistry({ hasUI: true });
+    piBaseExtension(registry.pi as any);
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "should not run" }] }) }),
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    for (const [toolCallId, command] of [
+      ["quoted-1", "r'm' -rf tmp"],
+      ["quoted-2", "'r''m' -rf tmp"],
+      ["escaped", "r\\m -rf tmp"],
+      ["absolute", "/bin/rm -rf tmp"],
+    ] as const) {
+      const result = await registry.getTool("bash").execute(
+        toolCallId,
+        { command, workdir: "." },
+        undefined,
+        undefined,
+        { cwd: root },
+      );
+      expect(result.isError).toBe(true);
+      expect(getText(result)).toContain("Permission denied for bash");
+    }
+  });
+
+  it("asks for dynamic shell execution even when the visible wrapper is allowlisted", async () => {
+    // Intent: shell wrappers and command substitutions are unsupported lexical surfaces, so they
+    // must ask unless an explicit rule denies the complete command string.
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
       permission: {
@@ -594,6 +634,7 @@ describe("permission guard", () => {
           "rm *": "deny",
           "bash *": "allow",
           "echo *": "allow",
+          "eval \"$NEXT_COMMAND\"": "deny",
         },
       },
     });
@@ -629,9 +670,32 @@ describe("permission guard", () => {
       { cwd: root },
     );
     expect(substitution.isError).not.toBe(true);
-    expect(prompts).toHaveLength(0);
+    expect(prompts).toHaveLength(2);
+
+    const literal = await registry.getTool("bash").execute(
+      "3",
+      { command: "echo '$(rm -rf tmp)'", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(literal.isError).not.toBe(true);
+    expect(prompts).toHaveLength(2);
+
+    const denied = await registry.getTool("bash").execute(
+      "4",
+      { command: "eval \"$NEXT_COMMAND\"", workdir: "." },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(denied.isError).toBe(true);
+    expect(getText(denied)).toContain("Permission denied for bash");
+    expect(prompts).toHaveLength(2);
   });
-  it("does not treat heredoc body text as separate bash permission commands", async () => {
+  it("asks for dynamic heredocs, substitutions, command heads, compounds, redirections, and launchers", async () => {
+    // Intent: dynamic execution hidden inside an allowlisted outer surface must ask, while a
+    // quoted heredoc delimiter keeps the same body literal and needs no confirmation.
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
       permission: {
@@ -639,6 +703,11 @@ describe("permission guard", () => {
           "*": "ask",
           "rm *": "deny",
           "cat *": "allow",
+          "diff *": "allow",
+          "env *": "allow",
+          "$CMD *": "allow",
+          "(rm *": "allow",
+          ">/dev/null *": "allow",
         },
       },
     });
@@ -657,16 +726,34 @@ describe("permission guard", () => {
     });
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
-    const result = await registry.getTool("bash").execute(
+    const literalHeredoc = await registry.getTool("bash").execute(
       "1",
-      { command: "cat <<'EOF'\nrm -rf tmp\nEOF", workdir: "." },
+      { command: "cat <<'EOF'\n$(rm -rf tmp)\nEOF", workdir: "." },
       undefined,
       undefined,
       { cwd: root },
     );
-
-    expect(result.isError).not.toBe(true);
+    expect(literalHeredoc.isError).not.toBe(true);
     expect(prompts).toHaveLength(0);
+
+    for (const [toolCallId, command] of [
+      ["2", "cat <<EOF\n$(rm -rf tmp)\nEOF"],
+      ["3", "diff <(rm -rf tmp) expected.txt"],
+      ["4", "env -u X bash -c \"$CMD\""],
+      ["5", "$CMD -rf tmp"],
+      ["6", "(rm -rf tmp)"],
+      ["7", ">/dev/null rm -rf tmp"],
+    ] as const) {
+      const result = await registry.getTool("bash").execute(
+        toolCallId,
+        { command, workdir: "." },
+        undefined,
+        undefined,
+        { cwd: root },
+      );
+      expect(result.isError).not.toBe(true);
+    }
+    expect(prompts).toHaveLength(6);
   });
 
   it("asks instead of guessing when bash surface syntax is malformed", async () => {

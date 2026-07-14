@@ -31,6 +31,7 @@ function topLevelOperatorLength(input: string, index: number): number {
   const next = input[index + 1];
   if (char === "&" && next === "&") return 2;
   if (char === "&" && next !== ">" && input[index - 1] !== ">" && input[index - 1] !== "<") return 1;
+  if (char === "|" && input[index - 1] === ">") return 0;
   if (char === "|" && next === "|") return 2;
   if (char === "|" && next === "&") return 2;
   if (char === "|") return 1;
@@ -41,17 +42,43 @@ function topLevelOperatorLength(input: string, index: number): number {
 interface HeredocDelimiter {
   value: string;
   stripLeadingTabs: boolean;
+  allowExpansion: boolean;
 }
 interface PendingHeredoc {
   segmentIndex: number;
   delimiters: HeredocDelimiter[];
 }
 
-function stripHeredocDelimiterQuotes(token: string): string {
-  if ((token.startsWith("'") && token.endsWith("'")) || (token.startsWith('"') && token.endsWith('"'))) {
-    return token.slice(1, -1);
+function parseHeredocDelimiter(token: string): { value: string; allowExpansion: boolean } {
+  let value = "";
+  let quote: "single" | "double" | undefined;
+  let allowExpansion = true;
+  for (let i = 0; i < token.length; i++) {
+    const char = token[i]!;
+    const next = token[i + 1];
+    if (char === "\\" && next !== undefined && quote !== "single") {
+      allowExpansion = false;
+      if (quote === "double" && !["$", "`", '"', "\\", "\n"].includes(next)) {
+        value += char;
+        continue;
+      }
+      value += next;
+      i += 1;
+      continue;
+    }
+    if (char === "'" && quote !== "double") {
+      allowExpansion = false;
+      quote = quote === "single" ? undefined : "single";
+      continue;
+    }
+    if (char === '"' && quote !== "single") {
+      allowExpansion = false;
+      quote = quote === "double" ? undefined : "double";
+      continue;
+    }
+    value += char;
   }
-  return token.replace(/\\(.)/g, "$1");
+  return { value, allowExpansion };
 }
 
 function extractHeredocDelimiters(commandLine: string): HeredocDelimiter[] {
@@ -73,11 +100,28 @@ function extractHeredocDelimiters(commandLine: string): HeredocDelimiter[] {
     }
 
     if (rawDelimiter === undefined) continue;
-    const value = stripHeredocDelimiterQuotes(rawDelimiter);
-    if (value.length === 0) continue;
-    delimiters.push({ value, stripLeadingTabs });
+    const parsed = parseHeredocDelimiter(rawDelimiter);
+    if (parsed.value.length === 0) continue;
+    delimiters.push({ ...parsed, stripLeadingTabs });
   }
   return delimiters;
+}
+
+function isCommandSubstitutionStart(value: string, index: number): boolean {
+  return value[index] === "$" && value[index + 1] === "(" && value[index + 2] !== "(";
+}
+
+function hasExpandableCommandSubstitution(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]!;
+    const next = value[i + 1];
+    if (char === "\\" && next !== undefined) {
+      i += 1;
+      continue;
+    }
+    if (isCommandSubstitutionStart(value, i) || char === "`") return true;
+  }
+  return false;
 }
 
 function consumeHeredocBodies(input: string, newlineIndex: number, delimiters: HeredocDelimiter[]): { text: string; nextIndex: number } | { reason: string } {
@@ -98,6 +142,9 @@ function consumeHeredocBodies(input: string, newlineIndex: number, delimiters: H
         found = true;
         break;
       }
+      if (delimiter.allowExpansion && hasExpandableCommandSubstitution(line)) {
+        return { reason: "command_substitution" };
+      }
       if (!hasNewline) break;
     }
     if (!found) return { reason: "unterminated_heredoc" };
@@ -105,20 +152,20 @@ function consumeHeredocBodies(input: string, newlineIndex: number, delimiters: H
   return { text, nextIndex: cursor };
 }
 
-
 /**
  * Split a bash command into static, top-level surface segments.
  *
- * This intentionally does not expand variables, inspect scripts, or recursively
- * analyze `bash -c`, command substitutions, eval/source, functions, or aliases.
- * It only prevents separators inside quotes, escapes, comments, or nested
- * grouping syntax from being treated as top-level separators.
+ * This intentionally does not expand variables, inspect scripts, or recursively analyze dynamic
+ * shell constructs. Command/process substitutions, expanding heredocs, runtime command names,
+ * executable-position redirections, compound syntax, and dynamic wrappers are marked unsupported;
+ * the remaining parser keeps top-level separators out of quoted, escaped, commented, heredoc, or
+ * nested grouping syntax.
  */
 export function analyzeBashSurfaceCommand(command: string): BashSurfaceAnalysis {
   const input = normalizeCommandInput(command);
   const segments: string[] = [];
   let current = "";
-  let quote: "single" | "double" | "backtick" | undefined;
+  let quote: "single" | "double" | undefined;
   let parenDepth = 0;
   let braceDepth = 0;
   let doubleBracketDepth = 0;
@@ -184,18 +231,9 @@ export function analyzeBashSurfaceCommand(command: string): BashSurfaceAnalysis 
         i++;
         continue;
       }
+      if (isCommandSubstitutionStart(input, i)) return { kind: "unsupported", reason: "command_substitution", segments };
+      if (char === "`") return { kind: "unsupported", reason: "command_substitution", segments };
       if (char === "\"") quote = undefined;
-      continue;
-    }
-
-    if (quote === "backtick") {
-      current += char;
-      if (char === "\\" && next !== undefined) {
-        current += next;
-        i++;
-        continue;
-      }
-      if (char === "`") quote = undefined;
       continue;
     }
 
@@ -223,10 +261,10 @@ export function analyzeBashSurfaceCommand(command: string): BashSurfaceAnalysis 
       continue;
     }
 
-    if (char === "`") {
-      quote = "backtick";
-      current += char;
-      continue;
+    if (isCommandSubstitutionStart(input, i)) return { kind: "unsupported", reason: "command_substitution", segments };
+    if (char === "`") return { kind: "unsupported", reason: "command_substitution", segments };
+    if ((char === "<" || char === ">") && next === "(") {
+      return { kind: "unsupported", reason: "process_substitution", segments };
     }
 
     if (char === "[" && next === "[") {
@@ -293,6 +331,10 @@ export function analyzeBashSurfaceCommand(command: string): BashSurfaceAnalysis 
   if (doubleBracketDepth > 0) return { kind: "unsupported", reason: "unclosed_double_bracket", segments };
 
   pushSegment(segments, current);
+  for (const segment of segments) {
+    const reason = unsupportedSurfaceReason(segment);
+    if (reason) return { kind: "unsupported", reason, segments };
+  }
   return { kind: "supported", segments };
 }
 
@@ -434,6 +476,115 @@ function isAssignmentToken(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*(?:\+)?=/.test(token);
 }
 
+const DYNAMIC_SHELL_WRAPPERS = new Set(["sh", "bash", "dash", "zsh", "ksh", "ksh93", "mksh", "fish"]);
+const COMMAND_LAUNCHERS = new Set(["command", "env", "exec", "nohup"]);
+const COMPOUND_SHELL_KEYWORDS = new Set([
+  "!",
+  "case",
+  "coproc",
+  "do",
+  "done",
+  "elif",
+  "else",
+  "esac",
+  "fi",
+  "for",
+  "function",
+  "if",
+  "select",
+  "then",
+  "time",
+  "until",
+  "while",
+]);
+
+interface ExecutableTokenSurface {
+  name: string;
+  hasExpansion: boolean;
+  hasRedirection: boolean;
+}
+
+function analyzeExecutableToken(token: string): ExecutableTokenSurface {
+  let value = "";
+  let quote: "single" | "double" | undefined;
+  let hasExpansion = false;
+  let hasRedirection = false;
+  for (let i = 0; i < token.length; i++) {
+    const char = token[i]!;
+    const next = token[i + 1];
+    if (quote === "single") {
+      if (char === "'") quote = undefined;
+      else value += char;
+      continue;
+    }
+    if (quote === "double") {
+      if (char === "\\" && next !== undefined) {
+        if (["$", "`", '"', "\\", "\n"].includes(next)) {
+          value += next;
+          i += 1;
+        } else {
+          value += char;
+        }
+        continue;
+      }
+      if (char === '"') {
+        quote = undefined;
+        continue;
+      }
+      if (char === "$") hasExpansion = true;
+      value += char;
+      continue;
+    }
+    if (char === "\\" && next !== undefined) {
+      value += next;
+      i += 1;
+      continue;
+    }
+    if (char === "'") {
+      quote = "single";
+      continue;
+    }
+    if (char === '"') {
+      quote = "double";
+      continue;
+    }
+    if (char === "$") hasExpansion = true;
+    if (char === "<" || char === ">") hasRedirection = true;
+    value += char;
+  }
+  return {
+    name: value.split(/[\\/]/).pop() ?? value,
+    hasExpansion,
+    hasRedirection,
+  };
+}
+
+function isCompoundShellSyntax(tokens: string[], commandIndex: number, executable: string): boolean {
+  const token = tokens[commandIndex]!;
+  if (COMPOUND_SHELL_KEYWORDS.has(executable)) return true;
+  if (token.startsWith("(") && !token.startsWith("((")) return true;
+  if (token.startsWith("{")) return true;
+  if (/^[A-Za-z_][A-Za-z0-9_]*\s*\(\)/.test(token)) return true;
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(token) && tokens[commandIndex + 1]?.startsWith("()") === true;
+}
+
+function unsupportedSurfaceReason(segment: string): string | undefined {
+  const tokens = tokenizeBashSurfaceSegment(segment);
+  const index = tokens.findIndex((token) => !isAssignmentToken(token));
+  if (index < 0) return undefined;
+
+  const executableToken = tokens[index]!;
+  if (executableToken.startsWith("[[") || executableToken.startsWith("((")) return undefined;
+  const executable = analyzeExecutableToken(executableToken);
+  if (executable.hasRedirection) return "command_redirection";
+  if (isCompoundShellSyntax(tokens, index, executable.name)) return "compound_shell_syntax";
+  if (executable.hasExpansion) return "dynamic_command_name";
+  if (COMMAND_LAUNCHERS.has(executable.name)) return "dynamic_shell_wrapper";
+  if (executable.name === "eval" || executable.name === "source" || executable.name === ".") return "dynamic_shell_wrapper";
+  if (DYNAMIC_SHELL_WRAPPERS.has(executable.name)) return "dynamic_shell_wrapper";
+  return undefined;
+}
+
 function addPrefixCandidates(candidates: string[], tokens: string[]): void {
   for (let length = 1; length <= tokens.length; length++) {
     const prefix = tokens.slice(0, length).join(" ");
@@ -453,6 +604,13 @@ export function buildBashSurfaceCandidates(segment: string): string[] {
   const commandStart = tokens.findIndex((token) => !isAssignmentToken(token));
   if (commandStart > 0) {
     addPrefixCandidates(candidates, tokens.slice(commandStart));
+  }
+  if (commandStart >= 0) {
+    const commandTokens = tokens.slice(commandStart);
+    const executable = analyzeExecutableToken(commandTokens[0]!).name;
+    if (executable && executable !== commandTokens[0]) {
+      addPrefixCandidates(candidates, [executable, ...commandTokens.slice(1)]);
+    }
   }
 
   return uniqueStrings(candidates);
