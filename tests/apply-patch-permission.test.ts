@@ -136,7 +136,8 @@ describe("apply_patch permission integration", () => {
   });
 
   it("bounds permission previews while preserving the complete target list", async () => {
-    // Intent: approval dialogs must show useful changes without becoming unbounded.
+    // Intent: requested-change content stays bounded without hiding any target
+    // whose inherited and apply_patch permissions contributed to the decision.
     const root = await createTempWorkspace();
     await writeSettings(root, { apply_patch: "ask" });
     const prompts: string[] = [];

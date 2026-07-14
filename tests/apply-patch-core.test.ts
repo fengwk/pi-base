@@ -372,6 +372,31 @@ describe("apply_patch matching and planning", () => {
     expect(await readFile(join(root, "file.txt"), "utf8")).toBe("new\n");
   });
 
+  it("projects fallback context lines independently onto the old and new sides", async () => {
+    // Intent: slicing the trailing old/new arrays can leave one side of a context
+    // line intact; that line must become an addition or deletion, not disappear.
+    const root = await createRoot();
+    await put(root, "keep-new.txt", "old\n");
+    await put(root, "keep-old.txt", "\n");
+
+    await executeApplyPatch(patch(
+      "*** Update File: keep-new.txt",
+      "@@",
+      "-old",
+      " ",
+      "+new",
+    ), { cwd: root });
+    await executeApplyPatch(patch(
+      "*** Update File: keep-old.txt",
+      "@@",
+      " ",
+      "-",
+    ), { cwd: root });
+
+    expect(await readFile(join(root, "keep-new.txt"), "utf8")).toBe("\nnew\n");
+    expect(await readFile(join(root, "keep-old.txt"), "utf8")).toBe("");
+  });
+
   it("keeps trailing-empty-line fallback non-inserting and ambiguity-safe", async () => {
     // Intent: dropping a synthetic terminal empty old line may not create an
     // insertion, and fallback matching still rejects more than one source region.

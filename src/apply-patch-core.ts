@@ -379,24 +379,42 @@ function findUniqueMatch(
   return match;
 }
 
-function withoutTrailingEmptyCompatibilityLines(lines: readonly ApplyPatchChunkLine[]): ApplyPatchChunkLine[] {
+function projectTrailingEmptyCompatibilityLines(lines: readonly ApplyPatchChunkLine[]): ApplyPatchChunkLine[] {
+  const projected = lines.map((line) => ({
+    text: line.text,
+    inOld: line.kind !== "add",
+    inNew: line.kind !== "delete",
+  }));
   let oldIndex = -1;
   let newIndex = -1;
-  for (let index = lines.length - 1; index >= 0; index--) {
-    if (lines[index]!.kind !== "add") {
+  for (let index = projected.length - 1; index >= 0; index--) {
+    if (projected[index]!.inOld) {
       oldIndex = index;
       break;
     }
   }
-  for (let index = lines.length - 1; index >= 0; index--) {
-    if (lines[index]!.kind !== "delete") {
+  for (let index = projected.length - 1; index >= 0; index--) {
+    if (projected[index]!.inNew) {
       newIndex = index;
       break;
     }
   }
-  const removed = new Set<number>([oldIndex]);
-  if (newIndex !== -1 && lines[newIndex]!.text === "") removed.add(newIndex);
-  return lines.filter((_line, index) => !removed.has(index));
+
+  // OpenCode drops the trailing old/new entries independently. A context line
+  // belongs to both sides, so dropping it from only one side must convert it to
+  // an addition or deletion rather than removing the whole line.
+  if (oldIndex !== -1) projected[oldIndex]!.inOld = false;
+  if (newIndex !== -1 && projected[newIndex]!.text === "") projected[newIndex]!.inNew = false;
+
+  const result: ApplyPatchChunkLine[] = [];
+  for (const line of projected) {
+    if (!line.inOld && !line.inNew) continue;
+    result.push({
+      kind: line.inOld ? (line.inNew ? "context" : "delete") : "add",
+      text: line.text,
+    });
+  }
+  return result;
 }
 
 function toLineRecords(text: string): { records: LineRecord[]; defaultEnding: ConcreteLineEnding } {
@@ -464,7 +482,7 @@ function applyUpdate(path: string, text: string, chunks: readonly ApplyPatchChun
       if (match !== undefined) {
         matchIndex = match;
       } else if (oldLines.length > 1 && oldLines[oldLines.length - 1] === "") {
-        const compatibilityLines = withoutTrailingEmptyCompatibilityLines(lines);
+        const compatibilityLines = projectTrailingEmptyCompatibilityLines(lines);
         const compatibilityOldLines = compatibilityLines
           .filter((line) => line.kind !== "add")
           .map((line) => line.text);

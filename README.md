@@ -59,7 +59,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
 | `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
 | `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
-| `apply_patch` | `patchText` | session cwd | OpenCode `*** Begin Patch` 协议；支持 Add/Update/Delete，多文件先整体 preflight、再按顺序提交；调用、权限确认和持久化 diff 元数据均有界，行数统计保持完整；不支持 Move |
+| `apply_patch` | `patchText` | session cwd | OpenCode `*** Begin Patch` 协议；支持 Add/Update/Delete，多文件先整体 preflight、再按顺序提交；调用预览、权限变更预览和逐文件持久化 diff 均有界，目标清单保持完整，行数统计不截断；不支持 Move |
 <!-- 暂时禁用；恢复注册时一并取消此注释。
 | `lsp_diagnostics` | `path` | severity=all | 需 `lsp.servers` 声明 server；不做能力前置检查 |
 -->
