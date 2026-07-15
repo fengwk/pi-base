@@ -34,14 +34,20 @@ describe("path utilities", () => {
     expect(isHomeShortcutPath("$JAVA_HOME/bin")).toBe(false);
   });
 
-  it("resolves paths against cwd after @ and HOME expansion", () => {
+  it("resolves paths against cwd after separator, @, and HOME normalization", () => {
+    // Intent: permission matching already treats backslashes as separators; the
+    // actual tool target and workdir must resolve to the same filesystem path.
     const cwd = resolve("/tmp", "pi-base-path-utils");
     expect(resolveToCwd("@src/index.ts", cwd)).toBe(resolve(cwd, "src/index.ts"));
+    expect(resolveToCwd("src\\nested\\file.ts", cwd)).toBe(resolve(cwd, "src/nested/file.ts"));
     expect(resolveToCwd("${HOME}/src/index.ts", cwd)).toBe(join(home, "src", "index.ts"));
+    expect(resolveToCwd("~\\src\\index.ts", cwd)).toBe(join(home, "src", "index.ts"));
+    expect(resolveToCwd("$HOME\\src\\index.ts", cwd)).toBe(join(home, "src", "index.ts"));
+    expect(resolveToCwd("${HOME}\\src\\index.ts", cwd)).toBe(join(home, "src", "index.ts"));
     expect(resolveToCwd(`${cwd}/nested/../file.txt`, "/unused")).toBe(resolve(cwd, "file.txt"));
 
-    const relative = resolveToolWorkdir("@packages/app", cwd);
-    expect(relative.rawWorkdir).toBe("packages/app");
+    const relative = resolveToolWorkdir("@packages\\app", cwd);
+    expect(relative.rawWorkdir).toBe("packages\\app");
     expect(relative.cwd).toBe(resolve(cwd, "packages/app"));
 
     const absolute = resolveToolWorkdir(home, cwd);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import piBaseExtension from "../index.js";
 import { applyContextCompressionToMessages, shouldApplyContextCompression } from "../src/context-compression.js";
@@ -135,6 +135,35 @@ describe("context compression", () => {
     const again = await registry.emit("context", { messages: transformed.messages }, { cwd: root });
     const stable = again === undefined ? transformed.messages : again.messages;
     expect(stable).toEqual(transformed.messages);
+  });
+
+  it("masks separator aliases only after both calls reach the same real file", async () => {
+    // Intent: context tracking already normalizes separators; execution must do
+    // the same so a backslash-spelled read cannot refer to a different POSIX file.
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ contextCompression: { anchorHygiene: true } }), "utf8");
+    await writeWorkspaceFile(root, "pkg/nested/example.txt", "alpha\nbeta\n");
+
+    const registry = createToolRegistry({ cwd: root });
+    piBaseExtension(registry.pi as any);
+    const readArgs = { workdir: "pkg\\nested", path: "example.txt" };
+    const readResult = await registry.getTool("read").execute("read-separator", readArgs, undefined, undefined, { cwd: root });
+    const patchArgs = {
+      workdir: "pkg/nested",
+      patchText: "*** Begin Patch\n*** Update File: .\\example.txt\n@@\n-alpha\n+alpha v1\n*** End Patch",
+    };
+    const patchResult = await registry.getTool("apply_patch").execute("patch-separator", patchArgs, undefined, undefined, { cwd: root });
+    const messages = [
+      ...toolExchange("read", "read-separator", readArgs, readResult),
+      ...toolExchange("apply_patch", "patch-separator", patchArgs, patchResult),
+    ];
+    const transformed = await registry.emit("context", { messages }, { cwd: root });
+
+    expect(readResult.isError).not.toBe(true);
+    expect(patchResult.isError).not.toBe(true);
+    expect(getText(transformed.messages[1])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
+    expect(await readFile(join(root, "pkg", "nested", "example.txt"), "utf8")).toBe("alpha v1\nbeta\n");
   });
 
   it("keeps an already-folded prefix byte-stable as later turns append new tool calls", async () => {

@@ -295,7 +295,7 @@ describe("find (delegated to built-in pi-coding-agent)", () => {
 
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("find timed out");
-    expect(seenParams).toEqual({ pattern: "*", path: "." });
+    expect(seenParams).toEqual({ pattern: "*", path: process.cwd() });
   });
   it("rethrows non-timeout find errors", async () => {
     const registry = createToolRegistry();

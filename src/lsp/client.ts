@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { decodeTextFile } from "../text-codec.js";
 import { findBestJavaHome, LspDiscoveryResolver, type LspServerConfig, type LspWorkspaceDataConfig } from "./discovery.js";
 
 const EXT_TO_LANG: Record<string, string> = {
@@ -32,6 +33,12 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 1000;
 const NOOP = () => undefined;
+
+function readLspTextFile(filePath: string): string {
+  const decoded = decodeTextFile(readFileSync(filePath));
+  if (decoded === null) throw new Error(`LSP cannot open binary file: ${filePath}`);
+  return decoded.text;
+}
 
 function isJdtlsCommand(command: string[]): boolean {
   return command.some((part) => dirname(part) ? part.split(/[\\/]/).pop()?.toLowerCase().replace(/\.(cmd|bat|exe)$/i, "") === "jdtls" : part.toLowerCase().replace(/\.(cmd|bat|exe)$/i, "") === "jdtls");
@@ -311,7 +318,7 @@ export class LspClient {
   async openFile(filePath: string): Promise<void> {
     const absPath = resolve(filePath);
     if (this.openedFiles.has(absPath)) return;
-    const text = readFileSync(absPath, "utf8");
+    const text = readLspTextFile(absPath);
     const languageId = EXT_TO_LANG[extname(absPath)] || "plaintext";
     this.fileVersions.set(absPath, 1);
     this.fileMtimes.set(absPath, statSync(absPath).mtimeMs);
@@ -332,7 +339,7 @@ export class LspClient {
   syncFile(filePath: string): void {
     const absPath = resolve(filePath);
     if (!this.openedFiles.has(absPath)) return;
-    const text = readFileSync(absPath, "utf8");
+    const text = readLspTextFile(absPath);
     const version = (this.fileVersions.get(absPath) || 1) + 1;
     this.fileVersions.set(absPath, version);
     this.fileMtimes.set(absPath, statSync(absPath).mtimeMs);

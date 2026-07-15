@@ -1,3 +1,4 @@
+import iconv from "iconv-lite";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -270,6 +271,44 @@ describe("LspClient internals", () => {
       });
       expect((client as any).openedFiles.has(missingPath)).toBe(false);
       expect((client as any).fileContents.has(missingPath)).toBe(false);
+    });
+
+    it("decodes BOM-marked source before didOpen and didChange", async () => {
+      // Intent: file tools preserve non-UTF-8 encodings; LSP synchronization
+      // must send their decoded source text rather than UTF-8 replacement bytes.
+      const root = await createTempWorkspace();
+      const filePath = join(root, "src", "encoded.ts");
+      await mkdir(join(root, "src"), { recursive: true });
+      const bom = Buffer.from([0xff, 0xfe]);
+      await writeFile(filePath, Buffer.concat([bom, iconv.encode("export const value = '旧';\r\n", "utf-16le")]));
+      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      const notifySpy = vi.spyOn(client as any, "notify").mockImplementation(() => undefined);
+
+      await client.openFile(filePath);
+      expect(notifySpy).toHaveBeenCalledWith("textDocument/didOpen", {
+        textDocument: expect.objectContaining({ text: "export const value = '旧';\r\n" }),
+      });
+
+      notifySpy.mockClear();
+      await writeFile(filePath, Buffer.concat([bom, iconv.encode("export const value = '新';\r\n", "utf-16le")]));
+      client.syncFile(filePath);
+      expect(notifySpy).toHaveBeenCalledWith("textDocument/didChange", {
+        textDocument: expect.objectContaining({ version: 2 }),
+        contentChanges: [{ text: "export const value = '新';\r\n" }],
+      });
+      expect((client as any).fileContents.get(filePath)).toBe("export const value = '新';\r\n");
+    });
+
+    it("rejects binary files without opening an LSP document", async () => {
+      const root = await createTempWorkspace();
+      const filePath = join(root, "binary.ts");
+      await writeFile(filePath, Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff]));
+      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      const notifySpy = vi.spyOn(client as any, "notify").mockImplementation(() => undefined);
+
+      await expect(client.openFile(filePath)).rejects.toThrow(`LSP cannot open binary file: ${filePath}`);
+      expect(notifySpy).not.toHaveBeenCalledWith("textDocument/didOpen", expect.anything());
+      expect(client.isOpen(filePath)).toBe(false);
     });
 
     it("closes an open file and clears all per-file client state", async () => {

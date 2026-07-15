@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import piBaseExtension from "../index.js";
@@ -196,6 +196,24 @@ describe("apply_patch permission integration", () => {
     }, undefined, undefined, { cwd: deniedRoot, hasUI: false });
     expect(genericallyDenied.isError).toBe(true);
     expect(getText(genericallyDenied)).toContain("Permission denied for apply_patch");
+  });
+
+  it("normalizes separators consistently before permission and patch execution", async () => {
+    // Intent: permission must not authorize slash target X while apply_patch
+    // creates a distinct POSIX filename Y containing literal backslashes.
+    const root = await createTempWorkspace();
+    await writeSettings(root, { write: { "*": "deny", "nested/*.txt": "allow" } });
+    const registry = createToolRegistry({ hasUI: false });
+    piBaseExtension(registry.pi as any);
+
+    const result = await registry.getTool("apply_patch").execute("separator-alias", {
+      workdir: root,
+      patchText: patch("*** Add File: nested\\patch.txt", "+created"),
+    }, undefined, undefined, { cwd: root, hasUI: false });
+
+    expect(result.isError).not.toBe(true);
+    expect(await readFile(join(root, "nested", "patch.txt"), "utf8")).toBe("created\n");
+    expect(await readdir(root)).not.toContain("nested\\patch.txt");
   });
 
   it("normalizes absolute dot segments before matching path permissions", async () => {

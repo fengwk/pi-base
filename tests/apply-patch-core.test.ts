@@ -1,5 +1,6 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import iconv from "iconv-lite";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,27 +126,46 @@ describe("apply_patch parser", () => {
     expect(parseApplyPatch(whitespaceEnvelope).files).toEqual([
       { operation: "add", path: "spaced.txt", lines: ["ok"] },
     ]);
+    expect(parseApplyPatch([
+      "*** Begin Patch",
+      "*** Update File: update.txt",
+      "@@",
+      "-old",
+      "+new",
+      " *** End Patch ",
+    ].join("\n")).files).toHaveLength(1);
     expect(parseApplyPatch(`<<EOF\n${whitespaceEnvelope}\nEOF \t`).files).toHaveLength(1);
     expect(() => parseApplyPatch(`\`\`\`\n${patch("*** Add File: fenced.txt", "+no")}\n\`\`\``))
       .toThrow(/start with/);
+  });
+
+  it("trims large blank envelope padding without quadratic shifting", () => {
+    // Intent: malformed/model-generated padding must remain linear in input size;
+    // repeatedly shifting a split array made this case grow quadratically.
+    const input = `${"\n".repeat(250_000)}${patch("*** Add File: large.txt", "+ok")}`;
+    const startedAt = performance.now();
+    expect(parseApplyPatch(input).files).toEqual([
+      { operation: "add", path: "large.txt", lines: ["ok"] },
+    ]);
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
   });
 
   it("accepts padded file headers without reclassifying update context", () => {
     // Intent: Codex permits cosmetic whitespace around top-level hunk headers,
     // while a single leading space inside Update remains a context marker.
     const parsed = parseApplyPatch(patch(
-      "  *** Add File: add.txt  ",
-      "+added",
-      "\t*** Delete File: delete.txt\t",
       "  *** Update File: update.txt  ",
       "@@",
       " *** Add File: literal context",
+      "  *** Delete File: indented literal context",
       "-old",
       "+new",
+      "*** End of File",
+      "\t*** Add File: add.txt\t",
+      "+added",
+      "  *** Delete File: delete.txt  ",
     ));
     expect(parsed.files).toEqual([
-      { operation: "add", path: "add.txt", lines: ["added"] },
-      { operation: "delete", path: "delete.txt" },
       {
         operation: "update",
         path: "update.txt",
@@ -153,12 +173,15 @@ describe("apply_patch parser", () => {
           changeContext: undefined,
           lines: [
             { kind: "context", text: "*** Add File: literal context" },
+            { kind: "context", text: " *** Delete File: indented literal context" },
             { kind: "delete", text: "old" },
             { kind: "add", text: "new" },
           ],
-          endOfFile: false,
+          endOfFile: true,
         }],
       },
+      { operation: "add", path: "add.txt", lines: ["added"] },
+      { operation: "delete", path: "delete.txt" },
     ]);
   });
 
@@ -609,13 +632,21 @@ describe("apply_patch filesystem execution", () => {
       `*** Add File: ${root}/nested/../absolute.txt`,
       "+two",
     ), { cwd: root })).rejects.toThrow(/Duplicate resolved patch path/);
+    await expect(executeApplyPatch(patch(
+      "*** Add File: nested/slash.txt",
+      "+one",
+      "*** Add File: nested\\slash.txt",
+      "+two",
+    ), { cwd: root })).rejects.toThrow(/Duplicate resolved patch path/);
     expect(await exists(join(root, "sub/a.txt"))).toBe(false);
     expect(await exists(join(root, "absolute.txt"))).toBe(false);
+    expect(await exists(join(root, "nested/slash.txt"))).toBe(false);
   });
 
   it.each([
-    ["parent first", ["tree", "tree/child.txt"]],
-    ["child first", ["tree/child.txt", "tree"]],
+    ["parent is first", ["tree", "tree/child.txt"]],
+    ["child is first", ["tree/child.txt", "tree"]],
+    ["child uses backslashes", ["tree", "tree\\child.txt"]],
   ] as const)("rejects hierarchical Add paths before mutation when the %s", async (_name, paths) => {
     // Intent: every Add target is a file, so one Add cannot also be a directory
     // needed by another Add; this deterministic conflict belongs in preflight.
@@ -726,11 +757,39 @@ describe("apply_patch encodings and line endings", () => {
     expect(await readFile(file)).toEqual(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("new\n")]));
   });
 
-  it("preserves UTF-16LE and its BOM", async () => {
+  it.each([
+    ["UTF-16LE", "utf-16le", [0xff, 0xfe]],
+    ["UTF-16BE", "utf-16be", [0xfe, 0xff]],
+    ["UTF-32LE", "utf-32le", [0xff, 0xfe, 0x00, 0x00]],
+    ["UTF-32BE", "utf-32be", [0x00, 0x00, 0xfe, 0xff]],
+  ] as const)("preserves %s and its BOM byte-for-byte", async (_name, encoding, bomBytes) => {
+    // Intent: apply_patch must decode for matching but write the same encoding,
+    // BOM, mixed line endings, and final-termination state back to disk.
     const root = await createRoot();
-    const file = await put(root, "utf16.txt", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("old\r\n", "utf16le")]));
-    await executeApplyPatch(patch("*** Update File: utf16.txt", "@@", "-old", "+new"), { cwd: root });
-    expect(await readFile(file)).toEqual(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("new\r\n", "utf16le")]));
+    const source = "head\r\nold\n尾\rtail";
+    const expected = "head\r\nnew\n尾\rtail";
+    const file = await put(root, `${encoding}.txt`, Buffer.concat([Buffer.from(bomBytes), iconv.encode(source, encoding)]));
+    await executeApplyPatch(patch(`*** Update File: ${encoding}.txt`, "@@", "-old", "+new"), { cwd: root });
+    expect(await readFile(file)).toEqual(Buffer.concat([Buffer.from(bomBytes), iconv.encode(expected, encoding)]));
+  });
+
+  it.each([
+    ["UTF-16LE", "utf-16le"],
+    ["UTF-16BE", "utf-16be"],
+  ] as const)("preserves BOM-less %s detected by the zero-byte heuristic", async (_name, encoding) => {
+    const root = await createRoot();
+    const file = await put(root, `${encoding}-plain.txt`, iconv.encode("head\r\nold\nend", encoding));
+    await executeApplyPatch(patch(`*** Update File: ${encoding}-plain.txt`, "@@", "-old", "+new"), { cwd: root });
+    expect(await readFile(file)).toEqual(iconv.encode("head\r\nnew\nend", encoding));
+  });
+
+  it("preserves a confidently detected legacy multibyte encoding", async () => {
+    const root = await createRoot();
+    const source = "这是一个中文文件，用于验证编码。\r\nold\n第二行内容。";
+    const expected = "这是一个中文文件，用于验证编码。\r\nnew\n第二行内容。";
+    const file = await put(root, "legacy-gbk.txt", iconv.encode(source, "gbk"));
+    await executeApplyPatch(patch("*** Update File: legacy-gbk.txt", "@@", "-old", "+new"), { cwd: root });
+    expect(await readFile(file)).toEqual(iconv.encode(expected, "gbk"));
   });
 
   it.each([
@@ -867,6 +926,29 @@ describe("apply_patch commit races and aborts", () => {
     }]);
     expect(await readFile(join(root, "first.txt"), "utf8")).toBe("first\n");
     expect(await readFile(second, "utf8")).toBe("racer\n");
+  });
+
+  it("does not write an Add file when cancellation arrives during parent creation", async () => {
+    // Intent: recursive mkdir is an await boundary; cancellation observed there
+    // must stop before the exclusive file write even though new directories may remain.
+    const root = await createRoot();
+    const parent = join(root, "nested");
+    const failed: string[] = [];
+    // Flip deterministically after mkdir creates the parent but before writeFile.
+    const signal = {
+      get aborted() { return existsSync(parent); },
+    } as AbortSignal;
+
+    const error = await executeApplyPatch(patch("*** Add File: nested/file.txt", "+created"), {
+      cwd: root,
+      signal,
+      onCommitFailed: (failure) => { failed.push(failure.path); },
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ApplyPatchCommitError);
+    expect(error.message).toContain("Operation aborted");
+    expect(failed).toEqual(["nested/file.txt"]);
+    expect(await exists(join(root, "nested/file.txt"))).toBe(false);
   });
 
   it("aborts before preflight without side effects", async () => {

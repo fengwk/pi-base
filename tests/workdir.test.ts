@@ -125,7 +125,7 @@ describe("workdir defaults", () => {
     const grepResult = await grepRegistry.getTool("grep").execute("1", { pattern: "alpha", path: "src" }, undefined, undefined, { cwd: root });
     expect(grepResult.isError).not.toBe(true);
     expect(seenGrepCwd).toBe(root);
-    expect(seenGrepParams).toMatchObject({ pattern: "alpha", path: "src" });
+    expect(seenGrepParams).toMatchObject({ pattern: "alpha", path: join(root, "src") });
     expect(seenGrepParams.workdir).toBeUndefined();
 
     const findRegistry = createToolRegistry();
@@ -148,7 +148,7 @@ describe("workdir defaults", () => {
     const findResult = await findRegistry.getTool("find").execute("1", { pattern: "*.ts", path: "src" }, undefined, undefined, { cwd: root });
     expect(findResult.isError).not.toBe(true);
     expect(seenFindCwd).toBe(root);
-    expect(seenFindParams).toEqual({ pattern: "*.ts", path: "src" });
+    expect(seenFindParams).toEqual({ pattern: "*.ts", path: join(root, "src") });
   });
 
   it("uses the explicit workdir when delegating grep and find", async () => {
@@ -170,10 +170,10 @@ describe("workdir defaults", () => {
       },
     });
 
-    const grepResult = await grepRegistry.getTool("grep").execute("1", { pattern: "alpha", path: "src", workdir: "repo" }, undefined, undefined, { cwd: root });
+    const grepResult = await grepRegistry.getTool("grep").execute("1", { pattern: "alpha", path: "src\\example.ts", workdir: "repo" }, undefined, undefined, { cwd: root });
     expect(grepResult.isError).not.toBe(true);
     expect(seenGrepCwd).toBe(join(root, "repo"));
-    expect(seenGrepParams).toMatchObject({ pattern: "alpha", path: "src" });
+    expect(seenGrepParams).toMatchObject({ pattern: "alpha", path: join(root, "repo", "src", "example.ts") });
     expect(seenGrepParams.workdir).toBeUndefined();
 
     const findRegistry = createToolRegistry();
@@ -193,9 +193,9 @@ describe("workdir defaults", () => {
       };
     });
 
-    const findResult = await findRegistry.getTool("find").execute("1", { pattern: "*.ts", path: "src", workdir: "repo" }, undefined, undefined, { cwd: root });
+    const findResult = await findRegistry.getTool("find").execute("1", { pattern: "*.ts", path: "src\\", workdir: "repo" }, undefined, undefined, { cwd: root });
     expect(findResult.isError).not.toBe(true);
     expect(seenFindCwd).toBe(join(root, "repo"));
-    expect(seenFindParams).toEqual({ pattern: "*.ts", path: "src" });
+    expect(seenFindParams).toEqual({ pattern: "*.ts", path: join(root, "repo", "src") });
   });
 });

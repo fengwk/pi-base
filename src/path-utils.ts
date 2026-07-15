@@ -32,7 +32,11 @@ export function isHomeShortcutPath(value: string): boolean {
 }
 
 export function resolveToCwd(filePath: string, cwd: string): string {
-  const expanded = expandHomePath(stripAtPrefix(filePath));
+  // Tool paths accept either separator on every platform. Normalize before
+  // resolution so execution, permission matching, and context tracking cannot
+  // interpret the same input as different filesystem targets.
+  const normalized = normalizeSlashes(stripAtPrefix(filePath));
+  const expanded = expandHomePath(normalized);
   return resolvePath(cwd, expanded);
 }
 

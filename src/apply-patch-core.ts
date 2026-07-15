@@ -138,9 +138,11 @@ function normalizePatchText(text: string): string {
 
 function trimSurroundingBlankLines(text: string): string {
   const lines = text.split("\n");
-  while (lines.length > 1 && lines[0]!.trim() === "") lines.shift();
-  while (lines.length > 1 && lines[lines.length - 1]!.trim() === "") lines.pop();
-  return lines.join("\n");
+  let start = 0;
+  let end = lines.length;
+  while (end - start > 1 && lines[start]!.trim() === "") start++;
+  while (end - start > 1 && lines[end - 1]!.trim() === "") end--;
+  return lines.slice(start, end).join("\n");
 }
 
 function stripHeredocWrapper(text: string): string {
@@ -166,13 +168,14 @@ function isPatchMarker(line: string, marker: string): boolean {
     && /^[\t ]*$/.test(line.slice(index + marker.length));
 }
 
-function isFileDirective(line: string): boolean {
-  return FILE_DIRECTIVE_PREFIXES.some((prefix) => line.startsWith(prefix));
-}
-
 function isPaddedFileDirective(line: string): boolean {
   const trimmed = line.trim();
   return FILE_DIRECTIVE_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+}
+
+function isUpdateFileBoundary(line: string): boolean {
+  // Any leading space is Update context syntax; tab-only padding is unambiguous.
+  return !line.startsWith(" ") && isPaddedFileDirective(line);
 }
 
 function parseRequiredPath(line: string, prefix: string): string {
@@ -248,7 +251,7 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
       }
 
       const chunks: ApplyPatchChunk[] = [];
-      while (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isFileDirective(lines[index]!)) {
+      while (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isUpdateFileBoundary(lines[index]!)) {
         const chunkHeader = lines[index]!;
         if (!chunkHeader.startsWith("@@")) {
           throw new Error(`Malformed Update File ${path}: expected an @@ chunk, got ${chunkHeader}.`);
@@ -259,12 +262,12 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
 
         const chunkLines: ApplyPatchChunkLine[] = [];
         let endOfFile = false;
-        while (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isFileDirective(lines[index]!) && !lines[index]!.startsWith("@@")) {
+        while (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isUpdateFileBoundary(lines[index]!) && !lines[index]!.startsWith("@@")) {
           const bodyLine = lines[index]!;
           if (bodyLine === "*** End of File") {
             endOfFile = true;
             index++;
-            if (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isFileDirective(lines[index]!)) {
+            if (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isUpdateFileBoundary(lines[index]!)) {
               throw new Error(`Malformed Update File ${path}: *** End of File must end the update.`);
             }
             break;
@@ -688,7 +691,8 @@ async function commitMutation(plan: MutationPlan, signal?: AbortSignal): Promise
     throwIfAborted(signal);
     if (plan.operation === "add") {
       await mkdir(dirname(plan.absolutePath), { recursive: true });
-      await writeFile(plan.absolutePath, plan.outputBytes, { flag: "wx" });
+      throwIfAborted(signal);
+      await writeFile(plan.absolutePath, plan.outputBytes, { flag: "wx", signal });
       return;
     }
 
@@ -705,10 +709,11 @@ async function commitMutation(plan: MutationPlan, signal?: AbortSignal): Promise
       throw new Error(`${plan.path} changed after preflight; refusing to apply a stale patch.`);
     }
 
+    throwIfAborted(signal);
     if (plan.operation === "delete") {
       await unlink(plan.absolutePath);
     } else {
-      await writeFile(plan.absolutePath, plan.outputBytes);
+      await writeFile(plan.absolutePath, plan.outputBytes, { signal });
     }
   });
 }

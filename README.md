@@ -69,6 +69,8 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 
 `lsp_diagnostics` 在 0.1.x 期间暂时禁用评估；下一个 minor release 前必须明确恢复注册或完整删除其实现。
 
+所有工具的 `path`/`workdir` 都将 `/` 与 `\\` 视为目录分隔符，并在权限匹配、实际执行和 context compression 前解析为同一目标。因此文件工具不用于寻址 POSIX 文件名中的字面反斜杠字符。
+
 ### 文件修改工具的模型路由
 
 三个工具始终注册，但隐式/default agent 只暴露一组文件修改能力：

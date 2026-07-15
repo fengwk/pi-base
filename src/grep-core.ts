@@ -417,7 +417,7 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
 
       const builtIn = createBuiltInGrepTool(cwd);
       return await builtIn.execute(toolCallId || toolCallIdPlaceholder, {
-        path: rawPath,
+        path: absolutePath,
         pattern,
         glob: params.include,
         ignoreCase: params.ignore_case === true,

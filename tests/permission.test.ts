@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { registerBashRendererTool } from "../src/bash-renderer.js";
@@ -133,6 +133,57 @@ describe("permission guard", () => {
     expect(prompts[0]).toContain("Arguments: ");
     expect(prompts[0]).toContain("\"path\":\"notes.txt\"");
   });
+
+  it("uses the same separator semantics for permission and shared file tools", async () => {
+    // Intent: a slash-based allow rule must authorize the exact target used by
+    // read/edit/write even when the model emits Windows-style separators on POSIX.
+    const root = await createTempWorkspace();
+    await mkdir(join(root, "nested"), { recursive: true });
+    await writeFile(join(root, "nested", "read.txt"), "readable\n", "utf8");
+    await writeFile(join(root, "nested", "edit.txt"), "old\n", "utf8");
+    await writeProjectSettings(root, {
+      permission: {
+        read: { "*": "deny", "nested/*.txt": "allow" },
+        edit: { "*": "deny", "nested/*.txt": "allow" },
+        write: { "*": "deny", "nested/sub/*.txt": "allow" },
+      },
+    });
+    const registry = createToolRegistry({ hasUI: false });
+    piBaseExtension(registry.pi as any);
+
+    const readResult = await registry.getTool("read").execute(
+      "read",
+      { workdir: ".", path: "nested\\read.txt" },
+      undefined,
+      undefined,
+      { cwd: root, hasUI: false },
+    );
+    const editResult = await registry.getTool("edit").execute(
+      "edit",
+      { workdir: ".", path: "nested\\edit.txt", old_string: "old", new_string: "new" },
+      undefined,
+      undefined,
+      { cwd: root, hasUI: false },
+    );
+    const writeResult = await registry.getTool("write").execute(
+      "write",
+      { workdir: "nested\\sub", path: "write.txt", content: "written\n" },
+      undefined,
+      undefined,
+      { cwd: root, hasUI: false },
+    );
+
+    expect(readResult.isError).not.toBe(true);
+    expect(getText(readResult)).toContain("readable");
+    expect(editResult.isError).not.toBe(true);
+    expect(writeResult.isError).not.toBe(true);
+    expect(await readFile(join(root, "nested", "edit.txt"), "utf8")).toBe("new\n");
+    expect(await readFile(join(root, "nested", "sub", "write.txt"), "utf8")).toBe("written\n");
+    expect(await readdir(root)).not.toContain("nested\\read.txt");
+    expect(await readdir(root)).not.toContain("nested\\edit.txt");
+    expect(await readdir(root)).not.toContain("nested\\sub");
+  });
+
   // Intent: edit permission must resolve targets from the path parameter
   it("asks for edit when path does not match allow rules", async () => {
     const root = await createTempWorkspace();
