@@ -12,7 +12,18 @@
  * continue to be imported from there.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -230,12 +241,23 @@ function commandExists(cmd: string): boolean {
   }
 }
 
+function isUsableManagedBinary(filePath: string): boolean {
+  try {
+    const stats = statSync(filePath);
+    if (!stats.isFile() || stats.size === 0) return false;
+    if (process.platform !== "win32") accessSync(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Get the path to a tool (system-wide or in the managed bin dir). */
 export function getToolPath(tool: SupportedTool): string | null {
   const config = TOOLS[tool];
   if (!config) return null;
   const localPath = join(TOOLS_DIR, config.binaryName + (process.platform === "win32" ? ".exe" : ""));
-  if (existsSync(localPath)) return localPath;
+  if (isUsableManagedBinary(localPath)) return localPath;
   for (const systemBinaryName of config.systemBinaryNames) {
     if (commandExists(systemBinaryName)) return systemBinaryName;
   }
@@ -351,18 +373,15 @@ async function downloadTool(tool: SupportedTool): Promise<string> {
 
   mkdirSync(TOOLS_DIR, { recursive: true });
   const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
-  const archivePath = join(TOOLS_DIR, assetName);
+  const installNonce = `${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const archivePath = join(TOOLS_DIR, `download_tmp_${config.binaryName}_${installNonce}_${assetName}`);
+  const extractDir = join(TOOLS_DIR, `extract_tmp_${config.binaryName}_${installNonce}`);
   const binaryExt = plat === "win32" ? ".exe" : "";
   const binaryPath = join(TOOLS_DIR, config.binaryName + binaryExt);
 
-  await downloadFile(downloadUrl, archivePath);
-
-  const extractDir = join(
-    TOOLS_DIR,
-    `extract_tmp_${config.binaryName}_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
-  );
-  mkdirSync(extractDir, { recursive: true });
   try {
+    await downloadFile(downloadUrl, archivePath);
+    mkdirSync(extractDir, { recursive: true });
     if (assetName.endsWith(".tar.gz")) {
       extractTarGzArchive(archivePath, extractDir, assetName);
     } else if (assetName.endsWith(".zip")) {
@@ -381,14 +400,19 @@ async function downloadTool(tool: SupportedTool): Promise<string> {
     if (!extractedBinary) {
       throw new Error(`Binary not found in archive: expected ${binaryFileName} under ${extractDir}`);
     }
-    renameSync(extractedBinary, binaryPath);
-
     if (plat !== "win32") {
-      chmodSync(binaryPath, 0o755);
+      chmodSync(extractedBinary, 0o755);
+    }
+    try {
+      renameSync(extractedBinary, binaryPath);
+    } catch (error) {
+      // Another process may have completed the same first-use install on platforms where rename
+      // cannot replace an existing destination. Reuse only a complete executable file.
+      if (!isUsableManagedBinary(binaryPath)) throw error;
     }
   } finally {
-    rmSync(archivePath, { force: true });
-    rmSync(extractDir, { recursive: true, force: true });
+    try { rmSync(archivePath, { force: true }); } catch { /* best-effort cleanup */ }
+    try { rmSync(extractDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
   }
   return binaryPath;
 }

@@ -173,6 +173,30 @@ describe("read tool", () => {
     expect(seen).toEqual([[]]);
   });
 
+  it("keeps a successful read result when its observer throws", async () => {
+    // Intent: read observation is auxiliary bookkeeping; once file content is available, observer
+    // failure must not replace it with a misleading tool error.
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "src/observed.txt", "alpha\n");
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any, {
+      onSuccessfulRead: () => {
+        throw new Error("observer failed");
+      },
+    });
+
+    const result = await registry.getTool("read").execute(
+      "read-observer",
+      { path: "src/observed.txt" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("1|alpha");
+  });
+
   it("uses the target file directory when building the LSP resolver for absolute paths outside cwd", async () => {
     const rootA = await createTempWorkspace();
     const rootB = await createTempWorkspace();

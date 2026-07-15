@@ -86,6 +86,74 @@ describe("notify support", () => {
     ]);
   });
 
+  it("does not let notification delivery failure block a permission decision", async () => {
+    // Intent: desktop notification is auxiliary; even if a custom sender fails, the user must still
+    // see the permission UI and an allowed mutation must proceed normally.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: { write: "ask" },
+      notify: { permissionAsked: true },
+    });
+    let selects = 0;
+    const registry = createToolRegistry({
+      hasUI: true,
+      cwd: root,
+      ui: {
+        select: async () => {
+          selects += 1;
+          return "Yes";
+        },
+      },
+    });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async () => {
+          throw new Error("notification unavailable");
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const result = await registry.getTool("write").execute(
+      "notify-failure-write",
+      { path: "allowed.txt", content: "ok\n" },
+      undefined,
+      undefined,
+      {
+        cwd: root,
+        sessionManager: {
+          getSessionId: () => "notify-failure-session",
+          getSessionName: () => "Notify Failure Session",
+        },
+      },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(selects).toBe(1);
+  });
+
+  it("does not let notification delivery failure reject agent_end", async () => {
+    // Intent: final notifications are best-effort lifecycle side effects and cannot turn a
+    // completed agent run into an extension error.
+    const root = await createTempWorkspace();
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    registerNotifySupport(registry.pi as any, {
+      loadSettings: () => ({ settings: { notify: { agentEnd: true } } }) as never,
+      sendNotification: async () => {
+        throw new Error("notification unavailable");
+      },
+    });
+
+    await expect(registry.emit("agent_end", { type: "agent_end", messages: [] }, {
+      cwd: root,
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "notify-agent-end",
+        getSessionName: () => "Notify Agent End",
+      },
+    })).resolves.toBeUndefined();
+  });
+
   it("stays disabled when notify config is omitted", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {

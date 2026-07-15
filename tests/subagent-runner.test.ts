@@ -274,6 +274,50 @@ describe("runSubagent", () => {
     expect(subagentRegistry.all()).toEqual([]);
   });
 
+  it("cancels while session creation is in flight and disposes a late session", async () => {
+    // Intent: cancellation must not wait for a slow factory; if creation eventually finishes, the
+    // orphan session must be disposed without ever entering the live registry.
+    const controller = new AbortController();
+    let resolveSpawn!: (session: SubagentSession) => void;
+    let markSpawnStarted!: () => void;
+    const spawnStarted = new Promise<void>((resolve) => {
+      markSpawnStarted = resolve;
+    });
+    const child = handle("late-child", { report: "should not run" });
+    const prompt = vi.fn(async () => undefined);
+    child.prompt = prompt;
+    const spawn = vi.fn(() => {
+      markSpawnStarted();
+      return new Promise<SubagentSession>((resolve) => {
+        resolveSpawn = resolve;
+      });
+    });
+    const pending = runSubagent(
+      fakeCtx(),
+      { agentType: "worker", prompt: "go", childDepth: 2, signal: controller.signal },
+      { spawn, resume: spawn },
+    );
+    await spawnStarted;
+    controller.abort();
+
+    const promptOutcome = await Promise.race([
+      pending,
+      new Promise<"timed out">((resolve) => setTimeout(() => resolve("timed out"), 50)),
+    ]);
+    resolveSpawn(child);
+    const eventual = await pending;
+    await vi.waitFor(() => expect(child.dispose).toHaveBeenCalledTimes(1));
+
+    expect(promptOutcome).not.toBe("timed out");
+    expect(eventual).toEqual({
+      sessionId: "",
+      state: "cancelled",
+      error: "Cancelled by user before subagent session started.",
+    });
+    expect(prompt).not.toHaveBeenCalled();
+    expect(subagentRegistry.get("late-child")).toBeUndefined();
+  });
+
   it("emits live progress, updates widget counters, and ignores registration hook failures", async () => {
     // Intent: structured progress drives both tool updates and registry-backed widget counters,
     // while auxiliary registration hooks must not break a successful delegation.
@@ -376,6 +420,42 @@ describe("runSubagent", () => {
     }
   });
 
+  it("observes asynchronous abort failures from the idle watchdog", async () => {
+    // Intent: session abort may return a rejecting promise; the timer callback must attach rejection
+    // handling so a failed cleanup cannot become a process-level unhandled rejection.
+    vi.useFakeTimers();
+    let rejectPrompt!: (error: Error) => void;
+    const abortCompletion = Promise.reject(new Error("abort cleanup failed"));
+    const catchSpy = vi.spyOn(abortCompletion, "catch");
+    void abortCompletion.catch(() => undefined);
+    const child: SubagentSession = {
+      sessionId: "child-idle-abort-rejection",
+      prompt: () => new Promise<void>((_resolve, reject) => {
+        rejectPrompt = reject;
+      }),
+      collect: () => ({ report: undefined, toolCount: 0 }),
+      abort: vi.fn(() => {
+        rejectPrompt(new Error("watchdog abort"));
+        return abortCompletion;
+      }),
+      dispose: vi.fn(),
+    };
+    try {
+      const resultPromise = runSubagent(
+        fakeCtx(),
+        { agentType: "worker", prompt: "go", childDepth: 2, idleTimeoutMs: 50 },
+        { spawn: async () => child, resume: async () => child },
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      const result = await resultPromise;
+
+      expect(result.state).toBe("error");
+      expect(catchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not count long-running tool execution silence toward idleTimeoutMs", async () => {
     // Intent: idle watchdog should target model/session-side stalls; once a tool
     // starts running, silence during the tool body itself should not trip idle.
@@ -421,10 +501,13 @@ describe("runSubagent", () => {
 
   it("steers the child once when a tool-driving turn reaches maxTurns without hard-aborting it", async () => {
     // Intent: steering is consumed before the next model turn, unlike follow-up messages which wait
-    // until the child would otherwise stop. Queue it once so a looping child does not accumulate duplicates.
+    // until the child would otherwise stop. Queue it once, and keep a steer transport failure from
+    // replacing an otherwise successful child report.
     const progress: string[] = [];
     let listener: ((event: unknown) => void) | undefined;
-    const steer = vi.fn(async () => undefined);
+    const steer = vi.fn(() => {
+      throw new Error("steer transport unavailable");
+    });
     const child: SubagentSession = {
       sessionId: "child-turn-limit",
       prompt: async () => {

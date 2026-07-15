@@ -277,6 +277,37 @@ function cancelledByUserMessage(sessionId: string): string {
   return `Cancelled by user. Session preserved as \`${sessionId}\`; resume later with \`session_id: "${sessionId}"\`.`;
 }
 
+function waitForSubagentSession(promise: Promise<SubagentSession>, signal: AbortSignal | undefined): Promise<SubagentSession> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new Error("Operation aborted"));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      fn();
+    };
+    const onAbort = () => finish(() => reject(new Error("Operation aborted")));
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    promise.then(
+      (session) => finish(() => resolve(session)),
+      (error) => finish(() => reject(error)),
+    );
+  });
+}
+
+function disposeLateSubagentSession(promise: Promise<SubagentSession>): void {
+  void promise.then(async (session) => {
+    try {
+      await session.dispose();
+    } catch {
+      // The caller has already been released; late-session cleanup is best-effort.
+    }
+  }, () => undefined);
+}
+
 /**
  * Orchestrate one foreground delegation: spawn (or resume) a subagent session, track it in the
  * registry, await completion, and collect the report. Cancellation of the parent turn (signal)
@@ -302,11 +333,24 @@ export async function runSubagent(
   const parentSessionId = ctx.sessionManager.getSessionId();
   const rootSessionId = readRootSessionId(ctx) || parentSessionId;
   let handle: SubagentSession;
+  let sessionPromise: Promise<SubagentSession> | undefined;
   try {
-    handle = args.sessionId
-      ? await factory.resume({ ctx, sessionId: args.sessionId, agentType: args.agentType, childDepth: args.childDepth })
-      : await factory.spawn({ ctx, agentType: args.agentType, childDepth: args.childDepth });
+    sessionPromise = args.sessionId
+      ? Promise.resolve(factory.resume({ ctx, sessionId: args.sessionId, agentType: args.agentType, childDepth: args.childDepth }))
+      : Promise.resolve(factory.spawn({ ctx, agentType: args.agentType, childDepth: args.childDepth }));
+    handle = await waitForSubagentSession(sessionPromise, args.signal);
   } catch (error) {
+    if (args.signal?.aborted) {
+      if (sessionPromise) disposeLateSubagentSession(sessionPromise);
+      const sessionId = args.sessionId ?? "";
+      return {
+        sessionId,
+        state: "cancelled",
+        error: sessionId
+          ? cancelledByUserMessage(sessionId)
+          : "Cancelled by user before subagent session started.",
+      };
+    }
     return { sessionId: args.sessionId ?? "", state: "error", error: describeError(error) };
   }
 
@@ -362,7 +406,11 @@ export async function runSubagent(
         kind: "status",
         text: `idle timeout after ${formatDurationMs(args.idleTimeoutMs ?? 0)} without assistant/session progress; aborting`,
       });
-      void handle.abort();
+      try {
+        void Promise.resolve(handle.abort()).catch(() => undefined);
+      } catch {
+        // The watchdog has already recorded the timeout; abort cleanup is best-effort.
+      }
     }, args.idleTimeoutMs);
     idleTimer.unref?.();
   };
@@ -376,7 +424,11 @@ export async function runSubagent(
       kind: "status",
       text: `turn limit reached (${assistantTurns}/${args.maxTurns}); asking subagent to finish`,
     });
-    void handle.steer(MAX_TURNS_FINISH_PROMPT).catch(() => undefined);
+    try {
+      void Promise.resolve(handle.steer(MAX_TURNS_FINISH_PROMPT)).catch(() => undefined);
+    } catch {
+      // The finish reminder is advisory; steering failures must not replace the child report.
+    }
   };
 
   publishProgress({ kind: "status", text: `started ${args.agentType} session ${handle.sessionId}` });
@@ -404,8 +456,18 @@ export async function runSubagent(
   };
   args.signal?.addEventListener("abort", onAbort, { once: true });
   try {
+    if (args.signal?.aborted) {
+      requestCancellation();
+      const failure = cancelledByUserMessage(handle.sessionId);
+      publishProgress({ kind: "status", text: "cancelled" });
+      finish(handle.sessionId, "cancelled", safeToolCount(handle));
+      return {
+        sessionId: handle.sessionId,
+        state: "cancelled",
+        error: failure,
+      };
+    }
     resetIdleTimer();
-    if (args.signal?.aborted) requestCancellation();
     await handle.prompt(args.prompt);
     clearIdleTimer();
     if (args.signal?.aborted) {

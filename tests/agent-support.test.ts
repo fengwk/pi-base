@@ -937,6 +937,51 @@ thinkingLevel: high
     }
   });
 
+  it("keeps an activated agent when persisting its session entry fails", async () => {
+    // Intent: model/tools/status are already committed before session persistence; appendEntry failure
+    // must be a non-fatal warning instead of reporting a failed switch with partially changed state.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "persistence-warning.md",
+        `---
+name: persistence-warning
+tools:
+  - read
+---
+`,
+      );
+
+      const registry = createToolRegistry();
+      registry.pi.appendEntry = () => {
+        throw new Error("session storage unavailable");
+      };
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "persistence-warning", { cwd: root });
+
+      expect(registry.getStatuses().get("00-pi-base-agent")).toBe("agent:persistence-warning");
+      expect(registry.getActiveTools()).toEqual(["read"]);
+      expect(registry.getNotifications()).toContainEqual({
+        message: 'Agent "persistence-warning" activated, but its session state could not be saved: session storage unavailable',
+        variant: "warning",
+      });
+      expect(registry.getNotifications()).not.toContainEqual(expect.objectContaining({
+        message: expect.stringContaining("activation failed"),
+      }));
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("reports unexpected activation errors without crashing the /agent command", async () => {
     // Intent: unexpected internal failures must be surfaced as direct command
     // errors instead of bubbling out as `Extension \"command:agent\" error`.

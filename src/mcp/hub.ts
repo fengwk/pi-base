@@ -121,10 +121,13 @@ export class McpHub {
   async shutdown(): Promise<void> {
     // Invalidate queued/in-flight configuration work before disconnecting so an
     // earlier startup cannot resurrect its server after quit.
-    ++this.configGeneration;
+    const generation = ++this.configGeneration;
     this.configFingerprint = undefined;
     this.configurePromise = undefined;
     await this.stopRuntimes();
+    // A new session may configure the shared hub while an old disconnect is still settling.
+    // In that case the newer generation owns the defaults and must not be overwritten here.
+    if (this.configGeneration !== generation) return;
     this.defaultStartupTimeoutMs = DEFAULT_MCP_STARTUP_TIMEOUT_MS;
     this.defaultCallTimeoutMs = DEFAULT_MCP_CALL_TIMEOUT_MS;
     this.shutdownWhenUnused = false;

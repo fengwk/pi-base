@@ -246,6 +246,55 @@ describe("process-level MCP sharing", () => {
     await hub.shutdown();
   });
 
+  it("does not let an older shutdown reset defaults from a newer configuration", async () => {
+    // Intent: a new session may attach while the previous last-session shutdown is still waiting
+    // for disconnect; once the newer config wins, the older shutdown must not overwrite its timeouts.
+    const disconnectGate = deferred();
+    let oldDisconnectStarted = false;
+    let observedCallTimeout: number | undefined;
+    const hub = createMcpHub();
+    await hub.configure({
+      servers: { old: { type: "local", command: ["old"] } },
+    }, {
+      clientFactory: () => ({
+        async connect() {},
+        async disconnect() {
+          oldDisconnectStarted = true;
+          await disconnectGate.promise;
+        },
+        async listTools() { return [{ name: "old_tool" }]; },
+        async callTool() { return {}; },
+        isConnected() { return true; },
+      }),
+    });
+
+    const shuttingDown = hub.shutdown();
+    while (!oldDisconnectStarted) await Promise.resolve();
+    await hub.configure({
+      callTimeoutMs: 321,
+      servers: { next: { type: "local", command: ["next"] } },
+    }, {
+      clientFactory: () => ({
+        async connect() {},
+        async disconnect() {},
+        async listTools() { return [{ name: "next_tool" }]; },
+        async callTool(_name, _args, options) {
+          observedCallTimeout = options?.timeout;
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+        isConnected() { return true; },
+      }),
+    });
+
+    disconnectGate.resolve();
+    await shuttingDown;
+    await hub.call("next", "next_tool", {});
+
+    expect(observedCallTimeout).toBe(321);
+    expect(hub.getSnapshot().servers.map((server) => server.key)).toEqual(["next"]);
+    await hub.shutdown();
+  });
+
   it("keeps the shared server across root reload when config is unchanged", async () => {
     // Intent: extension/session replacement must not restart the process-level MCP
     // server when the effective configuration did not change.

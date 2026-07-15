@@ -356,12 +356,27 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   let widgetRenderTimer: ReturnType<typeof setTimeout> | null = null;
   pi.on("session_start", async (_event, ctx?: ExtensionContext) => {
     if (!ctx?.hasUI || !isRootSession(ctx)) return;
+    if (registeredHost) {
+      if (registeredHostRootSessionId === null) clearSubagentPermissionHost(registeredHost);
+      else clearSubagentPermissionHost(registeredHostRootSessionId, registeredHost);
+      registeredHost = null;
+      registeredHostRootSessionId = null;
+    }
     const rootSessionId = readRootSessionId(ctx);
     const host: SubagentPermissionHost = async (req) => {
       const run = hostChain.then(async () => {
+        if (registeredHost !== host || registeredHostRootSessionId !== rootSessionId) {
+          throw new Error("Subagent permission host is no longer active");
+        }
+        if (req.signal?.aborted) throw new Error("Operation aborted");
         await notifyHooks.onPermissionAsked({ ctx });
+        if (req.signal?.aborted) throw new Error("Operation aborted");
         const title = `⟳ subagent「${req.agentType}」(depth ${req.depth}) requests permission\n\n${req.prompt}`;
         const choice = await ctx.ui.select(title, ["Yes", "No"]);
+        if (registeredHost !== host || registeredHostRootSessionId !== rootSessionId) {
+          throw new Error("Subagent permission host is no longer active");
+        }
+        if (req.signal?.aborted) throw new Error("Operation aborted");
         if (choice !== "Yes") notifyHooks.onPermissionRejected({ ctx });
         return choice === "Yes";
       });
@@ -396,23 +411,25 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     unsubscribeWidget = subagentRegistry.onChange(scheduleRender);
   });
   pi.on("session_shutdown", async (_event, ctx) => {
-    if (registeredHost) {
-      if (registeredHostRootSessionId === null) clearSubagentPermissionHost(registeredHost);
-      else clearSubagentPermissionHost(registeredHostRootSessionId, registeredHost);
+    const shutdownRootSessionId = isRootSession(ctx) ? readRootSessionId(ctx) : null;
+    const ownsRegisteredUi = shutdownRootSessionId !== null
+      && registeredHostRootSessionId === shutdownRootSessionId;
+    if (registeredHost && ownsRegisteredUi) {
+      clearSubagentPermissionHost(shutdownRootSessionId, registeredHost);
       registeredHost = null;
       registeredHostRootSessionId = null;
     }
-    if (unsubscribeWidget) {
+    if (ownsRegisteredUi && unsubscribeWidget) {
       unsubscribeWidget();
       unsubscribeWidget = null;
     }
-    if (widgetRenderTimer) {
+    if (ownsRegisteredUi && widgetRenderTimer) {
       clearTimeout(widgetRenderTimer);
       widgetRenderTimer = null;
     }
-    if (isRootSession(ctx)) {
-      subagentRegistry.removeForRoot(readRootSessionId(ctx));
-      if (ctx.hasUI) ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
+    if (shutdownRootSessionId !== null) {
+      subagentRegistry.removeForRoot(shutdownRootSessionId);
+      if (ownsRegisteredUi && ctx.hasUI) ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
     }
   });
 

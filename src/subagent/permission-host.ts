@@ -77,7 +77,30 @@ export function hasSubagentPermissionHost(rootSessionId?: string): boolean {
  * top-level), letting the caller fall back to blocking rather than silently allowing.
  */
 export async function askSubagentPermissionHost(request: SubagentPermissionRequest): Promise<boolean | null> {
+  const signal = request.signal;
+  if (signal?.aborted) throw new Error("Operation aborted");
   const current = hosts.get(hostKey(request.rootSessionId));
   if (!current) return null;
-  return current(request);
+  const decision = current(request);
+  if (!signal) return decision;
+
+  return new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const onAbort = () => finish(() => reject(new Error("Operation aborted")));
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+    decision.then(
+      (allowed) => finish(() => resolve(allowed)),
+      (error) => finish(() => reject(error)),
+    );
+  });
 }

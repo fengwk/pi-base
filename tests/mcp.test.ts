@@ -554,6 +554,49 @@ describe("mcp support", () => {
     expect(message).toContain("create_temp_dir [stale]");
   });
 
+  it("transfers an alias when its owning server stops advertising the tool", async () => {
+    // Intent: a stale owner no longer provides the alias; another connected server advertising the
+    // same name must take ownership instead of leaving the usable tool permanently conflicted.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          alpha: { type: "local", command: ["mock-alpha"], toolPrefix: "" },
+          beta: { type: "local", command: ["mock-beta"], toolPrefix: "" },
+        },
+      },
+    });
+    const alphaEcho: McpTool = { ...echoTool, description: "Echo from alpha" };
+    const betaEcho: McpTool = { ...echoTool, description: "Echo from beta" };
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          alpha: [{
+            toolsSequence: [[alphaEcho], []],
+            callResult: () => ({ content: [{ type: "text", text: "alpha" }] }),
+          }],
+          beta: [{
+            connectDelayMs: 5,
+            tools: [betaEcho],
+            callResult: () => ({ content: [{ type: "text", text: "beta" }] }),
+          }],
+        }),
+        heartbeatIntervalMs: 20,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => registry.getTool("echo").description === "Echo from alpha");
+    await waitFor(() => registry.getTool("echo").description === "Echo from beta");
+
+    expect(registry.getActiveTools()).toContain("echo");
+    const result = await registry.getTool("echo").execute("echo-beta", { text: "hello" }, undefined, undefined, { cwd: root });
+    expect(getText(result)).toBe("beta");
+  });
+
   it("removes stale tool aliases from the active-tools set so the model cannot pick a dead alias", async () => {
     // Intent: a tool the server stops advertising must not linger in active tools,
     // otherwise the model can select an alias that only fails at execution time.
@@ -603,6 +646,71 @@ describe("mcp support", () => {
 
     // Tearing MCP down must retire the remaining alias instead of leaving a dead entry.
     await registry.emit("session_shutdown", {});
+    expect(registry.getActiveTools()).not.toContain("echo");
+  });
+
+  it("restores an active MCP alias after a temporary stale snapshot", async () => {
+    // Intent: availability loss removes a dead alias, but a tool that was active before the outage
+    // should return to the model once the same server advertises it again.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: { type: "local", command: ["mock-mcp"], toolPrefix: "" },
+        },
+      },
+    });
+    const returnedEcho: McpTool = { ...echoTool, description: "Echo returned" };
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [{ toolsSequence: [[echoTool], [], [returnedEcho], [returnedEcho]] }],
+        }),
+        heartbeatIntervalMs: 20,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => registry.getActiveTools().includes("echo"));
+    await waitFor(() => !registry.getActiveTools().includes("echo"));
+    await waitFor(() => registry.getTool("echo").description === "Echo returned");
+
+    expect(registry.getActiveTools()).toContain("echo");
+  });
+
+  it("does not re-activate an MCP alias after the user disables it", async () => {
+    // Intent: heartbeat and temporary availability changes must preserve a manual disable instead
+    // of treating every fresh snapshot as permission to put the alias back into active tools.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: { type: "local", command: ["mock-mcp"], toolPrefix: "" },
+        },
+      },
+    });
+    const returnedEcho: McpTool = { ...echoTool, description: "Echo returned after manual disable" };
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [{ toolsSequence: [[echoTool], [], [returnedEcho], [returnedEcho]] }],
+        }),
+        heartbeatIntervalMs: 20,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => registry.getActiveTools().includes("echo"));
+    registry.pi.setActiveTools(registry.getActiveTools().filter((name) => name !== "echo"));
+    await waitFor(() => registry.getTool("echo").description === "Echo returned after manual disable");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
     expect(registry.getActiveTools()).not.toContain("echo");
   });
 
@@ -657,6 +765,26 @@ describe("mcp support", () => {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     }
+  });
+
+  it("preserves closed-object constraints in MCP parameter schemas", () => {
+    // Intent: dropping additionalProperties=false makes the model-facing validator accept fields
+    // that the MCP server explicitly rejects, turning a schema error into a remote tool failure.
+    const schema: any = convertJsonSchemaToTypeBox({
+      type: "object",
+      properties: { text: { type: "string" } },
+      required: ["text"],
+      additionalProperties: false,
+    });
+
+    expect(schema.required).toEqual(["text"]);
+    expect(schema.additionalProperties).toBe(false);
+
+    const typedExtras: any = convertJsonSchemaToTypeBox({
+      type: "object",
+      additionalProperties: { type: "string" },
+    });
+    expect(typedExtras.additionalProperties?.type).toBe("string");
   });
 
   it("converts JSON Schema type arrays into MCP parameter unions", () => {

@@ -75,6 +75,38 @@ describe("mcp client config resolution", () => {
     expect(client.isConnected()).toBe(false);
   });
 
+  it("does not let a stale connect failure clear a newer successful connection", async () => {
+    // Intent: disconnect may cancel one handshake while a replacement connects; the late rejection
+    // from the old SDK client must not overwrite the replacement client's connected state.
+    let rejectFirstConnect!: (error: Error) => void;
+    let connectCalls = 0;
+    Client.prototype.connect = (function () {
+      connectCalls += 1;
+      if (connectCalls === 1) {
+        return new Promise<void>((_resolve, reject) => {
+          rejectFirstConnect = reject;
+        });
+      }
+      return Promise.resolve();
+    }) as any;
+    Client.prototype.close = (async () => undefined) as any;
+    Client.prototype.listTools = (async () => ({ tools: [{ name: "replacement" }] })) as any;
+
+    const client = createSdkMcpClient("mm", { type: "local", command: ["mock-mcp"] });
+    const staleConnect = client.connect(5_000);
+    await Promise.resolve();
+    await client.disconnect();
+
+    await client.connect(5_000);
+    expect(client.isConnected()).toBe(true);
+    rejectFirstConnect(new Error("stale connection closed"));
+    await expect(staleConnect).rejects.toThrow("stale connection closed");
+
+    expect(client.isConnected()).toBe(true);
+    await expect(client.listTools()).resolves.toEqual([{ name: "replacement" }]);
+    await client.disconnect();
+  });
+
   it("connects once, lists tools, calls tools, and disconnects cleanly", async () => {
     // Intent: SdkMcpClient is the boundary around the MCP SDK; once connected it
     // must delegate listTools/callTool while tracking connection state.

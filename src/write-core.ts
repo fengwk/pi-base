@@ -92,7 +92,7 @@ export async function executeWrite(
     const content = params.content;
     const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
     const absolutePath = resolveToCwd(rawPath, cwd);
-    return await withFileMutationQueue(absolutePath, async () => {
+    const { existed } = await withFileMutationQueue(absolutePath, async () => {
       throwIfAborted(signal);
       let existed = true;
       let outputEncoding = defaultTextEncoding();
@@ -109,12 +109,19 @@ export async function executeWrite(
       }
       const output = encodeTextFile(content, outputEncoding, outputBom);
       await throwIfAbortedAfter(mkdir(dirname(absolutePath), { recursive: true }), signal);
-      await throwIfAbortedAfter(writeFile(absolutePath, output), signal);
-      options.onSuccessfulWrite?.(absolutePath);
-      return {
-        content: [{ type: "text" as const, text: formatWriteSuccess(rawPath, existed) }],
-      };
+      // Once the write starts, let it settle and report the committed result. A post-write abort
+      // cannot roll the file back and must not hide the mutation from downstream bookkeeping.
+      await writeFile(absolutePath, output);
+      return { existed };
     });
+    try {
+      options.onSuccessfulWrite?.(absolutePath);
+    } catch {
+      // Observer failures cannot roll back the committed write.
+    }
+    return {
+      content: [{ type: "text" as const, text: formatWriteSuccess(rawPath, existed) }],
+    };
   } catch (error) {
     return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
   }

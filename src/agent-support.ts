@@ -268,7 +268,15 @@ export function registerAgentSupport(
     activeModelId = modelId;
     updateStatus(ctx, agent.name);
     if (options.persist) {
-      persistActiveAgent(agent.name);
+      try {
+        persistActiveAgent(agent.name);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`Agent "${agent.name}" activated, but its session state could not be saved: ${message}`);
+        if (ctx.hasUI) {
+          ctx.ui.notify(`Agent "${agent.name}" activated, but its session state could not be saved: ${message}`, "warning");
+        }
+      }
     }
     if (options.notify && ctx.hasUI) {
       const selectedModel = agent.model ? ` model:${agent.model.provider}/${agent.model.modelId}` : "";

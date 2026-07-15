@@ -20,6 +20,8 @@ export interface McpSessionBindingOptions {
 export class McpSessionBinding {
   private readonly toolOwners = new Map<string, string>();
   private readonly availableAliases = new Set<string>();
+  private readonly unavailableAliases = new Set<string>();
+  private readonly reactivateWhenAvailable = new Set<string>();
   private releaseHub: (() => Promise<void>) | undefined;
   private ctx: ExtensionContext | undefined;
   private snapshot: McpSnapshot = { enabledServers: 0, connectedServers: 0, servers: [] };
@@ -45,6 +47,12 @@ export class McpSessionBinding {
     const aliases = new Set(this.snapshot.servers.flatMap((server) => server.tools
       .filter((tool) => tool.state !== "conflict")
       .map((tool) => tool.aliasName)));
+    const currentlyActiveTools = new Set(this.options.pi.getActiveTools());
+    for (const alias of this.availableAliases) {
+      this.unavailableAliases.add(alias);
+      if (currentlyActiveTools.has(alias)) this.reactivateWhenAvailable.add(alias);
+      else this.reactivateWhenAvailable.delete(alias);
+    }
     this.reconcileActiveTools(new Set(), aliases);
     for (const alias of this.availableAliases) this.reportToolAvailability(alias, false);
     this.availableAliases.clear();
@@ -64,9 +72,19 @@ export class McpSessionBinding {
   private sync(hubSnapshot: McpHubSnapshot): void {
     const pi = this.options.pi;
     const canActivateTool = this.options.canActivateTool ?? (() => true);
-    const activeServerKeys = new Set(hubSnapshot.servers.map((server) => server.key));
+    const advertisedAliasOwners = new Map<string, Set<string>>();
+    for (const server of hubSnapshot.servers) {
+      for (const { tool, stale } of server.tools) {
+        if (stale) continue;
+        const aliasName = buildMcpToolName(server.key, tool.name, server.config.toolPrefix);
+        const owners = advertisedAliasOwners.get(aliasName) ?? new Set<string>();
+        owners.add(server.key);
+        advertisedAliasOwners.set(aliasName, owners);
+      }
+    }
     const existingToolNames = new Set(pi.getAllTools().map((tool: { name: string }) => tool.name));
-    const aliasesToActivate = new Set<string>();
+    const currentlyActiveTools = new Set(pi.getActiveTools());
+    const activationCandidates = new Set<string>();
     const aliasesToDeactivate = new Set<string>();
     const nextAvailableAliases = new Set<string>();
     const servers: McpServerSnapshot[] = [];
@@ -77,8 +95,10 @@ export class McpSessionBinding {
         const aliasName = buildMcpToolName(server.key, tool.name, server.config.toolPrefix);
         const owner = this.toolOwners.get(aliasName);
         const registeredByThisServer = owner === server.key;
-        const ownedByInactiveServer = owner !== undefined && owner !== server.key && !activeServerKeys.has(owner);
-        const conflictsWithExistingTool = !registeredByThisServer && !ownedByInactiveServer && existingToolNames.has(aliasName);
+        const ownedByUnavailableServer = owner !== undefined
+          && owner !== server.key
+          && !advertisedAliasOwners.get(aliasName)?.has(owner);
+        const conflictsWithExistingTool = !registeredByThisServer && !ownedByUnavailableServer && existingToolNames.has(aliasName);
 
         if (!stale && conflictsWithExistingTool) {
           tools.push({
@@ -103,8 +123,14 @@ export class McpSessionBinding {
           this.toolOwners.set(aliasName, server.key);
           existingToolNames.add(aliasName);
           nextAvailableAliases.add(aliasName);
-          if (canActivateTool(aliasName)) aliasesToActivate.add(aliasName);
-        } else {
+          const newlyAvailable = !this.availableAliases.has(aliasName);
+          const returningFromUnavailable = this.unavailableAliases.has(aliasName);
+          const restoringPreviousActiveState = this.reactivateWhenAvailable.has(aliasName);
+          const preservingActiveOwnerTransfer = ownedByUnavailableServer && currentlyActiveTools.has(aliasName);
+          if ((newlyAvailable && (!returningFromUnavailable || restoringPreviousActiveState)) || preservingActiveOwnerTransfer) {
+            activationCandidates.add(aliasName);
+          }
+        } else if (registeredByThisServer) {
           aliasesToDeactivate.add(aliasName);
         }
 
@@ -129,16 +155,33 @@ export class McpSessionBinding {
       });
     }
 
+    const newlyAvailableAliases = new Set<string>();
     for (const alias of this.availableAliases) {
-      if (!nextAvailableAliases.has(alias)) aliasesToDeactivate.add(alias);
+      if (nextAvailableAliases.has(alias)) continue;
+      aliasesToDeactivate.add(alias);
+      this.unavailableAliases.add(alias);
+      if (currentlyActiveTools.has(alias)) this.reactivateWhenAvailable.add(alias);
+      else this.reactivateWhenAvailable.delete(alias);
+    }
+    for (const alias of nextAvailableAliases) {
+      if (!this.availableAliases.has(alias)) newlyAvailableAliases.add(alias);
+    }
+
+    // Availability policy is updated before activation checks so a returning alias is no longer
+    // rejected solely because the previous stale snapshot marked it unavailable.
+    for (const alias of newlyAvailableAliases) this.reportToolAvailability(alias, true);
+    const aliasesToActivate = new Set<string>();
+    for (const alias of activationCandidates) {
+      if (canActivateTool(alias)) aliasesToActivate.add(alias);
     }
     this.reconcileActiveTools(aliasesToActivate, aliasesToDeactivate);
 
     for (const alias of this.availableAliases) {
       if (!nextAvailableAliases.has(alias)) this.reportToolAvailability(alias, false);
     }
-    for (const alias of nextAvailableAliases) {
-      if (!this.availableAliases.has(alias)) this.reportToolAvailability(alias, true);
+    for (const alias of newlyAvailableAliases) {
+      this.unavailableAliases.delete(alias);
+      this.reactivateWhenAvailable.delete(alias);
     }
     this.availableAliases.clear();
     for (const alias of nextAvailableAliases) this.availableAliases.add(alias);

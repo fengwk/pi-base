@@ -55,8 +55,19 @@ async function writeFullOutput(text: string, toolName: string): Promise<string> 
   await ensureTruncationDir(dir);
   const safeToolName = sanitizeToolNameForFilename(toolName);
   const filePath = join(dir, `${safeToolName}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.txt`);
-  await writeFile(filePath, text, "utf8");
-  return filePath;
+  try {
+    await writeFile(filePath, text, "utf8");
+    return filePath;
+  } catch (error) {
+    await rm(filePath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function buildTruncationHint(totalBytes: number, totalLines: number, outputPath: string | undefined): string {
+  return outputPath
+    ? `The tool call succeeded but the output was truncated. Full output (${totalBytes} bytes, ${totalLines} lines) saved to: ${outputPath}\nUse grep to search the full content or read with offset/limit to inspect specific sections.`
+    : `The tool call succeeded but the output was truncated. Full output could not be saved to temporary storage (${totalBytes} bytes, ${totalLines} lines).\nRe-run the tool with a narrower scope if you need the omitted content.`;
 }
 
 function countLines(text: string): number {
@@ -124,8 +135,13 @@ async function truncateTextOutput(text: string, toolName: string, alreadyTruncat
 
   const removed = hitBytes ? totalBytes - bytes : totalLines - preview.length;
   const unit = hitBytes ? "bytes" : "lines";
-  const outputPath = await writeFullOutput(text, toolName);
-  const hint = `The tool call succeeded but the output was truncated. Full output (${totalBytes} bytes, ${totalLines} lines) saved to: ${outputPath}\nUse grep to search the full content or read with offset/limit to inspect specific sections.`;
+  let outputPath: string | undefined;
+  try {
+    outputPath = await writeFullOutput(text, toolName);
+  } catch {
+    // Keep the bounded preview even when auxiliary full-output storage is unavailable.
+  }
+  const hint = buildTruncationHint(totalBytes, totalLines, outputPath);
 
   return {
     content: `${preview.join("\n")}\n\n...${removed} ${unit} truncated...\n\n${hint}`,
@@ -222,8 +238,7 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
     };
   }
 
-  const hint = `The tool call succeeded but the output was truncated. Full output (${truncated.totalBytes} bytes, ${truncated.totalLines} lines) saved to: ${truncated.outputPath}
-Use grep to search the full content or read with offset/limit to inspect specific sections.`;
+  const hint = buildTruncationHint(truncated.totalBytes, truncated.totalLines, truncated.outputPath);
   const nextContent: any[] = [];
   let usedLines = 0;
   let usedBytes = 0;

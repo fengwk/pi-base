@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { registerWriteTool } from "../src/write.js";
@@ -76,6 +77,61 @@ describe("write behavior", () => {
 
     expect(getText(result)).toContain("Overwrote src/existing.ts successfully.");
     expect(writes[0]).toContain("src/existing.ts");
+  });
+
+  it("reports success once the file write has committed even if cancellation arrives at completion", async () => {
+    // Intent: cancellation may stop work before the write starts, but observing it only after the
+    // file exists must not report an error while leaving an untracked committed mutation behind.
+    const root = await createTempWorkspace();
+    const target = join(root, "committed.txt");
+    const writes: string[] = [];
+    const signal = {
+      get aborted() {
+        return existsSync(target);
+      },
+    } as AbortSignal;
+    const registry = createToolRegistry();
+    registerWriteTool(registry.pi as any, {
+      onSuccessfulWrite: (absolutePath) => writes.push(absolutePath),
+    });
+
+    const result = await registry.getTool("write").execute(
+      "write-committed",
+      { path: "committed.txt", content: "committed\n" },
+      signal,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("Created committed.txt successfully.");
+    expect(await readFile(target, "utf8")).toBe("committed\n");
+    expect(writes).toEqual([target]);
+  });
+
+  it("keeps a committed write successful when its observer throws", async () => {
+    // Intent: post-write bookkeeping is best-effort and cannot roll back the file, so an observer
+    // failure must not turn the committed mutation into a misleading tool error.
+    const root = await createTempWorkspace();
+    const target = join(root, "observer.txt");
+    const registry = createToolRegistry();
+    registerWriteTool(registry.pi as any, {
+      onSuccessfulWrite: () => {
+        throw new Error("observer failed");
+      },
+    });
+
+    const result = await registry.getTool("write").execute(
+      "write-observer",
+      { path: "observer.txt", content: "written\n" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("Created observer.txt successfully.");
+    expect(await readFile(target, "utf8")).toBe("written\n");
   });
 
   describe("formatWriteCall collapsed preview", () => {

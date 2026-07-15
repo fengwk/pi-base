@@ -24,6 +24,25 @@ async function startAndStop(client: LspClient): Promise<void> {
   await client.stop();
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`process ${pid} did not exit within ${timeoutMs}ms`);
+}
+
 describe("LspClient start command enhancement", () => {
   it("injects process-scoped jdtls workspace data when no explicit -data is present", async () => {
     // Intent: this verifies the real spawned command receives the generated
@@ -88,6 +107,41 @@ describe("LspClient start command enhancement", () => {
 
     const args = (await readFile(argsFile, "utf8")).trim().split("\n").filter(Boolean);
     expect(args).not.toContain("-data");
+  });
+
+  it.skipIf(process.platform === "win32")("force-terminates a server that ignores SIGTERM", async () => {
+    // Intent: stop/reload must not return while an unresponsive LSP process remains alive; the
+    // bounded protocol shutdown is followed by an actual non-ignorable termination on POSIX.
+    const root = await createTempWorkspace();
+    const serverPath = join(root, "ignore-term-lsp");
+    await writeFile(
+      serverPath,
+      `#!/usr/bin/env node
+process.on("SIGTERM", () => {});
+process.stdin.resume();
+setInterval(() => {}, 1000);
+`,
+      { mode: 0o755 },
+    );
+    const client = new LspClient(root, {
+      id: "ignore-term",
+      command: [serverPath],
+      extensions: [".txt"],
+      requestTimeoutMs: 20,
+    });
+    await client.start();
+    const pid = (client as any).proc.pid as number;
+
+    try {
+      await client.stop({ shutdownGraceMs: 20 });
+      await waitForProcessExit(pid, 500);
+      expect(isProcessAlive(pid)).toBe(false);
+    } finally {
+      if (isProcessAlive(pid)) {
+        process.kill(pid, "SIGKILL");
+        await waitForProcessExit(pid, 500);
+      }
+    }
   });
 
   it("throws a clear startup error for a missing LSP executable", async () => {

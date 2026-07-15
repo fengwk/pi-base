@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -144,12 +145,14 @@ describe("createFindToolDefinition native fd path", () => {
   });
 
   it("reports fd availability failures before spawning a search process", async () => {
-    // Intent: missing fd is an environment/setup problem and should be reported
-    // before the agent waits for a search that can never start.
+    // Intent: missing fd is an environment/setup problem and should be reported before spawn,
+    // while the pre-spawn cancellation listener must still be released with the failed call.
     const root = await createTempWorkspace();
     const tool = createFindToolDefinition(root);
+    const controller = new AbortController();
 
-    await expect(tool.execute("find-missing-fd", { path: ".", pattern: "*" })).rejects.toThrow("fd is not available");
+    await expect(tool.execute("find-missing-fd", { path: ".", pattern: "*" }, controller.signal)).rejects.toThrow("fd is not available");
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
   });
 
   it("keeps partial fd output from non-zero exits", async () => {

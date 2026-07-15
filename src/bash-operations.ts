@@ -25,6 +25,10 @@ export function createGracefulBashOperations(options?: { shellPath?: string }): 
       env?: NodeJS.ProcessEnv;
     }) =>
       new Promise<{ exitCode: number | null }>((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new Error("aborted"));
+          return;
+        }
         const { shell, args } = getShellConfig(options?.shellPath);
         const child = spawn(shell, [...args, command], {
           cwd,

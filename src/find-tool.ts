@@ -31,7 +31,9 @@ export function createFindToolDefinition(cwd: string): any {
           cleanup(keepTermination);
           fn();
         };
-        let cleanup = (_keepTermination?: boolean) => undefined;
+        let cleanup = (_keepTermination?: boolean) => {
+          signal?.removeEventListener("abort", onAbort);
+        };
 
         const onAbort = () => {
           aborted = true;

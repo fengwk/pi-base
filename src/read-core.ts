@@ -231,7 +231,11 @@ export function registerReadTool(
           ...body,
           ...(notices.length > 0 ? ["", ...notices] : []),
         ];
-        options.onSuccessfulRead?.(absolutePath, displayedFileLines);
+        try {
+          options.onSuccessfulRead?.(absolutePath, displayedFileLines);
+        } catch {
+          // Observer failures cannot invalidate the completed read.
+        }
         return {
           content: [{ type: "text" as const, text: contentLines.join("\n") }],
           ...(upstreamTextTruncated ? { details: { upstreamTextTruncated: true } } : {}),

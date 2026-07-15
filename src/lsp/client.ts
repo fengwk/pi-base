@@ -32,6 +32,7 @@ const INIT_RETRY_DELAY_MS = 500;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
 const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 1000;
+const FORCE_KILL_WAIT_MS = 1000;
 const NOOP = () => undefined;
 
 function readLspTextFile(filePath: string): string {
@@ -143,6 +144,69 @@ async function waitForGracefulShutdown(promise: Promise<unknown>, timeoutMs: num
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+async function waitForProcessExit(proc: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
+  if (proc.exitCode !== null) return true;
+  if (timeoutMs <= 0) return false;
+  const eventProc = proc as ChildProcessWithoutNullStreams & {
+    once?: (event: "exit" | "error", listener: () => void) => unknown;
+    removeListener?: (event: "exit" | "error", listener: () => void) => unknown;
+  };
+  if (typeof eventProc.once !== "function") return false;
+
+  return new Promise<boolean>((resolve) => {
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (exited: boolean) => {
+      if (timer) clearTimeout(timer);
+      eventProc.removeListener?.("exit", onExit);
+      eventProc.removeListener?.("error", onError);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const onError = () => finish(proc.exitCode !== null);
+    eventProc.once?.("exit", onExit);
+    eventProc.once?.("error", onError);
+    if (proc.exitCode !== null) {
+      finish(true);
+      return;
+    }
+    timer = setTimeout(() => finish(proc.exitCode !== null), timeoutMs);
+  });
+}
+
+async function forceTerminateProcess(proc: ChildProcessWithoutNullStreams): Promise<void> {
+  if (proc.exitCode !== null) return;
+  const eventProc = proc as ChildProcessWithoutNullStreams & {
+    once?: (event: "exit" | "error", listener: () => void) => unknown;
+    removeListener?: (event: "exit" | "error", listener: () => void) => unknown;
+  };
+  if (typeof eventProc.once !== "function") {
+    try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    let timer: NodeJS.Timeout | undefined;
+    const finish = () => {
+      if (timer) clearTimeout(timer);
+      eventProc.removeListener?.("exit", finish);
+      eventProc.removeListener?.("error", finish);
+      resolve();
+    };
+    eventProc.once?.("exit", finish);
+    eventProc.once?.("error", finish);
+    if (proc.exitCode !== null) {
+      finish();
+      return;
+    }
+    timer = setTimeout(finish, FORCE_KILL_WAIT_MS);
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      finish();
+    }
+  });
 }
 
 function isTransientPullDiagnosticsInternalError(error: (Error & { code?: number }) | null | undefined): boolean {
@@ -437,13 +501,14 @@ export class LspClient {
 
   private async stopImpl(shutdownGraceMs: number): Promise<void> {
     const proc = this.proc;
+    const gracefulDeadline = Date.now() + Math.max(0, shutdownGraceMs);
     this.stopping = true;
     this.rejectAllPending("LSP client stopped");
     this.rejectAllDiagnosticsWaiters("LSP client stopped");
 
     if (proc && proc.exitCode === null && !proc.killed) {
       try {
-        await waitForGracefulShutdown(this.send("shutdown", null), shutdownGraceMs);
+        await waitForGracefulShutdown(this.send("shutdown", null), Math.max(0, gracefulDeadline - Date.now()));
       } catch {
         // Best-effort graceful shutdown. The process is force-killed below.
       }
@@ -452,9 +517,10 @@ export class LspClient {
       } catch {
         // best-effort
       }
+      await waitForProcessExit(proc, Math.max(0, gracefulDeadline - Date.now()));
     }
 
-    try { proc?.kill(); } catch { /* ignore */ }
+    if (proc) await forceTerminateProcess(proc);
     this.proc = null;
     this.openedFiles.clear();
     this.fileVersions.clear();
@@ -626,7 +692,11 @@ export class LspClient {
       if (headerEnd === -1) return;
       const header = this.buffer.subarray(0, headerEnd).toString("utf8");
       const lengthMatch = header.match(/Content-Length:\s*(\d+)/i);
-      if (!lengthMatch) return;
+      if (!lengthMatch) {
+        // Discard one malformed header block so stray server stdout cannot pin the parser forever.
+        this.buffer = this.buffer.subarray(headerEnd + 4);
+        continue;
+      }
       const length = Number(lengthMatch[1]);
       const start = headerEnd + 4;
       const end = start + length;

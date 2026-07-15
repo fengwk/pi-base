@@ -46,9 +46,14 @@ class SdkMcpClient implements McpProtocolClient {
         }
         this.connected = true;
       } catch (error) {
-        if (this.client === client) this.client = undefined;
-        if (this.transport === transport) this.transport = undefined;
-        this.connected = false;
+        const isCurrentConnection = this.connectionVersion === connectionVersion
+          && this.client === client
+          && this.transport === transport;
+        if (isCurrentConnection) {
+          this.client = undefined;
+          this.transport = undefined;
+          this.connected = false;
+        }
         await closeClient(client);
         throw error;
       } finally {

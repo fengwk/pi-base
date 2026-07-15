@@ -85,7 +85,7 @@ export function registerNotifySupport(
     if (kind === "session.completed" && Date.now() < suppressedUntil) return;
     suppressCompletedUntil.delete(payload.sessionID);
 
-    await sendNotification(payload, ctx);
+    await sendNotificationBestEffort(sendNotification, payload, ctx);
   });
 
   return {
@@ -99,7 +99,7 @@ export function registerNotifySupport(
         if (permissionNotifiedTurns.has(payload.sessionID)) return;
         permissionNotifiedTurns.add(payload.sessionID);
       }
-      await sendNotification(payload, ctx);
+      await sendNotificationBestEffort(sendNotification, payload, ctx);
     },
     onPermissionRejected({ ctx }) {
       const notify = loadSettings?.(ctx.cwd)?.settings.notify;
@@ -111,6 +111,18 @@ export function registerNotifySupport(
       suppressCompletedUntil.set(payload.sessionID, Date.now() + window);
     },
   };
+}
+
+async function sendNotificationBestEffort(
+  sendNotification: (payload: PiBaseNotifyPayload, ctx: ExtensionContext) => Promise<void>,
+  payload: PiBaseNotifyPayload,
+  ctx: ExtensionContext,
+): Promise<void> {
+  try {
+    await sendNotification(payload, ctx);
+  } catch {
+    // Notifications are auxiliary and must not interrupt permission or session lifecycles.
+  }
 }
 
 function createShellNotificationSender(

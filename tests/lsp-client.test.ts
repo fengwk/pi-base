@@ -1,5 +1,6 @@
 import iconv from "iconv-lite";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -76,6 +77,34 @@ describe("LspClient internals", () => {
       }));
     }, 10);
     await expect(promise).resolves.toEqual([{ message: "boom" }]);
+  });
+
+  it("recovers from a malformed protocol header before the next valid message", async () => {
+    // Intent: an LSP server that accidentally writes one malformed header to stdout must not pin
+    // the parser on those bytes and make every later response time out.
+    vi.useFakeTimers();
+    try {
+      const client = new LspClient("/tmp/demo", { id: "typescript", command: ["tsserver"], extensions: [".ts"] } as any);
+      const uri = "file:///tmp/recovered.ts";
+      const promise = (client as any).waitForPublishedDiagnostics(uri, 100);
+      const observed = promise.then(
+        (value: unknown) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+
+      (client as any).onData(Buffer.from("unexpected server output\r\n\r\n", "utf8"));
+      (client as any).onData(encodeMessage({
+        jsonrpc: "2.0",
+        method: "textDocument/publishDiagnostics",
+        params: { uri, diagnostics: [{ message: "recovered" }] },
+      }));
+      await vi.advanceTimersByTimeAsync(120);
+
+      expect(await observed).toEqual({ value: [{ message: "recovered" }] });
+      expect((client as any).buffer.length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears the diagnostics timeout once publishDiagnostics arrives", async () => {
@@ -717,6 +746,41 @@ describe("LspClient internals", () => {
       await client.stop();
 
       await expect(pending).rejects.toThrow("LSP client stopped");
+    });
+
+    it("allows a responsive server to exit naturally within the shutdown grace period", async () => {
+      // Intent: after a successful shutdown response, the LSP `exit` notification must get the
+      // remaining grace budget before SIGKILL so servers can flush and release workspace locks.
+      const client = new LspClient("/tmp/demo", { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      const proc = new EventEmitter() as EventEmitter & {
+        stdin: { write: (wire: string) => void };
+        exitCode: number | null;
+        killed: boolean;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      proc.exitCode = null;
+      proc.killed = false;
+      proc.kill = vi.fn();
+      proc.stdin = {
+        write: (wire: string) => {
+          const payload = JSON.parse(wire.slice(wire.indexOf("\r\n\r\n") + 4));
+          if (payload.method === "shutdown") {
+            setTimeout(() => {
+              (client as any).onData(encodeMessage({ jsonrpc: "2.0", id: payload.id, result: null }));
+            }, 0);
+          } else if (payload.method === "exit") {
+            setTimeout(() => {
+              proc.exitCode = 0;
+              proc.emit("exit", 0);
+            }, 10);
+          }
+        },
+      };
+      (client as any).proc = proc;
+
+      await client.stop({ shutdownGraceMs: 100 });
+
+      expect(proc.kill).not.toHaveBeenCalled();
     });
 
     it("force-kills an unresponsive client after the bounded shutdown grace period", async () => {

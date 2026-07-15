@@ -7,6 +7,10 @@ type SharedSchemaOptions = {
   examples?: unknown[];
 };
 
+type ObjectSchemaOptions = SharedSchemaOptions & {
+  additionalProperties?: boolean | TSchema;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -94,7 +98,13 @@ function convertObjectSchema(schema: Record<string, unknown>): TSchema {
     mapped[key] = required.includes(key) ? converted : Type.Optional(converted);
   }
 
-  return Type.Object(mapped, readSharedSchemaOptions(schema));
+  const options: ObjectSchemaOptions = readSharedSchemaOptions(schema);
+  if (typeof schema.additionalProperties === "boolean") {
+    options.additionalProperties = schema.additionalProperties;
+  } else if (isRecord(schema.additionalProperties)) {
+    options.additionalProperties = convertJsonSchemaToTypeBox(schema.additionalProperties);
+  }
+  return Type.Object(mapped, options);
 }
 
 function convertArraySchema(schema: Record<string, unknown>): TSchema {

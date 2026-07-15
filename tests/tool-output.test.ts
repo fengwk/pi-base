@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { applyUnifiedOutputTruncation } from "../src/tool-output.js";
-import { createToolRegistry } from "./helpers.js";
+import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 describe("tool output truncation", () => {
   it("returns small text output unchanged", async () => {
@@ -47,6 +47,32 @@ describe("tool output truncation", () => {
     expect(outputPath).toContain(join(tmpdir(), "pi-base-truncation"));
     const saved = await readFile(outputPath, "utf8");
     expect(saved).toContain("line-2505");
+  });
+
+  it("keeps a bounded preview when temporary full-output storage is unavailable", async () => {
+    // Intent: saving the full body is auxiliary; a broken TMPDIR must not turn a successful tool
+    // result into an extension error or allow the oversized output through unbounded.
+    const root = await createTempWorkspace();
+    const notADirectory = join(root, "tmp-file");
+    await writeFile(notADirectory, "not a directory", "utf8");
+    const previousTmpDir = process.env.TMPDIR;
+    process.env.TMPDIR = notADirectory;
+    try {
+      const truncated = await applyUnifiedOutputTruncation("demo", {
+        content: [{ type: "text", text: "x".repeat(60 * 1024) }],
+        details: { source: "test" },
+      } as any);
+
+      expect(truncated.truncated).toBe(true);
+      const text = String((truncated.result.content[0] as any)?.text);
+      expect(text).toContain("output was truncated");
+      expect(text).toContain("Full output could not be saved to temporary storage");
+      expect(text.length).toBeLessThan(2_000);
+      expect((truncated.result as any).details?.truncation?.outputPath).toBeUndefined();
+    } finally {
+      if (previousTmpDir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTmpDir;
+    }
   });
 
   it("preserves original item order when truncation happens in a later text block", async () => {

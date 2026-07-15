@@ -49,4 +49,17 @@ describe("createGracefulBashOperations", () => {
 
     await expect(pending).rejects.toThrow("aborted");
   });
+
+  it("does not launch a shell when the caller is already aborted", async () => {
+    // Intent: a pre-aborted request must short-circuit before shell resolution or spawn; the
+    // missing path makes any accidental setup work observable instead of cancellation.
+    const operations = createGracefulBashOperations({ shellPath: "/definitely/missing/pi-base-shell" });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(operations.exec("printf should-not-run", process.cwd(), {
+      onData: () => undefined,
+      signal: controller.signal,
+    })).rejects.toThrow("aborted");
+  });
 });

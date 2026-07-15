@@ -76,8 +76,6 @@ def main() -> int:
             prompt,
             "--output",
             "json",
-            "--api-key",
-            api_key,
         ]
     )
 
