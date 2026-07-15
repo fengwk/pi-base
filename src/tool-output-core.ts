@@ -208,6 +208,29 @@ function mergeDetails(details: any, truncation: TruncationMetadata) {
   return { truncation: meta };
 }
 
+// When the output was already truncated upstream (bash tail footer, read/grep/find
+// metadata), the upstream `details.truncation` carries rich fields (truncatedBy,
+// outputLines, maxBytes, ...) that tool renderers read. Replacing it wholesale with
+// the pi-base marker meta would erase those fields and surface "undefined" in
+// truncation warnings, so preserve them and only supplement the marker.
+function mergeAlreadyTruncatedDetails(details: any, truncated: TruncationResult): any {
+  const existing = details && typeof details === "object" && !Array.isArray(details) ? details.truncation : undefined;
+  const meta: Record<string, unknown> = {
+    truncated: true,
+    alreadyTruncated: true,
+    totalLines: truncated.totalLines,
+    totalBytes: truncated.totalBytes,
+  };
+  if (truncated.outputPath) meta.outputPath = truncated.outputPath;
+  const mergedTruncation = existing && typeof existing === "object" && !Array.isArray(existing)
+    ? { ...meta, ...existing, truncated: true, alreadyTruncated: true, ...(truncated.outputPath ? { outputPath: truncated.outputPath } : {}) }
+    : meta;
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    return { ...details, truncation: mergedTruncation };
+  }
+  return { truncation: mergedTruncation };
+}
+
 export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, result: AgentToolResult<TDetails>): Promise<{ result: AgentToolResult<any>; truncated: boolean }> {
   const items = Array.isArray(result?.content) ? result.content : [];
   const textParts = items.filter((item: any) => item?.type === "text").map((item: any) => String(item.text ?? ""));
@@ -228,12 +251,7 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
       truncated: true,
       result: {
         ...result,
-        details: mergeDetails((result as any).details, {
-          outputPath: truncated.outputPath,
-          totalLines: truncated.totalLines,
-          totalBytes: truncated.totalBytes,
-          alreadyTruncated: truncated.alreadyTruncated,
-        }),
+        details: mergeAlreadyTruncatedDetails((result as any).details, truncated),
       },
     };
   }

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { applyUnifiedOutputTruncation } from "../src/tool-output.js";
+import { formatBashWarnings } from "../src/bash-renderer-core.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 describe("tool output truncation", () => {
@@ -103,6 +104,27 @@ describe("tool output truncation", () => {
     const details = (truncated.result as any).details;
     expect(details.truncation.alreadyTruncated).toBe(true);
     expect(details.truncation.outputPath).toBe("/tmp/pi-bash-demo.log");
+  });
+
+  it("preserves upstream bash truncation fields so renderer warnings stay accurate", async () => {
+    // Reproduces the production path: the tool_result hook runs applyUnifiedOutputTruncation
+    // on an already-truncated bash result, then the bash renderer reads details.truncation.
+    // The hook must not erase upstream fields (truncatedBy/outputLines/maxBytes), otherwise
+    // formatBashWarnings prints "Truncated: undefined lines shown".
+    const outputPath = "/tmp/pi-bash-output.log";
+    const upstream = {
+      content: [{ type: "text" as const, text: `line-1\n\n[Showing lines 1-1 of 100. Full output: ${outputPath}]` }],
+      details: {
+        fullOutputPath: outputPath,
+        truncation: { truncated: true, truncatedBy: "lines", outputLines: 1, totalLines: 100, maxBytes: 50 * 1024 },
+      },
+    };
+    const hook = await applyUnifiedOutputTruncation("bash", upstream as any);
+    expect((hook.result as any).details?.truncation?.alreadyTruncated).toBe(true);
+    const warnings = formatBashWarnings(hook.result);
+    expect(warnings).toContain(`Full output: ${outputPath}`);
+    expect(warnings.some((w) => w.includes("showing 1 of 100 lines"))).toBe(true);
+    expect(warnings.some((w) => w.includes("undefined"))).toBe(false);
   });
 
   it("marks already-truncated long-line output even when below pi-base size limits", async () => {
