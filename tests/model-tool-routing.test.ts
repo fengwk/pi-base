@@ -75,6 +75,23 @@ describe("model tool routing", () => {
       .toEqual(["read", "apply_patch"]);
   });
 
+  it("treats apply_patch and edit/write as mutually exclusive", () => {
+    // Intent: apply_patch subsumes edit and write. When all three are declared
+    // together, the legacy tools are removed regardless of model or selection.
+    expect(projectFileMutationTools(["read", "edit", "write", "apply_patch"], GPT5.id, "explicit"))
+      .toEqual(["read", "apply_patch"]);
+    expect(projectFileMutationTools(["read", "edit", "write", "apply_patch"], ANTHROPIC.id, "explicit"))
+      .toEqual(["read", "apply_patch"]);
+    expect(projectFileMutationTools(["read", "edit", "write", "apply_patch"], GPT5.id, "implicit"))
+      .toEqual(["read", "apply_patch"]);
+    expect(projectFileMutationTools(["read", "edit", "write", "apply_patch"], ANTHROPIC.id, "implicit"))
+      .toEqual(["read", "edit", "write"]);
+    expect(projectFileMutationTools(["read", "edit", "apply_patch"], ANTHROPIC.id, "explicit"))
+      .toEqual(["read", "apply_patch"]);
+    expect(projectFileMutationTools(["read", "write", "apply_patch"], GPT5.id, "explicit"))
+      .toEqual(["read", "apply_patch"]);
+  });
+
   it.each([
     ["GPT-5/Codex", GPT5, ["apply_patch"]],
     ["GPT-4", GPT4, ["edit", "write"]],
