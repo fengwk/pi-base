@@ -10,6 +10,7 @@ export interface GracefulTerminationOptions {
 
 export interface GracefulTerminator {
   terminate: () => void;
+  forceTerminate: () => void;
   cleanup: () => void;
   isTerminating: () => boolean;
 }
@@ -41,8 +42,21 @@ function signalProcessTree(pid: number, signal: NodeJS.Signals) {
   }
 }
 
+function hasProcessTree(pid: number) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 function requestSoftTermination(child: ChildProcess, killTree: boolean) {
   if (process.platform === "win32") {
+    if (killTree && typeof child.pid === "number") {
+      spawnTaskkill(["/T", "/PID", String(child.pid)]);
+      return;
+    }
     signalChild(child, "SIGTERM");
     return;
   }
@@ -69,13 +83,36 @@ export function createGracefulTerminator(child: ChildProcess, options: GracefulT
   let exited = false;
   let terminating = false;
   let forceKillTimer: NodeJS.Timeout | undefined;
+  const processTreePid = killTree && typeof child.pid === "number" ? child.pid : undefined;
+
+  const clearForceKillTimer = () => {
+    if (!forceKillTimer) return;
+    clearTimeout(forceKillTimer);
+    forceKillTimer = undefined;
+  };
+
+  const shouldKeepTreeEscalation = () => {
+    if (!killTree || !terminating || !forceKillTimer) return false;
+    if (processTreePid === undefined) return false;
+    if (process.platform === "win32") return true;
+    return hasProcessTree(processTreePid);
+  };
+
+  const forceNow = () => {
+    clearForceKillTimer();
+    if (!killTree) {
+      if (exited) return;
+    } else if (processTreePid === undefined) {
+      if (exited) return;
+    } else if (process.platform !== "win32" && !hasProcessTree(processTreePid)) {
+      return;
+    }
+    forceTermination(child, killTree);
+  };
 
   const markExited = () => {
     exited = true;
-    if (forceKillTimer) {
-      clearTimeout(forceKillTimer);
-      forceKillTimer = undefined;
-    }
+    if (!shouldKeepTreeEscalation()) clearForceKillTimer();
   };
 
   child.once("exit", markExited);
@@ -85,17 +122,18 @@ export function createGracefulTerminator(child: ChildProcess, options: GracefulT
     terminate: () => {
       if (terminating || exited) return;
       terminating = true;
-      requestSoftTermination(child, killTree);
       forceKillTimer = setTimeout(() => {
-        if (exited) return;
-        forceTermination(child, killTree);
+        forceKillTimer = undefined;
+        forceNow();
       }, forceKillAfterMs);
+      requestSoftTermination(child, killTree);
+    },
+    forceTerminate: () => {
+      terminating = true;
+      forceNow();
     },
     cleanup: () => {
-      if (forceKillTimer) {
-        clearTimeout(forceKillTimer);
-        forceKillTimer = undefined;
-      }
+      if (!shouldKeepTreeEscalation()) clearForceKillTimer();
       child.removeListener("exit", markExited);
       child.removeListener("close", markExited);
     },

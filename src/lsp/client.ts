@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { decodeTextFile } from "../text-codec.js";
+import { createGracefulTerminator, type GracefulTerminator } from "../process-termination.js";
 import { findBestJavaHome, LspDiscoveryResolver, type LspServerConfig, type LspWorkspaceDataConfig } from "./discovery.js";
 
 const EXT_TO_LANG: Record<string, string> = {
@@ -219,6 +220,8 @@ function formatTransientDiagnosticsTimeoutError(serverId: string, filePath: stri
 
 export class LspClient {
   private proc: ChildProcessWithoutNullStreams | null = null;
+  private terminator: GracefulTerminator | null = null;
+  private transportFailure: Error | null = null;
   private buffer = Buffer.alloc(0);
   private pending = new Map<number, PendingHandler>();
   private requestId = 0;
@@ -244,25 +247,27 @@ export class LspClient {
 
   async start(): Promise<void> {
     if (this.stopping) throw new Error("LSP client stopped");
+    this.transportFailure = null;
     const jdtlsEnhancedCommand = isJdtlsCommand(this.server.command) ? enhanceJdtlsCommand(this.server.command, this.root, this.server.workspaceData) : this.server.command;
     const jdtlsEnv = enhanceJdtlsEnv(jdtlsEnhancedCommand, process.env);
     this.proc = spawn(jdtlsEnhancedCommand[0], jdtlsEnhancedCommand.slice(1), {
       cwd: this.root,
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...jdtlsEnv },
     });
+    this.terminator = createGracefulTerminator(this.proc, { killTree: true });
     this.proc.on("error", (err) => {
-      const reason = `LSP server failed to start: ${err.message}`;
-      this.rejectAllPending(reason);
-      this.rejectAllDiagnosticsWaiters(reason);
+      this.recordTransportFailure(`LSP server failed to start: ${err.message}`);
     });
     this.proc.on("exit", (code) => {
-      const reason = `LSP server exited (code: ${code ?? "null"})`;
-      this.rejectAllPending(reason);
-      this.rejectAllDiagnosticsWaiters(reason);
+      this.recordTransportFailure(`LSP server exited (code: ${code ?? "null"})`);
     });
     this.proc.stdout.on("data", (chunk) => this.onData(chunk as Buffer));
-    this.proc.stderr?.on("data", () => undefined);
+    this.proc.stdin.on("error", (err) => this.recordTransportFailure(`LSP stdin error: ${err.message}`));
+    this.proc.stdout.on("error", (err) => this.recordTransportFailure(`LSP stdout error: ${err.message}`));
+    this.proc.stderr.on("data", () => undefined);
+    this.proc.stderr.on("error", (err) => this.recordTransportFailure(`LSP stderr error: ${err.message}`));
     // Wait briefly for the process to either die (e.g. missing binary) or survive.
     await new Promise((resolve) => setTimeout(resolve, 100));
     if (this.stopping || !this.proc) throw new Error("LSP client stopped");
@@ -270,15 +275,18 @@ export class LspClient {
       const detail = this.proc.exitCode === null ? "killed before start" : `exited with code ${this.proc.exitCode}`;
       throw new Error(`LSP server '${this.server.command.join(" ")}' ${detail} for ${this.root}. Check that the server is installed and reachable on PATH.`);
     }
+    const transportFailure = this.transportFailure as Error | null;
+    if (transportFailure) throw new Error(transportFailure.message);
   }
 
   async initialize(): Promise<void> {
     const rootUri = pathToFileURL(this.root).href;
+    const workspaceFolders = this.workspaceFolders();
     const initParams: Record<string, unknown> = {
       processId: process.pid,
       rootUri,
       rootPath: this.root,
-      workspaceFolders: [{ uri: rootUri, name: "workspace" }],
+      workspaceFolders,
       capabilities: {
         general: { positionEncodings: ["utf-32", "utf-16", "utf-8"] },
         textDocument: {
@@ -365,7 +373,7 @@ export class LspClient {
   }
 
   isAlive(): boolean {
-    return this.proc !== null && this.proc.exitCode === null && !this.proc.killed;
+    return this.transportFailure === null && this.proc !== null && this.proc.exitCode === null && !this.proc.killed;
   }
 
   syncExternalChanges(): void {
@@ -501,6 +509,7 @@ export class LspClient {
 
   private async stopImpl(shutdownGraceMs: number): Promise<void> {
     const proc = this.proc;
+    const terminator = this.terminator;
     const gracefulDeadline = Date.now() + Math.max(0, shutdownGraceMs);
     this.stopping = true;
     this.rejectAllPending("LSP client stopped");
@@ -520,8 +529,15 @@ export class LspClient {
       await waitForProcessExit(proc, Math.max(0, gracefulDeadline - Date.now()));
     }
 
-    if (proc) await forceTerminateProcess(proc);
+    if (proc && terminator) {
+      terminator.forceTerminate();
+      await waitForProcessExit(proc, FORCE_KILL_WAIT_MS);
+      terminator.cleanup();
+    } else if (proc) {
+      await forceTerminateProcess(proc);
+    }
     this.proc = null;
+    this.terminator = null;
     this.openedFiles.clear();
     this.fileVersions.clear();
     this.fileMtimes.clear();
@@ -634,19 +650,15 @@ export class LspClient {
   }
 
   private notify(method: string, params: unknown): void {
-    if (!this.proc || this.proc.exitCode !== null || this.proc.killed) return;
-    const message = JSON.stringify({ jsonrpc: "2.0", method, params });
-    this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`);
+    this.writeMessage({ jsonrpc: "2.0", method, params });
   }
 
   private send(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
     if (this.stopping && method !== "shutdown") throw new Error("LSP client stopped");
+    if (this.transportFailure) throw new Error(this.transportFailure.message);
     if (!this.proc || this.proc.exitCode !== null || this.proc.killed) throw new Error("LSP client not started");
     if (signal?.aborted) throw abortError();
     const id = ++this.requestId;
-    const message = JSON.stringify({ jsonrpc: "2.0", id, method, params });
-    this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`);
-    this.onActivity();
     return new Promise((resolve, reject) => {
       let settled = false;
       const onAbort = () => {
@@ -681,6 +693,56 @@ export class LspClient {
         },
         timer,
       });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      try {
+        this.writeMessage({ jsonrpc: "2.0", id, method, params });
+        this.onActivity();
+      } catch (error) {
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        this.pending.delete(id);
+        clearTimeout(pending.timer);
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  private workspaceFolders(): Array<{ uri: string; name: string }> {
+    return [{ uri: pathToFileURL(this.root).href, name: "workspace" }];
+  }
+
+  private writeMessage(payload: unknown): void {
+    if (this.transportFailure) throw new Error(this.transportFailure.message);
+    if (!this.proc || this.proc.exitCode !== null || this.proc.killed) return;
+    const message = JSON.stringify(payload);
+    try {
+      this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const reason = `LSP stdin error: ${message}`;
+      this.recordTransportFailure(reason);
+      throw new Error(reason);
+    }
+  }
+
+  private recordTransportFailure(reason: string): void {
+    if (!this.transportFailure) this.transportFailure = new Error(reason);
+    this.rejectAllPending(this.transportFailure.message);
+    this.rejectAllDiagnosticsWaiters(this.transportFailure.message);
+  }
+
+  private respondToServerRequest(id: unknown, method: string): void {
+    if (method === "workspace/workspaceFolders") {
+      this.writeMessage({ jsonrpc: "2.0", id, result: this.workspaceFolders() });
+      return;
+    }
+    this.writeMessage({
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32601, message: `Method not found: ${method}` },
     });
   }
 
@@ -712,6 +774,10 @@ export class LspClient {
           const waiters = this.diagnosticsWaiters.get(message.params.uri) ?? [];
           this.diagnosticsWaiters.delete(message.params.uri);
           for (const waiter of waiters) waiter.resolve(diagnostics);
+          continue;
+        }
+        if (typeof message.method === "string" && typeof message.id !== "undefined") {
+          this.respondToServerRequest(message.id, message.method);
           continue;
         }
         if (typeof message.id !== "undefined") {

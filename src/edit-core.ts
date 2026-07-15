@@ -37,14 +37,10 @@ import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
 const EDIT_ARGUMENT_VALIDATION_HINT = "Hint: Adjust the input parameters and re-run the `edit` command.";
-const EDIT_WORKING_FRAMES = ["-", "\\", "|", "/"] as const;
-const EDIT_WORKING_FRAME_INTERVAL_MS = 120;
 
 interface EditRenderState {
   completedDiff: string | undefined;
   completedKey: string | undefined;
-  spinnerIndex: number;
-  spinnerTimer: ReturnType<typeof setTimeout> | undefined;
 }
 
 function prepareEditArguments(args: unknown, validationTool: any): any {
@@ -110,41 +106,9 @@ function getEditRenderState(context: any): EditRenderState {
   const nextState: EditRenderState = {
     completedDiff: undefined,
     completedKey: undefined,
-    spinnerIndex: 0,
-    spinnerTimer: undefined,
   };
   sharedState.__piBaseEditRenderState = nextState;
   return nextState;
-}
-
-function stopEditWorkingSpinner(state: EditRenderState): void {
-  if (state.spinnerTimer !== undefined) {
-    clearTimeout(state.spinnerTimer);
-    state.spinnerTimer = undefined;
-  }
-}
-
-function scheduleEditWorkingSpinner(state: EditRenderState, invalidate: (() => void) | undefined): void {
-  if (state.spinnerTimer !== undefined || typeof invalidate !== "function") return;
-  state.spinnerTimer = setTimeout(() => {
-    state.spinnerTimer = undefined;
-    state.spinnerIndex = (state.spinnerIndex + 1) % EDIT_WORKING_FRAMES.length;
-    invalidate();
-  }, EDIT_WORKING_FRAME_INTERVAL_MS);
-}
-
-function formatEditWorkingLine(args: any, theme: any, spinnerIndex: number): string {
-  const oldText = String(args?.old_string ?? "");
-  const newText = String(args?.new_string ?? "");
-  const oldLines = countDisplayedLines(normalizeToLF(oldText));
-  const newLines = countDisplayedLines(normalizeToLF(newText));
-  const frame = EDIT_WORKING_FRAMES[spinnerIndex % EDIT_WORKING_FRAMES.length] ?? "-";
-  return [
-    styleMuted(theme, `${frame} working`),
-    `${styleMuted(theme, "old ")}${styleAccent(theme, `${oldLines}L/${oldText.length}C`)}`,
-    styleMuted(theme, "->"),
-    `${styleMuted(theme, "new ")}${styleAccent(theme, `${newLines}L/${newText.length}C`)}`,
-  ].join(" ");
 }
 
 function colorizeCompletedEditDiff(diff: string, theme: any): string {
@@ -465,20 +429,13 @@ export function registerEditTool(
       const header = formatEditCall(mappedArgs, theme, context?.cwd);
       const state = getEditRenderState(context);
       if (state.completedKey !== undefined) {
-        stopEditWorkingSpinner(state);
         return renderCallText(formatCompletedEditCall(header, state.completedDiff, theme), context?.lastComponent);
       }
-      if (context?.executionStarted && context?.isPartial !== false) {
-        scheduleEditWorkingSpinner(state, context?.invalidate);
-        return renderCallText(`${header}\n\n${formatEditWorkingLine(mappedArgs, theme, state.spinnerIndex)}`, context?.lastComponent);
-      }
-      stopEditWorkingSpinner(state);
       const preview = formatEditCallPreview(mappedArgs, theme);
       return renderStreamingCallText(preview ? `${header}\n\n${preview}` : header, theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const state = getEditRenderState(context);
-      stopEditWorkingSpinner(state);
       if (!context?.isError) {
         const diff = typeof result?.details?.diff === "string" ? result.details.diff : undefined;
         const replacements = typeof result?.details?.replacements === "number" ? result.details.replacements : undefined;

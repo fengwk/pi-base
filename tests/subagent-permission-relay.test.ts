@@ -47,7 +47,7 @@ describe("subagent permission relay", () => {
     expect(allowed).toBe(true);
     expect(prompts).toEqual([
       {
-        title: "⟳ subagent「worker」(depth 2) requests permission\n\nPermission request",
+        title: "⟳ subagent「worker」(depth 2) requests permission: Permission request",
         items: ["Yes", "No"],
       },
     ]);

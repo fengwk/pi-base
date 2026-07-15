@@ -34,30 +34,41 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> 
 }
 
 describe("createGracefulTerminator on Windows", () => {
-  it("uses taskkill for process-tree force termination and ignores taskkill spawn errors", async () => {
-    // Intent: Windows tree cleanup relies on taskkill; missing taskkill or a
-    // spawn error must not crash the extension while cleaning up tool children.
+  it("keeps Windows process-tree escalation armed after the leader exits", async () => {
+    // Intent: taskkill must capture the tree before the leader exits, and the
+    // delayed /F fallback must survive leader exit and caller cleanup.
     vi.useFakeTimers();
     try {
-      const killer = new EventEmitter() as EventEmitter & { unref: ReturnType<typeof vi.fn> };
-      killer.unref = vi.fn();
-      childProcessMock.spawn.mockReturnValueOnce(killer);
+      const softKiller = new EventEmitter() as EventEmitter & { unref: ReturnType<typeof vi.fn> };
+      const forceKiller = new EventEmitter() as EventEmitter & { unref: ReturnType<typeof vi.fn> };
+      softKiller.unref = vi.fn();
+      forceKiller.unref = vi.fn();
+      childProcessMock.spawn.mockReturnValueOnce(softKiller).mockReturnValueOnce(forceKiller);
 
       await withPlatform("win32", async () => {
         const child = new FakeChild();
         const terminator = createGracefulTerminator(child as any, { killTree: true, forceKillAfterMs: 25 });
 
         terminator.terminate();
-        expect(child.killedSignals).toEqual(["SIGTERM"]);
-        await vi.advanceTimersByTimeAsync(25);
-
-        expect(childProcessMock.spawn).toHaveBeenCalledWith("taskkill", ["/F", "/T", "/PID", "4242"], {
+        expect(child.killedSignals).toEqual([]);
+        expect(childProcessMock.spawn).toHaveBeenNthCalledWith(1, "taskkill", ["/T", "/PID", "4242"], {
           stdio: "ignore",
           detached: true,
         });
-        expect(killer.unref).toHaveBeenCalled();
-        expect(killer.listenerCount("error")).toBe(1);
-        expect(() => killer.emit("error", new Error("taskkill missing"))).not.toThrow();
+        child.emit("exit", 0);
+        terminator.cleanup();
+        await vi.advanceTimersByTimeAsync(25);
+
+        expect(childProcessMock.spawn).toHaveBeenNthCalledWith(2, "taskkill", ["/F", "/T", "/PID", "4242"], {
+          stdio: "ignore",
+          detached: true,
+        });
+        expect(softKiller.unref).toHaveBeenCalled();
+        expect(forceKiller.unref).toHaveBeenCalled();
+        expect(softKiller.listenerCount("error")).toBe(1);
+        expect(forceKiller.listenerCount("error")).toBe(1);
+        expect(() => softKiller.emit("error", new Error("taskkill missing"))).not.toThrow();
+        expect(() => forceKiller.emit("error", new Error("taskkill missing"))).not.toThrow();
       });
     } finally {
       childProcessMock.spawn.mockReset();

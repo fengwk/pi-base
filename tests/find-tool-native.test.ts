@@ -129,6 +129,18 @@ describe("createFindToolDefinition native fd path", () => {
     expect(args).toContain("**/src/*.ts");
   });
 
+  it("preserves trailing spaces in matched file names", async () => {
+    // Intent: fd output is a path protocol; trimming a result changes the
+    // target and can make the returned path refer to a nonexistent file.
+    const root = await createTempWorkspace();
+    await installFakeFd(root);
+    process.env.PI_BASE_FAKE_FD_OUTPUT = `${join(root, "trailing ")}\n`;
+
+    const result = await createFindToolDefinition(root).execute("find-spaced", { path: ".", pattern: "*" });
+
+    expect(getText(result)).toBe("trailing ");
+  });
+
   it("distinguishes empty results from fd execution failures", async () => {
     // Intent: no matches are normal model feedback; fd failures should remain
     // errors with stderr details.

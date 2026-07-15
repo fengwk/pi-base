@@ -145,6 +145,22 @@ const noArgTool: McpTool = {
     properties: {},
   },
 };
+const prototypeNamedTool: McpTool = {
+  name: "toString",
+  description: "Exercise a valid MCP name inherited from Object.prototype",
+  inputSchema: {
+    type: "object",
+    properties: {},
+  },
+};
+const prototypeSetterNamedTool: McpTool = {
+  name: "__proto__",
+  description: "Exercise a valid MCP name matching Object.prototype's legacy setter",
+  inputSchema: {
+    type: "object",
+    properties: {},
+  },
+};
 function createMcpRegistry(options: Parameters<typeof createToolRegistry>[0]): ReturnType<typeof createToolRegistry> {
   const registry = createToolRegistry(options);
   registries.push(registry);
@@ -1249,6 +1265,96 @@ describe("mcp support", () => {
 
     expect(seenStartupTimeout).toBe(15);
     expect(seenCallTimeout).toBe(25);
+  });
+
+  it("uses a per-tool call timeout before the server and global defaults", async () => {
+    // Intent: one slow MCP tool can receive a larger cancellation budget without
+    // weakening timeout protection for every other tool on the same server.
+    const seenTimeouts = new Map<string, number | undefined>();
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        callTimeoutMs: 50,
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+            callTimeoutMs: 25,
+            toolCallTimeoutMs: { echo: 240, ["__proto__"]: 360 },
+          },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({
+          mm: [{
+            tools: [echoTool, noArgTool, prototypeNamedTool, prototypeSetterNamedTool],
+            callResult: (name, _args, options) => {
+              seenTimeouts.set(name, options?.timeout);
+              return { content: [{ type: "text", text: "ok" }] };
+            },
+          }],
+        }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "echo") && hasTool(registry, "create_temp_dir"));
+    await registry.getTool("echo").execute("1", { text: "hello" }, undefined, undefined, { cwd: root });
+    await registry.getTool("create_temp_dir").execute("2", {}, undefined, undefined, { cwd: root });
+    await registry.getTool("toString").execute("3", {}, undefined, undefined, { cwd: root });
+    await registry.getTool("__proto__").execute("4", {}, undefined, undefined, { cwd: root });
+
+    expect(seenTimeouts.get("echo")).toBe(240);
+    expect(seenTimeouts.get("create_temp_dir")).toBe(25);
+    expect(seenTimeouts.get("toString")).toBe(25);
+    expect(seenTimeouts.get("__proto__")).toBe(360);
+  });
+
+  it("applies wildcard permission rules to prototype-named MCP tools", async () => {
+    // Intent: dynamic tool names are ordinary strings; inherited Object keys
+    // must not be mistaken for tool-specific permission rule arrays.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      permission: { "*": "ask" },
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+    const prompts: string[] = [];
+    const registry = createMcpRegistry({
+      hasUI: true,
+      cwd: root,
+      ui: { select: async (title) => { prompts.push(title); return "Yes"; } },
+    });
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({ mm: [{ tools: [prototypeNamedTool] }] }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, "toString"));
+    const result = await registry.getTool("toString").execute("1", {}, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect(prompts).toEqual(["Permission request: toString"]);
   });
 
   it("uses global MCP timeouts and resets both to 60000ms after reload", async () => {

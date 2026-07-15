@@ -59,7 +59,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
 | `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
 | `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
-| `apply_patch` | `patchText` | session cwd | OpenCode `*** Begin Patch` 协议；支持 Add/Update/Delete，多文件先整体 preflight、再按顺序提交；调用预览、权限变更预览和逐文件持久化 diff 均有界，目标清单保持完整，行数统计不截断；不支持 Move |
+| `apply_patch` | `patchText` | workdir=session cwd | OpenCode `*** Begin Patch` 协议，并提供可选 `workdir` 扩展；支持 Add/Update/Delete，多文件先整体 preflight、再按顺序提交；参数流式生成时调用预览有界，参数完成后完整展示 patch，逐文件持久化 diff 仍有界且行数统计不截断；不支持 Move |
 <!-- 暂时禁用；恢复注册时一并取消此注释。
 | `lsp_diagnostics` | `path` | severity=all | 需 `lsp.servers` 声明 server；不做能力前置检查 |
 -->
@@ -97,7 +97,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 *** End Patch
 ```
 
-`apply_patch` 对模型暴露与 OpenCode 相同的单一 `{ patchText }` function-tool 参数。`patchText` 可直接传协议正文，也兼容常见 heredoc 包装；`*** Begin Patch`/`*** End Patch` 两侧以及 heredoc closing delimiter 后可带水平空白。Add body 每行以 `+` 开头；Delete 无 body；Update 使用一个或多个 `@@` chunk，context/删除/新增行分别以空格、`-`、`+` 开头。所有相对路径统一相对当前 session cwd 解析。
+`apply_patch` 使用 OpenCode 的 `patchText` 协议，并额外暴露可选 `workdir`。`patchText` 可直接传协议正文，也兼容常见 heredoc 包装；`*** Begin Patch`/`*** End Patch` 两侧以及 heredoc closing delimiter 后可带水平空白。Add body 每行以 `+` 开头；Delete 无 body；Update 使用一个或多个 `@@` chunk，context/删除/新增行分别以空格、`-`、`+` 开头。相对路径在提供 `workdir` 时从该目录解析，否则从当前 session cwd 解析。
 
 执行分两阶段：先解析并 preflight 全部文件（路径、存在性、文本编码、hunk 唯一匹配、输出可编码性等），任一失败则完全不写；preflight 全部成功后按 patch 顺序逐文件提交。提交阶段若后续文件因竞态或文件系统错误失败，前面已提交文件不会回滚，错误会明确标记 partial application，并在 details 中列出实际已提交文件及 diff 元数据；失败文件可能已被底层写操作部分修改，因此同时报告 `failedPathState: "unknown"`，调用方不能假定它保持原样。每次成功提交（包括最终部分失败之前的提交）都会更新 LSP：Add/Update 同步内容，Delete 对已打开文档发送 `didClose` 并清理缓存；状态未知的失败路径也会保守关闭已打开的 LSP 文档，避免继续使用可能陈旧的缓存。LSP 处理失败不会覆盖原始文件系统结果。
 
@@ -293,7 +293,7 @@ Agent 正文（覆盖 system prompt）
 | `ask` | 有 UI 弹出 Yes/No；无 UI headless subagent 转发给 root UI；其他无 UI 场景直接拦截 |
 | 路径类匹配 | 同时匹配原始路径、相对 workdir 路径、相对项目根路径、绝对路径 |
 | apply_patch 继承 | 执行前解析全部 target；Update 继承 `edit` 路径规则，Add/Delete 继承 `write` 路径规则；随后叠加 `permission.apply_patch` 作为覆盖层 |
-| apply_patch 聚合 | 对所有 target 取 `deny > ask > allow`；有效 patch 的确认框列出全部 `A/M/D path`，并展示由请求 patch 派生的 bounded 变更预览（确认前不读取目标文件）；畸形 patch 不执行文件操作，仅退回全局 `*` + `apply_patch` 通用规则 |
+| apply_patch 聚合 | 对所有 target 取 `deny > ask > allow`；确认框只显示单行、总长有界的 `A/M/D path` 摘要，具体 patch 内容在工具调用预览中查看；畸形 patch 不执行文件操作，仅退回全局 `*` + `apply_patch` 通用规则 |
 | bash 匹配 | 识别 `&&`/`||`/`|`/`;`/换行 分割的顶层 command 段；不展开变量；动态命令头、命令头/前置重定向、复合/控制流语法、命令替换、可展开 heredoc、process substitution、shell/eval/source 动态执行，以及 command/env/exec/nohup 执行包装器无法保守分析时，显式整条命令 deny 仍 deny，否则退回 ask |
 
 `permission` 是用于防误操作的词法规则，不是安全沙箱。它不会执行完整 shell 解析或提供文件系统隔离；文件路径检查也不防御 symlink 穿透或 TOCTOU 竞态。需要强隔离时应在 Pi 之外使用容器、受限账户或其他系统级沙箱。
@@ -323,6 +323,8 @@ Agent 正文（覆盖 system prompt）
 | `collapsedToolResultMaxChars` | 仅已折叠时生效，不会单独触发折叠 |
 
 默认值：read=10, grep=15, bash=20, write=10，其他工具 `*`=20。
+
+文件修改工具的调用预览独立于上述结果折叠配置：`apply_patch` / `edit` / `write` 在参数流式生成时统一限制为 10 行；完成后 `apply_patch` 与 `edit` 完整展示变更预览，`write` 默认收起为 7 行内容预览，展开后可查看完整写入内容。权限确认框只保留不超过 80 字符的单行工具摘要，不重复写入或 diff 正文。
 
 #### `notify`
 
@@ -360,10 +362,12 @@ Agent 正文（覆盖 system prompt）
 |------|------|------|
 | `anchorHygiene` | false | 后续 write/edit/apply_patch 成功后，折叠同路径旧的 read/edit/apply_patch 文件上下文；write ack 不参与折叠；partial apply_patch 会把已提交路径及 `failedPathState: "unknown"` 的失败路径标脏，但不影响尚未执行的后续目标 |
 | `tools` | — | 按 `toolCall.name` 精确匹配，需压缩的工具名列表 |
-| `retainedUserMessageRounds` | 2 | 保留最近的 N 轮 user 消息 |
-| `retainedAssistantTurns` | 4 | 保留最近的 N 次 assistant turn |
+| `retainedUserMessageRounds` | 2 | 压缩前需保留的有效 user round 数 |
+| `retainedAssistantTurns` | 4 | 构成一个有效 user round 所需累计的 assistant turn 数 |
 | `enabledProviders` | 不限制 | 仅对这些 provider id 生效（大小写不敏感）；`[]`=全部不生效 |
 | `disabledProviders` | — | 即使命中 enabledProviders 也跳过压缩（大小写不敏感）；不允许空数组 |
+
+年龄压缩从候选工具结果之后的下一条 user 消息开始按 user window 统计。连续 window 累计达到 `retainedAssistantTurns` 次 assistant turn 后计为一个有效 user round；累计达到 `retainedUserMessageRounds` 个有效 round 后才压缩该结果。每个 user window 最多贡献一个有效 round。
 
 生效顺序：`enabledProviders` 过滤 → `disabledProviders` 过滤 → 都通过后启用。仅压缩成功的 `toolResult.content`，失败的永不被压缩。read 到已注入 skill 路径的文件不参与 age compression（除非被后续 anchorHygiene 触发）。
 
@@ -412,7 +416,8 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
         "env": { "API_KEY": "${API_KEY}" },
         "toolPrefix": "",
         "startupTimeoutMs": 60000,
-        "callTimeoutMs": 60000
+        "callTimeoutMs": 60000,
+        "toolCallTimeoutMs": { "scrape": 240000 }
       },
       "remote-example": {
         "type": "remote",
@@ -436,6 +441,7 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
 | `enabled` | `false` 禁用该 server |
 | `startupTimeoutMs` | server 启动超时，覆盖 `mcp.startupTimeoutMs` 全局默认；默认 `60000` |
 | `callTimeoutMs` | 单次工具调用超时，覆盖 `mcp.callTimeoutMs` 全局默认；默认 `60000`。超时由 MCP SDK 取消对应请求，不会因单次慢调用重启 server |
+| `toolCallTimeoutMs` | 按 MCP server 原始工具名覆盖 `callTimeoutMs`，例如 `{ "scrape": 240000 }`；未列出的工具继续使用 server 或全局默认 |
 | `mcp.startupTimeoutMs` / `mcp.callTimeoutMs` | 全局默认，可在未声明 `servers` 时单独配置 |
 
 同一 Pi 进程内，每个 MCP server 配置只建立一个共享连接/本地进程，root 与所有 subagent 共用。首次 `session_start` 会并行等待所有 enabled server 完成首次连接或达到 `startupTimeoutMs`，因此首个 prompt 只会在 MCP readiness 确定后开始；后续 subagent 直接复用同一 readiness 和工具列表。`pi-base` 继续在后台维护重连 + heartbeat，状态显示在 footer。

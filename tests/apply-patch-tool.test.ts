@@ -1,5 +1,5 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import piBaseExtension from "../index.js";
@@ -59,9 +59,12 @@ describe("apply_patch tool", () => {
     expect(tool.parameters.required).toEqual(["patchText"]);
     expect(tool.parameters.properties).toEqual({
       patchText: expect.objectContaining({ type: "string" }),
+      workdir: expect.objectContaining({ type: "string" }),
     });
     expect(() => tool.prepareArguments({})).toThrow();
     expect(tool.prepareArguments({ patchText: patch("*** Add File: valid.txt", "+ok") })).toMatchObject({ patchText: expect.any(String) });
+    expect(tool.prepareArguments({ patchText: patch("*** Add File: valid.txt", "+ok"), workdir: "pkg" }))
+      .toMatchObject({ patchText: expect.any(String), workdir: "pkg" });
 
     const absent = await tool.execute("absent", undefined, undefined, undefined, { cwd: process.cwd() });
     expect(absent.isError).toBe(true);
@@ -89,7 +92,8 @@ describe("apply_patch tool", () => {
   });
 
   it("renders default and explicit workdirs, every target kind, and malformed fallback", () => {
-    // Intent: calls stay compact after parsing, while malformed streaming input remains inspectable.
+    // Intent: completed calls preserve the complete review payload, including
+    // malformed input whose execution will fail validation.
     const registry = createToolRegistry();
     registerApplyPatchTool(registry.pi as any);
     const tool = registry.getTool("apply_patch");
@@ -130,12 +134,13 @@ describe("apply_patch tool", () => {
     const malformedLarge = render(tool.renderCall({
       patchText: ["*** Begin Patch", ...Array.from({ length: 60 }, (_, index) => `malformed-${index + 1}`)].join("\n"),
     }, {} as any, { cwd: "/repo", argsComplete: true }));
-    expect(malformedLarge).toContain("more patch lines");
-    expect(malformedLarge).not.toContain("malformed-60");
+    expect(malformedLarge).toContain("malformed-60");
+    expect(malformedLarge).not.toContain("more patch lines");
   });
 
-  it("bounds completed call previews without hiding the operation summary", () => {
-    // Intent: a large patch must remain reviewable without flooding the transcript.
+  it("shows the complete patch preview once arguments are complete", () => {
+    // Intent: permission and completed history rely on the call preview as the
+    // authoritative human-review surface; only argument streaming is height-bounded.
     const registry = createToolRegistry();
     registerApplyPatchTool(registry.pi as any);
     const tool = registry.getTool("apply_patch");
@@ -147,8 +152,8 @@ describe("apply_patch tool", () => {
     expect(call).toContain("Targets: A large.txt, D later-delete.txt");
     expect(call).toContain("A large.txt");
     expect(call).toContain("+line-1");
-    expect(call).toContain("more patch lines");
-    expect(call).not.toContain("+line-60");
+    expect(call).toContain("+line-60");
+    expect(call).not.toContain("more patch lines");
 
     const longPath = `${"x".repeat(200)}.txt`;
     const manyTargets = render(tool.renderCall({
@@ -199,6 +204,27 @@ describe("apply_patch tool", () => {
     expect(await readFile(join(root, "nested/add.txt"), "utf8")).toBe("created\n");
     expect(await readFile(join(root, "update.txt"), "utf8")).toBe("new\n");
     expect(await exists(join(root, "delete.txt"))).toBe(false);
+  });
+
+  it("resolves relative patch paths from explicit workdir instead of the session cwd", async () => {
+    // Intent: a workspace patch must not silently modify an identically named file
+    // in the session root when the caller selected another working directory.
+    const root = await createTempWorkspace();
+    const workspace = join(root, "workspace");
+    await mkdir(workspace);
+    await writeFile(join(root, "same.txt"), "old\n", "utf8");
+    await writeFile(join(workspace, "same.txt"), "old\n", "utf8");
+    const registry = createToolRegistry();
+    registerApplyPatchTool(registry.pi as any);
+
+    const result = await registry.getTool("apply_patch").execute("workdir", {
+      workdir: "workspace",
+      patchText: patch("*** Update File: same.txt", "@@", "-old", "+new"),
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect(await readFile(join(root, "same.txt"), "utf8")).toBe("old\n");
+    expect(await readFile(join(workspace, "same.txt"), "utf8")).toBe("new\n");
   });
 
   it("uses a singular summary and renders results with or without diff metadata", async () => {

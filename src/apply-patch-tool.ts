@@ -152,14 +152,14 @@ export function formatApplyPatchCall(args: any, theme: any, cwd?: string): strin
   try {
     const patch = parseApplyPatch(args.patchText);
     const targets = formatCallTargetSummary(patch);
-    const preview = buildApplyPatchPreview(patch, { maxLines: 40, maxLineChars: 240 });
+    const preview = buildApplyPatchPreview(patch);
     return [
       header,
       `${styleMuted(theme, "Targets: ")}${styleAccent(theme, targets)}`,
       preview.lines.map((line) => colorizePreviewLine(line, theme)).join("\n"),
     ].join("\n\n");
   } catch {
-    const preview = buildRawApplyPatchPreview(args.patchText, { maxLines: 40, maxLineChars: 240 });
+    const preview = buildRawApplyPatchPreview(args.patchText);
     return `${header}\n\n${preview.lines.map((line) => colorizePreviewLine(line, theme)).join("\n")}`;
   }
 }

@@ -220,7 +220,7 @@ describe("tool renderers", () => {
     });
   });
 
-  it("shows edit working state in renderCall while execution is in progress", async () => {
+  it("keeps the edit preview visible while execution is in progress", async () => {
     await withTempGlobalPiBaseConfig({}, async () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
@@ -229,13 +229,14 @@ describe("tool renderers", () => {
         {} as any,
         { lastComponent: undefined, state: {}, executionStarted: true, argsComplete: true, cwd: "/tmp/ws" },
       ));
-      expect(rendered).toContain("working");
-      expect(rendered).toContain("old 2L/10C");
-      expect(rendered).toContain("new 3L/16C");
+      expect(rendered).toContain("1|alpha");
+      expect(rendered).toContain("-2|beta");
+      expect(rendered).toContain("+3|gamma");
+      expect(rendered).not.toContain("working");
     });
   });
 
-  it("does not keep showing edit working state after a failed result arrives", async () => {
+  it("keeps the edit preview visible after a failed result arrives", async () => {
     await withTempGlobalPiBaseConfig({}, async () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
@@ -317,6 +318,7 @@ describe("tool renderers", () => {
         { name: "bash", args: { timeout_seconds: 5 } },
         { name: "edit", args: { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" } },
         { name: "write", args: { path: "src/example.ts", content: Array.from({ length: 14 }, (_, index) => `line-${index + 1}`).join("\n") } },
+        { name: "apply_patch", args: { patchText: ["*** Begin Patch", "*** Add File: src/example.ts", ...Array.from({ length: 14 }, (_, index) => `+line-${index + 1}`), "*** End Patch"].join("\n") } },
         // Temporarily disabled with the lsp_diagnostics tool registration.
         // { name: "lsp_diagnostics", args: { severity: "warning" } },
         { name: "lsp_goto_definition", args: { line: 3 } },
@@ -363,6 +365,54 @@ describe("tool renderers", () => {
       expect(pendingPath).not.toContain("<missing-path>");
       expect(editRendered).toContain("earlier lines");
       expect(editRendered).not.toContain("-old-3");
+
+      const applyPatchRendered = render(registry.getTool("apply_patch").renderCall(
+        { patchText: ["*** Begin Patch", "*** Add File: src/example.ts", ...Array.from({ length: 14 }, (_, index) => `+line-${index + 1}`), "*** End Patch"].join("\n") },
+        {} as any,
+        streamingContext as any,
+      ));
+      expect(applyPatchRendered).toContain("+line-14");
+      expect(applyPatchRendered).toContain("earlier lines");
+      expect([writeRendered, editRendered, applyPatchRendered].map((text) => text.split("\n").length)).toEqual([10, 10, 10]);
+    });
+  });
+
+  it("fully shows completed apply_patch and edit previews while write stays collapsed", async () => {
+    await withTempGlobalPiBaseConfig({}, async (root) => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const lines = Array.from({ length: 40 }, (_, index) => `line-${index + 1}`);
+      const settledContext = {
+        lastComponent: undefined,
+        argsComplete: true,
+        executionStarted: true,
+        isPartial: false,
+        expanded: false,
+        isError: false,
+        cwd: root,
+        state: {},
+      };
+
+      const applyPatch = render(registry.getTool("apply_patch").renderCall({
+        patchText: ["*** Begin Patch", "*** Add File: large.txt", ...lines.map((line) => `+${line}`), "*** End Patch"].join("\n"),
+      }, {} as any, settledContext as any));
+      const edit = render(registry.getTool("edit").renderCall({
+        path: "large.txt",
+        old_string: lines.map((line) => `old-${line}`).join("\n"),
+        new_string: "replacement",
+      }, {} as any, { ...settledContext, state: {} } as any));
+      const write = render(registry.getTool("write").renderCall({
+        path: "large.txt",
+        content: lines.join("\n"),
+      }, {} as any, settledContext as any));
+
+      expect(applyPatch).toContain("+line-40");
+      expect(applyPatch).not.toContain("more patch lines");
+      expect(edit).toContain("-40|old-line-40");
+      expect(write).toContain("line-7");
+      expect(write).not.toContain("line-8");
+      expect(write).not.toContain("line-40");
+      expect(write).toContain("33 more lines");
     });
   });
 

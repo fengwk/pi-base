@@ -8,7 +8,7 @@ import { registerWriteTool } from "./write.js";
 import { registerApplyPatchTool } from "./apply-patch.js";
 import { registerBashRendererTool } from "./bash-renderer.js";
 import { type LoadedPiBaseSettings } from "./config.js";
-import { registerPermissionGuard } from "./permission.js";
+import { registerPermissionGuard, truncatePermissionLine } from "./permission.js";
 import { loadRuntimePiBaseSettings, reloadRuntimePiBaseSettings, toggleRuntimeYolo } from "./runtime-settings.js";
 import { lspManager } from "./lsp/client.js";
 import { registerLspTools, type LspResolverFactory } from "./lsp/tools.js";
@@ -371,7 +371,8 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
         if (req.signal?.aborted) throw new Error("Operation aborted");
         await notifyHooks.onPermissionAsked({ ctx });
         if (req.signal?.aborted) throw new Error("Operation aborted");
-        const title = `⟳ subagent「${req.agentType}」(depth ${req.depth}) requests permission\n\n${req.prompt}`;
+        const summary = req.prompt.replace(/^Permission request:\s*/i, "");
+        const title = truncatePermissionLine(`⟳ subagent「${req.agentType}」(depth ${req.depth}) requests permission: ${summary}`);
         const choice = await ctx.ui.select(title, ["Yes", "No"]);
         if (registeredHost !== host || registeredHostRootSessionId !== rootSessionId) {
           throw new Error("Subagent permission host is no longer active");

@@ -1,7 +1,7 @@
 import iconv from "iconv-lite";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +15,32 @@ import { createTempWorkspace, writeWorkspaceFile } from "./helpers.js";
 function encodeMessage(payload: unknown): Buffer {
   const body = JSON.stringify(payload);
   return Buffer.from(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`, "utf8");
+}
+
+function decodeMessage(frame: string): any {
+  return JSON.parse(frame.slice(frame.indexOf("\r\n\r\n") + 4));
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForPidFile(filePath: string, timeoutMs = 2_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return Number(await readFile(filePath, "utf8"));
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error(`pid file was not written within ${timeoutMs}ms`);
 }
 
 /* Temporarily disabled with the lsp_diagnostics tests.
@@ -247,6 +273,56 @@ describe("LspClient internals", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("does not consume a pending client request when a server request reuses its id", async () => {
+      // Intent: JSON-RPC ids are scoped by sender, so a reverse request must be
+      // answered independently while the same-id client request stays pending.
+      const writes: string[] = [];
+      const c = new LspClient("/tmp/demo", { id: "gopls", command: ["gopls"], extensions: [".go"] } as any);
+      (c as any).proc = {
+        stdin: { write: (frame: string) => writes.push(frame) },
+        exitCode: null,
+        killed: false,
+      };
+      const promise = (c as any).send("workspace/symbol", { query: "x" });
+
+      (c as any).onData(encodeMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "window/showMessageRequest",
+        params: { type: 3, message: "Choose", actions: [{ title: "OK" }] },
+      }));
+
+      expect((c as any).pending.has(1)).toBe(true);
+      expect(decodeMessage(writes[1]!)).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32601, message: "Method not found: window/showMessageRequest" },
+      });
+
+      (c as any).onData(encodeMessage({ jsonrpc: "2.0", id: 1, result: [{ name: "Foo" }] }));
+      await expect(promise).resolves.toEqual([{ name: "Foo" }]);
+    });
+
+    it("answers workspace/workspaceFolders server requests", () => {
+      // Intent: the client advertises workspace-folder support and must return
+      // the same workspace it supplied during initialization.
+      const writes: string[] = [];
+      const c = new LspClient("/tmp/demo", { id: "gopls", command: ["gopls"], extensions: [".go"] } as any);
+      (c as any).proc = {
+        stdin: { write: (frame: string) => writes.push(frame) },
+        exitCode: null,
+        killed: false,
+      };
+
+      (c as any).onData(encodeMessage({ jsonrpc: "2.0", id: "folders-1", method: "workspace/workspaceFolders", params: null }));
+
+      expect(decodeMessage(writes[0]!)).toEqual({
+        jsonrpc: "2.0",
+        id: "folders-1",
+        result: [{ uri: pathToFileURL("/tmp/demo").href, name: "workspace" }],
+      });
     });
 
     it("rejects send promptly when the caller aborts", async () => {
@@ -747,6 +823,69 @@ describe("LspClient internals", () => {
 
       await expect(pending).rejects.toThrow("LSP client stopped");
     });
+
+    it.skipIf(process.platform === "win32")("rejects requests instead of crashing when the server closes stdin", async () => {
+      // Intent: a broken LSP input pipe must become a normal client failure;
+      // the stdin stream's error event must never escape as an uncaught EPIPE.
+      const root = await createTempWorkspace();
+      const client = new LspClient(root, {
+        id: "closed-stdin",
+        command: [process.execPath, "-e", "require('node:fs').closeSync(0); setInterval(() => {}, 1000)"],
+        extensions: [".ts"],
+        requestTimeoutMs: 1_000,
+      } as any);
+
+      await client.start();
+      try {
+        await expect(client.workspaceSymbols("demo")).rejects.toThrow(/LSP stdin error: write EPIPE/);
+        expect(client.isAlive()).toBe(false);
+      } finally {
+        await client.stop({ shutdownGraceMs: 0 });
+      }
+    });
+
+    it.skipIf(process.platform === "win32")("force-stops descendants of an unresponsive LSP wrapper", async () => {
+      // Intent: reload/idle shutdown is complete only after the wrapper's
+      // process group is gone; a detached language-server child must not survive.
+      const root = await createTempWorkspace();
+      const wrapperPath = join(root, "lsp-wrapper.cjs");
+      const pidPath = join(root, "lsp-descendant.pid");
+      const survivorMarker = join(root, "lsp-descendant-survived.txt");
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        `setTimeout(() => fs.writeFileSync(${JSON.stringify(survivorMarker)}, 'alive'), 300);`,
+        "setInterval(() => {}, 1000);",
+      ].join(" ");
+      await writeFile(wrapperPath, [
+        "const fs = require('node:fs');",
+        "const { spawn } = require('node:child_process');",
+        `const child = spawn(${JSON.stringify(process.execPath)}, ['-e', ${JSON.stringify(descendantScript)}], { stdio: 'ignore' });`,
+        `fs.writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n"), "utf8");
+      const client = new LspClient(root, {
+        id: "wrapper",
+        command: [process.execPath, wrapperPath],
+        extensions: [".ts"],
+      } as any);
+      let descendantPid: number | undefined;
+
+      try {
+        await client.start();
+        descendantPid = await waitForPidFile(pidPath);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        await client.stop({ shutdownGraceMs: 25 });
+        await new Promise((resolve) => setTimeout(resolve, 400));
+
+        await expect(readFile(survivorMarker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await client.stop({ shutdownGraceMs: 0 });
+        if (descendantPid !== undefined && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
+    }, 5_000);
 
     it("allows a responsive server to exit naturally within the shutdown grace period", async () => {
       // Intent: after a successful shutdown response, the LSP `exit` notification must get the

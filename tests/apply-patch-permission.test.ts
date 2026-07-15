@@ -92,7 +92,7 @@ describe("apply_patch permission integration", () => {
     expect(await readFile(join(root, "update.txt"), "utf8")).toBe("new\n");
   });
 
-  it("aggregates valid targets as deny over ask over allow and prompts with compact targets", async () => {
+  it("aggregates valid targets as deny over ask over allow and prompts with a single-line target summary", async () => {
     const root = await createTempWorkspace();
     await writeSettings(root, {
       edit: { "*": "allow", "ask.txt": "ask" },
@@ -118,12 +118,11 @@ describe("apply_patch permission integration", () => {
     }, undefined, undefined, { cwd: root });
     expect(asked.isError).not.toBe(true);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("Targets:\n  A allow.txt\n  M ask.txt\n  D delete.txt");
-    expect(prompts[0]).toContain("Requested changes:");
-    expect(prompts[0]).toContain("  A allow.txt\n  +added");
-    expect(prompts[0]).toContain("  M ask.txt\n  @@\n  -old\n  +new");
-    expect(prompts[0]).toContain("  D delete.txt\n  (delete file)");
-    expect(prompts[0]).not.toContain("*** Begin Patch");
+    expect(prompts[0]).toContain("Permission request: apply_patch A allow.txt, M ask.txt, D delete.txt");
+    expect(prompts[0]).not.toContain("\n");
+    expect(prompts[0]).not.toContain("+added");
+    expect(prompts[0]).not.toContain("-old");
+    expect(prompts[0]).not.toContain("Requested changes");
 
     const denied = await registry.getTool("apply_patch").execute("deny", {
       workdir: root,
@@ -135,9 +134,9 @@ describe("apply_patch permission integration", () => {
     expect(await exists(join(root, "okay.txt"))).toBe(false);
   });
 
-  it("bounds permission previews while preserving the complete target list", async () => {
-    // Intent: requested-change content stays bounded without hiding any target
-    // whose inherited and apply_patch permissions contributed to the decision.
+  it("omits patch bodies and truncates the complete permission summary", async () => {
+    // Intent: permission only identifies the operation; the tool-call preview
+    // remains the single detailed review surface for patch contents.
     const root = await createTempWorkspace();
     await writeSettings(root, { apply_patch: "ask" });
     const prompts: string[] = [];
@@ -156,10 +155,11 @@ describe("apply_patch permission integration", () => {
 
     expect(result.isError).toBe(true);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("Targets:\n  A large.txt");
-    expect(prompts[0]).toContain("  +line-1");
-    expect(prompts[0]).toContain("more patch lines");
+    expect(prompts[0]).toContain("Permission request: apply_patch A large.txt");
+    expect(prompts[0]).not.toContain("\n");
+    expect(prompts[0]).not.toContain("+line-1");
     expect(prompts[0]).not.toContain("+line-50");
+    expect(prompts[0]!.length).toBeLessThanOrEqual(80);
     expect(await exists(join(root, "large.txt"))).toBe(false);
   });
 
@@ -234,6 +234,26 @@ describe("apply_patch permission integration", () => {
     expect(await exists(blocked)).toBe(false);
   });
 
+  it("applies path permissions after resolving an explicit external workdir", async () => {
+    // Intent: exposing workdir must not let a relative patch target bypass rules
+    // written for the final absolute path outside the session directory.
+    const root = await createTempWorkspace();
+    const external = await createTempWorkspace();
+    const blocked = join(external, "blocked.txt");
+    await writeSettings(root, { write: { "*": "allow", [blocked]: "deny" } });
+    const registry = createToolRegistry({ hasUI: false });
+    piBaseExtension(registry.pi as any);
+
+    const result = await registry.getTool("apply_patch").execute("external-workdir", {
+      workdir: external,
+      patchText: patch("*** Add File: blocked.txt", "+no"),
+    }, undefined, undefined, { cwd: root, hasUI: false });
+
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("Permission denied for apply_patch");
+    expect(await exists(blocked)).toBe(false);
+  });
+
   it("preserves headless ask blocking, root-relayed subagent prompts, and yolo bypass", async () => {
     const root = await createTempWorkspace();
     await writeSettings(root, { apply_patch: "ask" });
@@ -260,6 +280,7 @@ describe("apply_patch permission integration", () => {
     expect(rootPrompts).toHaveLength(1);
     expect(rootPrompts[0]).toContain("subagent「default」(depth 2)");
     expect(rootPrompts[0]).toContain("A relayed.txt");
+    expect(rootPrompts[0]).not.toContain("\n");
 
     await writeSettings(root, { apply_patch: "deny" });
     await rootRegistry.emit("session_start", { reason: "reload" }, { cwd: root, hasUI: true });

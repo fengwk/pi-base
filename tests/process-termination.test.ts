@@ -60,6 +60,34 @@ describe("createGracefulTerminator", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("keeps process-tree escalation armed after the leader exits", async () => {
+    // Intent: a detached shell can exit before descendants that ignored SIGTERM,
+    // so leader exit and caller cleanup must not cancel the process-group SIGKILL.
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      class FakeChild extends EventEmitter {
+        pid = 12345;
+        kill() {
+          return true;
+        }
+      }
+      const child = new FakeChild();
+      const terminator = createGracefulTerminator(child as any, { killTree: true, forceKillAfterMs: 50 });
+
+      terminator.terminate();
+      child.emit("exit", 0);
+      terminator.cleanup();
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+    } finally {
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not signal a child that already exited", () => {
     // Intent: late cancellation after process exit must be a no-op and must not
     // resurrect a force-kill timer.

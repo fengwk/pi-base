@@ -51,7 +51,14 @@ describe("pi-base config", () => {
       await writeFile(globalPath, JSON.stringify({ mcp: { startupTimeoutMs: 80, callTimeoutMs: 90 } }), "utf8");
       await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
         mcp: {
-          servers: { mm: { type: "local", command: ["mock-mcp"], callTimeoutMs: 30 } },
+          servers: {
+            mm: {
+              type: "local",
+              command: ["mock-mcp"],
+              callTimeoutMs: 30,
+              toolCallTimeoutMs: { scrape: 240 },
+            },
+          },
         },
       }), "utf8");
 
@@ -59,6 +66,7 @@ describe("pi-base config", () => {
       expect(inherited.settings.mcp?.startupTimeoutMs).toBe(80);
       expect(inherited.settings.mcp?.callTimeoutMs).toBe(90);
       expect(inherited.settings.mcp?.servers?.mm?.callTimeoutMs).toBe(30);
+      expect(inherited.settings.mcp?.servers?.mm?.toolCallTimeoutMs).toEqual({ scrape: 240 });
 
       await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
         mcp: {
@@ -268,6 +276,9 @@ describe("pi-base config", () => {
     ["invalid local cwd", { mcp: { servers: { x: { type: "local", command: ["x"], cwd: 1 } } } }, /cwd must be a string/],
     ["invalid local startup timeout", { mcp: { servers: { x: { type: "local", command: ["x"], startupTimeoutMs: 0 } } } }, /startupTimeoutMs/],
     ["invalid local call timeout", { mcp: { servers: { x: { type: "local", command: ["x"], callTimeoutMs: 0 } } } }, /callTimeoutMs/],
+    ["invalid per-tool timeout shape", { mcp: { servers: { x: { type: "local", command: ["x"], toolCallTimeoutMs: [] } } } }, /toolCallTimeoutMs/],
+    ["invalid per-tool timeout value", { mcp: { servers: { x: { type: "local", command: ["x"], toolCallTimeoutMs: { scrape: 0 } } } } }, /toolCallTimeoutMs\.scrape/],
+    ["empty per-tool timeout name", { mcp: { servers: { x: { type: "local", command: ["x"], toolCallTimeoutMs: { "": 10 } } } } }, /empty tool name/],
     ["invalid global startup timeout", { mcp: { startupTimeoutMs: 0 } }, /mcp\.startupTimeoutMs/],
     ["invalid global call timeout", { mcp: { callTimeoutMs: -1 } }, /mcp\.callTimeoutMs/],
     ["invalid remote url type", { mcp: { servers: { x: { type: "remote", transport: "sse", url: 1 } } } }, /url must be a string/],

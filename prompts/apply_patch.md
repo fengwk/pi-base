@@ -53,7 +53,8 @@ Delete a file:
 
 - You MUST include a header (Add / Update / Delete) for every file operation.
 - You MUST prefix every added line with +, including when creating a new file.
-- Paths are relative to the working directory. Never use absolute paths.
+- Paths are relative to `workdir` when provided, otherwise the agent's current working directory. Never use absolute paths.
+- When existing files were read from another working directory, pass the same `workdir` and keep patch paths relative to it.
 - Each file may appear only once per patch.
 - Add fails if the file already exists; it never overwrites. Delete and Update require an existing regular text file.
 - An Update must change at least one line; a no-op update is rejected.
@@ -63,4 +64,5 @@ Delete a file:
 - Files are checked before the first change. If a later file fails to commit, earlier files in the same patch may already be applied; the error reports which files were applied.
 
 Parameters:
-- patchText (required): the complete patch text.
+- `patchText` (required): the complete patch text.
+- `workdir` (optional, default: the agent's current working directory): working directory for resolving relative patch paths.
