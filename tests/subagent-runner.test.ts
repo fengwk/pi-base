@@ -549,6 +549,7 @@ describe("runSubagent", () => {
     );
     expect(steer).toHaveBeenCalledTimes(1);
     expect(steer).toHaveBeenCalledWith(expect.stringContaining("delegated task turn limit"));
+    expect(steer).toHaveBeenCalledWith(expect.stringContaining("phase report"));
     expect(child.abort).toHaveBeenCalledTimes(0);
     expect(result).toEqual({ sessionId: "child-turn-limit", state: "completed", report: "final answer" });
     expect(progress.join("\n")).toContain("turn limit reached (1/1)");
@@ -633,9 +634,9 @@ describe("runSubagent", () => {
 
     expect(steer).toHaveBeenCalledTimes(2);
     expect(steer).toHaveBeenNthCalledWith(1, expect.stringContaining("delegated task turn limit"));
-    expect(steer).toHaveBeenNthCalledWith(2, expect.stringContaining("repeated reminder"));
-    expect(progress).toContain("turn limit reached (2/2); asking subagent to finish");
-    expect(progress).toContain("turn limit still exceeded (7/2); asking subagent to finish again");
+    expect(steer).toHaveBeenNthCalledWith(2, expect.stringContaining("updated phase report"));
+    expect(progress).toContain("turn limit reached (2/2); asking subagent for a phase report");
+    expect(progress).toContain("turn limit still exceeded (7/2); asking subagent for an updated phase report");
     expect(progress.join("\n")).not.toContain("turn limit still exceeded (3/2)");
     expect(result).toEqual({ sessionId: "child-repeat-reminder", state: "completed", report: "final answer" });
   });

@@ -12,7 +12,7 @@ import {
   type RunResult,
   type SubagentSessionFactory,
 } from "./runner.js";
-import { taskSchema } from "./schema.js";
+import { createTaskSchema, taskSchema } from "./schema.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
 import {
   resolveCollapsedResultLines,
@@ -29,13 +29,12 @@ export interface SubagentTaskToolDeps {
   getMaxConcurrency: (cwd: string) => number;
   getMaxTotalConcurrency: (cwd: string) => number | undefined;
   getIdleTimeoutMs: (cwd: string) => number | undefined;
-  getMaxTurns: (cwd: string) => number | undefined;
+  getMaxTurns: (cwd: string) => number;
   getCollapsedResultLines?: CollapsedResultLinesResolver;
   getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
   factory: SubagentSessionFactory;
 }
 
-const TASK_DESCRIPTION = loadToolDescription(TASK_TOOL_NAME);
 const TASK_PROMPT_SNIPPET = loadToolPromptSnippet(TASK_TOOL_NAME);
 const TASK_DEFAULT_COLLAPSED_RESULT_LINES = 10;
 const pendingSessionReservations = new Map<string, number>();
@@ -70,12 +69,20 @@ function formatAvailableAgents(agentNames: string[]): string {
   return agentNames.length > 0 ? agentNames.join(" / ") : "no available agents";
 }
 
-function formatTaskCommand(params: { subagent_type?: unknown; session_id?: unknown }): string {
+function formatTaskCommand(params: { subagent_type?: unknown; maxTurns?: unknown; session_id?: unknown }): string {
   const agentType = readString(params.subagent_type) || "<missing-subagent_type>";
+  const maxTurns = params.maxTurns;
   const sessionId = readString(params.session_id);
   const parts = ["task", agentType];
+  if (typeof maxTurns === "number" && Number.isInteger(maxTurns) && maxTurns > 0) parts.push(`--max-turns ${maxTurns}`);
   if (sessionId) parts.push(`--resume ${sessionId}`);
   return parts.join(" ");
+}
+
+function readOptionalPositiveInteger(value: unknown, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || (value as number) < 1) throw new Error(`\`${name}\` must be a positive integer.`);
+  return value as number;
 }
 
 function dimBlock(text: string, theme: any): string {
@@ -241,12 +248,15 @@ function renderFinalResult(
  * to `runSubagent`.
  */
 export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">, deps: SubagentTaskToolDeps): void {
+  // The registered schema/description reflects the process' initial workspace. The authoritative
+  // default remains resolved from ctx.cwd for every invocation, including resumed child sessions.
+  const describedDefaultMaxTurns = deps.getMaxTurns(process.cwd());
   const tool = defineTool({
     name: TASK_TOOL_NAME,
     label: "Task",
-    description: TASK_DESCRIPTION,
+    description: loadToolDescription(TASK_TOOL_NAME, { defaultMaxTurns: String(describedDefaultMaxTurns) }),
     promptSnippet: TASK_PROMPT_SNIPPET,
-    parameters: taskSchema,
+    parameters: createTaskSchema(describedDefaultMaxTurns),
     executionMode: "parallel",
     renderCall(args: Static<typeof taskSchema>, theme, context) {
       return renderTaskCall(args ?? {}, theme, context.lastComponent);
@@ -268,6 +278,12 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
 
       if (!agentType) return errorResult("`subagent_type` is required.");
       if (!prompt) return errorResult("`prompt` is required.");
+      let requestedMaxTurns: number | undefined;
+      try {
+        requestedMaxTurns = readOptionalPositiveInteger(params?.maxTurns, "maxTurns");
+      } catch (error) {
+        return errorResult((error as Error).message);
+      }
 
       const allowed = deps.getActiveAgentSubagents();
       const availableAgents = formatAvailableAgents(allowed);
@@ -326,7 +342,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
             sessionId,
             childDepth,
             idleTimeoutMs: deps.getIdleTimeoutMs(ctx.cwd),
-            maxTurns: deps.getMaxTurns(ctx.cwd),
+            maxTurns: requestedMaxTurns ?? deps.getMaxTurns(ctx.cwd),
             signal: signal ?? undefined,
             onRegistered: () => {
               releaseSessionReservation?.();

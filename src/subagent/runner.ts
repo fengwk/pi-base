@@ -427,12 +427,12 @@ export async function runSubagent(
     publishProgress({
       kind: "status",
       text: repeated
-        ? `turn limit still exceeded (${assistantTurns}/${args.maxTurns}); asking subagent to finish again`
-        : `turn limit reached (${assistantTurns}/${args.maxTurns}); asking subagent to finish`,
+        ? `turn limit still exceeded (${assistantTurns}/${args.maxTurns}); asking subagent for an updated phase report`
+        : `turn limit reached (${assistantTurns}/${args.maxTurns}); asking subagent for a phase report`,
     });
     try {
       const repeatContext = repeated
-        ? `\n\nThis is a repeated reminder. You are ${turnsPastLimit} successful assistant turns past the limit (${assistantTurns}/${args.maxTurns}). Return your final response now.`
+        ? `\n\nThis is a repeated reminder. You are ${turnsPastLimit} successful assistant turns past the limit (${assistantTurns}/${args.maxTurns}). Return an updated phase report now.`
         : "";
       void Promise.resolve(handle.steer(`${MAX_TURNS_FINISH_PROMPT}${repeatContext}`)).catch(() => undefined);
     } catch {

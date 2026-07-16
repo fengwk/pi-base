@@ -113,6 +113,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 |------|------|
 | `subagent_type` (必填) | 委派的目标 agent 名 |
 | `prompt` (必填) | 委派任务的完整描述 |
+| `maxTurns` (可选) | 本次调用覆盖 `subagent.maxTurns` 的正整数交互预算；未设置时使用当前 workspace 的配置值。未完成的 child 到达预算会返回阶段性报告。该值控制 parent/child 的汇报粒度：任务初期宜设小值确认路径，或用于需要频繁交互的任务 |
 | `session_id` (可选) | 恢复已有子 session |
 
 返回 XML 格式结果：
@@ -393,7 +394,7 @@ Agent 正文（覆盖 system prompt）
 | `maxConcurrency` | 10 | 单父 session 直接子 agent 并发上限；超限直接报错 |
 | `maxTotalConcurrency` | 关闭 | 整棵 delegation tree 并发上限；超限即使父 session 未达 maxConcurrency 也报错 |
 | `idleTimeoutMs` | 关闭 | 无 assistant/session 进展时的空闲超时（tool 执行中不触发）；计时 >0 时生效 |
-| `maxTurns` | 50 | 达到此有效 assistant turn 数后通过 steer 队列注入软收尾提示；若仍持续发起工具调用，每额外 5 个有效 turn 再提醒一次。`error`/`aborted` 消息不计数；不会强制终止子 agent |
+| `maxTurns` | 50 | `task.maxTurns` 未指定时的默认有效 assistant turn 预算。达到预算后通过 steer 队列要求未完成的 child 返回阶段性报告；若仍持续发起工具调用，每额外 5 个有效 turn 再提醒一次。`error`/`aborted` 消息不计数；不会强制终止子 agent |
 
 root UI 的 editor-adjacent widget 展示运行中 subagent 的 parent/child 树、turn/tool call 计数和最近活动；历史 `task` tool block 保持稳定。`/subagent` 打开运行中 session 选择器，`/subagent <session-id-or-unique-prefix>` 可直接只读查看运行中或已持久化结束的 session transcript。
 

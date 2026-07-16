@@ -70,6 +70,7 @@ interface AgentCatalog {
 export interface SubagentControls {
   taskToolName: string;
   getMaxDepth: (cwd: string) => number;
+  getMaxTurns: (cwd: string) => number;
   readDepth: (ctx: ExtensionContext) => number;
 }
 
@@ -122,7 +123,7 @@ export function registerAgentSupport(
   // Mirrors opencode's <available_skills>/<available_references> pattern: a clear XML envelope
   // (`<available_subagents>` containing one `<subagent>` element per delegate) is much easier for
   // the model to parse than nested bullet lists, and matches the rest of pi-base's prompt XML.
-  const buildSubagentSection = (agent: AgentDefinition, activeTools: string[]): string => {
+  const buildSubagentSection = (agent: AgentDefinition, activeTools: string[], cwd: string): string => {
     if (!subagentControls || !activeTools.includes(subagentControls.taskToolName)) return "";
     const names = agent.subagents ?? [];
     if (names.length === 0) return "";
@@ -137,7 +138,7 @@ export function registerAgentSupport(
       ].join("\n");
     });
     return [
-      TASK_SYSTEM_PROMPT,
+      TASK_SYSTEM_PROMPT.replaceAll("${defaultMaxTurns}", String(subagentControls.getMaxTurns(cwd))),
       "",
       "<available_subagents>",
       entries.join("\n"),
@@ -450,7 +451,7 @@ export function registerAgentSupport(
       activeAgent.skills !== undefined,
     );
 
-    const guide = [options.baseToolGuide, buildSubagentSection(activeAgent, selectedTools)]
+    const guide = [options.baseToolGuide, buildSubagentSection(activeAgent, selectedTools, event.systemPromptOptions.cwd ?? process.cwd())]
       .map((section) => section.trim())
       .filter(Boolean)
       .join("\n\n");

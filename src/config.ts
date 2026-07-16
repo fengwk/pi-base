@@ -56,7 +56,7 @@ export interface SubagentConfig {
   maxTotalConcurrency?: number;
   /** Abort a delegated subagent after this many milliseconds without any session activity. Omit or set 0 to disable. */
   idleTimeoutMs?: number;
-  /** Soft-stop a delegated subagent after this many successful assistant turns. Further tool-driving turns are re-reminded every five turns; error/aborted messages do not count. Defaults to 50. */
+  /** Default soft-stop budget for delegated subagents. A task call may override it; an unfinished child is asked for a phase report at the budget and every five later tool-driving turns. Error/aborted messages do not count. Defaults to 50. */
   maxTurns?: number;
 }
 

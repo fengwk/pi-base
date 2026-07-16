@@ -13,6 +13,8 @@ afterEach(() => subagentRegistry.clear());
 
 interface CapturedTool {
   name: string;
+  description: string;
+  parameters: any;
   renderCall: (args: Record<string, unknown>, theme: unknown, context: unknown) => { render: (width: number) => string[] };
   renderResult: (result: unknown, options: { expanded?: boolean; isPartial?: boolean }, theme: unknown, context: unknown) => { render: (width: number) => string[] };
   execute: (id: string, params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: ((partial: { content: Array<{ text: string }> }) => void) | undefined, ctx: never) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
@@ -54,7 +56,7 @@ const baseDeps = (over: Partial<SubagentTaskToolDeps> = {}): SubagentTaskToolDep
   getMaxConcurrency: () => 2,
   getMaxTotalConcurrency: () => undefined,
   getIdleTimeoutMs: () => undefined,
-  getMaxTurns: () => undefined,
+  getMaxTurns: () => 50,
   factory: fakeFactory(),
   ...over,
 });
@@ -100,17 +102,69 @@ describe("task tool", () => {
     expect(text(result)).toContain("state=\"completed\"");
   });
 
+  it("advertises the configured default maxTurns", () => {
+    // Intent: the tool contract exposes the effective registration-workspace default while the
+    // runtime resolver remains authoritative for each invocation's ctx.cwd.
+    const tool = registerAndCapture(baseDeps({ getMaxTurns: () => 7 }));
+    expect(tool.description).toContain("The default is `7`");
+    expect(tool.parameters.properties.maxTurns.description).toContain("Default: 7");
+  });
+
+  it("uses task maxTurns to override the configured budget", async () => {
+    // Intent: omit the override to retain the config budget, then prove a smaller call budget
+    // reaches the runner's phase-report steer path for the same child behavior.
+    const steer = vi.fn(async () => undefined);
+    const factory: SubagentSessionFactory = {
+      spawn: async () => {
+        let listener: ((event: unknown) => void) | undefined;
+        return {
+          sessionId: "child-budget",
+          prompt: async () => {
+            listener?.({ type: "message_end", message: { role: "assistant", content: [{ type: "toolCall" }] } });
+            listener?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "report" }] } });
+          },
+          collect: () => ({ report: "report", toolCount: 1 }),
+          subscribe: (next) => {
+            listener = next;
+            return () => undefined;
+          },
+          steer,
+          abort: vi.fn(),
+          dispose: vi.fn(),
+        };
+      },
+      resume: async () => { throw new Error("unused"); },
+    };
+    const tool = registerAndCapture(baseDeps({ getMaxTurns: () => 2, factory }));
+
+    await tool.execute("configured", { subagent_type: "worker", prompt: "go" }, undefined, undefined, ctx());
+    expect(steer).not.toHaveBeenCalled();
+
+    await tool.execute("override", { subagent_type: "worker", prompt: "go", maxTurns: 1 }, undefined, undefined, ctx());
+    expect(steer).toHaveBeenCalledWith(expect.stringContaining("phase report"));
+  });
+
+  it("rejects a non-positive task maxTurns override", async () => {
+    // Intent: direct execution in tests bypasses TypeBox validation, so the tool also protects
+    // the runner from an invalid budget supplied by a programmatic caller.
+    const tool = registerAndCapture(baseDeps());
+    const result = await tool.execute("1", { subagent_type: "worker", prompt: "go", maxTurns: 0 }, undefined, undefined, ctx());
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("maxTurns");
+  });
+
   it("renders only the task command and prompt while running regardless of expansion", () => {
     // Intent: live progress belongs in the /subagent panel, so task history remains stable in every state.
     const tool = registerAndCapture(baseDeps());
     const call = render(
       tool.renderCall(
-        { subagent_type: "worker", prompt: "line 1\nline 2" },
+        { subagent_type: "worker", prompt: "line 1\nline 2", maxTurns: 3 },
         {},
         { lastComponent: undefined },
       ),
     );
     expect(call).toContain("task worker");
+    expect(call).toContain("--max-turns 3");
     expect(call).not.toContain("--description");
     expect(call).toContain("line 1");
     expect(call).toContain("line 2");

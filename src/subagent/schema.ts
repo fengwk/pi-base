@@ -8,14 +8,23 @@ import { Type } from "@sinclair/typebox";
  * from that session's current agent, the session is switched to the latest config of
  * the new type (see design.md §5.1).
  */
-export const taskSchema = Type.Object({
-  subagent_type: Type.String({
-    description: "Which subagent to delegate to. Must be listed in the current agent's `subagents` allowlist.",
-  }),
-  prompt: Type.String({
-    description: "The full task/instructions handed to the subagent.",
-  }),
-  session_id: Type.Optional(Type.String({
-    description: "Resume a previous subagent session by its id (the `<task id=\"...\">` value returned from an earlier task call).",
-  })),
-});
+export function createTaskSchema(defaultMaxTurns: number) {
+  return Type.Object({
+    subagent_type: Type.String({
+      description: "Which subagent to delegate to. Must be listed in the current agent's `subagents` allowlist.",
+    }),
+    prompt: Type.String({
+      description: "The full task/instructions handed to the subagent.",
+    }),
+    maxTurns: Type.Optional(Type.Integer({
+      minimum: 1,
+      description: `Optional positive interaction-turn budget for this invocation. Default: ${defaultMaxTurns}. If unfinished at the budget, the child returns a phase report; use a smaller budget to verify its path early or when frequent parent-child interaction is needed.`,
+    })),
+    session_id: Type.Optional(Type.String({
+      description: "Resume a previous subagent session by its id (the `<task id=\"...\">` value returned from an earlier task call).",
+    })),
+  });
+}
+
+/** Default export shape for type consumers; registered tools use the cwd-scoped factory above. */
+export const taskSchema = createTaskSchema(50);

@@ -32,7 +32,7 @@ afterEach(() => {
   else process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previousGlobal;
 });
 
-async function setupAgents(): Promise<{ root: string }> {
+async function setupAgents(): Promise<{ root: string; globalPath: string }> {
   const root = await createTempWorkspace();
   const agentDir = await createTempWorkspace();
   process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -57,7 +57,7 @@ async function setupAgents(): Promise<{ root: string }> {
     "worker.md",
     `---\nname: worker\ndescription: Run focused unit-of-work tasks.\nmodel: ${defaultModel.provider}/${defaultModel.id}\ntools:\n  - read\n---\nWork.\n`,
   );
-  return { root };
+  return { root, globalPath };
 }
 
 describe("task tool injection", () => {
@@ -94,6 +94,7 @@ describe("task tool injection", () => {
   it("injects task instructions and available subagents into the system prompt when delegating", async () => {
     // Intent: task instructions and the valid subagent types must be exposed only when `task` is active.
     const { root } = await setupAgents();
+    await writeProjectSettings(root, { subagent: { maxTurns: 7 } });
     const registry = createToolRegistry({ model: defaultModel, models: [defaultModel] });
     piBaseExtension(registry.pi as never);
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
@@ -108,6 +109,8 @@ describe("task tool injection", () => {
     expect(prompt).toContain("You can delegate self-contained subtasks with the `task` tool.");
     expect(prompt).toContain("The main agent remains responsible for task decomposition, decisions, integration, validation, and final judgment.");
     expect(prompt).toContain("After 2-3 well-directed attempts without meaningful progress, take over the work, switch approaches, or report the blocker.");
+    expect(prompt).toContain("The default is `7`");
+    expect(prompt).toContain("phase report");
     expect(prompt).toContain("Set `subagent_type` to one of the names listed below.");
     expect(prompt).toContain("<available_subagents>");
     expect(prompt).toContain("</available_subagents>");
@@ -122,6 +125,24 @@ describe("task tool injection", () => {
       { cwd: root },
     );
     expect(String(workerResult?.systemPrompt ?? "")).not.toContain("<available_subagents>");
+  });
+
+  it("uses the global maxTurns setting when the project does not override it", async () => {
+    // Intent: the prompt's dynamically injected default must follow the same global-plus-project
+    // settings resolution as task execution, including the global-only fallback.
+    const { root, globalPath } = await setupAgents();
+    await writeFile(globalPath, JSON.stringify({ subagent: { maxTurns: 9 } }), "utf8");
+    const registry = createToolRegistry({ model: defaultModel, models: [defaultModel] });
+    piBaseExtension(registry.pi as never);
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await registry.runCommand("agent", "orchestrator", { cwd: root });
+
+    const result = await registry.emit(
+      "before_agent_start",
+      { systemPrompt: "BASE", systemPromptOptions: { cwd: root, selectedTools: registry.getActiveTools() } },
+      { cwd: root },
+    );
+    expect(String(result?.systemPrompt ?? "")).toContain("The default is `9`");
   });
 
   it("filters unknown subagents at load time so task is never injected for them", async () => {

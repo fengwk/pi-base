@@ -14,4 +14,5 @@ Usage:
 Parameters:
 - `subagent_type` (required): A subagent type listed in `<available_subagents>`.
 - `prompt` (required): Complete instructions for a new task or updated direction for a resumed task.
+- `maxTurns` (optional): A positive interaction-turn budget. The default is `${defaultMaxTurns}`. An unfinished child must return a phase report at the budget; use a smaller value early to verify its path or when frequent parent-child interaction is needed.
 - `session_id` (optional): The `<task id="...">` value of the session to resume.

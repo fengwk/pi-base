@@ -294,6 +294,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   const subagentControls = {
     taskToolName: TASK_TOOL_NAME,
     getMaxDepth: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxDepth,
+    getMaxTurns: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxTurns,
     readDepth,
   };
   const inactiveDynamicToolNames = new Set<string>();
