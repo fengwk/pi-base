@@ -12,6 +12,7 @@ export interface ApplyPatchPreview {
 export interface ApplyPatchPreviewOptions {
   maxLines?: number;
   maxLineChars?: number;
+  maxAddLines?: number;
 }
 
 export function applyPatchOperationLabel(operation: ApplyPatchOperation): "A" | "M" | "D" {
@@ -26,7 +27,15 @@ function truncateLine(text: string, maxChars: number | undefined): string {
   return `${text.slice(0, maxChars - 3)}...`;
 }
 
-function* iteratePreviewLines(patch: ParsedApplyPatch): Generator<ApplyPatchPreviewLine> {
+function normalizePreviewLimit(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.floor(value));
+}
+
+function* iteratePreviewLines(
+  patch: ParsedApplyPatch,
+  maxAddLines: number | undefined,
+): Generator<ApplyPatchPreviewLine> {
   let firstFile = true;
   for (const file of patch.files) {
     if (!firstFile) yield { kind: "blank", text: "" };
@@ -42,7 +51,17 @@ function* iteratePreviewLines(patch: ParsedApplyPatch): Generator<ApplyPatchPrev
 
     if (file.operation === "add") {
       if (file.lines.length === 0) yield { kind: "meta", text: "(empty file)" };
-      else for (const line of file.lines) yield { kind: "add", text: `+${line}` };
+      else {
+        const visibleCount = maxAddLines === undefined ? file.lines.length : Math.min(maxAddLines, file.lines.length);
+        for (const line of file.lines.slice(0, visibleCount)) yield { kind: "add", text: `+${line}` };
+        const remaining = file.lines.length - visibleCount;
+        if (remaining > 0) {
+          yield {
+            kind: "meta",
+            text: `... (${remaining} more ${remaining === 1 ? "line" : "lines"}, ${file.lines.length} total)`,
+          };
+        }
+      }
       continue;
     }
 
@@ -81,12 +100,8 @@ function buildBoundedPreview(
   source: Iterable<ApplyPatchPreviewLine>,
   options: ApplyPatchPreviewOptions,
 ): ApplyPatchPreview {
-  const maxLineChars = options.maxLineChars === undefined || !Number.isFinite(options.maxLineChars)
-    ? undefined
-    : Math.max(0, Math.floor(options.maxLineChars));
-  const maxLines = options.maxLines === undefined || !Number.isFinite(options.maxLines)
-    ? undefined
-    : Math.max(0, Math.floor(options.maxLines));
+  const maxLineChars = normalizePreviewLimit(options.maxLineChars);
+  const maxLines = normalizePreviewLimit(options.maxLines);
   const lines: ApplyPatchPreviewLine[] = [];
   let totalLines = 0;
   for (const line of source) {
@@ -112,7 +127,7 @@ export function buildApplyPatchPreview(
   patch: ParsedApplyPatch,
   options: ApplyPatchPreviewOptions = {},
 ): ApplyPatchPreview {
-  return buildBoundedPreview(iteratePreviewLines(patch), options);
+  return buildBoundedPreview(iteratePreviewLines(patch, normalizePreviewLimit(options.maxAddLines)), options);
 }
 
 export function buildRawApplyPatchPreview(

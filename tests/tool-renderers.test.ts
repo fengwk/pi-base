@@ -377,37 +377,67 @@ describe("tool renderers", () => {
     });
   });
 
-  it("fully shows completed apply_patch and edit previews while write stays collapsed", async () => {
+  it("keeps apply_patch complete for review, then collapses only settled Add bodies", async () => {
     await withTempGlobalPiBaseConfig({}, async (root) => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const lines = Array.from({ length: 40 }, (_, index) => `line-${index + 1}`);
-      const settledContext = {
+      const args = {
+        patchText: [
+          "*** Begin Patch",
+          "*** Add File: large.txt",
+          ...lines.map((line) => `+${line}`),
+          "*** Update File: existing.txt",
+          "@@",
+          ...Array.from({ length: 12 }, (_, index) => `+updated-${index + 1}`),
+          "*** Delete File: removed.txt",
+          "*** End Patch",
+        ].join("\n"),
+      };
+      const reviewContext = {
         lastComponent: undefined,
         argsComplete: true,
         executionStarted: true,
-        isPartial: false,
+        isPartial: true,
         expanded: false,
         isError: false,
         cwd: root,
         state: {},
       };
 
-      const applyPatch = render(registry.getTool("apply_patch").renderCall({
-        patchText: ["*** Begin Patch", "*** Add File: large.txt", ...lines.map((line) => `+${line}`), "*** End Patch"].join("\n"),
-      }, {} as any, settledContext as any));
+      const review = render(registry.getTool("apply_patch").renderCall(args, {} as any, reviewContext as any));
+      const settled = render(registry.getTool("apply_patch").renderCall(args, {} as any, {
+        ...reviewContext,
+        isPartial: false,
+        state: {},
+      } as any));
+      const expanded = render(registry.getTool("apply_patch").renderCall(args, {} as any, {
+        ...reviewContext,
+        isPartial: false,
+        expanded: true,
+        state: {},
+      } as any));
       const edit = render(registry.getTool("edit").renderCall({
         path: "large.txt",
         old_string: lines.map((line) => `old-${line}`).join("\n"),
         new_string: "replacement",
-      }, {} as any, { ...settledContext, state: {} } as any));
+      }, {} as any, { ...reviewContext, state: {} } as any));
       const write = render(registry.getTool("write").renderCall({
         path: "large.txt",
         content: lines.join("\n"),
-      }, {} as any, settledContext as any));
+      }, {} as any, { ...reviewContext, isPartial: false, state: {} } as any));
 
-      expect(applyPatch).toContain("+line-40");
-      expect(applyPatch).not.toContain("more patch lines");
+      expect(review).not.toContain("Targets:");
+      expect(review).toContain("+line-40");
+      expect(review).toContain("+updated-12");
+      expect(review).toContain("D removed.txt");
+      expect(settled).toContain("+line-10");
+      expect(settled).not.toContain("+line-11");
+      expect(settled).toContain("... (30 more lines, 40 total)");
+      expect(settled).toContain("+updated-12");
+      expect(settled).toContain("D removed.txt");
+      expect(expanded).toContain("+line-40");
+      expect(expanded).not.toContain("30 more lines");
       expect(edit).toContain("-40|old-line-40");
       expect(write).toContain("line-7");
       expect(write).not.toContain("line-8");

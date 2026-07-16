@@ -69,6 +69,27 @@ describe("apply_patch display", () => {
     expect(hidden.omittedLines).toBe(4);
   });
 
+  it("collapses only Add body lines when requested", () => {
+    // Intent: settled call cards should bound whole-file additions without hiding Update or Delete review data.
+    const parsed = parseApplyPatch(patch(
+      "*** Add File: created.txt",
+      ...Array.from({ length: 12 }, (_, index) => `+created-${index + 1}`),
+      "*** Update File: updated.txt",
+      "@@",
+      ...Array.from({ length: 12 }, (_, index) => `+updated-${index + 1}`),
+      "*** Delete File: removed.txt",
+    ));
+
+    const rendered = formatApplyPatchPreview(buildApplyPatchPreview(parsed, { maxAddLines: 10 }));
+
+    expect(rendered).toContain("+created-10");
+    expect(rendered).not.toContain("+created-11");
+    expect(rendered).toContain("... (2 more lines, 12 total)");
+    expect(rendered).toContain("+updated-12");
+    expect(rendered).toContain("D removed.txt");
+    expect(rendered).toContain("(delete file)");
+  });
+
   it("bounds malformed raw text without normalizing away CRLF or CR line boundaries", () => {
     const raw = buildRawApplyPatchPreview(`first\r\n${"x".repeat(300)}\rthird\nfourth`, {
       maxLines: 3,

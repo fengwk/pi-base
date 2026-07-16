@@ -59,7 +59,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
 | `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
 | `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
-| `apply_patch` | `patchText` | workdir=session cwd | OpenCode `*** Begin Patch` 协议，并提供可选 `workdir` 扩展；支持 Add/Update/Delete，多文件先整体 preflight、再按顺序提交；参数流式生成时调用预览有界，参数完成后完整展示 patch，逐文件持久化 diff 仍有界且行数统计不截断；不支持 Move |
+| `apply_patch` | `patchText` | workdir=session cwd | OpenCode `*** Begin Patch` 协议，并提供可选 `workdir` 扩展；支持 Add/Update/Delete，多文件先整体 preflight、再按顺序提交；参数流式生成和落定后的 Add 内容预览有界，参数完成及权限/执行期间完整展示 patch，逐文件持久化 diff 仍有界且行数统计不截断；不支持 Move |
 <!-- 暂时禁用；恢复注册时一并取消此注释。
 | `lsp_diagnostics` | `path` | severity=all | 需 `lsp.servers` 声明 server；不做能力前置检查 |
 -->
@@ -324,7 +324,7 @@ Agent 正文（覆盖 system prompt）
 
 默认值：read=10, grep=15, bash=20, write=10，其他工具 `*`=20。
 
-文件修改工具的调用预览独立于上述结果折叠配置：`apply_patch` / `edit` / `write` 在参数流式生成时统一限制为 10 行；完成后 `apply_patch` 与 `edit` 完整展示变更预览，`write` 默认收起为 7 行内容预览，展开后可查看完整写入内容。权限确认框只保留不超过 80 字符的单行工具摘要，不重复写入或 diff 正文。
+文件修改工具的调用预览独立于上述结果折叠配置：`apply_patch` / `edit` / `write` 在参数流式生成时统一限制为 10 行；参数完成以及权限/执行期间，`apply_patch` 与 `edit` 完整展示变更预览。调用落定后，`apply_patch` 每个 Add 区段默认保留前 10 行并标记剩余行数，Update/Delete 保持完整；`write` 默认收起为 7 行内容预览。展开后均可查看完整写入内容。权限确认框只保留不超过 80 字符的单行工具摘要，不重复写入或 diff 正文。
 
 #### `notify`
 

@@ -8,7 +8,6 @@ import {
   type ApplyPatchCommitFailure,
   type ApplyPatchFileResult,
   type ApplyPatchOperation,
-  type ParsedApplyPatch,
 } from "./apply-patch-core.js";
 import {
   applyPatchOperationLabel,
@@ -105,26 +104,7 @@ export function buildApplyPatchFileMetadata(file: ApplyPatchFileResult): ApplyPa
   };
 }
 
-const APPLY_PATCH_CALL_MAX_TARGETS = 20;
-const APPLY_PATCH_CALL_MAX_TARGET_CHARS = 160;
-
-function truncateCallTarget(target: string): string {
-  if (target.length <= APPLY_PATCH_CALL_MAX_TARGET_CHARS) return target;
-  return `${target.slice(0, APPLY_PATCH_CALL_MAX_TARGET_CHARS - 3)}...`;
-}
-
-function formatCallTargetSummary(patch: ParsedApplyPatch): string {
-  const targets = patch.files.slice(0, APPLY_PATCH_CALL_MAX_TARGETS).map((file) => {
-    const path = shortenHomePath(file.path);
-    const destination = file.operation === "update" && file.moveTo !== undefined
-      ? ` -> ${shortenHomePath(file.moveTo)}`
-      : "";
-    return truncateCallTarget(`${applyPatchOperationLabel(file.operation)} ${path}${destination}`);
-  });
-  const omitted = patch.files.length - targets.length;
-  if (omitted > 0) targets.push(`... (${omitted} more targets)`);
-  return targets.join(", ");
-}
+export const APPLY_PATCH_COLLAPSED_ADD_PREVIEW_LINES = 10;
 
 function colorizePreviewLine(line: ApplyPatchPreviewLine, theme: any): string {
   if (line.kind === "file") {
@@ -144,24 +124,33 @@ function colorizePreviewLine(line: ApplyPatchPreviewLine, theme: any): string {
   return line.text.startsWith("@@") ? styleDiffContext(theme, line.text) : styleMuted(theme, line.text);
 }
 
-export function formatApplyPatchCall(args: any, theme: any, cwd?: string): string {
+export function formatApplyPatchCall(
+  args: any,
+  theme: any,
+  cwd?: string,
+  options: { collapseAddBodies?: boolean } = {},
+): string {
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
   const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   const header = `${styleToolTitle(theme, "apply_patch")}${workdir}`;
   if (typeof args?.patchText !== "string" || args.patchText.length === 0) return header;
   try {
     const patch = parseApplyPatch(args.patchText);
-    const targets = formatCallTargetSummary(patch);
-    const preview = buildApplyPatchPreview(patch);
+    const preview = buildApplyPatchPreview(patch, options.collapseAddBodies
+      ? { maxAddLines: APPLY_PATCH_COLLAPSED_ADD_PREVIEW_LINES }
+      : {});
     return [
       header,
-      `${styleMuted(theme, "Targets: ")}${styleAccent(theme, targets)}`,
       preview.lines.map((line) => colorizePreviewLine(line, theme)).join("\n"),
-    ].join("\n\n");
+    ].filter(Boolean).join("\n\n");
   } catch {
     const preview = buildRawApplyPatchPreview(args.patchText);
     return `${header}\n\n${preview.lines.map((line) => colorizePreviewLine(line, theme)).join("\n")}`;
   }
+}
+
+function shouldCollapseApplyPatchCall(context: any): boolean {
+  return context?.isPartial === false && context?.expanded !== true;
 }
 
 function formatSummary(files: readonly ApplyPatchFileMetadata[]): string {
@@ -176,9 +165,9 @@ function formatPartialError(error: ApplyPatchCommitError, files: readonly ApplyP
   return `Error: Patch partially applied: ${files.length} ${files.length === 1 ? "file was" : "files were"} committed (${targets}) before failure at ${error.failedPath}. ${failedState} Cause: ${error.causeMessage}`;
 }
 
-function renderResultWithDiffMetadata(result: any): any {
+function renderPartialResultWithDiffMetadata(result: any): any {
   const files = Array.isArray(result?.details?.files) ? result.details.files as ApplyPatchFileMetadata[] : [];
-  if (files.length === 0) return result;
+  if (result?.details?.partial !== true || files.length === 0) return result;
   const sections = files.map((file) => {
     const heading = `${applyPatchOperationLabel(file.operation)} ${file.path} (+${file.addedLines} -${file.removedLines})`;
     return file.diff ? `${heading}\ndiff:\n${file.diff}` : heading;
@@ -213,12 +202,14 @@ export function registerApplyPatchTool(
       });
     },
     renderCall(args: any, theme: any, context: any) {
-      return renderStreamingCallText(formatApplyPatchCall(args, theme, context?.cwd), theme, context);
+      return renderStreamingCallText(formatApplyPatchCall(args, theme, context?.cwd, {
+        collapseAddBodies: shouldCollapseApplyPatchCall(context),
+      }), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("apply_patch", undefined, context, options.getCollapsedResultLines);
       const maxCollapsedChars = resolveCollapsedResultMaxChars("apply_patch", undefined, context, options.getCollapsedResultMaxChars);
-      return renderRawResult(renderResultWithDiffMetadata(result), { ...renderOptions, collapsedLines, maxCollapsedChars }, theme, context);
+      return renderRawResult(renderPartialResultWithDiffMetadata(result), { ...renderOptions, collapsedLines, maxCollapsedChars }, theme, context);
     },
     async execute(_toolCallId: string, params: any, signal?: AbortSignal, _onUpdate?: any, ctx: any = {}) {
       try {

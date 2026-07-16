@@ -124,7 +124,7 @@ describe("apply_patch tool", () => {
     const move = render(tool.renderCall({
       patchText: patch("*** Update File: old.txt", "*** Move to: new.txt", "@@", "-old", "+new"),
     }, {} as any, { cwd: "/repo", argsComplete: true }));
-    expect(move).toContain("Targets: M old.txt -> new.txt");
+    expect(move).toContain("M old.txt -> new.txt");
 
     const missingPatch = render(tool.renderCall({}, {} as any, { cwd: "/repo", argsComplete: false }));
     expect(missingPatch.trim()).toBe("apply_patch");
@@ -149,22 +149,11 @@ describe("apply_patch tool", () => {
       patchText: patch("*** Add File: large.txt", ...content, "*** Delete File: later-delete.txt"),
     }, {} as any, { cwd: "/repo", argsComplete: true }));
 
-    expect(call).toContain("Targets: A large.txt, D later-delete.txt");
+    expect(call).not.toContain("Targets:");
     expect(call).toContain("A large.txt");
     expect(call).toContain("+line-1");
     expect(call).toContain("+line-60");
     expect(call).not.toContain("more patch lines");
-
-    const longPath = `${"x".repeat(200)}.txt`;
-    const manyTargets = render(tool.renderCall({
-      patchText: patch(
-        `*** Add File: ${longPath}`,
-        ...Array.from({ length: 20 }, (_, index) => `*** Add File: file-${index + 2}.txt`),
-      ),
-    }, {} as any, { cwd: "/repo", argsComplete: true }));
-    expect(manyTargets).toContain(`A ${"x".repeat(155)}...`);
-    expect(manyTargets).toContain("... (1 more targets)");
-    expect(manyTargets).not.toContain(longPath);
   });
 
   it("applies Add/Update/Delete and returns concise multi-file diff metadata", async () => {
@@ -227,8 +216,8 @@ describe("apply_patch tool", () => {
     expect(await readFile(join(workspace, "same.txt"), "utf8")).toBe("new\n");
   });
 
-  it("uses a singular summary and renders results with or without diff metadata", async () => {
-    // Intent: empty-file creation has metadata but no hunk, while ordinary errors may have no file metadata.
+  it("keeps successful patch results concise and renders diff metadata only for partial commits", async () => {
+    // Intent: the completed call already displays the full patch, so a successful result must not add a foldable duplicate diff.
     const root = await createTempWorkspace();
     const registry = createToolRegistry();
     registerApplyPatchTool(registry.pi as any);
@@ -240,9 +229,11 @@ describe("apply_patch tool", () => {
 
     expect(getText(result)).toBe("Applied patch successfully (1 file): A empty.txt");
     expect(result.details.files[0]).toMatchObject({ diff: "", addedLines: 0, removedLines: 0 });
-    const withoutDiff = render(tool.renderResult(result, { expanded: true, isPartial: false }, {} as any, { cwd: root, isError: false }));
-    expect(withoutDiff).toContain("A empty.txt (+0 -0)");
-    expect(withoutDiff).not.toContain("diff:");
+    const successfulResult = render(tool.renderResult(result, { expanded: false, isPartial: false }, {} as any, { cwd: root, isError: false }));
+    expect(successfulResult).toContain("Applied patch successfully (1 file): A empty.txt");
+    expect(successfulResult).not.toContain("A empty.txt (+0 -0)");
+    expect(successfulResult).not.toContain("diff:");
+    expect(successfulResult).not.toContain("more lines");
 
     const plain = render(tool.renderResult(
       { content: [{ type: "text", text: "plain result" }] },
@@ -259,16 +250,23 @@ describe("apply_patch tool", () => {
     ));
     expect(emptyMetadata).toContain("empty metadata");
 
-    const metadataOnly = render(tool.renderResult(
-      { content: [], details: { files: [{ operation: "add", path: "x", absolutePath: "/x", diff: "", addedLines: 0, removedLines: 0 }] } },
+    const partial = render(tool.renderResult(
+      {
+        content: [{ type: "text", text: "Error: Patch partially applied" }],
+        details: {
+          partial: true,
+          files: [{ operation: "add", path: "x", absolutePath: "/x", diff: "+created", addedLines: 1, removedLines: 0 }],
+        },
+      },
       { expanded: true, isPartial: false },
       {} as any,
-      { cwd: root, isError: false },
+      { cwd: root, isError: true },
     ));
-    expect(metadataOnly).toContain("A x (+0 -0)");
+    expect(partial).toContain("A x (+1 -0)");
+    expect(partial).toContain("+created");
   });
 
-  it("renders compact targets in the call and per-file diffs in the result", async () => {
+  it("renders compact targets in the call and a concise successful result", async () => {
     const root = await createTempWorkspace();
     await writeFile(join(root, "a.txt"), "old\n", "utf8");
     const registry = createToolRegistry();
@@ -287,10 +285,38 @@ describe("apply_patch tool", () => {
     expect(call).not.toContain("*** Begin Patch");
 
     const result = await tool.execute("render", args, undefined, undefined, { cwd: "/unused" });
-    const renderedResult = render(tool.renderResult(result, { expanded: true, isPartial: false }, {} as any, { cwd: root, isError: false }));
-    expect(renderedResult).toContain("M a.txt (+1 -1)");
-    expect(renderedResult).toContain("-old");
-    expect(renderedResult).toContain("+new");
+    const renderedResult = render(tool.renderResult(result, { expanded: false, isPartial: false }, {} as any, { cwd: root, isError: false }));
+    expect(renderedResult).toContain("Applied patch successfully (1 file): M a.txt");
+    expect(renderedResult).not.toContain("M a.txt (+1 -1)");
+    expect(renderedResult).not.toContain("diff:");
+  });
+
+  it("does not fold a duplicate diff into a large successful patch result", async () => {
+    // Intent: a complete call preview already contains the patch; the settled success card must remain one concise summary.
+    const root = await createTempWorkspace();
+    const registry = createToolRegistry();
+    registerApplyPatchTool(registry.pi as any);
+    const tool = registry.getTool("apply_patch");
+    const result = await tool.execute("large-success", {
+      workdir: root,
+      patchText: patch(
+        "*** Add File: large.txt",
+        ...Array.from({ length: 65 }, (_, index) => `+line-${index + 1}`),
+      ),
+    }, undefined, undefined, { cwd: root });
+
+    const rendered = render(tool.renderResult(
+      result,
+      { expanded: false, isPartial: false },
+      {} as any,
+      { cwd: root, isError: false },
+    ));
+
+    expect(rendered).toContain("Applied patch successfully (1 file): A large.txt");
+    expect(rendered).not.toContain("diff:");
+    expect(rendered).not.toContain("+line-1");
+    expect(rendered).not.toContain("more lines");
+    expect(rendered).not.toContain("output truncated");
   });
 
   it("bounds update diff metadata to nearby unified-hunk context", async () => {
