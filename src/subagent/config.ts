@@ -4,7 +4,7 @@ import { loadPiBaseSettings, type LoadedPiBaseSettings } from "../config.js";
 export const DEFAULT_MAX_DEPTH = 2;
 /** Max subagents a single session may run at once; excess `task` calls are rejected. */
 export const DEFAULT_MAX_CONCURRENCY = 10;
-/** Soft loop cap for delegated subagents; after this many assistant turns pi-base asks the child to finish. */
+/** Soft loop cap for delegated subagents; pi-base asks the child to finish at this count and every five later tool-driving turns. Error and aborted messages do not count. */
 export const DEFAULT_MAX_TURNS = 50;
 
 export interface ResolvedSubagentConfig {

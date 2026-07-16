@@ -393,7 +393,7 @@ Agent 正文（覆盖 system prompt）
 | `maxConcurrency` | 10 | 单父 session 直接子 agent 并发上限；超限直接报错 |
 | `maxTotalConcurrency` | 关闭 | 整棵 delegation tree 并发上限；超限即使父 session 未达 maxConcurrency 也报错 |
 | `idleTimeoutMs` | 关闭 | 无 assistant/session 进展时的空闲超时（tool 执行中不触发）；计时 >0 时生效 |
-| `maxTurns` | 50 | 达到此 assistant turn 数后一次性注入软收尾提示；不会强制终止子 agent |
+| `maxTurns` | 50 | 达到此有效 assistant turn 数后通过 steer 队列注入软收尾提示；若仍持续发起工具调用，每额外 5 个有效 turn 再提醒一次。`error`/`aborted` 消息不计数；不会强制终止子 agent |
 
 root UI 的 editor-adjacent widget 展示运行中 subagent 的 parent/child 树、turn/tool call 计数和最近活动；历史 `task` tool block 保持稳定。`/subagent` 打开运行中 session 选择器，`/subagent <session-id-or-unique-prefix>` 可直接只读查看运行中或已持久化结束的 session transcript。
 

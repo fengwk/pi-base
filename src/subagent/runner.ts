@@ -113,6 +113,7 @@ const MAX_TURNS_FINISH_PROMPT = readFileSync(
   new URL("../../prompts/subagent-max-turns.md", import.meta.url),
   "utf8",
 ).trim();
+const MAX_TURNS_REMINDER_INTERVAL = 5;
 
 function formatDurationMs(value: number): string {
   if (value < 1000) return `${value}ms`;
@@ -176,7 +177,7 @@ function resolvePersistedSubagentSession(cwd: string, query: string): PersistedS
 function assistantTurnCount(messages: RuntimeMessage[]): number {
   let turns = 0;
   for (const message of messages) {
-    if (message.role === "assistant") turns += 1;
+    if (isCountedAssistantMessage(message)) turns += 1;
   }
   return turns;
 }
@@ -376,7 +377,7 @@ export async function runSubagent(
   let assistantTurns = 0;
   let toolCalls = 0;
   let activeToolCalls = 0;
-  let finishReminderQueued = false;
+  let lastFinishReminderTurn: number | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let cancellationRequested = false;
   const publishProgress = (update: SubagentProgressUpdate): void => {
@@ -415,17 +416,25 @@ export async function runSubagent(
     idleTimer.unref?.();
   };
   const maybeQueueFinishReminder = (assistantToolCalls: number) => {
-    if (assistantToolCalls < 1 || finishReminderQueued) return;
+    if (assistantToolCalls < 1) return;
     if (typeof handle.steer !== "function") return;
     if (args.maxTurns === undefined || args.maxTurns < 1) return;
-    if (assistantTurns < args.maxTurns) return;
-    finishReminderQueued = true;
+    const turnsPastLimit = assistantTurns - args.maxTurns;
+    if (turnsPastLimit < 0 || turnsPastLimit % MAX_TURNS_REMINDER_INTERVAL !== 0) return;
+    if (lastFinishReminderTurn === assistantTurns) return;
+    lastFinishReminderTurn = assistantTurns;
+    const repeated = turnsPastLimit > 0;
     publishProgress({
       kind: "status",
-      text: `turn limit reached (${assistantTurns}/${args.maxTurns}); asking subagent to finish`,
+      text: repeated
+        ? `turn limit still exceeded (${assistantTurns}/${args.maxTurns}); asking subagent to finish again`
+        : `turn limit reached (${assistantTurns}/${args.maxTurns}); asking subagent to finish`,
     });
     try {
-      void Promise.resolve(handle.steer(MAX_TURNS_FINISH_PROMPT)).catch(() => undefined);
+      const repeatContext = repeated
+        ? `\n\nThis is a repeated reminder. You are ${turnsPastLimit} successful assistant turns past the limit (${assistantTurns}/${args.maxTurns}). Return your final response now.`
+        : "";
+      void Promise.resolve(handle.steer(`${MAX_TURNS_FINISH_PROMPT}${repeatContext}`)).catch(() => undefined);
     } catch {
       // The finish reminder is advisory; steering failures must not replace the child report.
     }
@@ -515,6 +524,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isCountedAssistantMessage(message: unknown): boolean {
+  return isRecord(message)
+    && message.role === "assistant"
+    && message.stopReason !== "error"
+    && message.stopReason !== "aborted";
+}
+
 function rawTextFromContent(content: unknown): string {
   if (!Array.isArray(content)) return "";
   return content
@@ -535,7 +551,7 @@ function toolCallCountFromContent(content: unknown): number {
 }
 
 function assistantToolCallCountFromEvent(event: unknown): number {
-  if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message) || event.message.role !== "assistant") return 0;
+  if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message) || !isCountedAssistantMessage(event.message)) return 0;
   return toolCallCountFromContent(event.message.content);
 }
 
@@ -602,9 +618,13 @@ function formatProgressEvent(event: unknown, activeToolArgs: Map<string, string>
     const prefix = event.isError === true ? "✗" : "✓";
     return { kind: "tool", text: `${prefix} ${event.toolName}${argsPreview}` };
   }
-  if (event.type === "message_end" && isRecord(event.message) && event.message.role === "assistant") {
+  if (event.type === "message_end" && isRecord(event.message) && isCountedAssistantMessage(event.message)) {
     const body = truncateMultiline(rawTextFromContent(event.message.content));
     return { kind: "assistant", text: body ? `assistant\n${body}` : "", turns: 1 };
+  }
+  if (event.type === "message_end" && isRecord(event.message) && event.message.role === "assistant") {
+    const body = truncateMultiline(rawTextFromContent(event.message.content));
+    return { kind: "assistant", text: body ? `assistant\n${body}` : "" };
   }
   return undefined;
 }

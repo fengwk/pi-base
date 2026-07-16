@@ -499,7 +499,7 @@ describe("runSubagent", () => {
     }
   });
 
-  it("steers the child once when a tool-driving turn reaches maxTurns without hard-aborting it", async () => {
+  it("steers the child at the turn limit without hard-aborting it", async () => {
     // Intent: steering is consumed before the next model turn, unlike follow-up messages which wait
     // until the child would otherwise stop. Queue it once, and keep a steer transport failure from
     // replacing an otherwise successful child report.
@@ -553,6 +553,143 @@ describe("runSubagent", () => {
     expect(result).toEqual({ sessionId: "child-turn-limit", state: "completed", report: "final answer" });
     expect(progress.join("\n")).toContain("turn limit reached (1/1)");
     expect(progress.join("\n")).not.toContain("turn limit reached (2/1)");
+  });
+
+  it("does not steer a final-only assistant turn that exactly reaches maxTurns", async () => {
+    // Intent: a terminal answer must remain the collected report rather than enqueueing a new model turn.
+    let listener: ((event: unknown) => void) | undefined;
+    const steer = vi.fn(async () => undefined);
+    const child: SubagentSession = {
+      sessionId: "child-final-at-limit",
+      prompt: async () => {
+        listener?.({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "final answer" }] },
+        });
+      },
+      collect: () => ({ report: "final answer", toolCount: 0 }),
+      subscribe(next) {
+        listener = next;
+        return () => undefined;
+      },
+      steer,
+      abort: vi.fn(),
+      dispose: vi.fn(),
+    };
+
+    const result = await runSubagent(
+      fakeCtx(),
+      { agentType: "worker", prompt: "go", childDepth: 2, maxTurns: 1 },
+      { spawn: async () => child, resume: async () => child },
+    );
+
+    expect(steer).not.toHaveBeenCalled();
+    expect(result).toEqual({ sessionId: "child-final-at-limit", state: "completed", report: "final answer" });
+    expect(subagentRegistry.get("child-final-at-limit")?.turns).toBe(1);
+  });
+
+  it("re-steers every five effective tool-driving turns after maxTurns", async () => {
+    // Intent: a noncompliant child receives periodic steer-queue reminders without a hard abort or per-turn spam.
+    let listener: ((event: unknown) => void) | undefined;
+    const steer = vi.fn(async () => undefined);
+    const child: SubagentSession = {
+      sessionId: "child-repeat-reminder",
+      prompt: async () => {
+        for (let turn = 1; turn <= 7; turn += 1) {
+          listener?.({
+            type: "message_end",
+            message: { role: "assistant", content: [{ type: "toolCall" }] },
+          });
+        }
+        listener?.({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "final answer" }] },
+        });
+      },
+      collect: () => ({ report: "final answer", toolCount: 7 }),
+      subscribe(next) {
+        listener = next;
+        return () => undefined;
+      },
+      steer,
+      abort: vi.fn(),
+      dispose: vi.fn(),
+    };
+
+    const progress: string[] = [];
+    const result = await runSubagent(
+      fakeCtx(),
+      {
+        agentType: "worker",
+        prompt: "go",
+        childDepth: 2,
+        maxTurns: 2,
+        onProgress(update) {
+          progress.push(update.text);
+        },
+      },
+      { spawn: async () => child, resume: async () => child },
+    );
+
+    expect(steer).toHaveBeenCalledTimes(2);
+    expect(steer).toHaveBeenNthCalledWith(1, expect.stringContaining("delegated task turn limit"));
+    expect(steer).toHaveBeenNthCalledWith(2, expect.stringContaining("repeated reminder"));
+    expect(progress).toContain("turn limit reached (2/2); asking subagent to finish");
+    expect(progress).toContain("turn limit still exceeded (7/2); asking subagent to finish again");
+    expect(progress.join("\n")).not.toContain("turn limit still exceeded (3/2)");
+    expect(result).toEqual({ sessionId: "child-repeat-reminder", state: "completed", report: "final answer" });
+  });
+
+  it("does not count errored or aborted assistant messages toward maxTurns", async () => {
+    // Intent: transient provider/network failures must neither consume the child budget nor generate repeat steer reminders.
+    let listener: ((event: unknown) => void) | undefined;
+    const steer = vi.fn(async () => undefined);
+    const child: SubagentSession = {
+      sessionId: "child-error-turns",
+      prompt: async () => {
+        listener?.({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "toolCall" }] },
+        });
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          listener?.({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "network connection reset",
+              content: [{ type: "toolCall" }],
+            },
+          });
+        }
+        listener?.({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "aborted",
+            content: [{ type: "toolCall" }],
+          },
+        });
+      },
+      collect: () => ({ report: "recovered", toolCount: 1 }),
+      subscribe(next) {
+        listener = next;
+        return () => undefined;
+      },
+      steer,
+      abort: vi.fn(),
+      dispose: vi.fn(),
+    };
+
+    const result = await runSubagent(
+      fakeCtx(),
+      { agentType: "worker", prompt: "go", childDepth: 2, maxTurns: 1 },
+      { spawn: async () => child, resume: async () => child },
+    );
+
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(subagentRegistry.get("child-error-turns")?.turns).toBe(1);
+    expect(result).toEqual({ sessionId: "child-error-turns", state: "completed", report: "recovered" });
   });
 });
 
