@@ -170,15 +170,10 @@ export class McpHub {
       throw new Error(buildNotConnectedMessage(runtime));
     }
 
-    const configuredToolTimeout = runtime.config.toolCallTimeoutMs
-      && Object.prototype.hasOwnProperty.call(runtime.config.toolCallTimeoutMs, toolName)
-      ? runtime.config.toolCallTimeoutMs[toolName]
-      : undefined;
     try {
       return await client.callTool(toolName, args, {
         signal,
-        timeout: configuredToolTimeout
-          ?? runtime.config.callTimeoutMs
+        timeout: runtime.config.callTimeoutMs
           ?? this.defaultCallTimeoutMs,
       });
     } catch (error) {

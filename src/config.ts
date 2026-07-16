@@ -407,20 +407,6 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
   }
   return output;
 }
-
-
-function sanitizeMcpToolCallTimeoutMs(value: unknown, path: string): Record<string, number> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${path} must be an object keyed by MCP tool name.`);
-  }
-  const output: Record<string, number> = Object.create(null);
-  for (const [toolName, timeoutMs] of Object.entries(value as Record<string, unknown>)) {
-    if (!toolName.trim()) throw new Error(`${path} contains an empty tool name.`);
-    output[toolName] = sanitizePositiveInteger(timeoutMs, `${path}.${toolName}`);
-  }
-  return output;
-}
-
 function sanitizeMcpLocalServerConfig(value: unknown, path: string): LocalMcpServerConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
   const input = value as Record<string, unknown>;
@@ -444,9 +430,6 @@ function sanitizeMcpLocalServerConfig(value: unknown, path: string): LocalMcpSer
   }
   if (input.callTimeoutMs !== undefined) {
     output.callTimeoutMs = sanitizePositiveInteger(input.callTimeoutMs, `${path}.callTimeoutMs`);
-  }
-  if (input.toolCallTimeoutMs !== undefined) {
-    output.toolCallTimeoutMs = sanitizeMcpToolCallTimeoutMs(input.toolCallTimeoutMs, `${path}.toolCallTimeoutMs`);
   }
   return output;
 }
@@ -480,9 +463,6 @@ function sanitizeMcpRemoteServerConfig(value: unknown, path: string): RemoteMcpS
   }
   if (input.callTimeoutMs !== undefined) {
     output.callTimeoutMs = sanitizePositiveInteger(input.callTimeoutMs, `${path}.callTimeoutMs`);
-  }
-  if (input.toolCallTimeoutMs !== undefined) {
-    output.toolCallTimeoutMs = sanitizeMcpToolCallTimeoutMs(input.toolCallTimeoutMs, `${path}.toolCallTimeoutMs`);
   }
   return output;
 }

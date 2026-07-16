@@ -9,7 +9,6 @@ export interface LocalMcpServerConfig {
   toolPrefix?: string;
   startupTimeoutMs?: number;
   callTimeoutMs?: number;
-  toolCallTimeoutMs?: Record<string, number>;
 }
 
 export interface RemoteMcpServerConfig {
@@ -21,7 +20,6 @@ export interface RemoteMcpServerConfig {
   toolPrefix?: string;
   startupTimeoutMs?: number;
   callTimeoutMs?: number;
-  toolCallTimeoutMs?: Record<string, number>;
 }
 
 export type McpServerConfig = LocalMcpServerConfig | RemoteMcpServerConfig;

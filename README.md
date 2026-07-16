@@ -416,8 +416,7 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
         "env": { "API_KEY": "${API_KEY}" },
         "toolPrefix": "",
         "startupTimeoutMs": 60000,
-        "callTimeoutMs": 60000,
-        "toolCallTimeoutMs": { "scrape": 240000 }
+        "callTimeoutMs": 60000
       },
       "remote-example": {
         "type": "remote",
@@ -441,7 +440,6 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
 | `enabled` | `false` 禁用该 server |
 | `startupTimeoutMs` | server 启动超时，覆盖 `mcp.startupTimeoutMs` 全局默认；默认 `60000` |
 | `callTimeoutMs` | 单次工具调用超时，覆盖 `mcp.callTimeoutMs` 全局默认；默认 `60000`。超时由 MCP SDK 取消对应请求，不会因单次慢调用重启 server |
-| `toolCallTimeoutMs` | 按 MCP server 原始工具名覆盖 `callTimeoutMs`，例如 `{ "scrape": 240000 }`；未列出的工具继续使用 server 或全局默认 |
 | `mcp.startupTimeoutMs` / `mcp.callTimeoutMs` | 全局默认，可在未声明 `servers` 时单独配置 |
 
 同一 Pi 进程内，每个 MCP server 配置只建立一个共享连接/本地进程，root 与所有 subagent 共用。首次 `session_start` 会并行等待所有 enabled server 完成首次连接或达到 `startupTimeoutMs`，因此首个 prompt 只会在 MCP readiness 确定后开始；后续 subagent 直接复用同一 readiness 和工具列表。`pi-base` 继续在后台维护重连 + heartbeat，状态显示在 footer。
