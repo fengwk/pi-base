@@ -271,6 +271,23 @@ describe("apply_patch matching and planning", () => {
     expect(result.files[0]).toMatchObject({ operation: "update", path: "file.txt", before: source, after: expected });
   });
 
+  it("replaces an entire file through one Update operation", async () => {
+    const root = await createRoot();
+    await put(root, "README.md", "# old\nversion: 0.1.0\n");
+
+    await executeApplyPatch(patch(
+      "*** Update File: README.md",
+      "@@",
+      "-# old",
+      "-version: 0.1.0",
+      "+# opencli-hub",
+      "+version: 1.0.0",
+      "*** End of File",
+    ), { cwd: root });
+
+    expect(await readFile(join(root, "README.md"), "utf8")).toBe("# opencli-hub\nversion: 1.0.0\n");
+  });
+
   it.each([
     ["exact", "x\nx\n", "x", /exact matching/],
     ["trimEnd", "x \nx  \n", "x", /trimEnd matching/],

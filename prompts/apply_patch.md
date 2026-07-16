@@ -55,7 +55,7 @@ Delete a file:
 - You MUST prefix every added line with +, including when creating a new file.
 - Paths are relative to `workdir` when provided, otherwise the agent's current working directory. Never use absolute paths.
 - When existing files were read from another working directory, pass the same `workdir` and keep patch paths relative to it.
-- Each file may appear only once per patch.
+- Each file may appear only once per patch. To replace an existing file, use one `Update File` hunk; never pair `Delete File` and `Add File` for the same path.
 - Add fails if the file already exists; it never overwrites. Delete and Update require an existing regular text file.
 - An Update must change at least one line; a no-op update is rejected.
 - `*** Move to:` is parsed for compatibility but Move is not supported; a patch containing it fails before any change.
