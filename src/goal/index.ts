@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Spacer, Text } from "@earendil-works/pi-tui";
-import { buildGoalBudgetLimitPrompt, buildGoalContinuationPrompt } from "./prompts.js";
+import { buildGoalBudgetLimitPrompt, buildGoalContinuationPrompt, buildGoalSetPrompt } from "./prompts.js";
 import {
   accountGoalTurn,
   createGoalState,
@@ -26,7 +26,7 @@ export const GOAL_TOOL_NAMES = [CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDAT
 const GOAL_CONTROL_MESSAGE_TYPE = "pi-base-goal-control";
 const GOAL_STATUS_KEY = "03-pi-base-goal";
 
-type GoalControlKind = "continuation" | "budget_limit";
+type GoalControlKind = "goal_set" | "continuation" | "budget_limit";
 
 interface GoalControlDetails {
   kind: GoalControlKind;
@@ -112,7 +112,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
         customType: GOAL_CONTROL_MESSAGE_TYPE,
         // sendMessage({ triggerTurn: true }) starts Agent.run directly and deliberately bypasses
         // before_agent_start, so this message must carry the full continuation contract itself.
-        content: kind === "budget_limit" ? buildGoalBudgetLimitPrompt(state) : buildGoalContinuationPrompt(state),
+        content: buildGoalControlPrompt(kind, state),
         display: true,
         details: { kind, goal: state },
       },
@@ -144,11 +144,21 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   const isGoalSessionSupported = (ctx: ExtensionContext): boolean =>
     options.isSessionSupported?.(ctx) ?? true;
 
-  const replaceGoal = (ctx: ExtensionContext, objective: string, tokenBudget: number | null): GoalState => {
+  const announceUserGoalSet = (state: GoalState): void => {
+    emitControlMessage("goal_set", state, { triggerTurn: true, deliverAs: "steer" });
+  };
+
+  const replaceGoal = (
+    ctx: ExtensionContext,
+    objective: string,
+    tokenBudget: number | null,
+    source: "user" | "model",
+  ): GoalState => {
     const next = createGoalState(objective, tokenBudget);
     budgetWrapupGoalId = null;
     setGoal(ctx, next);
-    if (ctx.isIdle()) startContinuation(ctx);
+    if (source === "user") announceUserGoalSet(next);
+    else if (ctx.isIdle()) startContinuation(ctx);
     return next;
   };
 
@@ -157,7 +167,8 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     const state = details?.goal;
     const kind = details?.kind ?? "continuation";
     const box = new Box(1, 1, (value) => theme.bg("customMessageBg", value));
-    box.addChild(new Text(theme.fg("customMessageLabel", theme.bold(kind === "budget_limit" ? "Goal budget" : "Goal continuation")), 0, 0));
+    const label = kind === "budget_limit" ? "Goal budget" : kind === "goal_set" ? "Goal set" : "Goal continuation";
+    box.addChild(new Text(theme.fg("customMessageLabel", theme.bold(label)), 0, 0));
     box.addChild(new Spacer(1));
     if (!state) {
       box.addChild(new Text(String(message.content ?? ""), 0, 0));
@@ -166,15 +177,17 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     const summary = [
       `${theme.fg("dim", "Objective: ")}${theme.fg("customMessageText", truncateObjective(state.objective))}`,
       `${theme.fg("dim", "Usage: ")}${theme.fg("customMessageText", formatGoalUsage(state))}`,
-      kind === "continuation"
-        ? theme.fg("dim", "Automatic continuation; Esc pauses the goal.")
-        : theme.fg("warning", "Budget reached; this is the final wrap-up turn."),
+      kind === "goal_set"
+        ? theme.fg("dim", "User-set goal; the agent will adopt it.")
+        : kind === "continuation"
+          ? theme.fg("dim", "Automatic continuation; Esc pauses the goal.")
+          : theme.fg("warning", "Budget reached; this is the final wrap-up turn."),
     ];
     if (options.expanded) {
       summary.push(
         "",
         theme.fg("dim", "Injected model guidance:"),
-        kind === "budget_limit" ? buildGoalBudgetLimitPrompt(state) : buildGoalContinuationPrompt(state),
+        buildGoalControlPrompt(kind, state),
       );
     } else {
       summary.push(theme.fg("dim", "(ctrl+o to show injected guidance)"));
@@ -225,7 +238,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
       if (parsedBudget.error) {
         return { content: [{ type: "text" as const, text: parsedBudget.error }], details: { goal }, isError: true };
       }
-      const next = replaceGoal(ctx, objective, parsedBudget.tokenBudget);
+      const next = replaceGoal(ctx, objective, parsedBudget.tokenBudget, "model");
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ goal: next, remainingTokens: remainingTokens(next) }, null, 2) }],
         details: { goal: next },
@@ -353,7 +366,9 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
           notify(ctx, "Usage: /goal edit <objective>", "warning");
           return;
         }
-        setGoal(ctx, { ...goal, objective, updatedAt: Date.now() });
+        const next = { ...goal, objective, updatedAt: Date.now() };
+        setGoal(ctx, next);
+        announceUserGoalSet(next);
         notify(ctx, "Goal objective updated.");
         return;
       }
@@ -371,7 +386,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
         const confirmed = await ctx.ui.confirm("Replace goal?", `Current: ${goal.objective}\n\nNew: ${parsed.objective}`);
         if (!confirmed) return;
       }
-      replaceGoal(ctx, parsed.objective, parsed.tokenBudget);
+      replaceGoal(ctx, parsed.objective, parsed.tokenBudget, "user");
     },
   });
 
@@ -533,13 +548,13 @@ export function filterGoalContextMessages<T extends ContextMessageShape>(
     const message = messages[index];
     if (message.customType !== GOAL_CONTROL_MESSAGE_TYPE) continue;
     const details = isGoalControlDetails(message.details) ? message.details : undefined;
-    const keepActiveContinuation = goal?.status === "active"
-      && details?.kind === "continuation"
+    const keepActiveControl = goal?.status === "active"
+      && (details?.kind === "goal_set" || details?.kind === "continuation")
       && details.goal.id === goal.id;
     const keepBudgetWrapup = budgetWrapupGoalId !== null
       && details?.kind === "budget_limit"
       && details.goal.id === budgetWrapupGoalId;
-    if (keepActiveContinuation || keepBudgetWrapup) {
+    if (keepActiveControl || keepBudgetWrapup) {
       latestControlIndex = index;
       break;
     }
@@ -568,10 +583,16 @@ function remainingTokens(state: GoalState | null): number | null {
 function isGoalControlDetails(value: unknown): value is GoalControlDetails {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const details = value as Partial<GoalControlDetails>;
-  return (details.kind === "continuation" || details.kind === "budget_limit")
+  return (details.kind === "goal_set" || details.kind === "continuation" || details.kind === "budget_limit")
     && details.goal !== null
     && typeof details.goal === "object"
     && typeof details.goal.id === "string";
+}
+
+function buildGoalControlPrompt(kind: GoalControlKind, state: GoalState): string {
+  if (kind === "goal_set") return buildGoalSetPrompt(state);
+  if (kind === "budget_limit") return buildGoalBudgetLimitPrompt(state);
+  return buildGoalContinuationPrompt(state);
 }
 
 export type { GoalState, GoalStatus } from "./state.js";

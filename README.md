@@ -477,8 +477,9 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
 行为：
 
 - 状态持久化为 `active`、`paused`、`blocked`、`budget_limited` 或 `complete`，可跨 resume 恢复。
+- 用户通过 `/goal <objective>` 创建、替换或编辑目标时，会写入一条可见 goal-set message，并以 `{ triggerTurn: true, deliverAs: "steer" }` 发送：streaming 时 steer 当前 agent，idle 时用同一条消息启动新 turn。该 turn settled 后才按正常生命周期发出独立 continuation。模型调用 `create_goal` 只持久化 state，不额外注入 goal-set message。
 - 自动续跑只在 `agent_settled` 后即时发起，不提前排 `followUp`。TUI 中 `Esc` 产生 aborted assistant 后会持久化为 `paused`，因此不会再投递陈旧的 goal continuation；使用 `/goal resume` 才会继续。
-- continuation 和 budget-limit guidance 都是可见的折叠 custom message；按 `ctrl+o` 展开可查看实际注入模型的完整 prompt。完整 prompt 同时包含 objective、预算和 completion/blocked audit。
+- goal-set、continuation 和 budget-limit guidance 都是可见的折叠 custom message；按 `ctrl+o` 展开可查看实际注入模型的完整 prompt。goal-set 与 continuation 共享 complete/blocked audit，continuation 额外包含预算。
 - `/reload` 会安全地把 active goal 改为 `paused`，避免 reload 后静默恢复自动工作。
 - token budget 按 Codex 语义累计主 session 的非缓存输入、cache write 和 output；`cacheRead` 不重复计入，subagent usage 也不汇入主 goal。达到预算后只允许一个收尾 turn，总结进度和下一步，不再自动续跑。
 - goal 只属于主 session；subagent 不会获得 `create_goal`、`get_goal` 或 `update_goal`，也不会恢复或自动续跑 goal。

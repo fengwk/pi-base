@@ -45,15 +45,18 @@ async function finishAgentRun(
 }
 
 describe("goal support", () => {
-  it("starts each automatic continuation only after the previous run settles", async () => {
-    // Intent: Codex-style idle continuation avoids pre-queued follow-ups, which is what lets Esc
-    // end a run without a stale goal prompt being delivered afterwards.
+  it("steers a user-set goal or starts it immediately while idle", async () => {
+    // Intent: one goal-set message gives streaming and idle users equivalent behavior: Pi steers
+    // a running agent, or starts a new goal-set turn when no agent is running.
     const registry = createToolRegistry();
     registerGoalSupport(registry.pi as never);
 
     await registry.runCommand("goal", "Ship the verified feature");
     expect(registry.getMessageSends()).toHaveLength(1);
-    expect(registry.getMessageSends()[0]?.options).toEqual({ triggerTurn: true });
+    expect(registry.getMessageSends()[0]).toMatchObject({
+      message: { details: { kind: "goal_set" } },
+      options: { triggerTurn: true, deliverAs: "steer" },
+    });
 
     await finishAgentRun(registry, assistantMessage("stop", {
       input: 10,
@@ -64,8 +67,27 @@ describe("goal support", () => {
     }));
 
     expect(registry.getMessageSends()).toHaveLength(2);
-    expect(registry.getMessageSends()[1]?.options).toEqual({ triggerTurn: true });
+    expect(registry.getMessageSends()[1]).toMatchObject({
+      message: { details: { kind: "continuation" } },
+      options: { triggerTurn: true },
+    });
     expect(latestGoal(registry)).toMatchObject({ status: "active", tokensUsed: 17 });
+  });
+
+  it("steers a user-set goal without scheduling continuation during an active run", async () => {
+    // Intent: the active agent receives the new objective immediately instead of waiting for a
+    // future continuation, while no duplicate triggerTurn is launched mid-run.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+
+    await registry.runCommand("goal", "Redirect the active work", { isIdle: () => false });
+
+    expect(registry.getMessageSends()).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({ details: expect.objectContaining({ kind: "goal_set" }) }),
+        options: { triggerTurn: true, deliverAs: "steer" },
+      }),
+    ]);
   });
 
   it("pauses on an aborted assistant and does not continue after agent_settled", async () => {
@@ -98,6 +120,7 @@ describe("goal support", () => {
       undefined,
       { isIdle: () => false },
     );
+    expect(registry.getMessageSends()).toHaveLength(0);
     const creationTurn = assistantMessage("stop", { input: 60, output: 40 });
     await registry.emit("turn_end", { type: "turn_end", turnIndex: 0, message: creationTurn, toolResults: [] });
     await registry.emit("agent_end", { type: "agent_end", messages: [creationTurn] });
@@ -129,7 +152,7 @@ describe("goal support", () => {
     expect(latestGoal(registry)).toMatchObject({ status: "budget_limited", tokensUsed: 35 });
     const budgetSend = registry.getMessageSends().find((send) => send.message.details?.kind === "budget_limit");
     expect(budgetSend?.options).toEqual({ deliverAs: "steer" });
-    expect(registry.getMessageSends().filter((send) => send.message.details?.kind === "continuation")).toHaveLength(1);
+    expect(registry.getMessageSends().filter((send) => send.message.details?.kind === "continuation")).toHaveLength(0);
   });
 
   it("waits for the final settled result before blocking an errored goal", async () => {
@@ -238,6 +261,7 @@ describe("goal support", () => {
     expect(result.messages[0].content).toContain("Verify every named artifact");
     expect(result.messages[0].content).toContain("Completion audit:");
     expect(registry.getMessages()[0]?.content).toContain("Verify every named artifact");
+    expect(registry.getMessages()[0]?.content).toContain("Blocked audit:");
   });
 
   it("computes the Codex-style token delta directly", () => {
