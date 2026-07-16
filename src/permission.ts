@@ -296,6 +296,8 @@ export function registerPermissionGuard(
   options: {
     loadSettings?: (cwd: string) => LoadedPiBaseSettings;
     toggleYolo?: (cwd: string) => boolean;
+    /** Must match mutation call renderers so yolo bypass and compact previews use one runtime state. */
+    isYoloEnabled?: (cwd: string) => boolean;
     onPermissionAsked?: (input: { ctx: ExtensionContext }) => Promise<void>;
     onPermissionRejected?: (input: { ctx: ExtensionContext }) => void;
     /** Resolve the delegating agent/depth/root-session of a headless subagent session, for the relayed prompt label. */
@@ -304,6 +306,7 @@ export function registerPermissionGuard(
 ): void {
   const loadSettings = options.loadSettings ?? loadRuntimePiBaseSettings;
   const toggleYolo = options.toggleYolo ?? toggleRuntimeYolo;
+  const isYoloEnabled = options.isYoloEnabled ?? ((cwd: string) => loadSettings(cwd).settings.yolo === true);
   const onPermissionAsked = options.onPermissionAsked;
   const onPermissionRejected = options.onPermissionRejected;
   const resolveSubagentInfo = options.resolveSubagentInfo;
@@ -321,13 +324,12 @@ export function registerPermissionGuard(
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    const loaded = loadSettings(ctx.cwd);
-    updateYoloStatus(ctx, loaded.settings.yolo === true);
+    updateYoloStatus(ctx, isYoloEnabled(ctx.cwd));
   });
 
   pi.on("tool_call", async (event, ctx) => {
     const loaded = loadSettings(ctx.cwd);
-    const yoloEnabled = loaded.settings.yolo === true;
+    const yoloEnabled = isYoloEnabled(ctx.cwd);
     updateYoloStatus(ctx, yoloEnabled);
     if (yoloEnabled) return undefined;
 

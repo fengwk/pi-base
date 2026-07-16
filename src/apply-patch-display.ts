@@ -13,6 +13,7 @@ export interface ApplyPatchPreviewOptions {
   maxLines?: number;
   maxLineChars?: number;
   maxAddLines?: number;
+  maxAddLineChars?: number;
 }
 
 export function applyPatchOperationLabel(operation: ApplyPatchOperation): "A" | "M" | "D" {
@@ -35,6 +36,7 @@ function normalizePreviewLimit(value: number | undefined): number | undefined {
 function* iteratePreviewLines(
   patch: ParsedApplyPatch,
   maxAddLines: number | undefined,
+  maxAddLineChars: number | undefined,
 ): Generator<ApplyPatchPreviewLine> {
   let firstFile = true;
   for (const file of patch.files) {
@@ -53,7 +55,9 @@ function* iteratePreviewLines(
       if (file.lines.length === 0) yield { kind: "meta", text: "(empty file)" };
       else {
         const visibleCount = maxAddLines === undefined ? file.lines.length : Math.min(maxAddLines, file.lines.length);
-        for (const line of file.lines.slice(0, visibleCount)) yield { kind: "add", text: `+${line}` };
+        for (const line of file.lines.slice(0, visibleCount)) {
+          yield { kind: "add", text: truncateLine(`+${line}`, maxAddLineChars) };
+        }
         const remaining = file.lines.length - visibleCount;
         if (remaining > 0) {
           yield {
@@ -127,7 +131,14 @@ export function buildApplyPatchPreview(
   patch: ParsedApplyPatch,
   options: ApplyPatchPreviewOptions = {},
 ): ApplyPatchPreview {
-  return buildBoundedPreview(iteratePreviewLines(patch, normalizePreviewLimit(options.maxAddLines)), options);
+  return buildBoundedPreview(
+    iteratePreviewLines(
+      patch,
+      normalizePreviewLimit(options.maxAddLines),
+      normalizePreviewLimit(options.maxAddLineChars),
+    ),
+    options,
+  );
 }
 
 export function buildRawApplyPatchPreview(

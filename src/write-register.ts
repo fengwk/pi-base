@@ -11,10 +11,9 @@ import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 // Phases from the render context:
 //   - argsComplete === false             -> model is still streaming args
 //   - argsComplete && executionStarted=false && isPartial=true  -> toolcall streamed,
-//                                              apply not yet started
-//   - executionStarted && isPartial=true -> preflight / execute in flight
-//                                              (covers permission, yolo fast-path,
-//                                              and the actual fs write)
+//                                              apply not yet started; yolo is compact here
+//   - executionStarted && isPartial=true -> non-yolo permission / execute in flight
+//                                              and the actual fs write
 //   - isPartial === false && !expanded   -> tool apply has settled and the user is in
 //                                              the collapsed state; this is the
 //                                              moment we collapse the call body to
@@ -22,22 +21,36 @@ import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 //   - isPartial === false && expanded    -> tool apply has settled but the user has
 //                                              expanded the tool row; keep the full
 //                                              body so the expanded view is honest
-function shouldCollapseWriteCall(context: any): boolean {
+function shouldCollapseWriteCall(
+  context: any,
+  isYoloEnabled: ((cwd: string) => boolean) | undefined,
+): boolean {
   if (!context || typeof context !== "object") return false;
-  if (context.isPartial !== false) return false;
   if (context.expanded === true) return false;
-  return true;
+  if (context.isPartial === false) return true;
+  return context.argsComplete === true && isYoloEnabled?.(context.cwd ?? process.cwd()) === true;
 }
 
-function formatWriteCallForContext(args: any, theme: any, context: any): string {
+function formatWriteCallForContext(
+  args: any,
+  theme: any,
+  context: any,
+  isYoloEnabled: ((cwd: string) => boolean) | undefined,
+): string {
   return formatWriteCall(args, theme, context?.cwd, {
-    collapsed: shouldCollapseWriteCall(context),
+    collapsed: shouldCollapseWriteCall(context, isYoloEnabled),
   });
 }
 
 export function registerWriteTool(
   pi: ExtensionAPI,
-  options: { onSuccessfulWrite?: (absolutePath: string) => void; getCollapsedResultLines?: CollapsedResultLinesResolver; getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver } = {},
+  options: {
+    onSuccessfulWrite?: (absolutePath: string) => void;
+    getCollapsedResultLines?: CollapsedResultLinesResolver;
+    getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
+    /** Shared with the permission guard: yolo bypasses approval, so its completed arguments may stay compact. */
+    isYoloEnabled?: (cwd: string) => boolean;
+  } = {},
 ) {
   const tool = {
     name: "write",
@@ -55,9 +68,9 @@ export function registerWriteTool(
       // args are complete (or the host doesn't tell us), render the static call so the
       // collapse/full branching below can take over.
       if (context?.argsComplete === false) {
-        return renderStreamingCallText(formatWriteCallForContext(args, theme, context), theme, context);
+        return renderStreamingCallText(formatWriteCallForContext(args, theme, context, options.isYoloEnabled), theme, context);
       }
-      return renderCallText(formatWriteCallForContext(args, theme, context), context?.lastComponent);
+      return renderCallText(formatWriteCallForContext(args, theme, context, options.isYoloEnabled), context?.lastComponent);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const collapsedLines = resolveCollapsedResultLines("write", undefined, context, options.getCollapsedResultLines);

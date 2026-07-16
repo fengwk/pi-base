@@ -105,6 +105,7 @@ export function buildApplyPatchFileMetadata(file: ApplyPatchFileResult): ApplyPa
 }
 
 export const APPLY_PATCH_COLLAPSED_ADD_PREVIEW_LINES = 10;
+export const APPLY_PATCH_COLLAPSED_ADD_PREVIEW_LINE_CHARS = 1500;
 
 function colorizePreviewLine(line: ApplyPatchPreviewLine, theme: any): string {
   if (line.kind === "file") {
@@ -137,7 +138,10 @@ export function formatApplyPatchCall(
   try {
     const patch = parseApplyPatch(args.patchText);
     const preview = buildApplyPatchPreview(patch, options.collapseAddBodies
-      ? { maxAddLines: APPLY_PATCH_COLLAPSED_ADD_PREVIEW_LINES }
+      ? {
+        maxAddLines: APPLY_PATCH_COLLAPSED_ADD_PREVIEW_LINES,
+        maxAddLineChars: APPLY_PATCH_COLLAPSED_ADD_PREVIEW_LINE_CHARS,
+      }
       : {});
     return [
       header,
@@ -149,8 +153,13 @@ export function formatApplyPatchCall(
   }
 }
 
-function shouldCollapseApplyPatchCall(context: any): boolean {
-  return context?.isPartial === false && context?.expanded !== true;
+function shouldCollapseApplyPatchCall(
+  context: any,
+  isYoloEnabled: ((cwd: string) => boolean) | undefined,
+): boolean {
+  if (context?.expanded === true) return false;
+  if (context?.isPartial === false) return true;
+  return context?.argsComplete === true && isYoloEnabled?.(context?.cwd ?? process.cwd()) === true;
 }
 
 function formatSummary(files: readonly ApplyPatchFileMetadata[]): string {
@@ -183,6 +192,8 @@ export function registerApplyPatchTool(
     onCommitFailed?: (failure: ApplyPatchCommitFailure) => void | Promise<void>;
     getCollapsedResultLines?: CollapsedResultLinesResolver;
     getCollapsedResultMaxChars?: CollapsedResultMaxCharsResolver;
+    /** Shared with the permission guard: yolo bypasses approval, so its completed arguments may stay compact. */
+    isYoloEnabled?: (cwd: string) => boolean;
   } = {},
 ) {
   const description = loadToolDescription("apply_patch");
@@ -203,7 +214,7 @@ export function registerApplyPatchTool(
     },
     renderCall(args: any, theme: any, context: any) {
       return renderStreamingCallText(formatApplyPatchCall(args, theme, context?.cwd, {
-        collapseAddBodies: shouldCollapseApplyPatchCall(context),
+        collapseAddBodies: shouldCollapseApplyPatchCall(context, options.isYoloEnabled),
       }), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {

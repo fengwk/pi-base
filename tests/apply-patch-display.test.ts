@@ -90,6 +90,28 @@ describe("apply_patch display", () => {
     expect(rendered).toContain("(delete file)");
   });
 
+  it("bounds only displayed Add lines by character count when requested", () => {
+    // Intent: a generated file can contain a pathological single line, but Update/Delete review
+    // data must remain complete when the settled Add-only preview is compacted.
+    const longAdd = "a".repeat(1_700);
+    const longUpdate = "u".repeat(1_700);
+    const parsed = parseApplyPatch(patch(
+      "*** Add File: generated.txt",
+      `+${longAdd}`,
+      "*** Update File: existing.txt",
+      "@@",
+      `+${longUpdate}`,
+    ));
+
+    const preview = buildApplyPatchPreview(parsed, { maxAddLines: 10, maxAddLineChars: 1_500 });
+    const addLine = preview.lines.find((line) => line.kind === "add" && line.text.startsWith("+a"));
+    const updateLine = preview.lines.find((line) => line.kind === "add" && line.text.startsWith("+u"));
+
+    expect(addLine?.text).toBe(`+${"a".repeat(1_496)}...`);
+    expect(addLine?.text).toHaveLength(1_500);
+    expect(updateLine?.text).toBe(`+${longUpdate}`);
+  });
+
   it("bounds malformed raw text without normalizing away CRLF or CR line boundaries", () => {
     const raw = buildRawApplyPatchPreview(`first\r\n${"x".repeat(300)}\rthird\nfourth`, {
       maxLines: 3,

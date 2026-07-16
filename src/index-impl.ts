@@ -202,6 +202,10 @@ export function registerFindTool(
 
 export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensionOptions = {}): void {
   const loadSettings = loadRuntimePiBaseSettings;
+  // This exact resolver is passed to both the permission guard and mutation call renderers.
+  // A yolo-enabled tool call bypasses approval, so it must not briefly expand only to collapse
+  // again when its fast execution settles.
+  const isYoloEnabled = (cwd: string): boolean => loadSettings(cwd).settings.yolo === true;
   const resolverFactory = createResolverFactory(loadSettings);
   const getCollapsedResultLines = createCollapsedResultLinesResolver(loadSettings);
   const getCollapsedResultMaxChars = createCollapsedResultMaxCharsResolver(loadSettings);
@@ -268,6 +272,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     onSuccessfulWrite: syncLsp,
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
+    isYoloEnabled,
   });
   registerApplyPatchTool(pi, {
     onCommitted: (result) => {
@@ -279,6 +284,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     },
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
+    isYoloEnabled,
   });
   registerLspTools(pi, { resolverFactory, getCollapsedResultLines, getCollapsedResultMaxChars });
   const notifyHooks = registerNotifySupport(pi, {
@@ -335,6 +341,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   registerPermissionGuard(pi, {
     loadSettings,
     toggleYolo: toggleRuntimeYolo,
+    isYoloEnabled,
     onPermissionAsked: notifyHooks.onPermissionAsked,
     onPermissionRejected: notifyHooks.onPermissionRejected,
     resolveSubagentInfo: (ctx) => {

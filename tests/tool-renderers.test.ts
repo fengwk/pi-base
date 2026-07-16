@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
@@ -443,6 +443,114 @@ describe("tool renderers", () => {
       expect(write).not.toContain("line-8");
       expect(write).not.toContain("line-40");
       expect(write).toContain("33 more lines");
+    });
+  });
+
+  it("bounds a settled Add preview line without truncating review or expanded content", async () => {
+    await withTempGlobalPiBaseConfig({}, async (root) => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const longLine = "x".repeat(1_700);
+      const renderWide = (component: any) => component.render(2_000).join("\n");
+      const args = {
+        patchText: [
+          "*** Begin Patch",
+          "*** Add File: generated.txt",
+          `+${longLine}`,
+          "*** End Patch",
+        ].join("\n"),
+      };
+      const reviewContext = {
+        lastComponent: undefined,
+        argsComplete: true,
+        executionStarted: true,
+        isPartial: true,
+        expanded: false,
+        isError: false,
+        cwd: root,
+        state: {},
+      };
+
+      const review = renderWide(registry.getTool("apply_patch").renderCall(args, {} as any, reviewContext as any));
+      const settled = renderWide(registry.getTool("apply_patch").renderCall(args, {} as any, {
+        ...reviewContext,
+        isPartial: false,
+        state: {},
+      } as any));
+      const expanded = renderWide(registry.getTool("apply_patch").renderCall(args, {} as any, {
+        ...reviewContext,
+        isPartial: false,
+        expanded: true,
+        state: {},
+      } as any));
+
+      expect(review).toContain(`+${longLine}`);
+      expect(settled).toContain(`+${"x".repeat(1_496)}...`);
+      expect(settled).not.toContain(`+${longLine}`);
+      expect(expanded).toContain(`+${longLine}`);
+    });
+  });
+
+  it("uses one yolo state for permission bypass and compact mutation call previews", async () => {
+    await withTempGlobalPiBaseConfig({ yolo: true, permission: { apply_patch: "deny", write: "deny" } }, async (root) => {
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const lines = Array.from({ length: 20 }, (_, index) => `line-${index + 1}`);
+      const context = {
+        lastComponent: undefined,
+        argsComplete: true,
+        executionStarted: false,
+        isPartial: true,
+        expanded: false,
+        isError: false,
+        cwd: root,
+        state: {},
+      };
+      const patchArgs = {
+        patchText: [
+          "*** Begin Patch",
+          "*** Add File: generated.txt",
+          ...lines.map((line) => `+${line}`),
+          "*** End Patch",
+        ].join("\n"),
+      };
+
+      const applyPatch = render(registry.getTool("apply_patch").renderCall(patchArgs, {} as any, context as any));
+      const write = render(registry.getTool("write").renderCall({ path: "generated.txt", content: lines.join("\n") }, {} as any, context as any));
+      const expandedPatch = render(registry.getTool("apply_patch").renderCall(patchArgs, {} as any, {
+        ...context,
+        expanded: true,
+        state: {},
+      } as any));
+      const expandedWrite = render(registry.getTool("write").renderCall({ path: "generated.txt", content: lines.join("\n") }, {} as any, {
+        ...context,
+        expanded: true,
+        state: {},
+      } as any));
+
+      expect(applyPatch).toContain("+line-10");
+      expect(applyPatch).not.toContain("+line-11");
+      expect(applyPatch).toContain("10 more lines");
+      expect(write).toContain("line-7");
+      expect(write).not.toContain("line-8");
+      expect(write).toContain("13 more lines");
+      expect(expandedPatch).toContain("+line-20");
+      expect(expandedWrite).toContain("line-20");
+
+      const applied = await registry.getTool("apply_patch").execute("yolo-apply", {
+        workdir: root,
+        patchText: patchArgs.patchText,
+      }, undefined, undefined, { cwd: root });
+      const written = await registry.getTool("write").execute("yolo-write", {
+        workdir: root,
+        path: "written.txt",
+        content: "written\n",
+      }, undefined, undefined, { cwd: root });
+
+      expect(applied.isError).not.toBe(true);
+      expect(written.isError).not.toBe(true);
+      expect(await readFile(join(root, "generated.txt"), "utf8")).toBe(`${lines.join("\n")}\n`);
+      expect(await readFile(join(root, "written.txt"), "utf8")).toBe("written\n");
     });
   });
 
