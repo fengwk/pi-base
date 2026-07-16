@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { filterGoalContextMessages, registerGoalSupport } from "../src/goal/index.js";
+import { filterGoalContextMessages, registerGoalSupport, UPDATE_GOAL_TOOL_NAME } from "../src/goal/index.js";
+import { buildGoalBudgetLimitPrompt } from "../src/goal/prompts.js";
 import { GOAL_STATE_ENTRY_TYPE, tokenDeltaFromUsage, type GoalState } from "../src/goal/state.js";
 import { createToolRegistry } from "./helpers.js";
 
@@ -139,6 +140,25 @@ describe("goal support", () => {
     expect(registry.getNotifications().at(-1)?.message).toContain("interrupted");
   });
 
+  it("does not continue a manually paused goal after its current run settles", async () => {
+    // Intent: a pause issued while the agent is running remains terminal for automatic
+    // continuation even when the in-flight turn finishes normally.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Pause without another continuation");
+    await registry.emit("agent_start", { type: "agent_start" });
+    await registry.runCommand("goal", "pause", { isIdle: () => false });
+
+    const message = assistantMessage("stop");
+    await registry.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: Date.now() });
+    await registry.emit("turn_end", { type: "turn_end", turnIndex: 0, message, toolResults: [] });
+    await registry.emit("agent_end", { type: "agent_end", messages: [message] });
+    await registry.emit("agent_settled", { type: "agent_settled" });
+
+    expect(latestGoal(registry)?.status).toBe("paused");
+    expect(registry.getMessageSends().filter((send) => send.message.details?.kind === "continuation")).toHaveLength(0);
+  });
+
   it("does not block a replacement goal for an error from the superseded run", async () => {
     // Intent: the final stop reason belongs to the goal that owned the run at agent_start, not a
     // replacement created while that run was still streaming.
@@ -183,7 +203,7 @@ describe("goal support", () => {
     expect(registry.getMessageSends().at(-1)?.options).toEqual({ triggerTurn: true });
   });
 
-  it("uses non-cached input plus output for the budget and steers one wrap-up turn", async () => {
+  it("uses non-cached input plus output for the budget and does not continue after settling", async () => {
     // Intent: cached context must not consume the goal budget repeatedly; the crossing turn queues
     // one immediate steering message rather than a post-agent follow-up.
     const registry = createToolRegistry();
@@ -206,6 +226,93 @@ describe("goal support", () => {
     const budgetSend = registry.getMessageSends().find((send) => send.message.details?.kind === "budget_limit");
     expect(budgetSend?.options).toEqual({ deliverAs: "steer" });
     expect(registry.getMessageSends().filter((send) => send.message.details?.kind === "continuation")).toHaveLength(0);
+  });
+
+  it("repeats the budget soft-stop steer every five post-budget tool turns", async () => {
+    // Intent: budget exhaustion is advisory during an already-running agent, matching the
+    // subagent max-turn pattern without scheduling a post-settled continuation.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "--tokens 1 Finish within the budget");
+    await registry.emit("agent_start", { type: "agent_start" });
+
+    const crossing = assistantMessage("toolUse", { output: 1 });
+    await registry.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: Date.now() });
+    await registry.emit("turn_end", { type: "turn_end", turnIndex: 0, message: crossing, toolResults: [] });
+    expect(registry.getMessageSends().filter((send) => send.message.details?.kind === "budget_limit")).toHaveLength(1);
+
+    for (let turnIndex = 1; turnIndex <= 5; turnIndex++) {
+      const message = assistantMessage("toolUse");
+      await registry.emit("turn_start", { type: "turn_start", turnIndex, timestamp: Date.now() });
+      await registry.emit("turn_end", { type: "turn_end", turnIndex, message, toolResults: [] });
+      const expectedBudgetReminders = turnIndex === 5 ? 2 : 1;
+      expect(registry.getMessageSends().filter((send) => send.message.details?.kind === "budget_limit"))
+        .toHaveLength(expectedBudgetReminders);
+    }
+
+    await registry.emit("agent_end", { type: "agent_end", messages: [] });
+    await registry.emit("agent_settled", { type: "agent_settled" });
+
+    expect(latestGoal(registry)?.status).toBe("budget_limited");
+    expect(registry.getMessageSends().filter((send) => send.message.details?.kind === "continuation")).toHaveLength(0);
+  });
+
+  it("only permits completion during a budget-limited wrap-up", async () => {
+    // Intent: exhaustion is not itself a blocker, so the soft-stop window may close the goal only
+    // when evidence proves completion; otherwise its persisted status remains budget_limited.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "--tokens 1 Finish within the budget");
+    await registry.emit("agent_start", { type: "agent_start" });
+    const crossing = assistantMessage("stop", { output: 1 });
+    await registry.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: Date.now() });
+    await registry.emit("turn_end", { type: "turn_end", turnIndex: 0, message: crossing, toolResults: [] });
+
+    const updateGoal = registry.getTool("update_goal");
+    const context = { hasUI: false, isIdle: () => true };
+    const blocked = await updateGoal.execute(
+      "call",
+      { status: "blocked", reason: "The budget was exhausted." },
+      undefined,
+      undefined,
+      context,
+    );
+
+    expect(blocked).toMatchObject({ isError: true });
+    expect(blocked.content[0]?.text).toContain("budget-limited goal can only be marked complete");
+    expect(latestGoal(registry)?.status).toBe("budget_limited");
+
+    const completed = await updateGoal.execute(
+      "call",
+      { status: "complete", reason: "All explicit requirements are verified." },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(completed).not.toMatchObject({ isError: true });
+    expect(latestGoal(registry)?.status).toBe("complete");
+    expect(registry.getActiveTools()).not.toContain(UPDATE_GOAL_TOOL_NAME);
+  });
+
+  it("treats a budget exhaustion as budget_limited rather than completion or blocked", () => {
+    // Intent: budget exhaustion permits one final summary but cannot independently justify a
+    // terminal goal decision or another autonomous continuation.
+    const prompt = buildGoalBudgetLimitPrompt({
+      version: 1,
+      id: "goal",
+      objective: "Complete the requested work",
+      status: "budget_limited",
+      tokenBudget: 30,
+      tokensUsed: 35,
+      timeUsedSeconds: 10,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    expect(prompt).toContain("budget_limited");
+    expect(prompt).toContain("Budget exhaustion is neither completion nor a blocker.");
+    expect(prompt).toContain("leave it budget_limited after the wrap-up");
+    expect(prompt).toContain("genuinely complete");
   });
 
   it("waits for the final settled result before blocking an errored goal", async () => {
@@ -329,7 +436,10 @@ describe("goal support", () => {
     expect(result.messages[0].content).toContain("<system-reminder>");
     expect(result.messages[0].content).toContain("not a new user request");
     expect(result.messages[0].content).toContain("detailed reason");
+    expect(result.messages[0].content).toContain("genuinely complete");
     expect(result.messages[0].content).toContain("Do not turn an unspecified edge case");
+    expect(result.messages[0].content).not.toContain("manufacture more work");
+    expect(result.messages[0].content).not.toContain("search for extra work");
     expect(result.messages[0].content).toContain("</system-reminder>");
     expect(registry.getMessages()[0]?.content).toContain("Verify every named artifact");
     expect(registry.getMessages()[0]?.content).toContain("Blocked audit:");
@@ -346,8 +456,7 @@ describe("goal support", () => {
     const text = result.content[0]?.text ?? "";
 
     expect(text).toContain("This is the current goal.");
-    expect(text).toContain("call update_goal with status complete");
-    expect(text).toContain("detailed reason");
+    expect(text).toContain("current goal status and evidence satisfy its tool policy");
     expect(text).toContain('"objective": "Verify the final result"');
     expect(text).not.toContain('"reason"');
     for (const toolName of ["get_goal", "create_goal", "update_goal"]) {

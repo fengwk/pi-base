@@ -26,6 +26,7 @@ export const GOAL_TOOL_NAMES = [CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDAT
 
 const GOAL_CONTROL_MESSAGE_TYPE = "pi-base-goal-control";
 const GOAL_STATUS_KEY = "03-pi-base-goal";
+const BUDGET_REMINDER_INTERVAL = 5;
 
 type GoalControlKind = "goal_set" | "continuation" | "budget_limit";
 
@@ -61,6 +62,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   let currentTurnStartedAt: number | null = null;
   let lastStopReason: AssistantMessage["stopReason"] | undefined;
   let budgetWrapupGoalId: string | null = null;
+  let budgetToolTurnsSinceReminder = 0;
   let continuationTimer: ReturnType<typeof setTimeout> | null = null;
   let generation = 0;
 
@@ -70,13 +72,21 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     continuationTimer = null;
   };
 
+  const clearBudgetWrapup = (): void => {
+    budgetWrapupGoalId = null;
+    budgetToolTurnsSinceReminder = 0;
+  };
+
   const updateStatus = (ctx: ExtensionContext): void => {
     if (!ctx.hasUI) return;
     ctx.ui.setStatus(GOAL_STATUS_KEY, statusBarEnabled ? formatGoalStatus(goal) ?? "" : "");
   };
 
+  const isBudgetWrapup = (): boolean =>
+    goal !== null && goal.status === "budget_limited" && budgetWrapupGoalId === goal.id;
+
   const goalRuntimeToolsEnabled = (): boolean =>
-    sessionSupported && goal !== null && (goal.status === "active" || budgetWrapupGoalId === goal.id);
+    sessionSupported && goal !== null && (goal.status === "active" || isBudgetWrapup());
 
   const syncGoalTools = (): void => {
     const current = pi.getActiveTools();
@@ -158,7 +168,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     source: "user" | "model",
   ): GoalState => {
     const next = createGoalState(objective, tokenBudget);
-    budgetWrapupGoalId = null;
+    clearBudgetWrapup();
     setGoal(ctx, next);
     if (source === "user") announceUserGoalSet(next);
     else if (ctx.isIdle()) startContinuation(ctx);
@@ -184,7 +194,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
         ? theme.fg("dim", "User-set goal; the agent will adopt it.")
         : kind === "continuation"
           ? theme.fg("dim", "Automatic continuation; Esc pauses the goal.")
-          : theme.fg("warning", "Budget reached; this is the final wrap-up turn."),
+          : theme.fg("warning", "Budget reached; wrap up the current run."),
     ];
     if (options.expanded) {
       summary.push(
@@ -255,9 +265,17 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
       if (!goal) {
         return { content: [{ type: "text" as const, text: "No goal is set." }], details: { goal }, isError: true };
       }
-      if (goal.status !== "active" && budgetWrapupGoalId !== goal.id) {
+      const budgetWrapup = isBudgetWrapup();
+      if (goal.status !== "active" && !budgetWrapup) {
         return {
           content: [{ type: "text" as const, text: `Goal status is ${goal.status}; it cannot be updated by the model.` }],
+          details: { goal },
+          isError: true,
+        };
+      }
+      if (budgetWrapup && params.status !== "complete") {
+        return {
+          content: [{ type: "text" as const, text: "A budget-limited goal can only be marked complete during its wrap-up." }],
           details: { goal },
           isError: true,
         };
@@ -316,7 +334,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
           notify(ctx, "No goal is set.");
           return;
         }
-        budgetWrapupGoalId = null;
+        clearBudgetWrapup();
         setGoal(ctx, null);
         notify(ctx, "Goal cleared.");
         return;
@@ -400,7 +418,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
       settledRunGoalId = null;
       currentTurnStartedAt = null;
       lastStopReason = undefined;
-      budgetWrapupGoalId = null;
+      clearBudgetWrapup();
       updateStatus(ctx);
       syncGoalTools();
       return;
@@ -416,7 +434,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     settledRunGoalId = null;
     currentTurnStartedAt = null;
     lastStopReason = undefined;
-    budgetWrapupGoalId = null;
+    clearBudgetWrapup();
     if (goal?.status === "active" && event.reason === "reload") {
       setGoal(ctx, { ...goal, status: "paused", updatedAt: Date.now() });
       notify(ctx, `Goal paused after reload: ${truncateObjective(goal.objective)}\nUse /goal resume to continue.`);
@@ -437,7 +455,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     settledRunGoalId = null;
     currentTurnStartedAt = null;
     lastStopReason = undefined;
-    budgetWrapupGoalId = null;
+    clearBudgetWrapup();
   });
 
   pi.on("before_agent_start", () => {
@@ -478,7 +496,10 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     const previousStatus = goal.status;
     const next = accountGoalTurn(goal, tokenDeltaFromUsage(assistant.usage), elapsedSeconds);
     const crossedBudget = previousStatus === "active" && next.status === "budget_limited";
-    if (crossedBudget) budgetWrapupGoalId = next.id;
+    if (crossedBudget) {
+      budgetWrapupGoalId = next.id;
+      budgetToolTurnsSinceReminder = 0;
+    }
     setGoal(ctx, next);
 
     if (assistant.stopReason === "aborted" && goal?.status === "active") {
@@ -488,6 +509,16 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     }
     if (crossedBudget && goal) {
       emitControlMessage("budget_limit", goal, { deliverAs: "steer" });
+    } else if (
+      goal?.status === "budget_limited"
+      && budgetWrapupGoalId === goal.id
+      && assistant.stopReason === "toolUse"
+    ) {
+      budgetToolTurnsSinceReminder++;
+      if (budgetToolTurnsSinceReminder >= BUDGET_REMINDER_INTERVAL) {
+        budgetToolTurnsSinceReminder = 0;
+        emitControlMessage("budget_limit", goal, { deliverAs: "steer" });
+      }
     }
   });
 
@@ -500,7 +531,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     const finalRunGoalId = settledRunGoalId;
     settledRunGoalId = null;
     if (budgetWrapupGoalId !== null) {
-      budgetWrapupGoalId = null;
+      clearBudgetWrapup();
       syncGoalTools();
     }
     if (!goal || goal.status !== "active") return;
@@ -596,7 +627,7 @@ function formatGetGoalResult(state: GoalState | null): string {
   if (!state) return `There is no current goal.\n\n${JSON.stringify(current, null, 2)}`;
   return [
     "This is the current goal. Use it to advance the objective or check whether every objective requirement is fully satisfied.",
-    "If current evidence proves it is complete, call update_goal with status complete and a detailed reason with the supporting evidence. If it is blocked under the goal policy, call update_goal with status blocked and a detailed reason describing the blocker and evidence.",
+    "Use update_goal only when the current goal status and evidence satisfy its tool policy.",
     "",
     "Current goal:",
     JSON.stringify(current, null, 2),

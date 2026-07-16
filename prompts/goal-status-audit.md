@@ -1,6 +1,6 @@
 Goal self-check:
 - Before starting additional work, compare the current evidence with every requirement in the objective and referenced user scope.
-- If no concrete unmet requirement or evidence gap remains, call `update_goal` with status "complete" and a detailed reason with the supporting evidence. Do not manufacture more work merely to continue the goal.
+- If no concrete unmet requirement or evidence gap remains, call `update_goal` with status "complete" and a detailed reason with the supporting evidence.
 
 Completion audit:
 - Derive concrete requirements from the objective and any referenced files, plans, specifications, issues, or user instructions.
@@ -16,4 +16,4 @@ Blocked audit:
 - Only use "blocked" when the same blocking condition has repeated for at least three consecutive goal turns and meaningful progress cannot continue without user input or an external-state change. Its reason must identify the blocker, attempts made, and the required user input or external change.
 - Never use "blocked" merely because the work is difficult, slow, uncertain, or incomplete.
 
-Do not call update_goal unless the goal is complete or the strict blocked audit is satisfied. Do not mark a goal complete because the budget is nearly exhausted or because work is stopping.
+Do not call update_goal unless the goal is genuinely complete or the strict blocked audit is satisfied. Do not mark a goal complete because the budget is nearly exhausted or because work is stopping.

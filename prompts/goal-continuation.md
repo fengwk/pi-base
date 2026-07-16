@@ -1,8 +1,8 @@
 <system-reminder>
-This is an automatic system reminder to inspect and complete the active goal. It is not a new user request and does not itself mean more work is required.
+This is an automatic system reminder to inspect and complete the active goal. It is not a new user request.
 
 First check current progress against the objective and available evidence:
-- If every objective requirement is already satisfied, call `update_goal` with status `complete` now and provide a detailed reason with the supporting evidence. Do not search for extra work, broaden scope, or add speculative tests merely because this reminder was sent.
+- If current evidence proves every objective requirement is satisfied, call `update_goal` with status `complete` now and provide a detailed reason with the supporting evidence.
 - If the goal is blocked, follow the blocked policy below and call `update_goal` with status `blocked` plus a detailed reason only when that policy is satisfied.
 - Otherwise, identify a concrete unmet requirement or evidence gap, then advance only that item.
 

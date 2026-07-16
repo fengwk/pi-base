@@ -479,10 +479,10 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
 - 状态持久化为 `active`、`paused`、`blocked`、`budget_limited` 或 `complete`，可跨 resume 恢复。
 - 模型调用 `update_goal` 时必须提供非空 `reason`，说明完成或阻塞的详细理由及证据；它只约束当前 tool call，不写入 goal 状态或 `update_goal` result。当前只校验非空，不对证据质量做自动审查。
 - `/goal <objective>` 会创建或替换为新的 active goal，并写入一条可见 goal-set message，以 `{ triggerTurn: true, deliverAs: "steer" }` 发送：streaming 时 steer 当前 agent，idle 时用同一条消息启动新 turn。`/goal edit <objective>` 保留现有 ID、状态、预算和已用量；仅在 goal active 时发送同一条 goal-set message，非 active goal 只更新持久化 objective。该 turn settled 后才按正常生命周期发出独立 continuation。模型调用 `create_goal` 只持久化 state，不额外注入 goal-set message。
-- 自动续跑只在 `agent_settled` 后即时发起，不提前排 `followUp`。TUI 中 `Esc` 产生 aborted assistant 后会持久化为 `paused`，因此不会再投递陈旧的 goal continuation；使用 `/goal resume` 才会继续。
+- 自动续跑只在 `agent_settled` 后即时发起，不提前排 `followUp`。TUI 中 `Esc` 产生 aborted assistant 后会持久化为 `paused`；`paused` 和 `budget_limited` 都不会在当前 run settled 后投递 goal continuation。使用 `/goal resume` 才会继续 paused goal。
 - goal-set、continuation 和 budget-limit guidance 都是可见的折叠 custom message；按 `ctrl+o` 展开可查看实际注入模型的完整 prompt。goal-set 与 continuation 共享 complete/blocked audit，continuation 使用 `<system-reminder>` 明确它是自动自查而非新用户请求，并要求先检查完成/阻塞状态再推进明确剩余项。
 - `/reload` 会安全地把 active goal 改为 `paused`，避免 reload 后静默恢复自动工作。
-- token budget 按 Codex 语义累计主 session 的非缓存输入、cache write 和 output；`cacheRead` 不重复计入，subagent usage 也不汇入主 goal。达到预算后只允许一个收尾 turn，总结进度和下一步，不再自动续跑。
+- token budget 按 Codex 语义累计主 session 的非缓存输入、cache write 和 output；`cacheRead` 不重复计入，subagent usage 也不汇入主 goal。达到预算后进入 `budget_limited`，这不是完成或阻塞：发送一次 soft-stop 收尾提示；若当前 run 仍连续发起工具调用，每额外 5 个 tool-driving assistant turn 重发一次。它不强制 abort，只有当前 run settled 后才停止自动续跑。仅当现有证据证明目标真正完成时，模型才可调用 `update_goal(complete, reason)`；否则保持 `budget_limited`。
 - goal 只属于主 session；subagent 不会获得 `create_goal`、`get_goal` 或 `update_goal`，也不会恢复或自动续跑 goal。
 - provider 请求前会过滤 `aborted` / `error` assistant messages 和旧 goal control messages。这使请求 payload、输出 token 估算和 provider replay 一致，规避 compact 后巨大中断 tool call 误把下一请求压到 1/16 output tokens 的路径；它不改变 Pi core 的 compaction threshold、切点或摘要逻辑。
 
