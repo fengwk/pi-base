@@ -426,7 +426,7 @@ describe("bash tool and index", () => {
     expect(bashResult.isError).toBe(true);
   });
 
-  it("enables the default base tool set without injecting an empty base guide", async () => {
+  it("enables the default base tool set and create_goal without injecting an empty base guide", async () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" });
@@ -441,6 +441,7 @@ describe("bash tool and index", () => {
       "lsp_goto_definition",
       "lsp_workspace_symbols",
       "lsp_java_decompile",
+      "create_goal",
     ]);
 
     const injected = await registry.emit("before_agent_start", {
@@ -469,7 +470,7 @@ describe("bash tool and index", () => {
     expect(registry.getActiveTools()).toEqual(["read"]);
   });
 
-  it("falls back to the default tool set when only retired task was active", async () => {
+  it("falls back to the default tool set and create_goal when only retired task was active", async () => {
     const registry = createToolRegistry();
     registry.pi.setActiveTools(["task"]);
     piBaseExtension(registry.pi as any);
@@ -485,6 +486,7 @@ describe("bash tool and index", () => {
       "lsp_goto_definition",
       "lsp_workspace_symbols",
       "lsp_java_decompile",
+      "create_goal",
     ]);
   });
 

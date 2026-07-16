@@ -46,6 +46,7 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
   const entries: any[] = [];
   const notifications: Array<{ message: string; variant: string }> = [];
   const messages: any[] = [];
+  const messageSends: Array<{ message: any; options: any }> = [];
   const messageRenderers = new Map<string, any>();
   const statuses = new Map<string, string | undefined>();
   const widgets = new Map<string, string[] | { render: (width: number) => string[]; dispose?: () => void }>();
@@ -325,8 +326,9 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       registerMessageRenderer(customType: string, renderer: any) {
         messageRenderers.set(customType, renderer);
       },
-      sendMessage(message: any) {
+      sendMessage(message: any, options?: any) {
         messages.push(message);
+        messageSends.push({ message, options });
       }
     },
     getTool(name: string) {
@@ -362,6 +364,9 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
     },
     getMessages() {
       return [...messages];
+    },
+    getMessageSends() {
+      return [...messageSends];
     },
     getMessageRenderer(customType: string) {
       return messageRenderers.get(customType);
@@ -408,8 +413,40 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
     },
     async emit(name: string, event: any, ctx: any = {}) {
       const handlers = events.get(name) ?? [];
-      let current = undefined;
       const eventContext = buildContext(ctx);
+      if (name === "before_agent_start") {
+        let currentEvent = { ...event };
+        const messages: any[] = [];
+        let systemPromptModified = false;
+        for (const handler of handlers) {
+          const result = await handler(currentEvent, eventContext);
+          if (!result) continue;
+          if (result.message !== undefined) messages.push(result.message);
+          if (result.systemPrompt !== undefined) {
+            currentEvent = { ...currentEvent, systemPrompt: result.systemPrompt };
+            systemPromptModified = true;
+          }
+        }
+        if (messages.length === 0 && !systemPromptModified) return undefined;
+        return {
+          ...(messages.length > 0 ? { messages } : {}),
+          ...(systemPromptModified ? { systemPrompt: currentEvent.systemPrompt } : {}),
+        };
+      }
+      if (name === "context") {
+        let currentEvent = { ...event };
+        let aggregate: any = undefined;
+        for (const handler of handlers) {
+          const result = await handler(currentEvent, eventContext);
+          if (!result) continue;
+          aggregate = { ...aggregate, ...result };
+          if (result.messages !== undefined) {
+            currentEvent = { ...currentEvent, messages: result.messages };
+          }
+        }
+        return aggregate;
+      }
+      let current = undefined;
       for (const handler of handlers) {
         current = await handler(event, eventContext);
       }

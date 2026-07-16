@@ -9,6 +9,7 @@
 - [Agent](#agent)
 - [配置](#配置)
 - [命令](#命令)
+- [目标模式](#目标模式)
 - [运行时行为](#运行时行为)
 - [开发](#开发)
 
@@ -456,7 +457,32 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
 | `/yolo` | 切换当前进程权限绕过状态，不回写配置 |
 | `/mcp-status` | 输出 MCP server/工具状态树，含冲突和 stale 工具 |
 | `/resume-all` | 跨项目恢复 session，需交互式 UI |
+| `/goal [--tokens 50k] <objective>` | 创建或替换持久化目标；默认不设 token budget |
+| `/goal status\|edit <objective>\|pause\|resume\|clear` | 查看、编辑、暂停、恢复或清除目标 |
+| `/goal statusbar [on\|off]` | 切换 footer 的 goal 状态项 |
 | `/reload` | (Pi 内置) 重载配置、扩展资源和 agent 定义 |
+
+## 目标模式
+
+`pi-base` 内置持久化 thread goal。它不依赖、不读取也不迁移任何旧 goal 插件状态；goal 状态只写入 `pi-base-goal-state` session entry，无需改写 session 或 Pi core。
+
+创建方式：
+
+```text
+/goal --tokens 200k 完成 <目标>，并以 <验证证据> 证明完成；保留 <约束>。
+```
+
+默认 agent 也可在用户显式要求目标模式时调用 `create_goal`。有显式 `tools` allowlist 的 agent 使用 `/goal` 创建；目标 active 后，`get_goal` / `update_goal` 会作为运行时控制工具注入。
+
+行为：
+
+- 状态持久化为 `active`、`paused`、`blocked`、`budget_limited` 或 `complete`，可跨 resume 恢复。
+- 自动续跑只在 `agent_settled` 后即时发起，不提前排 `followUp`。TUI 中 `Esc` 产生 aborted assistant 后会持久化为 `paused`，因此不会再投递陈旧的 goal continuation；使用 `/goal resume` 才会继续。
+- continuation 和 budget-limit guidance 都是可见的折叠 custom message；按 `ctrl+o` 展开可查看实际注入模型的完整 prompt。完整 prompt 同时包含 objective、预算和 completion/blocked audit。
+- `/reload` 会安全地把 active goal 改为 `paused`，避免 reload 后静默恢复自动工作。
+- token budget 按 Codex 语义累计主 session 的非缓存输入、cache write 和 output；`cacheRead` 不重复计入，subagent usage 也不汇入主 goal。达到预算后只允许一个收尾 turn，总结进度和下一步，不再自动续跑。
+- goal 只属于主 session；subagent 不会获得 `create_goal`、`get_goal` 或 `update_goal`，也不会恢复或自动续跑 goal。
+- provider 请求前会过滤 `aborted` / `error` assistant messages 和旧 goal control messages。这使请求 payload、输出 token 估算和 provider replay 一致，规避 compact 后巨大中断 tool call 误把下一请求压到 1/16 output tokens 的路径；它不改变 Pi core 的 compaction threshold、切点或摘要逻辑。
 
 ## 运行时行为
 
@@ -494,6 +520,7 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
 | 权限模式 | `YOLO`（仅 yolo 时显示） |
 | MCP 连接 | `MCP: 2/3 servers` |
 | 当前 agent | `agent:planner`（默认显示 `agent:default`） |
+| 目标状态 | `goal:active (12K / 200K)` |
 
 ---
 

@@ -96,6 +96,10 @@ export function registerAgentSupport(
     getConfiguredDefaultAgentName?: (cwd: string) => string | undefined;
     /** Filters registered tool definitions that should not be offered to agents right now. */
     isToolActivatable?: (tool: RegisteredToolInfo) => boolean;
+    /** Tools whose activation is controlled exclusively by getInjectedToolNames. */
+    runtimeOwnedToolNames?: readonly string[];
+    /** Runtime-owned tools injected after the agent's ordinary allowlist is applied. */
+    getInjectedToolNames?: (hasExplicitToolPolicy: boolean) => readonly string[];
   },
 ): AgentSupportHandle {
   let catalog = loadAgentCatalog();
@@ -188,8 +192,20 @@ export function registerAgentSupport(
   };
   const resolveActiveAgent = (): AgentDefinition | undefined => resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
   const projectAgentTools = (agent: AgentDefinition, modelId: string | undefined): string[] => {
-    const validTools = filterKnownTools(agent.tools, allRegisteredToolNames());
-    return projectFileMutationTools(validTools, modelId, agent.tools === undefined ? "implicit" : "explicit");
+    const allToolNames = allRegisteredToolNames();
+    const runtimeOwnedToolNames = new Set(options.runtimeOwnedToolNames ?? []);
+    // Implicit agents inherit normal tools and receive runtime-owned tools through the dedicated
+    // injection hook. Explicit allowlists retain their ability to name a runtime-owned tool.
+    const eligibleToolNames = agent.tools === undefined
+      ? allToolNames.filter((name) => !runtimeOwnedToolNames.has(name))
+      : allToolNames;
+    const validTools = filterKnownTools(agent.tools, eligibleToolNames);
+    const projected = projectFileMutationTools(validTools, modelId, agent.tools === undefined ? "implicit" : "explicit");
+    const injected = filterKnownTools(
+      [...(options.getInjectedToolNames?.(agent.tools !== undefined) ?? [])],
+      allToolNames,
+    );
+    return Array.from(new Set([...projected, ...injected]));
   };
   const canActivateToolForActiveAgent = (toolName: string): boolean => {
     const agent = resolveActiveAgent();

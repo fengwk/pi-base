@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import piBaseExtension from "../index.js";
 import { AGENT_STATE_ENTRY } from "../src/agent-support.js";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY } from "../src/subagent/depth.js";
+import { GOAL_TOOL_NAMES } from "../src/goal/index.js";
 import { isApplyPatchPreferredModelId, projectFileMutationTools } from "../src/model-tool-routing.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
@@ -108,6 +109,7 @@ describe("model tool routing", () => {
     expect(registry.getTool("write")).toBeDefined();
     expect(registry.getTool("apply_patch")).toBeDefined();
     expect(fileTools(registry.getActiveTools())).toEqual(expected);
+    expect(registry.getActiveTools()).toContain(GOAL_TOOL_NAMES[0]);
   });
 
   it("replaces stale file tools in a non-empty preserved session set in both directions", async () => {
@@ -221,5 +223,8 @@ describe("model tool routing", () => {
     piBaseExtension(subagent.pi as any);
     await subagent.emit("session_start", { reason: "startup" }, { cwd: root, model: GPT5, hasUI: false });
     expect(fileTools(subagent.getActiveTools())).toEqual(["apply_patch"]);
+    for (const toolName of GOAL_TOOL_NAMES) {
+      expect(subagent.getActiveTools()).not.toContain(toolName);
+    }
   });
 });

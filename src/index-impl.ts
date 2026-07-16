@@ -42,10 +42,17 @@ import { createSubagentWidgetComponent, renderSubagentWidget, SUBAGENT_WIDGET_KE
 import { registerSubagentTaskTool } from "./subagent/task-tool.js";
 import { registerSubagentCommand } from "./subagent/command.js";
 import { projectFileMutationTools } from "./model-tool-routing.js";
+import {
+  CREATE_GOAL_TOOL_NAME,
+  GOAL_TOOL_NAMES,
+  registerGoalSupport,
+  type GoalSupportHandle,
+} from "./goal/index.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
 export type { LocalMcpServerConfig, McpConfig, McpRemoteTransport, McpServerConfig, McpSnapshot, McpToolSnapshot, RemoteMcpServerConfig } from "./mcp/types.js";
+export { type GoalState, type GoalStatus } from "./goal/index.js";
 
 const BASE_TOOL_NAMES = [
   "read",
@@ -202,6 +209,7 @@ export function registerFindTool(
 
 export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensionOptions = {}): void {
   const loadSettings = loadRuntimePiBaseSettings;
+  let goalToolsAvailableInSession = true;
   // This exact resolver is passed to both the permission guard and mutation call renderers.
   // A yolo-enabled tool call bypasses approval, so it must not briefly expand only to collapse
   // again when its fast execution settles.
@@ -216,6 +224,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     void lspManager.closeFileIfOpen(absolutePath).catch(() => undefined);
   };
   pi.on("session_start", async (event, ctx) => {
+    goalToolsAvailableInSession = isRootSession(ctx);
     if (event.reason === "reload") {
       reloadRuntimePiBaseSettings();
       resolverFactory.clear();
@@ -224,7 +233,10 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       resolverFactory.clear();
     }
     const activeTools = pi.getActiveTools();
-    const defaultTools = projectFileMutationTools(BASE_TOOL_NAMES, ctx.model?.id, "implicit");
+    const defaultTools = [
+      ...projectFileMutationTools(BASE_TOOL_NAMES, ctx.model?.id, "implicit"),
+      ...(goalToolsAvailableInSession ? [CREATE_GOAL_TOOL_NAME] : []),
+    ];
     if (activeTools.length === 0) {
       pi.setActiveTools(defaultTools);
       return;
@@ -302,6 +314,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     type: "string",
     description: "Start in a specific pi-base agent by name (e.g. --agent reviewer). Ignored if the resumed session already has an agent.",
   });
+  let goalHandle: GoalSupportHandle | undefined;
   const agentHandle = registerAgentSupport(pi, {
     baseToolGuide: BASE_TOOL_GUIDE,
     subagentControls,
@@ -312,7 +325,14 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getConfiguredDefaultAgentName: (cwd: string) => loadSettings(cwd).settings.defaultAgent,
     isToolActivatable: (tool) =>
       !isBuiltinTool(tool) && !inactiveDynamicToolNames.has(tool.name),
+    runtimeOwnedToolNames: GOAL_TOOL_NAMES,
+    getInjectedToolNames: (hasExplicitToolPolicy) =>
+      goalToolsAvailableInSession
+        ? (goalHandle?.getInjectedToolNames(hasExplicitToolPolicy)
+          ?? (hasExplicitToolPolicy ? [] : [CREATE_GOAL_TOOL_NAME]))
+        : [],
   });
+  goalHandle = registerGoalSupport(pi, { isSessionSupported: isRootSession });
   registerMcpSupport(pi, {
     ...options.mcp,
     loadSettings,

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
 import piBaseExtension from "../index.js";
+import { CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from "../src/goal/index.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 const BASE_TOOL_NAMES = [
@@ -18,6 +19,7 @@ const BASE_TOOL_NAMES = [
   "lsp_workspace_symbols",
   "lsp_java_decompile",
 ] as const;
+const DEFAULT_AGENT_TOOL_NAMES = [...BASE_TOOL_NAMES, CREATE_GOAL_TOOL_NAME];
 
 function makeSkill(name: string, description: string, options?: { disableModelInvocation?: boolean }): Skill {
   return {
@@ -163,7 +165,7 @@ You are the planner.
 
       await registry.runCommand("agent", "default", { cwd: root });
       expect(registry.getCurrentModel()).toEqual(defaultModel);
-      expect(registry.getActiveTools()).toEqual(BASE_TOOL_NAMES.slice());
+      expect(registry.getActiveTools()).toEqual(DEFAULT_AGENT_TOOL_NAMES);
       expect(registry.pi.getThinkingLevel()).toBe("off");
       expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
 
@@ -504,7 +506,7 @@ thinkingLevel: low
       }]);
 
       await registry.runCommand("agent", "modeler", { cwd: root });
-      expect(registry.getActiveTools()).toEqual(BASE_TOOL_NAMES.slice());
+      expect(registry.getActiveTools()).toEqual(DEFAULT_AGENT_TOOL_NAMES);
       expect(registry.getCurrentModel()).toEqual(model);
       expect(registry.pi.getThinkingLevel()).toBe("low");
     } finally {
@@ -763,6 +765,43 @@ Locked prompt.
       expect(rebuiltPrompt.systemPrompt).not.toContain("<name>spec</name>");
       expect(rebuiltPrompt.systemPrompt).not.toContain("<name>other</name>");
       expect(rebuiltPrompt.systemPrompt).not.toContain("The following skills provide specialized instructions for specific tasks.");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("allows explicit agent tool policies to opt into create_goal", async () => {
+    // Intent: runtime-owned goal tools must not silently broaden an explicit allowlist, while an
+    // agent that names create_goal must retain it and receive read/update controls once active.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "goal-capable.md",
+        `---
+name: goal-capable
+tools: [create_goal]
+---
+
+Goal-capable prompt.
+`,
+      );
+
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "goal-capable", { cwd: root });
+      expect(registry.getActiveTools()).toEqual([CREATE_GOAL_TOOL_NAME]);
+
+      await registry.runCommand("goal", "Finish the explicit goal", { cwd: root });
+      expect(registry.getActiveTools()).toEqual([CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME]);
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
