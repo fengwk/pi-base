@@ -1,4 +1,4 @@
-The active thread goal has reached its token budget.
+The active goal has reached its token budget.
 
 <objective>
 ${objective}
@@ -11,4 +11,4 @@ Budget:
 
 The goal is now budget_limited. Do not start new substantive work for it. Wrap up this turn soon: summarize useful progress, identify remaining work or blockers, and leave the user with a clear next step.
 
-Do not call update_goal unless the goal is actually complete.
+Do not call update_goal unless the goal is actually complete. If it is complete, provide a detailed reason with the supporting evidence.

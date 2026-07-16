@@ -90,6 +90,40 @@ describe("goal support", () => {
     ]);
   });
 
+  it("edits a non-active goal without restarting agent work", async () => {
+    // Intent: editing a paused goal must preserve its stop state rather than injecting a goal-set
+    // message that would accidentally trigger a run despite the user's pause.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Initial objective");
+    await registry.runCommand("goal", "pause");
+    const sendsBeforeEdit = registry.getMessageSends().length;
+
+    await registry.runCommand("goal", "edit Updated objective");
+
+    expect(latestGoal(registry)).toMatchObject({ objective: "Updated objective", status: "paused" });
+    expect(registry.getMessageSends()).toHaveLength(sendsBeforeEdit);
+  });
+
+  it("steers an active edit without replacing the goal state", async () => {
+    // Intent: active edits must take effect immediately, while preserving the goal identity and
+    // accounting that distinguish edit from /goal replacement.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Initial objective");
+    const initial = latestGoal(registry);
+    const sendsBeforeEdit = registry.getMessageSends().length;
+
+    await registry.runCommand("goal", "edit Updated objective");
+
+    expect(latestGoal(registry)).toMatchObject({ id: initial?.id, objective: "Updated objective", status: "active" });
+    expect(registry.getMessageSends()).toHaveLength(sendsBeforeEdit + 1);
+    expect(registry.getMessageSends().at(-1)).toMatchObject({
+      message: { details: { kind: "goal_set" } },
+      options: { triggerTurn: true, deliverAs: "steer" },
+    });
+  });
+
   it("pauses on an aborted assistant and does not continue after agent_settled", async () => {
     // Intent: an Esc interruption is persisted as paused before the idle continuation decision,
     // proving that no queued goal message can restart the loop.
@@ -103,6 +137,25 @@ describe("goal support", () => {
     expect(latestGoal(registry)?.status).toBe("paused");
     expect(registry.getMessageSends()).toHaveLength(sendsBeforeAbort);
     expect(registry.getNotifications().at(-1)?.message).toContain("interrupted");
+  });
+
+  it("does not block a replacement goal for an error from the superseded run", async () => {
+    // Intent: the final stop reason belongs to the goal that owned the run at agent_start, not a
+    // replacement created while that run was still streaming.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Original objective");
+    await registry.emit("agent_start", { type: "agent_start" });
+
+    await registry.runCommand("goal", "Replacement objective", { isIdle: () => false });
+    const failed = assistantMessage("error");
+    await registry.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: Date.now() });
+    await registry.emit("turn_end", { type: "turn_end", turnIndex: 0, message: failed, toolResults: [] });
+    await registry.emit("agent_end", { type: "agent_end", messages: [failed] });
+    await registry.emit("agent_settled", { type: "agent_settled" });
+
+    expect(latestGoal(registry)).toMatchObject({ objective: "Replacement objective", status: "active" });
+    expect(registry.getMessageSends().at(-1)?.message.details?.kind).toBe("continuation");
   });
 
   it("starts budget accounting with the first turn that begins under the new goal", async () => {
@@ -177,6 +230,19 @@ describe("goal support", () => {
 
     expect(latestGoal(registry)?.status).toBe("active");
     expect(registry.getMessageSends().at(-1)?.message.details?.kind).toBe("continuation");
+  });
+
+  it("blocks the goal when a final agent error ends a goal-owned run", async () => {
+    // Intent: system-generated terminal transitions do not need a model-provided reason, but they
+    // must still stop continuation after retries are exhausted.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Recover from final errors");
+
+    await finishAgentRun(registry, assistantMessage("error"));
+
+    expect(latestGoal(registry)).toMatchObject({ status: "blocked" });
+    expect(latestGoal(registry)).not.toHaveProperty("reason");
   });
 
   it("filters aborted/error assistants before request estimation and keeps only current goal control", async () => {
@@ -260,8 +326,70 @@ describe("goal support", () => {
     });
     expect(result.messages[0].content).toContain("Verify every named artifact");
     expect(result.messages[0].content).toContain("Completion audit:");
+    expect(result.messages[0].content).toContain("<system-reminder>");
+    expect(result.messages[0].content).toContain("not a new user request");
+    expect(result.messages[0].content).toContain("detailed reason");
+    expect(result.messages[0].content).toContain("Do not turn an unspecified edge case");
+    expect(result.messages[0].content).toContain("</system-reminder>");
     expect(registry.getMessages()[0]?.content).toContain("Verify every named artifact");
     expect(registry.getMessages()[0]?.content).toContain("Blocked audit:");
+  });
+
+  it("returns goal guidance before the structured get_goal payload", async () => {
+    // Intent: get_goal turns retrieved state into an actionable completion/progress check rather
+    // than opaque JSON that could encourage an unconstrained continuation.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Verify the final result");
+
+    const result = await registry.getTool("get_goal").execute("call", {});
+    const text = result.content[0]?.text ?? "";
+
+    expect(text).toContain("This is the current goal.");
+    expect(text).toContain("call update_goal with status complete");
+    expect(text).toContain("detailed reason");
+    expect(text).toContain('"objective": "Verify the final result"');
+    expect(text).not.toContain('"reason"');
+    for (const toolName of ["get_goal", "create_goal", "update_goal"]) {
+      const tool = registry.getTool(toolName);
+      expect(tool.promptSnippet).toBeUndefined();
+      expect(tool.promptGuidelines).toBeUndefined();
+      expect(tool.description).toContain("goal");
+    }
+    expect(registry.getTool("update_goal").description).toContain("reason");
+  });
+
+  it("requires a nonblank reason without persisting it for terminal status updates", async () => {
+    // Intent: reason constrains the model's terminal decision in the current tool call, but is
+    // intentionally not promoted into durable goal state or result JSON.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Verify the final result");
+    const updateGoal = registry.getTool("update_goal");
+    const context = { hasUI: false, isIdle: () => true };
+
+    expect(updateGoal.parameters.required).toContain("reason");
+
+    const missing = await updateGoal.execute("call", { status: "complete" }, undefined, undefined, context);
+    expect(missing).toMatchObject({ isError: true });
+
+    const blank = await updateGoal.execute("call", { status: "complete", reason: "  " }, undefined, undefined, context);
+    expect(blank).toMatchObject({ isError: true });
+    expect(blank.content[0]?.text).toContain("reason is required");
+    expect(latestGoal(registry)).toMatchObject({ status: "active" });
+    expect(latestGoal(registry)).not.toHaveProperty("reason");
+
+    const completed = await updateGoal.execute(
+      "call",
+      { status: "complete", reason: "All named checks passed: npm test and npm run typecheck." },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(completed).not.toMatchObject({ isError: true });
+    expect(latestGoal(registry)).toMatchObject({ status: "complete" });
+    expect(latestGoal(registry)).not.toHaveProperty("reason");
+    expect(completed.content[0]?.text).not.toContain('"reason"');
   });
 
   it("computes the Codex-style token delta directly", () => {

@@ -12,7 +12,8 @@ export function buildGoalContinuationPrompt(state: GoalState): string {
     tokensUsed: String(state.tokensUsed),
     tokenBudget: state.tokenBudget === null ? "none" : String(state.tokenBudget),
     remainingTokens: state.tokenBudget === null ? "unbounded" : String(Math.max(0, state.tokenBudget - state.tokensUsed)),
-  })}\n\n${GOAL_STATUS_AUDIT_TEMPLATE}`;
+    statusAudit: GOAL_STATUS_AUDIT_TEMPLATE,
+  })}`;
 }
 
 export function buildGoalSetPrompt(state: GoalState): string {

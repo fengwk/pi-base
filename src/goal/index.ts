@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Spacer, Text } from "@earendil-works/pi-tui";
+import { loadToolDescription } from "../tool-prompt.js";
 import { buildGoalBudgetLimitPrompt, buildGoalContinuationPrompt, buildGoalSetPrompt } from "./prompts.js";
 import {
   accountGoalTurn,
@@ -55,6 +56,8 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   let statusBarEnabled = true;
   let sessionSupported = true;
   let runGoalId: string | null = null;
+  // Survives agent_end so the settled stop reason cannot affect a goal replaced mid-run.
+  let settledRunGoalId: string | null = null;
   let currentTurnStartedAt: number | null = null;
   let lastStopReason: AssistantMessage["stopReason"] | undefined;
   let budgetWrapupGoalId: string | null = null;
@@ -199,13 +202,11 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   pi.registerTool({
     name: GET_GOAL_TOOL_NAME,
     label: "Get Goal",
-    description: "Read the current persisted thread goal and its status or remaining token budget.",
-    promptSnippet: "Read the current thread goal when its exact state is needed",
-    promptGuidelines: ["The active goal is already included in the system prompt; call get_goal only when exact structured state is needed."],
+    description: loadToolDescription("goal-get-tool"),
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute() {
       return {
-        content: [{ type: "text" as const, text: JSON.stringify({ goal, remainingTokens: remainingTokens(goal) }, null, 2) }],
+        content: [{ type: "text" as const, text: formatGetGoalResult(goal) }],
         details: { goal },
       };
     },
@@ -214,14 +215,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   pi.registerTool({
     name: CREATE_GOAL_TOOL_NAME,
     label: "Create Goal",
-    description: "Create or replace a persisted thread goal only when the user explicitly requests goal mode.",
-    promptSnippet: "Create a persisted thread goal only when explicitly requested",
-    promptGuidelines: [
-      "Use create_goal only when the user explicitly asks to create, set, start, change, or replace a long-running goal.",
-      "Do not infer a goal from an ordinary coding task or one-off prompt.",
-      "Make the objective durable and evidence-checkable: include outcome, verification surface, constraints, boundaries, iteration policy, and blocked stop condition.",
-      "Set tokenBudget only when the user explicitly requested a token budget.",
-    ],
+    description: loadToolDescription("goal-create-tool"),
     parameters: Type.Object({
       objective: Type.String({
         minLength: 1,
@@ -249,15 +243,13 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   pi.registerTool({
     name: UPDATE_GOAL_TOOL_NAME,
     label: "Update Goal",
-    description: "Mark the current thread goal complete or blocked after the required evidence audit.",
-    promptSnippet: "Complete or block the current goal after strict evidence checks",
-    promptGuidelines: [
-      "Use status=complete only when current evidence proves every objective requirement is satisfied.",
-      "Use status=blocked only after the same blocking condition has repeated for at least three consecutive goal turns and meaningful progress cannot continue without user input or external change.",
-      "Do not use update_goal to pause, resume, clear, or budget-limit a goal.",
-    ],
+    description: loadToolDescription("goal-update-tool"),
     parameters: Type.Object({
       status: Type.Union([Type.Literal("complete"), Type.Literal("blocked")]),
+      reason: Type.String({
+        minLength: 1,
+        description: "Detailed rationale and concrete evidence supporting this completion or blocked status.",
+      }),
     }, { additionalProperties: false }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!goal) {
@@ -266,6 +258,14 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
       if (goal.status !== "active" && budgetWrapupGoalId !== goal.id) {
         return {
           content: [{ type: "text" as const, text: `Goal status is ${goal.status}; it cannot be updated by the model.` }],
+          details: { goal },
+          isError: true,
+        };
+      }
+      const reason = typeof params.reason === "string" ? params.reason.trim() : "";
+      if (!reason) {
+        return {
+          content: [{ type: "text" as const, text: "reason is required and must not be blank." }],
           details: { goal },
           isError: true,
         };
@@ -281,7 +281,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   });
 
   pi.registerCommand("goal", {
-    description: "Set, inspect, edit, pause, resume, or clear a long-running thread goal",
+    description: "Set, inspect, edit, pause, resume, or clear a long-running goal",
     getArgumentCompletions: (prefix) => {
       const values = ["status", "edit", "pause", "resume", "clear", "statusbar", "statusbar on", "statusbar off"];
       const matching = values.filter((value) => value.startsWith(prefix));
@@ -368,7 +368,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
         }
         const next = { ...goal, objective, updatedAt: Date.now() };
         setGoal(ctx, next);
-        announceUserGoalSet(next);
+        if (next.status === "active") announceUserGoalSet(next);
         notify(ctx, "Goal objective updated.");
         return;
       }
@@ -397,6 +397,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     if (!sessionSupported) {
       goal = null;
       runGoalId = null;
+      settledRunGoalId = null;
       currentTurnStartedAt = null;
       lastStopReason = undefined;
       budgetWrapupGoalId = null;
@@ -412,6 +413,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     goal = restored.goal;
     statusBarEnabled = restored.statusBarEnabled;
     runGoalId = null;
+    settledRunGoalId = null;
     currentTurnStartedAt = null;
     lastStopReason = undefined;
     budgetWrapupGoalId = null;
@@ -432,6 +434,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     generation++;
     clearContinuationTimer();
     runGoalId = null;
+    settledRunGoalId = null;
     currentTurnStartedAt = null;
     lastStopReason = undefined;
     budgetWrapupGoalId = null;
@@ -454,6 +457,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   pi.on("agent_start", () => {
     clearContinuationTimer();
     runGoalId = goal?.status === "active" ? goal.id : null;
+    settledRunGoalId = runGoalId;
     currentTurnStartedAt = null;
     lastStopReason = undefined;
   });
@@ -493,18 +497,25 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    const finalRunGoalId = settledRunGoalId;
+    settledRunGoalId = null;
     if (budgetWrapupGoalId !== null) {
       budgetWrapupGoalId = null;
       syncGoalTools();
     }
     if (!goal || goal.status !== "active") return;
-    if (lastStopReason === "aborted") {
+    const finalRunOwnsGoal = finalRunGoalId === goal.id;
+    if (lastStopReason === "aborted" && finalRunOwnsGoal) {
       setGoal(ctx, { ...goal, status: "paused", updatedAt: Date.now() });
       notify(ctx, "Goal paused because the active turn was interrupted. Use /goal resume to continue.");
       return;
     }
-    if (lastStopReason === "error") {
-      setGoal(ctx, { ...goal, status: "blocked", updatedAt: Date.now() });
+    if (lastStopReason === "error" && finalRunOwnsGoal) {
+      setGoal(ctx, {
+        ...goal,
+        status: "blocked",
+        updatedAt: Date.now(),
+      });
       notify(ctx, "Goal blocked because the final retry ended with an error. Inspect the error, then use /goal resume.", "warning");
       return;
     }
@@ -578,6 +589,18 @@ export function filterGoalContextMessages<T extends ContextMessageShape>(
 function remainingTokens(state: GoalState | null): number | null {
   if (!state || state.tokenBudget === null) return null;
   return Math.max(0, state.tokenBudget - state.tokensUsed);
+}
+
+function formatGetGoalResult(state: GoalState | null): string {
+  const current = { goal: state, remainingTokens: remainingTokens(state) };
+  if (!state) return `There is no current goal.\n\n${JSON.stringify(current, null, 2)}`;
+  return [
+    "This is the current goal. Use it to advance the objective or check whether every objective requirement is fully satisfied.",
+    "If current evidence proves it is complete, call update_goal with status complete and a detailed reason with the supporting evidence. If it is blocked under the goal policy, call update_goal with status blocked and a detailed reason describing the blocker and evidence.",
+    "",
+    "Current goal:",
+    JSON.stringify(current, null, 2),
+  ].join("\n");
 }
 
 function isGoalControlDetails(value: unknown): value is GoalControlDetails {
