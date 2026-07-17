@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Spacer, Text } from "@earendil-works/pi-tui";
 import { loadToolDescription } from "../tool-prompt.js";
@@ -61,7 +61,9 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   let settledRunGoalId: string | null = null;
   let currentTurnStartedAt: number | null = null;
   let lastStopReason: AssistantMessage["stopReason"] | undefined;
+  let lastStopWasContextOverflow = false;
   let budgetWrapupGoalId: string | null = null;
+  let overflowRecoveryGoalId: string | null = null;
   let budgetToolTurnsSinceReminder = 0;
   let continuationTimer: ReturnType<typeof setTimeout> | null = null;
   let generation = 0;
@@ -75,6 +77,15 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   const clearBudgetWrapup = (): void => {
     budgetWrapupGoalId = null;
     budgetToolTurnsSinceReminder = 0;
+  };
+
+  const clearOverflowRecovery = (): void => {
+    overflowRecoveryGoalId = null;
+  };
+
+  const recordAssistantStop = (assistant: AssistantMessage, contextWindow?: number): void => {
+    lastStopReason = assistant.stopReason;
+    lastStopWasContextOverflow = assistant.stopReason !== "stop" && isContextOverflow(assistant, contextWindow);
   };
 
   const updateStatus = (ctx: ExtensionContext): void => {
@@ -418,7 +429,9 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
       settledRunGoalId = null;
       currentTurnStartedAt = null;
       lastStopReason = undefined;
+      lastStopWasContextOverflow = false;
       clearBudgetWrapup();
+      clearOverflowRecovery();
       updateStatus(ctx);
       syncGoalTools();
       return;
@@ -434,7 +447,9 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     settledRunGoalId = null;
     currentTurnStartedAt = null;
     lastStopReason = undefined;
+    lastStopWasContextOverflow = false;
     clearBudgetWrapup();
+    clearOverflowRecovery();
     if (goal?.status === "active" && event.reason === "reload") {
       setGoal(ctx, { ...goal, status: "paused", updatedAt: Date.now() });
       notify(ctx, `Goal paused after reload: ${truncateObjective(goal.objective)}\nUse /goal resume to continue.`);
@@ -455,7 +470,9 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     settledRunGoalId = null;
     currentTurnStartedAt = null;
     lastStopReason = undefined;
+    lastStopWasContextOverflow = false;
     clearBudgetWrapup();
+    clearOverflowRecovery();
   });
 
   pi.on("before_agent_start", () => {
@@ -478,6 +495,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     settledRunGoalId = runGoalId;
     currentTurnStartedAt = null;
     lastStopReason = undefined;
+    lastStopWasContextOverflow = false;
   });
 
   pi.on("turn_start", () => {
@@ -486,7 +504,7 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
 
   pi.on("turn_end", (event, ctx) => {
     const assistant = event.message.role === "assistant" ? event.message as AssistantMessage : undefined;
-    if (assistant) lastStopReason = assistant.stopReason;
+    if (assistant) recordAssistantStop(assistant, ctx.model?.contextWindow);
     const elapsedSeconds = currentTurnStartedAt === null
       ? 0
       : Math.max(0, Math.round((Date.now() - currentTurnStartedAt) / 1000));
@@ -522,7 +540,11 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     }
   });
 
-  pi.on("agent_end", () => {
+  pi.on("agent_end", (event, ctx) => {
+    const finalAssistant = [...event.messages].reverse().find(
+      (message): message is AssistantMessage => message.role === "assistant",
+    );
+    if (finalAssistant) recordAssistantStop(finalAssistant, ctx.model?.contextWindow);
     runGoalId = null;
     currentTurnStartedAt = null;
   });
@@ -530,6 +552,8 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   pi.on("agent_settled", (_event, ctx) => {
     const finalRunGoalId = settledRunGoalId;
     settledRunGoalId = null;
+    const overflowRecoveryFailed = overflowRecoveryGoalId === finalRunGoalId;
+    clearOverflowRecovery();
     if (budgetWrapupGoalId !== null) {
       clearBudgetWrapup();
       syncGoalTools();
@@ -541,19 +565,38 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
       notify(ctx, "Goal paused because the active turn was interrupted. Use /goal resume to continue.");
       return;
     }
+    if ((overflowRecoveryFailed || lastStopWasContextOverflow) && finalRunOwnsGoal) {
+      setGoal(ctx, {
+        ...goal,
+        status: "paused",
+        updatedAt: Date.now(),
+      });
+      notify(ctx, "Goal paused because context-overflow recovery failed. Reduce context or switch to a larger-context model, then use /goal resume.", "warning");
+      return;
+    }
     if (lastStopReason === "error" && finalRunOwnsGoal) {
       setGoal(ctx, {
         ...goal,
         status: "blocked",
         updatedAt: Date.now(),
       });
-      notify(ctx, "Goal blocked because the final retry ended with an error. Inspect the error, then use /goal resume.", "warning");
+      notify(ctx, "Goal blocked because the final agent run ended with an error. Inspect the error, then use /goal resume.", "warning");
       return;
     }
     startContinuation(ctx);
   });
 
+  pi.on("session_before_compact", (event) => {
+    if (event.reason === "overflow" && goal && settledRunGoalId === goal.id) {
+      overflowRecoveryGoalId = goal.id;
+    }
+  });
+
   pi.on("session_compact", (event, ctx) => {
+    if (event.reason === "overflow") {
+      clearOverflowRecovery();
+      return;
+    }
     if (event.reason === "manual" && !event.willRetry && goal?.status === "active") {
       scheduleContinuation(ctx);
     }

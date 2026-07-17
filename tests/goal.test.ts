@@ -339,6 +339,103 @@ describe("goal support", () => {
     expect(registry.getMessageSends().at(-1)?.message.details?.kind).toBe("continuation");
   });
 
+  it("pauses without continuation when overflow compaction never completes", async () => {
+    // Intent: a failed overflow compaction leaves the existing context unusable. The goal must not
+    // inject a new continuation prompt until the user reduces context or changes to a larger model.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Recover only after compaction succeeds");
+    const sendsBeforeFailure = registry.getMessageSends().length;
+
+    await registry.emit("agent_start", { type: "agent_start" });
+    await registry.emit("session_before_compact", {
+      type: "session_before_compact",
+      reason: "overflow",
+      willRetry: true,
+    });
+    await registry.emit("agent_settled", { type: "agent_settled" });
+
+    expect(latestGoal(registry)?.status).toBe("paused");
+    expect(registry.getMessageSends()).toHaveLength(sendsBeforeFailure);
+    expect(registry.getNotifications().at(-1)?.message).toContain("Goal paused because context-overflow recovery failed");
+  });
+
+  it("continues only after overflow compaction completes and the retry settles normally", async () => {
+    // Intent: core owns the compact-and-retry sequence. A goal checkpoint is allowed only after
+    // session_compact confirms recovery and the retried agent run finishes without an error.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Continue after a recovered overflow");
+    const sendsBeforeRecovery = registry.getMessageSends().length;
+
+    await registry.emit("agent_start", { type: "agent_start" });
+    await registry.emit("session_before_compact", {
+      type: "session_before_compact",
+      reason: "overflow",
+      willRetry: true,
+    });
+    await registry.emit("session_compact", {
+      type: "session_compact",
+      reason: "overflow",
+      willRetry: true,
+    });
+    await registry.emit("agent_end", { type: "agent_end", messages: [assistantMessage("stop")] });
+    await registry.emit("agent_settled", { type: "agent_settled" });
+
+    expect(latestGoal(registry)?.status).toBe("active");
+    expect(registry.getMessageSends()).toHaveLength(sendsBeforeRecovery + 1);
+    expect(registry.getMessageSends().at(-1)?.message.details?.kind).toBe("continuation");
+  });
+
+  it("pauses when the one overflow retry also exceeds the context window", async () => {
+    // Intent: Pi permits one compact-and-retry attempt. A second context overflow is a capacity
+    // fault, not an objective blocker, so it must pause rather than enter the generic error path.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Recover from context overflow");
+    const sendsBeforeFailure = registry.getMessageSends().length;
+
+    await registry.emit("agent_start", { type: "agent_start" });
+    await registry.emit("session_before_compact", {
+      type: "session_before_compact",
+      reason: "overflow",
+      willRetry: true,
+    });
+    await registry.emit("session_compact", {
+      type: "session_compact",
+      reason: "overflow",
+      willRetry: true,
+    });
+    await registry.emit("agent_start", { type: "agent_start" });
+    const retriedOverflow = {
+      ...assistantMessage("error"),
+      errorMessage: "Your input exceeds the context window of this model.",
+    };
+    await registry.emit("agent_end", { type: "agent_end", messages: [retriedOverflow] });
+    await registry.emit("agent_settled", { type: "agent_settled" });
+
+    expect(latestGoal(registry)?.status).toBe("paused");
+    expect(registry.getMessageSends()).toHaveLength(sendsBeforeFailure);
+    expect(registry.getNotifications().at(-1)?.message).toContain("Goal paused because context-overflow recovery failed");
+  });
+
+  it("uses the final agent_end assistant status when no turn_end is observed", async () => {
+    // Intent: lifecycle errors must suppress continuation even if a provider/runtime path omits a
+    // turn_end event; agent_end is the authoritative terminal message for that agent run.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Do not continue after an unreported final error");
+    const sendsBeforeFailure = registry.getMessageSends().length;
+
+    await registry.emit("agent_start", { type: "agent_start" });
+    await registry.emit("agent_end", { type: "agent_end", messages: [assistantMessage("error")] });
+    await registry.emit("agent_settled", { type: "agent_settled" });
+
+    expect(latestGoal(registry)?.status).toBe("blocked");
+    expect(registry.getMessageSends()).toHaveLength(sendsBeforeFailure);
+    expect(registry.getNotifications().at(-1)?.message).toContain("final agent run ended with an error");
+  });
+
   it("blocks the goal when a final agent error ends a goal-owned run", async () => {
     // Intent: system-generated terminal transitions do not need a model-provided reason, but they
     // must still stop continuation after retries are exhausted.
