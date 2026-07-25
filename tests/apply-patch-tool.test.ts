@@ -93,6 +93,34 @@ describe("apply_patch tool", () => {
     expect(getText(aborted)).not.toContain("Patch must start with");
   });
 
+  it("constrains generation to parser-valid operation forms", () => {
+    // Intent: constrained sampling must cover every intended operation while
+    // keeping Update hunks explicit and non-empty.
+    const registry = createToolRegistry();
+    registerApplyPatchTool(registry.pi as any);
+    const grammar = registry.getTool("apply_patch").constrainedSampling?.variants?.openai_lark;
+
+    expect(grammar).toContain('add_hunk: "*** Add File: " filename LF add_line*');
+    expect(grammar).toContain("(change_move change? | change)");
+    expect(grammar).toContain("change: (change_context change_line+)+ eof_line?");
+    expect(grammar).not.toContain('add_hunk: "*** Add File: " filename LF add_line+');
+    expect(grammar).not.toContain("change: (change_context | change_line)+ eof_line?");
+  });
+
+  it("describes only the current apply_patch contract", () => {
+    // Intent: the model-facing prompt must explain the actual runtime behavior
+    // directly, without migration notes or references to superseded designs.
+    const registry = createToolRegistry();
+    registerApplyPatchTool(registry.pi as any);
+    const description = registry.getTool("apply_patch").description;
+
+    expect(description).toContain("omit content lines to create an empty file");
+    expect(description).toContain("Matching for that hunk starts after the anchor line");
+    expect(description).toContain("A hunk containing only added lines appends them at the end of the file");
+    expect(description).toContain("Every Update that contains hunks must add or remove at least one line");
+    expect(description).not.toMatch(/Codex|OpenCode|pi-base|legacy|fallback|unsupported/i);
+  });
+
   it("renders default and explicit workdirs, every target kind, and malformed fallback", () => {
     // Intent: completed calls preserve the complete review payload, including
     // malformed input whose execution will fail validation.

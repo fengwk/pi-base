@@ -132,7 +132,7 @@ describe("apply_patch parser", () => {
       "@@",
       "-old",
       "+new",
-      " *** End Patch ",
+      "\t*** End Patch ",
     ].join("\n")).files).toHaveLength(1);
     expect(parseApplyPatch(`<<EOF\n${whitespaceEnvelope}\nEOF \t`).files).toHaveLength(1);
     expect(() => parseApplyPatch(`\`\`\`\n${patch("*** Add File: fenced.txt", "+no")}\n\`\`\``))
@@ -183,6 +183,23 @@ describe("apply_patch parser", () => {
       { operation: "add", path: "add.txt", lines: ["added"] },
       { operation: "delete", path: "delete.txt" },
     ]);
+  });
+
+  it("treats a space-prefixed End Patch marker as Update context", async () => {
+    // Intent: Update context owns its leading space, so protocol-looking file
+    // content must not terminate the surrounding patch or produce an empty hunk.
+    const root = await createRoot();
+    await put(root, "README.md", "*** End Patch\nold\n");
+
+    await executeApplyPatch(patch(
+      "*** Update File: README.md",
+      "@@",
+      " *** End Patch",
+      "-old",
+      "+new",
+    ), { cwd: root });
+
+    expect(await readFile(join(root, "README.md"), "utf8")).toBe("*** End Patch\nnew\n");
   });
 
   it("accepts CRLF/CR patches and quoted or unquoted heredoc wrappers", () => {
@@ -264,9 +281,9 @@ describe("apply_patch parser", () => {
   it.each([
     ["move-only", patch("*** Update File: old.txt", "*** Move to: new.txt"), "old\n"],
     ["move with update chunks", patch("*** Update File: old.txt", "*** Move to: new.txt", "@@", "-old", "+new"), "new\n"],
-  ])("executes Codex-style %s", async (_name, input, expectedContent) => {
-    // Intent: Move is a first-class Codex operation; pure rename and rename+edit
-    // must both land content at the destination and remove the source.
+  ])("executes %s", async (_name, input, expectedContent) => {
+    // Intent: Move is a first-class operation; pi-base supports both pure rename
+    // and rename+edit while preserving the same destination/source commit order.
     const root = await createRoot();
     await put(root, "old.txt", "old\n");
     expect(parseApplyPatch(input).files[0]).toMatchObject({ operation: "update", path: "old.txt", moveTo: "new.txt" });

@@ -168,7 +168,7 @@ function getToolPermissionRules(permission: PermissionConfig, toolName: string):
 }
 
 function inheritedApplyPatchToolName(intent: ApplyPatchIntent): "edit" | "write" {
-  return intent.operation === "update" ? "edit" : "write";
+  return intent.operation === "update" && intent.moveTo === undefined ? "edit" : "write";
 }
 
 function evaluateApplyPatchPermission(
@@ -197,7 +197,7 @@ function evaluateApplyPatchPermission(
         permission.apply_patch,
       );
       if (intent.moveTo === undefined) return [primary];
-      // Move destinations are creates/overwrites, so they inherit write rules.
+      // Move removes its source and creates/overwrites its destination, so both inherit write rules.
       const destination = buildPathTargetDescriptor(intent.moveTo, targetCwd, loaded);
       return [
         primary,

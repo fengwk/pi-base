@@ -207,6 +207,11 @@ function isUpdateFileBoundary(line: string): boolean {
   return !line.startsWith(" ") && isPaddedFileDirective(line);
 }
 
+function isUpdatePatchEnd(line: string): boolean {
+  // A leading space is Update context syntax; tab-only padding remains unambiguous.
+  return !line.startsWith(" ") && isPatchMarker(line, "*** End Patch");
+}
+
 function parseRequiredPath(line: string, prefix: string): string {
   const path = line.slice(prefix.length).trim();
   if (path.length === 0) throw new Error(`${prefix.slice(4, -1)} path must not be empty.`);
@@ -294,7 +299,7 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
       }
 
       const chunks: ApplyPatchChunk[] = [];
-      while (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isUpdateFileBoundary(lines[index]!)) {
+      while (index < lines.length && !isUpdatePatchEnd(lines[index]!) && !isUpdateFileBoundary(lines[index]!)) {
         const chunkHeader = lines[index]!;
         if (!chunkHeader.startsWith("@@")) {
           throw new Error(`Malformed Update File ${path}: expected an @@ chunk, got ${chunkHeader}.`);
@@ -305,12 +310,12 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
 
         const chunkLines: ApplyPatchChunkLine[] = [];
         let endOfFile = false;
-        while (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isUpdateFileBoundary(lines[index]!) && !lines[index]!.startsWith("@@")) {
+        while (index < lines.length && !isUpdatePatchEnd(lines[index]!) && !isUpdateFileBoundary(lines[index]!) && !lines[index]!.startsWith("@@")) {
           const bodyLine = lines[index]!;
           if (bodyLine === "*** End of File") {
             endOfFile = true;
             index++;
-            if (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isUpdateFileBoundary(lines[index]!)) {
+            if (index < lines.length && !isUpdatePatchEnd(lines[index]!) && !isUpdateFileBoundary(lines[index]!)) {
               throw new Error(`Malformed Update File ${path}: *** End of File must end the update.`);
             }
             break;

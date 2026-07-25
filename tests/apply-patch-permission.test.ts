@@ -67,25 +67,38 @@ describe("apply_patch permission integration", () => {
     expect(await exists(join(root, "delete.txt"))).toBe(false);
   });
 
-  it("inherits write permission for Move destinations", async () => {
-    // Intent: a Move reads/updates its source under edit rules but may create or
-    // overwrite its destination, which must independently satisfy write rules.
+  it("inherits write permission for both Move paths", async () => {
+    // Intent: Move deletes its source and writes its destination, so edit allow
+    // must not bypass a write deny on either filesystem target.
     const root = await createTempWorkspace();
     await writeSettings(root, {
       edit: "allow",
-      write: { "*": "allow", "blocked.txt": "deny" },
+      write: {
+        "*": "allow",
+        "blocked-source.txt": "deny",
+        "blocked-destination.txt": "deny",
+      },
     });
+    await writeFile(join(root, "blocked-source.txt"), "blocked source\n", "utf8");
     await writeFile(join(root, "source.txt"), "source\n", "utf8");
     const registry = createToolRegistry({ hasUI: false });
     piBaseExtension(registry.pi as any);
 
-    const denied = await registry.getTool("apply_patch").execute("move-denied", {
-      patchText: patch("*** Update File: source.txt", "*** Move to: blocked.txt"),
+    const deniedSource = await registry.getTool("apply_patch").execute("move-source-denied", {
+      patchText: patch("*** Update File: blocked-source.txt", "*** Move to: source-copy.txt"),
     }, undefined, undefined, { cwd: root, hasUI: false });
-    expect(denied.isError).toBe(true);
-    expect(getText(denied)).toContain("Permission denied for apply_patch");
+    expect(deniedSource.isError).toBe(true);
+    expect(getText(deniedSource)).toContain("Permission denied for apply_patch");
+    expect(await readFile(join(root, "blocked-source.txt"), "utf8")).toBe("blocked source\n");
+    expect(await exists(join(root, "source-copy.txt"))).toBe(false);
+
+    const deniedDestination = await registry.getTool("apply_patch").execute("move-destination-denied", {
+      patchText: patch("*** Update File: source.txt", "*** Move to: blocked-destination.txt"),
+    }, undefined, undefined, { cwd: root, hasUI: false });
+    expect(deniedDestination.isError).toBe(true);
+    expect(getText(deniedDestination)).toContain("Permission denied for apply_patch");
     expect(await readFile(join(root, "source.txt"), "utf8")).toBe("source\n");
-    expect(await exists(join(root, "blocked.txt"))).toBe(false);
+    expect(await exists(join(root, "blocked-destination.txt"))).toBe(false);
 
     const allowed = await registry.getTool("apply_patch").execute("move-allowed", {
       patchText: patch("*** Update File: source.txt", "*** Move to: allowed.txt"),
