@@ -150,8 +150,7 @@ describe("context compression", () => {
     const readArgs = { workdir: "pkg\\nested", path: "example.txt" };
     const readResult = await registry.getTool("read").execute("read-separator", readArgs, undefined, undefined, { cwd: root });
     const patchArgs = {
-      workdir: "pkg/nested",
-      patchText: "*** Begin Patch\n*** Update File: .\\example.txt\n@@\n-alpha\n+alpha v1\n*** End Patch",
+      patchText: "*** Begin Patch\n*** Workdir: pkg/nested\n*** Update File: .\\example.txt\n@@\n-alpha\n+alpha v1\n*** End Patch",
     };
     const patchResult = await registry.getTool("apply_patch").execute("patch-separator", patchArgs, undefined, undefined, { cwd: root });
     const messages = [

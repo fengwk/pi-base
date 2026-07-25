@@ -24,8 +24,8 @@ describe("apply_patch context compression", () => {
     // multi-file diff context becomes stale when any included file changes later.
     const root = await createTempWorkspace();
     const patchArgs = {
-      workdir: "pkg",
       patchText: patch(
+        "*** Workdir: pkg",
         "*** Add File: a.txt",
         "+a",
         "*** Add File: b.txt",
@@ -63,8 +63,8 @@ describe("apply_patch context compression", () => {
       call("read-third", "read", { workdir: "pkg", path: "third.txt" }),
       result("read-third", "read", "third context"),
       call("partial", "apply_patch", {
-        workdir: "pkg",
         patchText: patch(
+          "*** Workdir: pkg",
           "*** Add File: first.txt",
           "+first",
           "*** Add File: second.txt",
@@ -86,6 +86,41 @@ describe("apply_patch context compression", () => {
     expect(getText(next[3])).toBe(GENERIC_PLACEHOLDER);
     expect(getText(next[5])).toBe("third context");
     expect(getText(next[7])).toContain("Patch partially applied");
+  });
+
+  it("marks both unknown Move paths dirty after a commit-stage failure", async () => {
+    // Intent: a Move can write its destination before source removal fails, so
+    // neither side may retain older read context after the failed tool result.
+    const root = await createTempWorkspace();
+    const source = join(root, "pkg", "source.txt");
+    const destination = join(root, "pkg", "destination.txt");
+    const messages = [
+      call("read-source", "read", { workdir: "pkg", path: "source.txt" }),
+      result("read-source", "read", "source context"),
+      call("read-destination", "read", { workdir: "pkg", path: "destination.txt" }),
+      result("read-destination", "read", "destination context"),
+      call("move", "apply_patch", {
+        patchText: patch(
+          "*** Workdir: pkg",
+          "*** Update File: source.txt",
+          "*** Move to: destination.txt",
+        ),
+      }),
+      result("move", "apply_patch", "Error: Move commit failed", {
+        partial: false,
+        failedPath: "source.txt",
+        failedAbsolutePath: source,
+        failedMoveTo: "destination.txt",
+        failedAbsoluteMoveToPath: destination,
+        failedPathState: "unknown",
+        files: [],
+      }, true),
+    ];
+
+    const next = applyContextCompressionToMessages(messages, root, { anchorHygiene: true });
+    expect(getText(next[1])).toBe(GENERIC_PLACEHOLDER);
+    expect(getText(next[3])).toBe(GENERIC_PLACEHOLDER);
+    expect(getText(next[5])).toContain("Move commit failed");
   });
 
   it("does not dirty targets for a non-committing preflight error", async () => {

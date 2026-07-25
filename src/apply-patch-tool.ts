@@ -9,6 +9,7 @@ import {
   type ApplyPatchFileResult,
   type ApplyPatchOperation,
 } from "./apply-patch-core.js";
+import { APPLY_PATCH_LARK_GRAMMAR } from "./apply-patch-grammar.js";
 import {
   applyPatchOperationLabel,
   buildApplyPatchPreview,
@@ -40,6 +41,8 @@ export interface ApplyPatchFileMetadata {
   operation: ApplyPatchOperation;
   path: string;
   absolutePath: string;
+  moveTo?: string;
+  absoluteMoveToPath?: string;
   diff: string;
   addedLines: number;
   removedLines: number;
@@ -49,6 +52,9 @@ export interface ApplyPatchToolDetails {
   files: ApplyPatchFileMetadata[];
   partial: boolean;
   failedPath?: string;
+  failedAbsolutePath?: string;
+  failedMoveTo?: string;
+  failedAbsoluteMoveToPath?: string;
   failedPathState?: "unknown";
 }
 
@@ -100,6 +106,7 @@ export function buildApplyPatchFileMetadata(file: ApplyPatchFileResult): ApplyPa
     operation: file.operation,
     path: file.path,
     absolutePath: file.absolutePath,
+    ...(file.moveTo !== undefined ? { moveTo: file.moveTo, absoluteMoveToPath: file.absoluteMoveToPath } : {}),
     ...buildDisplayDiff(file.before, file.after),
   };
 }
@@ -125,15 +132,28 @@ function colorizePreviewLine(line: ApplyPatchPreviewLine, theme: any): string {
   return line.text.startsWith("@@") ? styleDiffContext(theme, line.text) : styleMuted(theme, line.text);
 }
 
+function formatTargetLabel(file: Pick<ApplyPatchFileMetadata, "operation" | "path" | "moveTo">): string {
+  const base = `${applyPatchOperationLabel(file.operation)} ${file.path}`;
+  return file.moveTo === undefined ? base : `${base} -> ${file.moveTo}`;
+}
+
 export function formatApplyPatchCall(
   args: any,
   theme: any,
   cwd?: string,
   options: { collapseAddBodies?: boolean } = {},
 ): string {
-  const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
-  const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
-  const header = `${styleToolTitle(theme, "apply_patch")}${workdir}`;
+  let workdirSuffix = "";
+  if (typeof args?.patchText === "string" && args.patchText.length > 0) {
+    try {
+      const parsed = parseApplyPatch(args.patchText);
+      const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(parsed.workdir, cwd);
+      workdirSuffix = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
+    } catch {
+      // Malformed patches fall through to the raw preview path below.
+    }
+  }
+  const header = `${styleToolTitle(theme, "apply_patch")}${workdirSuffix}`;
   if (typeof args?.patchText !== "string" || args.patchText.length === 0) return header;
   try {
     const patch = parseApplyPatch(args.patchText);
@@ -163,22 +183,22 @@ function shouldCollapseApplyPatchCall(
 }
 
 function formatSummary(files: readonly ApplyPatchFileMetadata[]): string {
-  const targets = files.map((file) => `${applyPatchOperationLabel(file.operation)} ${file.path}`).join(", ");
+  const targets = files.map((file) => formatTargetLabel(file)).join(", ");
   return `Applied patch successfully (${files.length} ${files.length === 1 ? "file" : "files"}): ${targets}`;
 }
 
 function formatPartialError(error: ApplyPatchCommitError, files: readonly ApplyPatchFileMetadata[]): string {
-  const failedState = `The state of ${error.failedPath} is unknown because the commit operation failed.`;
-  if (files.length === 0) return `Error: Patch failed before any file was committed at ${error.failedPath}. ${failedState} Cause: ${error.causeMessage}`;
-  const targets = files.map((file) => `${applyPatchOperationLabel(file.operation)} ${file.path}`).join(", ");
-  return `Error: Patch partially applied: ${files.length} ${files.length === 1 ? "file was" : "files were"} committed (${targets}) before failure at ${error.failedPath}. ${failedState} Cause: ${error.causeMessage}`;
+  const failedState = `The state of ${error.failedTarget} is unknown because the commit operation failed.`;
+  if (files.length === 0) return `Error: Patch failed before any file was committed at ${error.failedTarget}. ${failedState} Cause: ${error.causeMessage}`;
+  const targets = files.map((file) => formatTargetLabel(file)).join(", ");
+  return `Error: Patch partially applied: ${files.length} ${files.length === 1 ? "file was" : "files were"} committed (${targets}) before failure at ${error.failedTarget}. ${failedState} Cause: ${error.causeMessage}`;
 }
 
 function renderPartialResultWithDiffMetadata(result: any): any {
   const files = Array.isArray(result?.details?.files) ? result.details.files as ApplyPatchFileMetadata[] : [];
   if (result?.details?.partial !== true || files.length === 0) return result;
   const sections = files.map((file) => {
-    const heading = `${applyPatchOperationLabel(file.operation)} ${file.path} (+${file.addedLines} -${file.removedLines})`;
+    const heading = `${formatTargetLabel(file)} (+${file.addedLines} -${file.removedLines})`;
     return file.diff ? `${heading}\ndiff:\n${file.diff}` : heading;
   });
   const summary = result?.content?.find((item: any) => item?.type === "text")?.text ?? "";
@@ -204,6 +224,12 @@ export function registerApplyPatchTool(
     description,
     promptSnippet: loadToolPromptSnippet("apply_patch"),
     parameters: applyPatchSchema,
+    constrainedSampling: {
+      type: "grammar" as const,
+      variants: {
+        openai_lark: APPLY_PATCH_LARK_GRAMMAR,
+      },
+    },
     prepareArguments(args: unknown) {
       return validateToolArguments(validationTool, {
         type: "toolCall",
@@ -227,11 +253,7 @@ export function registerApplyPatchTool(
         if (!params || typeof params.patchText !== "string") {
           throw new Error("patchText is required and must be a string.");
         }
-        if (params.workdir !== undefined && typeof params.workdir !== "string") {
-          throw new Error("workdir must be a string when provided.");
-        }
         const result = await executeApplyPatch(params.patchText, {
-          workdir: params.workdir,
           cwd: ctx.cwd ?? process.cwd(),
           signal,
           onCommitted: options.onCommitted,
@@ -251,6 +273,9 @@ export function registerApplyPatchTool(
               files,
               partial: files.length > 0,
               failedPath: error.failedPath,
+              failedAbsolutePath: error.failedAbsolutePath,
+              failedMoveTo: error.failedMoveTo,
+              failedAbsoluteMoveToPath: error.failedAbsoluteMoveToPath,
               failedPathState: error.failedPathState,
             } satisfies ApplyPatchToolDetails,
             isError: true,

@@ -92,9 +92,16 @@ function resolveInputPaths(input: unknown, cwd: string): string[] {
 function resolveApplyPatchInputPaths(input: unknown, cwd: string): string[] {
   if (!isRecord(input) || typeof input.patchText !== "string") return [];
   try {
-    const baseCwd = resolveInputBaseCwd(input.workdir, cwd);
-    return getApplyPatchIntents(parseApplyPatch(input.patchText))
-      .map((intent) => canonicalizePath(resolveToCwd(stripAtPrefix(intent.path), baseCwd)));
+    const patch = parseApplyPatch(input.patchText);
+    const baseCwd = resolveInputBaseCwd(patch.workdir, cwd);
+    const paths: string[] = [];
+    for (const intent of getApplyPatchIntents(patch)) {
+      paths.push(canonicalizePath(resolveToCwd(stripAtPrefix(intent.path), baseCwd)));
+      if (intent.moveTo !== undefined) {
+        paths.push(canonicalizePath(resolveToCwd(stripAtPrefix(intent.moveTo), baseCwd)));
+      }
+    }
+    return paths;
   } catch {
     return [];
   }
@@ -108,28 +115,60 @@ function resolveAppliedDetailPaths(details: unknown, cwd: string): string[] {
     if (typeof file.absolutePath === "string" && file.absolutePath.trim().length > 0) {
       paths.push(canonicalizePath(resolvePromptPath(file.absolutePath, cwd)));
     }
+    if (typeof file.absoluteMoveToPath === "string" && file.absoluteMoveToPath.trim().length > 0) {
+      paths.push(canonicalizePath(resolvePromptPath(file.absoluteMoveToPath, cwd)));
+    }
   }
   return paths;
 }
 
-function resolveUnknownFailedDetailPath(details: unknown, input: unknown, cwd: string): string | undefined {
+function resolveUnknownFailedDetailPaths(details: unknown, input: unknown, cwd: string): string[] {
   if (
     !isRecord(details)
     || details.failedPathState !== "unknown"
     || typeof details.failedPath !== "string"
     || details.failedPath.trim().length === 0
-  ) return undefined;
-  const baseCwd = isRecord(input) ? resolveInputBaseCwd(input.workdir, cwd) : cwd;
-  return canonicalizePath(resolveToCwd(details.failedPath, baseCwd));
+  ) return [];
+  let baseCwd = cwd;
+  if (isRecord(input) && typeof input.patchText === "string") {
+    try {
+      baseCwd = resolveInputBaseCwd(parseApplyPatch(input.patchText).workdir, cwd);
+    } catch {
+      baseCwd = cwd;
+    }
+  } else if (isRecord(input)) {
+    baseCwd = resolveInputBaseCwd(input.workdir, cwd);
+  }
+  const legacyParts = details.failedPath.split(" -> ", 2);
+  const failedPath = legacyParts[0]!;
+  const failedMoveTo = typeof details.failedMoveTo === "string" && details.failedMoveTo.trim().length > 0
+    ? details.failedMoveTo
+    : legacyParts[1];
+  const failedAbsolutePath = typeof details.failedAbsolutePath === "string" && details.failedAbsolutePath.trim().length > 0
+    ? details.failedAbsolutePath
+    : undefined;
+  const failedAbsoluteMoveToPath = typeof details.failedAbsoluteMoveToPath === "string" && details.failedAbsoluteMoveToPath.trim().length > 0
+    ? details.failedAbsoluteMoveToPath
+    : undefined;
+  return [...new Set([
+    failedAbsolutePath === undefined
+      ? canonicalizePath(resolveToCwd(failedPath, baseCwd))
+      : resolvePromptPath(failedAbsolutePath, cwd),
+    ...(failedMoveTo === undefined && failedAbsoluteMoveToPath === undefined
+      ? []
+      : [failedAbsoluteMoveToPath === undefined
+        ? canonicalizePath(resolveToCwd(failedMoveTo!, baseCwd))
+        : resolvePromptPath(failedAbsoluteMoveToPath, cwd)]),
+  ])];
 }
 
 function resolveToolPaths(toolName: string, input: unknown, message: ToolResultMessageLike, cwd: string): string[] {
   if (toolName !== "apply_patch") return resolveInputPaths(input, cwd);
   if (message.isError === true) {
-    const failedPath = resolveUnknownFailedDetailPath(message.details, input, cwd);
+    const failedPaths = resolveUnknownFailedDetailPaths(message.details, input, cwd);
     return [...new Set([
       ...resolveAppliedDetailPaths(message.details, cwd),
-      ...(failedPath === undefined ? [] : [failedPath]),
+      ...failedPaths,
     ])];
   }
   const inputPaths = resolveApplyPatchInputPaths(input, cwd);

@@ -288,11 +288,20 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
   registerApplyPatchTool(pi, {
     onCommitted: (result) => {
-      if (result.operation === "delete") closeLsp(result.absolutePath);
-      else syncLsp(result.absolutePath);
+      if (result.operation === "delete") {
+        closeLsp(result.absolutePath);
+        return;
+      }
+      if (result.absoluteMoveToPath !== undefined) {
+        closeLsp(result.absolutePath);
+        syncLsp(result.absoluteMoveToPath);
+        return;
+      }
+      syncLsp(result.absolutePath);
     },
     onCommitFailed: (failure) => {
       closeLsp(failure.absolutePath);
+      if (failure.absoluteMoveToPath !== undefined) closeLsp(failure.absoluteMoveToPath);
     },
     getCollapsedResultLines,
     getCollapsedResultMaxChars,

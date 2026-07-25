@@ -53,7 +53,6 @@ describe("apply_patch permission integration", () => {
     piBaseExtension(registry.pi as any);
 
     const deniedUpdate = await registry.getTool("apply_patch").execute("update", {
-      workdir: root,
       patchText: patch("*** Update File: update.txt", "@@", "-old", "+new"),
     }, undefined, undefined, { cwd: root, hasUI: false });
     expect(deniedUpdate.isError).toBe(true);
@@ -61,12 +60,39 @@ describe("apply_patch permission integration", () => {
     expect(await readFile(join(root, "update.txt"), "utf8")).toBe("old\n");
 
     const writeOperations = await registry.getTool("apply_patch").execute("write-ops", {
-      workdir: root,
       patchText: patch("  *** Add File: add.txt  ", "+added", "\t*** Delete File: delete.txt\t"),
     }, undefined, undefined, { cwd: root, hasUI: false });
     expect(writeOperations.isError).not.toBe(true);
     expect(await readFile(join(root, "add.txt"), "utf8")).toBe("added\n");
     expect(await exists(join(root, "delete.txt"))).toBe(false);
+  });
+
+  it("inherits write permission for Move destinations", async () => {
+    // Intent: a Move reads/updates its source under edit rules but may create or
+    // overwrite its destination, which must independently satisfy write rules.
+    const root = await createTempWorkspace();
+    await writeSettings(root, {
+      edit: "allow",
+      write: { "*": "allow", "blocked.txt": "deny" },
+    });
+    await writeFile(join(root, "source.txt"), "source\n", "utf8");
+    const registry = createToolRegistry({ hasUI: false });
+    piBaseExtension(registry.pi as any);
+
+    const denied = await registry.getTool("apply_patch").execute("move-denied", {
+      patchText: patch("*** Update File: source.txt", "*** Move to: blocked.txt"),
+    }, undefined, undefined, { cwd: root, hasUI: false });
+    expect(denied.isError).toBe(true);
+    expect(getText(denied)).toContain("Permission denied for apply_patch");
+    expect(await readFile(join(root, "source.txt"), "utf8")).toBe("source\n");
+    expect(await exists(join(root, "blocked.txt"))).toBe(false);
+
+    const allowed = await registry.getTool("apply_patch").execute("move-allowed", {
+      patchText: patch("*** Update File: source.txt", "*** Move to: allowed.txt"),
+    }, undefined, undefined, { cwd: root, hasUI: false });
+    expect(allowed.isError).not.toBe(true);
+    expect(await exists(join(root, "source.txt"))).toBe(false);
+    expect(await readFile(join(root, "allowed.txt"), "utf8")).toBe("source\n");
   });
 
   it("lets permission.apply_patch override inherited operation rules", async () => {
@@ -77,7 +103,6 @@ describe("apply_patch permission integration", () => {
     piBaseExtension(registry.pi as any);
 
     const result = await registry.getTool("apply_patch").execute("override", {
-      workdir: root,
       patchText: patch(
         "*** Add File: add.txt",
         "+added",
@@ -105,7 +130,6 @@ describe("apply_patch permission integration", () => {
     piBaseExtension(registry.pi as any);
 
     const asked = await registry.getTool("apply_patch").execute("ask", {
-      workdir: root,
       patchText: patch(
         "*** Add File: allow.txt",
         "+added",
@@ -125,7 +149,6 @@ describe("apply_patch permission integration", () => {
     expect(prompts[0]).not.toContain("Requested changes");
 
     const denied = await registry.getTool("apply_patch").execute("deny", {
-      workdir: root,
       patchText: patch("*** Add File: okay.txt", "+ok", "*** Add File: deny.txt", "+no"),
     }, undefined, undefined, { cwd: root });
     expect(denied.isError).toBe(true);
@@ -173,14 +196,12 @@ describe("apply_patch permission integration", () => {
     piBaseExtension(registry.pi as any);
 
     const allowed = await registry.getTool("apply_patch").execute("workdir", {
-      workdir: "repo",
-      patchText: patch("*** Add File: src/a.ts", "+export const a = 1;"),
+      patchText: patch("*** Workdir: repo", "*** Add File: src/a.ts", "+export const a = 1;"),
     }, undefined, undefined, { cwd: root, hasUI: false });
     expect(allowed.isError).not.toBe(true);
     expect(await readFile(join(root, "repo/src/a.ts"), "utf8")).toBe("export const a = 1;\n");
 
     const malformed = await registry.getTool("apply_patch").execute("malformed", {
-      workdir: root,
       patchText: "*** Begin Patch\n*** Add File: malformed-only\n+created",
     }, undefined, undefined, { cwd: root, hasUI: false });
     expect(malformed.isError).toBe(true);
@@ -207,7 +228,6 @@ describe("apply_patch permission integration", () => {
     piBaseExtension(registry.pi as any);
 
     const result = await registry.getTool("apply_patch").execute("separator-alias", {
-      workdir: root,
       patchText: patch("*** Add File: nested\\patch.txt", "+created"),
     }, undefined, undefined, { cwd: root, hasUI: false });
 
@@ -245,8 +265,7 @@ describe("apply_patch permission integration", () => {
     piBaseExtension(registry.pi as any);
 
     const result = await registry.getTool("apply_patch").execute("external-workdir", {
-      workdir: external,
-      patchText: patch("*** Add File: blocked.txt", "+no"),
+      patchText: patch(`*** Workdir: ${external}`, "*** Add File: blocked.txt", "+no"),
     }, undefined, undefined, { cwd: root, hasUI: false });
 
     expect(result.isError).toBe(true);
@@ -261,7 +280,7 @@ describe("apply_patch permission integration", () => {
 
     const headless = createToolRegistry({ hasUI: false });
     piBaseExtension(headless.pi as any);
-    const blocked = await headless.getTool("apply_patch").execute("headless", { patchText, workdir: root }, undefined, undefined, { cwd: root, hasUI: false });
+    const blocked = await headless.getTool("apply_patch").execute("headless", { patchText }, undefined, undefined, { cwd: root, hasUI: false });
     expect(blocked.isError).toBe(true);
     expect(getText(blocked)).toContain("no interactive UI is available");
 
@@ -275,7 +294,7 @@ describe("apply_patch permission integration", () => {
     child.pi.appendEntry(ROOT_SESSION_ENTRY, { rootSessionId: "test-session" });
     child.pi.appendEntry(AGENT_STATE_ENTRY, { name: "default" });
     piBaseExtension(child.pi as any);
-    const relayed = await child.getTool("apply_patch").execute("child", { patchText, workdir: root }, undefined, undefined, { cwd: root, hasUI: false });
+    const relayed = await child.getTool("apply_patch").execute("child", { patchText }, undefined, undefined, { cwd: root, hasUI: false });
     expect(relayed.isError).not.toBe(true);
     expect(rootPrompts).toHaveLength(1);
     expect(rootPrompts[0]).toContain("subagent「default」(depth 2)");
@@ -286,7 +305,6 @@ describe("apply_patch permission integration", () => {
     await rootRegistry.emit("session_start", { reason: "reload" }, { cwd: root, hasUI: true });
     await rootRegistry.runCommand("yolo", "", { cwd: root });
     const yolo = await rootRegistry.getTool("apply_patch").execute("yolo", {
-      workdir: root,
       patchText: patch("*** Add File: yolo.txt", "+ok"),
     }, undefined, undefined, { cwd: root });
     expect(yolo.isError).not.toBe(true);

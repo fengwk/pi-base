@@ -60,7 +60,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
 | `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
 | `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
-| `apply_patch` | `patchText` | workdir=session cwd | OpenCode `*** Begin Patch` 协议，并提供可选 `workdir` 扩展；支持 Add/Update/Delete，多文件先整体 preflight、再按顺序提交；参数流式生成和落定后的 Add 内容预览有界，参数完成及权限/执行期间完整展示 patch，逐文件持久化 diff 仍有界且行数统计不截断；不支持 Move |
+| `apply_patch` | `patchText` | freeform；可选 `*** Workdir:`，默认 session cwd | 对齐 Codex freeform + Lark grammar；支持 Add/Update/Delete/Move；可选 `*** Workdir:` 指定根目录且不改 session cwd；多文件先整体 preflight、再按顺序提交；参数流式生成和落定后的 Add 内容预览有界，参数完成及权限/执行期间完整展示 patch，逐文件持久化 diff 仍有界且行数统计不截断 |
 <!-- 暂时禁用；恢复注册时一并取消此注释。
 | `lsp_diagnostics` | `path` | severity=all | 需 `lsp.servers` 声明 server；不做能力前置检查 |
 -->
@@ -87,9 +87,11 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 
 ```text
 *** Begin Patch
+*** Workdir: .workspace/my-task/worktree
 *** Add File: src/new.ts
 +export const value = 1;
 *** Update File: src/existing.ts
+*** Move to: src/renamed.ts
 @@ optional function or section context
 -old line
 +new line
@@ -98,13 +100,13 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 *** End Patch
 ```
 
-`apply_patch` 使用 OpenCode 的 `patchText` 协议，并额外暴露可选 `workdir`。`patchText` 可直接传协议正文，也兼容常见 heredoc 包装；`*** Begin Patch`/`*** End Patch` 两侧以及 heredoc closing delimiter 后可带水平空白。Add body 每行以 `+` 开头；Delete 无 body；Update 使用一个或多个 `@@` chunk，context/删除/新增行分别以空格、`-`、`+` 开头。相对路径在提供 `workdir` 时从该目录解析，否则从当前 session cwd 解析。
+上例中的 `*** Workdir:` 和 `*** Move to:` 均为可选指令；省略 Workdir 时使用 session cwd。`apply_patch` 对齐 Codex freeform 协议：工具仅有字符串参数 `patchText`；grammar-capable 模型上通过 OpenAI Lark（`APPLY_PATCH_LARK_GRAMMAR`）约束采样。`patchText` 为完整 freeform 正文，也可兼容常见 heredoc 包装；`*** Begin Patch`/`*** End Patch` 两侧以及 heredoc closing delimiter 后可带水平空白。
 
-执行分两阶段：先解析并 preflight 全部文件（路径、存在性、文本编码、hunk 唯一匹配、输出可编码性等），任一失败则完全不写；preflight 全部成功后按 patch 顺序逐文件提交。提交阶段若后续文件因竞态或文件系统错误失败，前面已提交文件不会回滚，错误会明确标记 partial application，并在 details 中列出实际已提交文件及 diff 元数据；失败文件可能已被底层写操作部分修改，因此同时报告 `failedPathState: "unknown"`，调用方不能假定它保持原样。每次成功提交（包括最终部分失败之前的提交）都会更新 LSP：Add/Update 同步内容，Delete 对已打开文档发送 `didClose` 并清理缓存；状态未知的失败路径也会保守关闭已打开的 LSP 文档，避免继续使用可能陈旧的缓存。LSP 处理失败不会覆盖原始文件系统结果。
+可选第一行指令 `*** Workdir: <path>` 指定路径解析根（相对 session cwd 或绝对路径），默认 session cwd，无需切换 session cwd。Add body 每行以 `+` 开头；Delete 无 body；Update 可含 `*** Move to:` 与零个或多个 `@@` chunk（纯 Move 可无 hunk）；context/删除/新增行分别以空格、`-`、`+` 开头。相对路径相对 Workdir/session cwd 解析。Move 先写目标再删源；目标已存在且为普通文件时按 Codex 语义覆盖。
+
+执行分两阶段：先解析并 preflight 全部文件（路径、存在性、文本编码、hunk 唯一匹配、输出可编码性等），任一失败则完全不写；preflight 全部成功后按 patch 顺序逐文件提交。提交阶段若后续文件因竞态或文件系统错误失败，前面已提交文件不会回滚，错误会明确标记 partial application，并在 details 中列出实际已提交文件及 diff 元数据；失败文件可能已被底层写操作部分修改，因此同时报告 `failedPathState: "unknown"`，调用方不能假定它保持原样。每次成功提交（包括最终部分失败之前的提交）都会更新 LSP：Add/Update 同步内容，Move 关闭源路径并同步目标路径，Delete 对已打开文档发送 `didClose` 并清理缓存；状态未知的失败路径也会保守关闭已打开的 LSP 文档，避免继续使用可能陈旧的缓存。LSP 处理失败不会覆盖原始文件系统结果。
 
 结果中的逐文件 diff 使用 LF 展示视图和 4 行上下文；每个文件最多保留 400 行、单行最多 500 字符，但 `addedLines`/`removedLines` 始终统计完整变更。实际写回仍保留源文件支持的编码、BOM、逐行 EOL 和无最终换行状态。
-
-`*** Move to:` 仅为协议解析兼容保留，**Move 不受支持**，会在任何文件变更前失败。
 
 ### `task`（子 agent 委派）
 
@@ -294,7 +296,7 @@ Agent 正文（覆盖 system prompt）
 | 匹配顺序 | 先检查全局 `*`，再检查 tool 专属规则；最后匹配的规则生效 |
 | `ask` | 有 UI 弹出 Yes/No；无 UI headless subagent 转发给 root UI；其他无 UI 场景直接拦截 |
 | 路径类匹配 | 同时匹配原始路径、相对 workdir 路径、相对项目根路径、绝对路径 |
-| apply_patch 继承 | 执行前解析全部 target；Update 继承 `edit` 路径规则，Add/Delete 继承 `write` 路径规则；随后叠加 `permission.apply_patch` 作为覆盖层 |
+| apply_patch 继承 | 执行前解析全部 target（含 Move 目标）；Update 源路径继承 `edit`，Add/Delete/Move 目标继承 `write`；随后叠加 `permission.apply_patch` 作为覆盖层 |
 | apply_patch 聚合 | 对所有 target 取 `deny > ask > allow`；确认框只显示单行、总长有界的 `A/M/D path` 摘要，具体 patch 内容在工具调用预览中查看；畸形 patch 不执行文件操作，仅退回全局 `*` + `apply_patch` 通用规则 |
 | bash 匹配 | 识别 `&&`/`||`/`|`/`;`/换行 分割的顶层 command 段；不展开变量；动态命令头、命令头/前置重定向、复合/控制流语法、命令替换、可展开 heredoc、process substitution、shell/eval/source 动态执行，以及 command/env/exec/nohup 执行包装器无法保守分析时，显式整条命令 deny 仍 deny，否则退回 ask |
 

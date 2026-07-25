@@ -182,19 +182,33 @@ function evaluateApplyPatchPermission(
   }
 
   try {
-    const { cwd: targetCwd } = resolveToolWorkdir(input.workdir, cwd);
     const applyPatch = parseApplyPatch(input.patchText);
+    const { cwd: targetCwd } = resolveToolWorkdir(applyPatch.workdir, cwd);
     const intents = getApplyPatchIntents(applyPatch);
     const targets: ApplyPatchPermissionTarget[] = intents.map((intent) => ({
       intent,
       descriptor: buildPathTargetDescriptor(intent.path, targetCwd, loaded),
     }));
-    const actions = targets.map(({ intent, descriptor }) => evaluateRules(
-      descriptor.candidates,
-      permission["*"],
-      permission[inheritedApplyPatchToolName(intent)],
-      permission.apply_patch,
-    ));
+    const actions = targets.flatMap(({ intent, descriptor }) => {
+      const primary = evaluateRules(
+        descriptor.candidates,
+        permission["*"],
+        permission[inheritedApplyPatchToolName(intent)],
+        permission.apply_patch,
+      );
+      if (intent.moveTo === undefined) return [primary];
+      // Move destinations are creates/overwrites, so they inherit write rules.
+      const destination = buildPathTargetDescriptor(intent.moveTo, targetCwd, loaded);
+      return [
+        primary,
+        evaluateRules(
+          destination.candidates,
+          permission["*"],
+          permission.write,
+          permission.apply_patch,
+        ),
+      ];
+    });
     return { action: aggregatePermissionActions(actions), applyPatchTargets: intents };
   } catch {
     // Parsing and workdir validation belong to the tool. Permission falls back to
@@ -233,8 +247,18 @@ export function truncatePermissionLine(value: string, maxChars = PERMISSION_PROM
   return `${singleLine.slice(0, sliceLength)}...`;
 }
 
-function getPromptWorkdirSuffix(input: unknown, cwd: string): string {
-  const workdir = input && typeof input === "object" ? (input as Record<string, unknown>).workdir : undefined;
+function getPromptWorkdirSuffix(input: unknown, cwd: string, toolName?: string): string {
+  let workdir: unknown = input && typeof input === "object" ? (input as Record<string, unknown>).workdir : undefined;
+  if (toolName === "apply_patch" && input && typeof input === "object") {
+    const patchText = (input as Record<string, unknown>).patchText;
+    if (typeof patchText === "string") {
+      try {
+        workdir = parseApplyPatch(patchText).workdir;
+      } catch {
+        workdir = undefined;
+      }
+    }
+  }
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(workdir, cwd);
   return usedDefault ? "" : ` in ${rawWorkdir}`;
 }
@@ -272,7 +296,7 @@ function buildPrompt(
 ): string {
   const summary = summarizePromptInput(input, applyPatchTargets);
   const detail = summary ? ` ${summary}` : "";
-  return truncatePermissionLine(`Permission request: ${toolName}${detail}${getPromptWorkdirSuffix(input, cwd)}`);
+  return truncatePermissionLine(`Permission request: ${toolName}${detail}${getPromptWorkdirSuffix(input, cwd, toolName)}`);
 }
 
 function buildSettingsHint(loaded: LoadedPiBaseSettings): string {

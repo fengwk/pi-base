@@ -243,17 +243,55 @@ describe("apply_patch parser", () => {
     expect(() => parseApplyPatch(input)).toThrow(expected);
   });
 
+  it("parses optional Workdir header immediately after Begin Patch", () => {
+    // Intent: freeform Workdir replaces the old JSON workdir parameter and must
+    // not be accepted mid-patch where it would be ambiguous with file content.
+    expect(parseApplyPatch(patch(
+      "*** Workdir: .workspace/task/worktree",
+      "*** Add File: a.txt",
+      "+ok",
+    ))).toMatchObject({
+      workdir: ".workspace/task/worktree",
+      files: [{ operation: "add", path: "a.txt", lines: ["ok"] }],
+    });
+    expect(() => parseApplyPatch(patch(
+      "*** Delete File: gone.txt",
+      "*** Workdir: late",
+    ))).toThrow(/only allowed immediately after/);
+    expect(() => parseApplyPatch(patch("*** Workdir:   ", "*** Add File: a.txt", "+ok"))).toThrow(/path must not be empty/);
+  });
+
   it.each([
-    ["move-only", patch("*** Update File: old.txt", "*** Move to: new.txt")],
-    ["move with update chunks", patch("*** Update File: old.txt", "*** Move to: new.txt", "@@", "-old", "+new")],
-  ])("parses %s for compatibility but rejects it before filesystem work", async (_name, input) => {
-    // Intent: the Codex grammar permits a move without content chunks, but all
-    // Move forms remain an execution-level unsupported operation in pi-base.
+    ["move-only", patch("*** Update File: old.txt", "*** Move to: new.txt"), "old\n"],
+    ["move with update chunks", patch("*** Update File: old.txt", "*** Move to: new.txt", "@@", "-old", "+new"), "new\n"],
+  ])("executes Codex-style %s", async (_name, input, expectedContent) => {
+    // Intent: Move is a first-class Codex operation; pure rename and rename+edit
+    // must both land content at the destination and remove the source.
     const root = await createRoot();
     await put(root, "old.txt", "old\n");
     expect(parseApplyPatch(input).files[0]).toMatchObject({ operation: "update", path: "old.txt", moveTo: "new.txt" });
-    await expect(executeApplyPatch(input, { cwd: root })).rejects.toThrow(/Move operations are not supported/);
-    expect(await readFile(join(root, "old.txt"), "utf8")).toBe("old\n");
+    const result = await executeApplyPatch(input, { cwd: root });
+    expect(result.files[0]).toMatchObject({
+      operation: "update",
+      path: "old.txt",
+      moveTo: "new.txt",
+      after: expectedContent,
+    });
+    expect(await exists(join(root, "old.txt"))).toBe(false);
+    expect(await readFile(join(root, "new.txt"), "utf8")).toBe(expectedContent);
+  });
+
+  it("overwrites an existing regular Move destination", async () => {
+    // Intent: Move follows Codex write-destination-then-remove-source semantics,
+    // including replacement of an existing regular destination file.
+    const root = await createRoot();
+    await put(root, "old.txt", "source\n");
+    await put(root, "new.txt", "destination\n");
+
+    await executeApplyPatch(patch("*** Update File: old.txt", "*** Move to: new.txt"), { cwd: root });
+
+    expect(await exists(join(root, "old.txt"))).toBe(false);
+    expect(await readFile(join(root, "new.txt"), "utf8")).toBe("source\n");
   });
 });
 
@@ -638,11 +676,12 @@ describe("apply_patch filesystem execution", () => {
     const root = await createRoot();
     await mkdir(join(root, "sub"));
     await expect(executeApplyPatch(patch(
+      "*** Workdir: sub",
       "*** Add File: a.txt",
       "+one",
       "*** Add File: ./a.txt",
       "+two",
-    ), { cwd: root, workdir: "sub" })).rejects.toThrow(/Duplicate resolved patch path/);
+    ), { cwd: root })).rejects.toThrow(/Duplicate resolved patch path/);
     await expect(executeApplyPatch(patch(
       `*** Add File: ${root}/absolute.txt`,
       "+one",
@@ -679,10 +718,25 @@ describe("apply_patch filesystem execution", () => {
       cwd: root,
       onCommitted: (file) => { committed.push(file.path); },
       onCommitFailed: (file) => { failed.push(file.path); },
-    })).rejects.toThrow(/Conflicting Add File paths/);
+    })).rejects.toThrow(/Conflicting patch output paths/);
     expect(committed).toEqual([]);
     expect(failed).toEqual([]);
     expect(await exists(join(root, "tree"))).toBe(false);
+  });
+
+  it("rejects hierarchical Add and Move output paths before mutation", async () => {
+    // Intent: a Move destination is also a file output and cannot become the
+    // parent directory required by another output in the same patch.
+    const root = await createRoot();
+    await put(root, "source.txt", "source\n");
+    await expect(executeApplyPatch(patch(
+      "*** Add File: tree",
+      "+file",
+      "*** Update File: source.txt",
+      "*** Move to: tree/child.txt",
+    ), { cwd: root })).rejects.toThrow(/Conflicting patch output paths/);
+    expect(await exists(join(root, "tree"))).toBe(false);
+    expect(await readFile(join(root, "source.txt"), "utf8")).toBe("source\n");
   });
 
   it("does not confuse a path-component prefix with an Add ancestor", async () => {
@@ -716,7 +770,7 @@ describe("apply_patch filesystem execution", () => {
         "+one",
         `*** Add File: ${root}/parent/child.txt`,
         "+two",
-      ), { cwd: root })).rejects.toThrow(/Conflicting Add File paths/);
+      ), { cwd: root })).rejects.toThrow(/Conflicting patch output paths/);
     } finally {
       if (descriptor) Object.defineProperty(process, "platform", descriptor);
     }
@@ -890,6 +944,100 @@ describe("apply_patch commit races and aborts", () => {
     expect(error.message).toContain("Already applied: marker.txt");
     if (operation === "update") expect(await readFile(target, "utf8")).toBe("changed\n");
     else expect(await exists(target)).toBe(false);
+  });
+
+  it("rejects a stale Move destination after preflight", async () => {
+    // Intent: Codex-style overwrite semantics must not clobber a cooperating
+    // mutation that changed the destination after the all-files preflight.
+    const root = await createRoot();
+    const source = await put(root, "source.txt", "source\n");
+    const destination = await put(root, "destination.txt", "destination\n");
+    const blocker = await createQueueBlocker(destination);
+    const pending = executeApplyPatch(patch(
+      "*** Add File: marker.txt",
+      "+done",
+      "*** Update File: source.txt",
+      "*** Move to: destination.txt",
+    ), { cwd: root });
+    await waitFor(() => exists(join(root, "marker.txt")));
+    await writeFile(destination, "racer\n");
+    blocker.release();
+    await blocker.done;
+
+    const error = await pending.catch((caught) => caught);
+    expect(error).toBeInstanceOf(ApplyPatchCommitError);
+    expect(error.message).toContain("Move destination changed after preflight");
+    expect(error.failedPath).toBe("source.txt");
+    expect(error.failedMoveTo).toBe("destination.txt");
+    expect(await readFile(source, "utf8")).toBe("source\n");
+    expect(await readFile(destination, "utf8")).toBe("racer\n");
+  });
+
+  it("locks opposite Move paths in a deterministic order", async () => {
+    // Intent: concurrent A -> B and B -> A patches must serialize rather than
+    // each holding its destination queue while waiting forever on the source.
+    const root = await createRoot();
+    const a = await put(root, "a.txt", "a\n");
+    const b = await put(root, "b.txt", "b\n");
+    const blockerA = await createQueueBlocker(a);
+    const blockerB = await createQueueBlocker(b);
+    const first = executeApplyPatch(patch("*** Update File: a.txt", "*** Move to: b.txt"), { cwd: root });
+    const second = executeApplyPatch(patch("*** Update File: b.txt", "*** Move to: a.txt"), { cwd: root });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    blockerA.release();
+    blockerB.release();
+    await Promise.all([blockerA.done, blockerB.done]);
+
+    let timeout: NodeJS.Timeout | undefined;
+    const settled = await Promise.race([
+      Promise.allSettled([first, second]),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("Opposite Move operations deadlocked.")), 1_000);
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    expect(settled.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(settled.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect([await exists(a), await exists(b)].filter(Boolean)).toHaveLength(1);
+  });
+
+  it("reports both paths when a Move fails after writing its destination", async () => {
+    // Intent: abort between destination write and source unlink leaves both paths
+    // potentially changed, so observers and context hygiene need both identities.
+    const root = await createRoot();
+    const source = await put(root, "source.txt", "source\n");
+    const destination = join(root, "destination.txt");
+    const failures: unknown[] = [];
+    const signal = {
+      get aborted() { return existsSync(destination); },
+    } as AbortSignal;
+
+    const error = await executeApplyPatch(patch(
+      "*** Update File: source.txt",
+      "*** Move to: destination.txt",
+    ), {
+      cwd: root,
+      signal,
+      onCommitFailed: (failure) => { failures.push({ ...failure }); },
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ApplyPatchCommitError);
+    expect(error).toMatchObject({
+      failedPath: "source.txt",
+      failedAbsolutePath: source,
+      failedMoveTo: "destination.txt",
+      failedAbsoluteMoveToPath: destination,
+    });
+    expect(failures).toEqual([{
+      operation: "update",
+      path: "source.txt",
+      absolutePath: source,
+      moveTo: "destination.txt",
+      absoluteMoveToPath: destination,
+      state: "unknown",
+    }]);
+    expect(await readFile(source, "utf8")).toBe("source\n");
+    expect(await exists(destination)).toBe(true);
   });
 
   it("reports partial application when a later exclusive Add loses a race", async () => {

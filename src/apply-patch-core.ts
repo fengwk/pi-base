@@ -1,5 +1,5 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { parseLineEndingDocument, serializeLineEndingDocument, type ConcreteLineEnding } from "./line-endings.js";
 import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
@@ -40,6 +40,8 @@ export interface ApplyPatchDeleteFile {
 export type ApplyPatchFile = ApplyPatchAddFile | ApplyPatchUpdateFile | ApplyPatchDeleteFile;
 
 export interface ParsedApplyPatch {
+  /** Optional freeform `*** Workdir:` header; defaults to session cwd when omitted. */
+  workdir?: string;
   files: ApplyPatchFile[];
 }
 
@@ -50,7 +52,6 @@ export interface ApplyPatchIntent {
 }
 
 export interface ApplyPatchExecutionOptions {
-  workdir?: unknown;
   cwd?: string;
   signal?: AbortSignal;
   onCommitted?: (result: ApplyPatchFileResult) => void | Promise<void>;
@@ -61,6 +62,8 @@ export interface ApplyPatchCommitFailure {
   operation: ApplyPatchOperation;
   path: string;
   absolutePath: string;
+  moveTo?: string;
+  absoluteMoveToPath?: string;
   state: "unknown";
 }
 
@@ -68,6 +71,8 @@ export interface ApplyPatchFileResult {
   operation: ApplyPatchOperation;
   path: string;
   absolutePath: string;
+  moveTo?: string;
+  absoluteMoveToPath?: string;
   before: string | null;
   after: string | null;
 }
@@ -78,20 +83,33 @@ export interface ApplyPatchExecutionResult {
 
 export class ApplyPatchCommitError extends Error {
   readonly failedPath: string;
+  readonly failedTarget: string;
+  readonly failedAbsolutePath?: string;
+  readonly failedMoveTo?: string;
+  readonly failedAbsoluteMoveToPath?: string;
   readonly failedPathState = "unknown" as const;
   readonly causeMessage: string;
   readonly appliedPaths: string[];
   readonly appliedFiles: ApplyPatchFileResult[];
 
-  constructor(failedPath: string, appliedFiles: ApplyPatchFileResult[], cause: unknown) {
+  constructor(failure: string | ApplyPatchCommitFailure, appliedFiles: ApplyPatchFileResult[], cause: unknown) {
+    const failedPath = typeof failure === "string" ? failure : failure.path;
+    const failedMoveTo = typeof failure === "string" ? undefined : failure.moveTo;
+    const failedTarget = failedMoveTo === undefined ? failedPath : `${failedPath} -> ${failedMoveTo}`;
     const causeMessage = cause instanceof Error ? cause.message : String(cause);
     const appliedPaths = appliedFiles.map((file) => file.path);
     const applied = appliedPaths.length === 0
       ? "No patch files were applied."
       : `Already applied: ${appliedPaths.join(", ")}.`;
-    super(`Failed to apply patch for ${failedPath}. ${applied} Cause: ${causeMessage}`, { cause });
+    super(`Failed to apply patch for ${failedTarget}. ${applied} Cause: ${causeMessage}`, { cause });
     this.name = "ApplyPatchCommitError";
     this.failedPath = failedPath;
+    this.failedTarget = failedTarget;
+    if (typeof failure !== "string") {
+      this.failedAbsolutePath = failure.absolutePath;
+      this.failedMoveTo = failure.moveTo;
+      this.failedAbsoluteMoveToPath = failure.absoluteMoveToPath;
+    }
     this.causeMessage = causeMessage;
     this.appliedPaths = appliedPaths;
     this.appliedFiles = appliedFiles.map((file) => ({ ...file }));
@@ -118,6 +136,9 @@ interface AddMutationPlan extends BaseMutationPlan {
 
 interface UpdateMutationPlan extends BaseMutationPlan {
   operation: "update";
+  moveTo?: string;
+  absoluteMoveToPath?: string;
+  expectedMoveToBytes?: Buffer | null;
   expectedBytes: Buffer;
   outputBytes: Buffer;
 }
@@ -131,6 +152,7 @@ type MutationPlan = AddMutationPlan | UpdateMutationPlan | DeleteMutationPlan;
 type MatchLevel = "exact" | "trimEnd" | "trim" | "unicode";
 
 const FILE_DIRECTIVE_PREFIXES = ["*** Add File:", "*** Update File:", "*** Delete File:"] as const;
+const WORKDIR_PREFIX = "*** Workdir:";
 
 function normalizePatchText(text: string): string {
   return text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -173,6 +195,13 @@ function isPaddedFileDirective(line: string): boolean {
   return FILE_DIRECTIVE_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
 }
 
+function isTopLevelPatchDirective(line: string): boolean {
+  const trimmed = line.trim();
+  return isPaddedFileDirective(line)
+    || trimmed.startsWith(WORKDIR_PREFIX)
+    || isPatchMarker(line, "*** End Patch");
+}
+
 function isUpdateFileBoundary(line: string): boolean {
   // Any leading space is Update context syntax; tab-only padding is unambiguous.
   return !line.startsWith(" ") && isPaddedFileDirective(line);
@@ -201,6 +230,16 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
   const seenPaths = new Set<string>();
   let index = 1;
   let foundEnd = false;
+  let workdir: string | undefined;
+
+  // Optional freeform workdir header must sit immediately after Begin Patch.
+  if (index < lines.length) {
+    const maybeWorkdir = lines[index]!.trim();
+    if (maybeWorkdir.startsWith(WORKDIR_PREFIX)) {
+      workdir = parseRequiredPath(maybeWorkdir, WORKDIR_PREFIX);
+      index++;
+    }
+  }
 
   while (index < lines.length) {
     const line = lines[index]!;
@@ -211,12 +250,16 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
     }
     const directiveLine = line.trim();
 
+    if (directiveLine.startsWith(WORKDIR_PREFIX)) {
+      throw new Error("*** Workdir: is only allowed immediately after *** Begin Patch.");
+    }
+
     if (directiveLine.startsWith("*** Add File:")) {
       const path = parseRequiredPath(directiveLine, "*** Add File:");
       assertUniquePath(path, seenPaths);
       index++;
       const content: string[] = [];
-      while (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isPaddedFileDirective(lines[index]!)) {
+      while (index < lines.length && !isTopLevelPatchDirective(lines[index]!)) {
         const bodyLine = lines[index]!;
         if (!bodyLine.startsWith("+")) {
           throw new Error(`Malformed Add File body for ${path}: every line must start with +.`);
@@ -232,7 +275,7 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
       const path = parseRequiredPath(directiveLine, "*** Delete File:");
       assertUniquePath(path, seenPaths);
       index++;
-      if (index < lines.length && !isPatchMarker(lines[index]!, "*** End Patch") && !isPaddedFileDirective(lines[index]!)) {
+      if (index < lines.length && !isTopLevelPatchDirective(lines[index]!)) {
         throw new Error(`Delete File ${path} must not have a body.`);
       }
       files.push({ operation: "delete", path });
@@ -297,7 +340,7 @@ export function parseApplyPatch(patchText: string): ParsedApplyPatch {
   while (index < lines.length && lines[index] === "") index++;
   if (index !== lines.length) throw new Error(`Unknown patch line after *** End Patch: ${lines[index]}.`);
   if (files.length === 0) throw new Error("Patch must contain at least one file operation.");
-  return { files };
+  return workdir === undefined ? { files } : { workdir, files };
 }
 
 export function getApplyPatchIntents(patch: ParsedApplyPatch): ApplyPatchIntent[] {
@@ -580,7 +623,32 @@ async function assertAddParentIsDirectory(absolutePath: string, signal?: AbortSi
   }
 }
 
-async function preflightFile(file: ApplyPatchFile, absolutePath: string, signal?: AbortSignal): Promise<MutationPlan> {
+async function assertDistinctMoveFiles(
+  path: string,
+  absolutePath: string,
+  moveTo: string,
+  absoluteMoveToPath: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    const [sourceRealPath, destinationRealPath] = await Promise.all([
+      throwIfAbortedAfter(realpath(absolutePath), signal),
+      throwIfAbortedAfter(realpath(absoluteMoveToPath), signal),
+    ]);
+    if (mutationPathKey(sourceRealPath) === mutationPathKey(destinationRealPath)) {
+      throw new Error(`${path}: Move destination ${moveTo} resolves to the source file.`);
+    }
+  } catch (error) {
+    if (!isNodeErrorWithCode(error, "ENOENT") && !isNodeErrorWithCode(error, "ENOTDIR")) throw error;
+  }
+}
+
+async function preflightFile(
+  file: ApplyPatchFile,
+  absolutePath: string,
+  absoluteMoveToPath: string | undefined,
+  signal?: AbortSignal,
+): Promise<MutationPlan> {
   if (file.operation === "add") {
     throwIfAborted(signal);
     try {
@@ -627,8 +695,46 @@ async function preflightFile(file: ApplyPatchFile, absolutePath: string, signal?
     };
   }
 
-  const after = applyUpdate(file.path, decoded.text, file.chunks);
+  // Move-only updates have no hunks; content is preserved and written to the destination.
+  const after = file.chunks.length === 0
+    ? decoded.text
+    : applyUpdate(file.path, decoded.text, file.chunks);
   const outputBytes = encodeTextFile(after, decoded.encoding, decoded.bom);
+
+  if (file.moveTo !== undefined) {
+    if (absoluteMoveToPath === undefined) {
+      throw new Error(`${file.path}: Move destination path is missing.`);
+    }
+    if (mutationPathKey(absolutePath) === mutationPathKey(absoluteMoveToPath)) {
+      throw new Error(`${file.path}: Move destination must differ from the source path.`);
+    }
+    await assertAddParentIsDirectory(absoluteMoveToPath, signal);
+    let expectedMoveToBytes: Buffer | null = null;
+    try {
+      const destStat = await throwIfAbortedAfter(stat(absoluteMoveToPath), signal);
+      if (!destStat.isFile()) {
+        throw new Error(`${file.moveTo}: Move destination exists and is not a regular file.`);
+      }
+      await assertDistinctMoveFiles(file.path, absolutePath, file.moveTo, absoluteMoveToPath, signal);
+      expectedMoveToBytes = await throwIfAbortedAfter(readFile(absoluteMoveToPath), signal);
+      // Codex overwrites an existing destination file when moving.
+    } catch (error) {
+      if (!isNodeErrorWithCode(error, "ENOENT") && !isNodeErrorWithCode(error, "ENOTDIR")) throw error;
+    }
+    return {
+      operation: "update",
+      path: file.path,
+      absolutePath,
+      moveTo: file.moveTo,
+      absoluteMoveToPath,
+      expectedMoveToBytes,
+      before: decoded.text,
+      after,
+      expectedBytes,
+      outputBytes,
+    };
+  }
+
   return {
     operation: "update",
     path: file.path,
@@ -640,42 +746,66 @@ async function preflightFile(file: ApplyPatchFile, absolutePath: string, signal?
   };
 }
 
+function rememberResolvedPath(
+  seenAbsolutePaths: Map<string, string>,
+  absolutePath: string,
+  label: string,
+): void {
+  const key = mutationPathKey(absolutePath);
+  const previous = seenAbsolutePaths.get(key);
+  if (previous !== undefined) {
+    throw new Error(`Duplicate resolved patch path: ${previous} and ${label}.`);
+  }
+  seenAbsolutePaths.set(key, label);
+}
+
+function rememberOutputPath(outputPaths: Map<string, string>, absolutePath: string, label: string): void {
+  outputPaths.set(mutationPathKey(absolutePath), label);
+}
+
+function assertNoHierarchicalOutputConflicts(outputPaths: ReadonlyMap<string, string>): void {
+  for (const [key, label] of outputPaths) {
+    for (let index = 1; index < key.length; index++) {
+      const isSeparator = key[index] === "/" || (process.platform === "win32" && key[index] === "\\");
+      if (!isSeparator) continue;
+      const ancestor = outputPaths.get(key.slice(0, index));
+      if (ancestor !== undefined) {
+        throw new Error(`Conflicting patch output paths: ${ancestor} cannot be an ancestor of ${label}.`);
+      }
+    }
+  }
+}
+
 async function buildMutationPlans(
   patch: ParsedApplyPatch,
   options: ApplyPatchExecutionOptions,
 ): Promise<MutationPlan[]> {
-  const { cwd } = resolveToolWorkdir(options.workdir, options.cwd ?? process.cwd());
-  const resolved = patch.files.map((file) => ({ file, absolutePath: resolveToCwd(file.path, cwd) }));
+  const { cwd } = resolveToolWorkdir(patch.workdir, options.cwd ?? process.cwd());
+  const resolved = patch.files.map((file) => ({
+    file,
+    absolutePath: resolveToCwd(file.path, cwd),
+    absoluteMoveToPath: file.operation === "update" && file.moveTo !== undefined
+      ? resolveToCwd(file.moveTo, cwd)
+      : undefined,
+  }));
   const seenAbsolutePaths = new Map<string, string>();
-  const addPaths = new Map<string, string>();
+  const outputPaths = new Map<string, string>();
   for (const item of resolved) {
-    const key = mutationPathKey(item.absolutePath);
-    const previous = seenAbsolutePaths.get(key);
-    if (previous !== undefined) {
-      throw new Error(`Duplicate resolved patch path: ${previous} and ${item.file.path}.`);
+    rememberResolvedPath(seenAbsolutePaths, item.absolutePath, item.file.path);
+    if (item.absoluteMoveToPath !== undefined && item.file.operation === "update" && item.file.moveTo !== undefined) {
+      rememberResolvedPath(seenAbsolutePaths, item.absoluteMoveToPath, item.file.moveTo);
+      rememberOutputPath(outputPaths, item.absoluteMoveToPath, item.file.moveTo);
     }
-    seenAbsolutePaths.set(key, item.file.path);
-    if (item.file.operation === "add") addPaths.set(key, item.file.path);
+    if (item.file.operation === "add") rememberOutputPath(outputPaths, item.absolutePath, item.file.path);
   }
-  for (const item of resolved) {
-    if (item.file.operation !== "add") continue;
-    const key = mutationPathKey(item.absolutePath);
-    for (let index = 1; index < key.length; index++) {
-      const isSeparator = key[index] === "/" || (process.platform === "win32" && key[index] === "\\");
-      if (!isSeparator) continue;
-      const ancestor = addPaths.get(key.slice(0, index));
-      if (ancestor !== undefined) {
-        throw new Error(`Conflicting Add File paths: ${ancestor} cannot be an ancestor of ${item.file.path}.`);
-      }
-    }
-  }
+  assertNoHierarchicalOutputConflicts(outputPaths);
 
   const plans: MutationPlan[] = [];
   const errors: string[] = [];
   for (const item of resolved) {
     throwIfAborted(options.signal);
     try {
-      plans.push(await preflightFile(item.file, item.absolutePath, options.signal));
+      plans.push(await preflightFile(item.file, item.absolutePath, item.absoluteMoveToPath, options.signal));
     } catch (error) {
       if (options.signal?.aborted) throwIfAborted(options.signal);
       errors.push(error instanceof Error ? error.message : String(error));
@@ -685,37 +815,119 @@ async function buildMutationPlans(
   return plans;
 }
 
+async function resolveMutationQueuePath(absolutePath: string, signal?: AbortSignal): Promise<string> {
+  try {
+    return await throwIfAbortedAfter(realpath(absolutePath), signal);
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT") || isNodeErrorWithCode(error, "ENOTDIR")) return absolutePath;
+    throw error;
+  }
+}
+
+async function withMutationQueues<T>(
+  absolutePaths: readonly string[],
+  signal: AbortSignal | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (absolutePaths.length === 1) return withFileMutationQueue(absolutePaths[0]!, fn);
+  const canonicalPaths = await Promise.all(absolutePaths.map((path) => resolveMutationQueuePath(path, signal)));
+  const uniquePaths = new Map<string, string>();
+  for (const path of canonicalPaths) uniquePaths.set(mutationPathKey(path), path);
+  const orderedPaths = [...uniquePaths.values()].sort((left, right) =>
+    mutationPathKey(left).localeCompare(mutationPathKey(right))
+  );
+  const acquire = (index: number): Promise<T> => index >= orderedPaths.length
+    ? fn()
+    : withFileMutationQueue(orderedPaths[index]!, () => acquire(index + 1));
+  return acquire(0);
+}
+
+async function assertMoveDestinationUnchanged(plan: UpdateMutationPlan, signal?: AbortSignal): Promise<void> {
+  if (plan.absoluteMoveToPath === undefined || plan.moveTo === undefined || plan.expectedMoveToBytes === undefined) return;
+  let currentBytes: Buffer | null;
+  try {
+    currentBytes = await throwIfAbortedAfter(readFile(plan.absoluteMoveToPath), signal);
+  } catch (error) {
+    if (!isNodeErrorWithCode(error, "ENOENT")) throw error;
+    currentBytes = null;
+  }
+  if (plan.expectedMoveToBytes === null && currentBytes !== null) {
+    throw new Error(`${plan.moveTo}: Move destination changed after preflight: path now exists.`);
+  }
+  if (plan.expectedMoveToBytes !== null && currentBytes === null) {
+    throw new Error(`${plan.moveTo}: Move destination changed after preflight: file no longer exists.`);
+  }
+  if (plan.expectedMoveToBytes !== null && currentBytes !== null && !currentBytes.equals(plan.expectedMoveToBytes)) {
+    throw new Error(`${plan.moveTo}: Move destination changed after preflight; refusing to overwrite stale contents.`);
+  }
+  if (currentBytes !== null) {
+    await assertDistinctMoveFiles(plan.path, plan.absolutePath, plan.moveTo, plan.absoluteMoveToPath, signal);
+  }
+}
+
 async function commitMutation(plan: MutationPlan, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal);
-  await withFileMutationQueue(plan.absolutePath, async () => {
-    throwIfAborted(signal);
-    if (plan.operation === "add") {
-      await mkdir(dirname(plan.absolutePath), { recursive: true });
+  const queuePaths = plan.operation === "update" && plan.absoluteMoveToPath !== undefined
+    ? [plan.absolutePath, plan.absoluteMoveToPath]
+    : [plan.absolutePath];
+
+  await withMutationQueues(queuePaths, signal, async () => {
+    const run = async () => {
       throwIfAborted(signal);
-      await writeFile(plan.absolutePath, plan.outputBytes, { flag: "wx", signal });
-      return;
-    }
-
-    let currentBytes: Buffer;
-    try {
-      currentBytes = await throwIfAbortedAfter(readFile(plan.absolutePath), signal);
-    } catch (error) {
-      if (isNodeErrorWithCode(error, "ENOENT")) {
-        throw new Error(`${plan.path} changed after preflight: file no longer exists.`);
+      if (plan.operation === "add") {
+        await mkdir(dirname(plan.absolutePath), { recursive: true });
+        throwIfAborted(signal);
+        await writeFile(plan.absolutePath, plan.outputBytes, { flag: "wx", signal });
+        return;
       }
-      throw error;
-    }
-    if (!currentBytes.equals(plan.expectedBytes)) {
-      throw new Error(`${plan.path} changed after preflight; refusing to apply a stale patch.`);
-    }
 
-    throwIfAborted(signal);
-    if (plan.operation === "delete") {
-      await unlink(plan.absolutePath);
-    } else {
+      let currentBytes: Buffer;
+      try {
+        currentBytes = await throwIfAbortedAfter(readFile(plan.absolutePath), signal);
+      } catch (error) {
+        if (isNodeErrorWithCode(error, "ENOENT")) {
+          throw new Error(`${plan.path} changed after preflight: file no longer exists.`);
+        }
+        throw error;
+      }
+      if (!currentBytes.equals(plan.expectedBytes)) {
+        throw new Error(`${plan.path} changed after preflight; refusing to apply a stale patch.`);
+      }
+
+      throwIfAborted(signal);
+      if (plan.operation === "delete") {
+        await unlink(plan.absolutePath);
+        return;
+      }
+
+      if (plan.absoluteMoveToPath !== undefined) {
+        await assertMoveDestinationUnchanged(plan, signal);
+        // Codex-style move: write destination (creating parents), then remove source.
+        await mkdir(dirname(plan.absoluteMoveToPath), { recursive: true });
+        throwIfAborted(signal);
+        await writeFile(plan.absoluteMoveToPath, plan.outputBytes, { signal });
+        throwIfAborted(signal);
+        await unlink(plan.absolutePath);
+        return;
+      }
+
       await writeFile(plan.absolutePath, plan.outputBytes, { signal });
-    }
+    };
+    await run();
   });
+}
+
+function toFileResult(plan: MutationPlan): ApplyPatchFileResult {
+  return {
+    operation: plan.operation,
+    path: plan.path,
+    absolutePath: plan.absolutePath,
+    ...(plan.operation === "update" && plan.moveTo !== undefined
+      ? { moveTo: plan.moveTo, absoluteMoveToPath: plan.absoluteMoveToPath }
+      : {}),
+    before: plan.before,
+    after: plan.after,
+  };
 }
 
 export async function executeApplyPatch(
@@ -724,34 +936,30 @@ export async function executeApplyPatch(
 ): Promise<ApplyPatchExecutionResult> {
   throwIfAborted(options.signal);
   const patch = typeof patchOrText === "string" ? parseApplyPatch(patchOrText) : patchOrText;
-  const move = patch.files.find((file): file is ApplyPatchUpdateFile => file.operation === "update" && file.moveTo !== undefined);
-  if (move?.moveTo !== undefined) throw new Error(`Move operations are not supported: ${move.path} -> ${move.moveTo}.`);
-
   const plans = await buildMutationPlans(patch, options);
   const results: ApplyPatchFileResult[] = [];
   for (const plan of plans) {
     try {
       await commitMutation(plan, options.signal);
     } catch (error) {
+      const failure: ApplyPatchCommitFailure = {
+        operation: plan.operation,
+        path: plan.path,
+        absolutePath: plan.absolutePath,
+        ...(plan.operation === "update" && plan.moveTo !== undefined
+          ? { moveTo: plan.moveTo, absoluteMoveToPath: plan.absoluteMoveToPath }
+          : {}),
+        state: "unknown",
+      };
+      const commitError = new ApplyPatchCommitError(failure, results, error);
       try {
-        await options.onCommitFailed?.({
-          operation: plan.operation,
-          path: plan.path,
-          absolutePath: plan.absolutePath,
-          state: "unknown",
-        });
+        await options.onCommitFailed?.({ ...failure });
       } catch {
         // Preserve the filesystem failure; cache/observer cleanup is best-effort.
       }
-      throw new ApplyPatchCommitError(plan.path, results, error);
+      throw commitError;
     }
-    const result: ApplyPatchFileResult = {
-      operation: plan.operation,
-      path: plan.path,
-      absolutePath: plan.absolutePath,
-      before: plan.before,
-      after: plan.after,
-    };
+    const result = toFileResult(plan);
     results.push(result);
     try {
       await options.onCommitted?.({ ...result });

@@ -1,4 +1,5 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -59,12 +60,14 @@ describe("apply_patch tool", () => {
     expect(tool.parameters.required).toEqual(["patchText"]);
     expect(tool.parameters.properties).toEqual({
       patchText: expect.objectContaining({ type: "string" }),
-      workdir: expect.objectContaining({ type: "string" }),
+    });
+    expect(tool.constrainedSampling).toMatchObject({
+      type: "grammar",
+      variants: { openai_lark: expect.stringContaining("*** Begin Patch") },
     });
     expect(() => tool.prepareArguments({})).toThrow();
     expect(tool.prepareArguments({ patchText: patch("*** Add File: valid.txt", "+ok") })).toMatchObject({ patchText: expect.any(String) });
-    expect(tool.prepareArguments({ patchText: patch("*** Add File: valid.txt", "+ok"), workdir: "pkg" }))
-      .toMatchObject({ patchText: expect.any(String), workdir: "pkg" });
+    expect(() => tool.prepareArguments({ patchText: patch("*** Add File: valid.txt", "+ok"), workdir: "pkg" })).toThrow();
 
     const absent = await tool.execute("absent", undefined, undefined, undefined, { cwd: process.cwd() });
     expect(absent.isError).toBe(true);
@@ -73,12 +76,11 @@ describe("apply_patch tool", () => {
     expect(getText(missing)).toContain("patchText is required and must be a string");
     expect(missing.details.__piBase.isError).toBe(true);
 
-    const badWorkdir = await tool.execute("workdir", { patchText: patch("*** Add File: a", "+x"), workdir: 1 }, undefined, undefined, { cwd: process.cwd() });
-    expect(badWorkdir.isError).toBe(true);
-    expect(getText(badWorkdir)).toContain("workdir must be a string");
-    const emptyWorkdir = await tool.execute("empty-workdir", { patchText: patch("*** Add File: a", "+x"), workdir: "" }, undefined, undefined, { cwd: process.cwd() });
+    const emptyWorkdir = await tool.execute("empty-workdir", {
+      patchText: patch("*** Workdir:   ", "*** Add File: a", "+x"),
+    }, undefined, undefined, { cwd: process.cwd() });
     expect(emptyWorkdir.isError).toBe(true);
-    expect(getText(emptyWorkdir)).toContain("workdir must be a non-empty string");
+    expect(getText(emptyWorkdir)).toContain("path must not be empty");
     const malformed = await tool.execute("malformed", { patchText: "not a patch" }, undefined, undefined, { cwd: process.cwd() });
     expect(malformed.isError).toBe(true);
     expect(getText(malformed)).toContain("Patch must start with");
@@ -119,7 +121,9 @@ describe("apply_patch tool", () => {
     expect(defaultWorkdir).toContain("D delete.txt");
     expect(defaultWorkdir).toContain("(delete file)");
 
-    const explicitWorkdir = render(tool.renderCall({ patchText: valid, workdir: "pkg" }, {} as any, { cwd: "/repo", argsComplete: true }));
+    const explicitWorkdir = render(tool.renderCall({
+      patchText: patch("*** Workdir: pkg", "*** Add File: add.txt", "+added"),
+    }, {} as any, { cwd: "/repo", argsComplete: true }));
     expect(explicitWorkdir).toContain("apply_patch in pkg");
     const move = render(tool.renderCall({
       patchText: patch("*** Update File: old.txt", "*** Move to: new.txt", "@@", "-old", "+new"),
@@ -164,8 +168,8 @@ describe("apply_patch tool", () => {
     registerApplyPatchTool(registry.pi as any);
 
     const result = await registry.getTool("apply_patch").execute("ok", {
-      workdir: root,
       patchText: patch(
+        `*** Workdir: ${root}`,
         "*** Add File: nested/add.txt",
         "+created",
         "*** Update File: update.txt",
@@ -207,8 +211,7 @@ describe("apply_patch tool", () => {
     registerApplyPatchTool(registry.pi as any);
 
     const result = await registry.getTool("apply_patch").execute("workdir", {
-      workdir: "workspace",
-      patchText: patch("*** Update File: same.txt", "@@", "-old", "+new"),
+      patchText: patch("*** Workdir: workspace", "*** Update File: same.txt", "@@", "-old", "+new"),
     }, undefined, undefined, { cwd: root });
 
     expect(result.isError).not.toBe(true);
@@ -223,9 +226,8 @@ describe("apply_patch tool", () => {
     registerApplyPatchTool(registry.pi as any);
     const tool = registry.getTool("apply_patch");
     const result = await tool.execute("single", {
-      workdir: root,
       patchText: patch("*** Add File: empty.txt"),
-    });
+    }, undefined, undefined, { cwd: root });
 
     expect(getText(result)).toBe("Applied patch successfully (1 file): A empty.txt");
     expect(result.details.files[0]).toMatchObject({ diff: "", addedLines: 0, removedLines: 0 });
@@ -273,8 +275,7 @@ describe("apply_patch tool", () => {
     registerApplyPatchTool(registry.pi as any);
     const tool = registry.getTool("apply_patch");
     const args = {
-      workdir: root,
-      patchText: patch("*** Update File: a.txt", "@@", "-old", "+new"),
+      patchText: patch(`*** Workdir: ${root}`, "*** Update File: a.txt", "@@", "-old", "+new"),
     };
 
     const call = render(tool.renderCall(args, {} as any, { cwd: "/unused", argsComplete: true }));
@@ -298,7 +299,6 @@ describe("apply_patch tool", () => {
     registerApplyPatchTool(registry.pi as any);
     const tool = registry.getTool("apply_patch");
     const result = await tool.execute("large-success", {
-      workdir: root,
       patchText: patch(
         "*** Add File: large.txt",
         ...Array.from({ length: 65 }, (_, index) => `+line-${index + 1}`),
@@ -327,7 +327,6 @@ describe("apply_patch tool", () => {
     const registry = createToolRegistry();
     registerApplyPatchTool(registry.pi as any);
     const result = await registry.getTool("apply_patch").execute("large", {
-      workdir: root,
       patchText: patch("*** Update File: large.txt", "@@", "-line-60", "+line-60-updated"),
     }, undefined, undefined, { cwd: root });
 
@@ -354,7 +353,6 @@ describe("apply_patch tool", () => {
     ];
 
     const result = await registry.getTool("apply_patch").execute("bounded-diff", {
-      workdir: root,
       patchText: patch("*** Add File: large-add.txt", ...added),
     }, undefined, undefined, { cwd: root });
 
@@ -375,7 +373,6 @@ describe("apply_patch tool", () => {
     registerApplyPatchTool(registry.pi as any);
 
     const result = await registry.getTool("apply_patch").execute("eol-diff", {
-      workdir: root,
       patchText: patch(
         "*** Update File: cr.txt",
         "@@",
@@ -399,11 +396,12 @@ describe("apply_patch tool", () => {
     expect(await readFile(join(root, "mixed.txt"), "utf8")).toBe("a\r\nB\nc\rd");
   });
 
-  it("syncs committed Add/Update files and closes committed Delete files in LSP", async () => {
-    // Intent: Delete must emit didClose instead of attempting to read the now-missing
-    // file, while successful Add and Update retain normal synchronization.
+  it("syncs committed Add/Update/Move targets and closes Delete/Move sources in LSP", async () => {
+    // Intent: Delete and Move sources emit didClose, while successful Add/Update
+    // targets and the Move destination retain normal synchronization.
     const root = await createTempWorkspace();
     await writeFile(join(root, "update.txt"), "old\n", "utf8");
+    await writeFile(join(root, "move.txt"), "move\n", "utf8");
     await writeFile(join(root, "delete.txt"), "gone\n", "utf8");
     const sync = vi.spyOn(lspManager, "syncFileIfOpen").mockResolvedValue(undefined);
     const close = vi.spyOn(lspManager, "closeFileIfOpen").mockResolvedValue(undefined);
@@ -411,7 +409,6 @@ describe("apply_patch tool", () => {
     piBaseExtension(registry.pi as any);
 
     const result = await registry.getTool("apply_patch").execute("lsp", {
-      workdir: root,
       patchText: patch(
         "*** Add File: add.txt",
         "+created",
@@ -419,6 +416,8 @@ describe("apply_patch tool", () => {
         "@@",
         "-old",
         "+new",
+        "*** Update File: move.txt",
+        "*** Move to: moved.txt",
         "*** Delete File: delete.txt",
       ),
     }, undefined, undefined, { cwd: root });
@@ -427,8 +426,44 @@ describe("apply_patch tool", () => {
     expect(sync.mock.calls.map(([path]) => path)).toEqual([
       join(root, "add.txt"),
       join(root, "update.txt"),
+      join(root, "moved.txt"),
     ]);
-    expect(close.mock.calls.map(([path]) => path)).toEqual([join(root, "delete.txt")]);
+    expect(close.mock.calls.map(([path]) => path)).toEqual([
+      join(root, "move.txt"),
+      join(root, "delete.txt"),
+    ]);
+  });
+
+  it("closes both Move paths in LSP when commit state is unknown", async () => {
+    // Intent: destination write can succeed before source removal fails; both
+    // open documents must be discarded and exposed in failure metadata.
+    const root = await createTempWorkspace();
+    const source = join(root, "source.txt");
+    const destination = join(root, "destination.txt");
+    await writeFile(source, "source\n", "utf8");
+    const sync = vi.spyOn(lspManager, "syncFileIfOpen").mockResolvedValue(undefined);
+    const close = vi.spyOn(lspManager, "closeFileIfOpen").mockResolvedValue(undefined);
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const signal = {
+      get aborted() { return existsSync(destination); },
+    } as AbortSignal;
+
+    const result = await registry.getTool("apply_patch").execute("move-failure", {
+      patchText: patch("*** Update File: source.txt", "*** Move to: destination.txt"),
+    }, signal, undefined, { cwd: root });
+
+    expect(result.isError).toBe(true);
+    expect(result.details).toMatchObject({
+      partial: false,
+      failedPath: "source.txt",
+      failedAbsolutePath: source,
+      failedMoveTo: "destination.txt",
+      failedAbsoluteMoveToPath: destination,
+      failedPathState: "unknown",
+    });
+    expect(sync).not.toHaveBeenCalled();
+    expect(close.mock.calls.map(([path]) => path)).toEqual([source, destination]);
   });
 
   it("reports a first-file commit race without claiming partial application", async () => {
@@ -448,7 +483,6 @@ describe("apply_patch tool", () => {
     const registry = createToolRegistry();
     registerApplyPatchTool(registry.pi as any);
     const pending = registry.getTool("apply_patch").execute("first-race", {
-      workdir: root,
       patchText: patch("*** Add File: first.txt", "+first"),
     }, undefined, undefined, { cwd: root });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -486,7 +520,6 @@ describe("apply_patch tool", () => {
     piBaseExtension(registry.pi as any);
 
     const pending = registry.getTool("apply_patch").execute("partial-lsp", {
-      workdir: root,
       patchText: patch("*** Delete File: deleted.txt", "*** Add File: second.txt", "+second"),
     }, undefined, undefined, { cwd: root });
     await waitFor(async () => !(await exists(deleted)));
@@ -507,7 +540,6 @@ describe("apply_patch tool", () => {
     const tool = registry.getTool("apply_patch");
 
     const preflight = await tool.execute("preflight", {
-      workdir: root,
       patchText: patch("*** Add File: untouched.txt", "+created", "*** Delete File: missing.txt"),
     }, undefined, undefined, { cwd: root });
     expect(preflight.isError).toBe(true);
@@ -527,7 +559,6 @@ describe("apply_patch tool", () => {
     await startedPromise;
 
     const pending = tool.execute("partial", {
-      workdir: root,
       patchText: patch("*** Add File: first.txt", "+first", "*** Add File: second.txt", "+second"),
     }, undefined, undefined, { cwd: root });
     await waitFor(() => exists(join(root, "first.txt")));

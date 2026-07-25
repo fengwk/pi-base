@@ -10,6 +10,7 @@ import {
   parseSessionEntries,
   SessionManager,
   type AgentSession,
+  type CreateAgentSessionOptions,
   type SessionEntry,
   type SessionHeader,
   type AgentSessionEvent,
@@ -888,12 +889,15 @@ export function createRealSubagentFactory(options: RealSubagentFactoryOptions = 
     runtime: ResolvedAgentRuntime,
     prepareSession: () => void,
   ): Promise<SubagentSession> => {
+    // pi 0.82+ createAgentSession takes modelRuntime (not modelRegistry). ModelRegistry
+    // wraps a private runtime; reuse it when present so subagents share parent auth.
+    const parentModelRuntime = (ctx.modelRegistry as unknown as { runtime?: CreateAgentSessionOptions["modelRuntime"] } | undefined)?.runtime;
     const { session, extensionsResult } = await createAgentSession({
       cwd: ctx.cwd,
       sessionManager: sm,
       model: runtime.model,
       thinkingLevel: runtime.thinkingLevel,
-      modelRegistry: ctx.modelRegistry,
+      ...(parentModelRuntime ? { modelRuntime: parentModelRuntime } : {}),
     });
     const liveView = createLiveViewSource(session, ctx.cwd);
     let disposed = false;

@@ -90,6 +90,9 @@ export function registerBashRendererTool(
         const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const builtIn = getBuiltIn(cwd);
         const timeoutSeconds = parsePositiveNumber(params.timeout_seconds, "timeout_seconds", BASH_DEFAULT_TIMEOUT_SECONDS);
+        // pi 0.82+ injects PI_* session env from ctx.sessionManager; unit/partial
+        // contexts without a session must omit ctx so spawn does not throw.
+        const bashCtx = ctx?.sessionManager ? ctx : undefined;
         return await builtIn.tool.execute(
           toolCallId,
           {
@@ -98,7 +101,7 @@ export function registerBashRendererTool(
           },
           signal,
           onUpdate,
-          ctx,
+          bashCtx,
         );
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
