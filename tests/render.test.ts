@@ -142,7 +142,7 @@ describe("render helpers", () => {
     expect(resolveToolPatternValue(config, "web_search")).toBe(1);
     expect(resolveToolPatternValue(config, "web_lookup")).toBe(2);
     expect(resolveToolPatternValue(config, "image_search")).toBe(3);
-    expect(resolveToolPatternValue(config, "lsp_diagnostics")).toBe(4);
+    expect(resolveToolPatternValue(config, "lsp_goto_definition")).toBe(4);
     expect(resolveToolPatternValue(config, "unknown_tool")).toBe(5);
   });
 
@@ -152,7 +152,7 @@ describe("render helpers", () => {
     expect(resolveCollapsedResultLines("write", undefined, undefined)).toBe(10);
     expect(resolveCollapsedResultLines("bash", undefined, undefined)).toBe(20);
     expect(resolveCollapsedResultLines("find", undefined, undefined)).toBe(20);
-    expect(resolveCollapsedResultLines("lsp_diagnostics", undefined, undefined)).toBe(20);
+    expect(resolveCollapsedResultLines("lsp_goto_definition", undefined, undefined)).toBe(20);
   });
 
   it("collapses streaming call text to a rolling window while args are still streaming", () => {

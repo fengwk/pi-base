@@ -4,7 +4,7 @@ import { DEFAULT_MAX_BYTES, formatSize, type BashToolOptions } from "@earendil-w
 import { Text } from "@earendil-works/pi-tui";
 import { resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning, withLeadingResultNewline } from "./render.js";
 import { describeToolWorkdirForDisplay, resolveToCwd } from "./path-utils.js";
-import { loadToolPromptSnippet } from "./tool-prompt.js";
+import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
 export type BashExecutionTool = { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 export type BashRenderDefinition = { renderResult?: (result: any, options: any, theme: any, context: any) => any };
@@ -174,17 +174,17 @@ function describeShell(): string {
   return describeShellFor({ platform: process.platform, shellPath: process.env.SHELL });
 }
 
+// loadToolDescription wraps each key as ${key}, so these must be bare names.
+function bashPromptReplacements(): Record<string, string> {
+  return { os: detectOsLabel(), shell: describeShell(), osNote: describeOsNote() };
+}
+
 export function loadBashDescription(): string {
-  const template = readFileSync(new URL("../prompts/bash.md", import.meta.url), "utf8");
-  return template
-    .replaceAll("${os}", detectOsLabel())
-    .replaceAll("${shell}", describeShell())
-    .replaceAll("${osNote}", describeOsNote())
-    .trim();
+  return loadToolDescription("bash", bashPromptReplacements());
 }
 
 export function loadBashPromptSnippet(): string {
-  return loadToolPromptSnippet("bash", { "${os}": detectOsLabel(), "${shell}": describeShell(), "${osNote}": describeOsNote() });
+  return loadToolPromptSnippet("bash", bashPromptReplacements());
 }
 
 export function buildHostShellOptionsFor(options: { platform: RuntimePlatform; shellPath: string | undefined }): BashToolOptions | undefined {

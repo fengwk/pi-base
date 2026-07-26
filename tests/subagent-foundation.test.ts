@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEPTH_ENTRY, ROOT_DEPTH, ROOT_SESSION_ENTRY, depthEntryData, isRootSession, readDepth, readRootSessionId, rootSessionEntryData } from "../src/subagent/depth.js";
+import { DEPTH_ENTRY, ROOT_DEPTH, ROOT_SESSION_ENTRY, isRootSession, readDepth, readRootSessionId, rootSessionEntryData } from "../src/subagent/depth.js";
 import { SubagentRegistry, type SubagentNode } from "../src/subagent/registry.js";
 import {
   askSubagentPermissionHost,
@@ -29,8 +29,8 @@ describe("subagent depth", () => {
   it("reads the latest depth entry and treats deeper sessions as non-root", () => {
     // Intent: the most recent depth entry wins (mirrors agent-state's last-entry semantics).
     const ctx = ctxWithEntries([
-      { type: "custom", customType: DEPTH_ENTRY, data: depthEntryData(2) },
-      { type: "custom", customType: DEPTH_ENTRY, data: depthEntryData(3) },
+      { type: "custom", customType: DEPTH_ENTRY, data: { depth: 2 } },
+      { type: "custom", customType: DEPTH_ENTRY, data: { depth: 3 } },
     ]);
     expect(readDepth(ctx as never)).toBe(3);
     expect(isRootSession(ctx as never)).toBe(false);

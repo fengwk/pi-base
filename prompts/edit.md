@@ -7,7 +7,7 @@ Usage:
 - If `read` reports `ends_with_newline: yes`, remember that the file ends with a newline, even though `read` does not add an extra numbered blank line to represent it.
 - Prefer `edit` for existing text files. Use `write` for new files or intentional whole-file replacement.
 - The edit fails if `old_string` is not found in the file with an error "Could not find old_string".
-- The edit fails if `old_string` is found multiple times in the file with an error "Found multiple exact matches". Either provide a larger string with more surrounding context to make the match unique or use `replace_all` to change every instance of `old_string`.
+- The edit fails if `old_string` is found more than once, reporting the match count as "Found N exact matches". Either provide a larger string with more surrounding context to make the match unique or use `replace_all` to change every instance of `old_string`.
 - Use `replace_all` for file-wide exact renames or repeated replacements when every occurrence should change.
 
 Parameters:

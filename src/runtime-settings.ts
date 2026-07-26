@@ -30,7 +30,3 @@ export function toggleRuntimeYolo(cwd: string): boolean {
   loaded.settings.yolo = enabled;
   return enabled;
 }
-
-export function isRuntimeYoloEnabled(cwd: string): boolean {
-  return loadRuntimePiBaseSettings(cwd).settings.yolo === true;
-}

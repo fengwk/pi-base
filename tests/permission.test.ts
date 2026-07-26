@@ -272,6 +272,36 @@ describe("permission guard", () => {
     expect(prompts[0]).toBe("Permission request: write notes.txt in repo");
   });
 
+  it("evaluates path rules against the session cwd when workdir is malformed", async () => {
+    // Intent: argument validation belongs to the tool. The permission guard must still produce a
+    // decision for a malformed workdir so the model sees the tool's own validation error rather
+    // than an exception escaping the tool_call hook.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, { permission: { write: { "blocked.ts": "deny" } } });
+
+    const registry = createToolRegistry({ hasUI: true });
+    registry.setUI({ select: async () => "Yes" });
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const decision = await registry.emit(
+      "tool_call",
+      { type: "tool_call", toolName: "write", toolCallId: "1", input: { path: "blocked.ts", workdir: "   ", content: "x" } },
+      { cwd: root },
+    );
+    expect(decision?.block).toBe(true);
+
+    const result = await registry.getTool("write").execute(
+      "2",
+      { path: "allowed.ts", workdir: "   ", content: "x" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("workdir must be a non-empty string when provided.");
+  });
+
   it("toggles yolo mode via /yolo and bypasses permission checks", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, { permission: { write: "ask" }, contextCompression: { anchorHygiene: true } });

@@ -2,7 +2,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  isRuntimeYoloEnabled,
   loadRuntimePiBaseSettings,
   reloadRuntimePiBaseSettings,
   toggleRuntimeYolo,
@@ -39,14 +38,13 @@ describe("runtime settings", () => {
       const root = await createTempWorkspace();
       await writeProjectSettings(root, { yolo: false });
 
-      expect(isRuntimeYoloEnabled(root)).toBe(false);
+      expect(loadRuntimePiBaseSettings(root).settings.yolo).toBe(false);
       expect(toggleRuntimeYolo(root)).toBe(true);
-      expect(isRuntimeYoloEnabled(root)).toBe(true);
       expect(loadRuntimePiBaseSettings(root).settings.yolo).toBe(true);
 
       reloadRuntimePiBaseSettings(root);
 
-      expect(isRuntimeYoloEnabled(root)).toBe(false);
+      expect(loadRuntimePiBaseSettings(root).settings.yolo).toBe(false);
     });
   });
 
@@ -64,8 +62,8 @@ describe("runtime settings", () => {
 
       reloadRuntimePiBaseSettings();
 
-      expect(isRuntimeYoloEnabled(first)).toBe(false);
-      expect(isRuntimeYoloEnabled(second)).toBe(false);
+      expect(loadRuntimePiBaseSettings(first).settings.yolo).toBe(false);
+      expect(loadRuntimePiBaseSettings(second).settings.yolo).toBe(false);
     });
   });
 });

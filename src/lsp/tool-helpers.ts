@@ -45,17 +45,6 @@ export function extractJdtUri(target: string): string | null {
   return idx === -1 ? null : target.slice(idx);
 }
 
-export function formatDiagnostics(items: any[]): string {
-  if (items.length === 0) return "No diagnostics found";
-  return items
-    .map((item) => {
-      const severityName = (item.severity != null) ? ([, "error", "warning", "information", "hint"][item.severity] ?? `severity ${item.severity}`) : "info";
-      const source = item.source ? ` [${item.source}${item.code ? ` ${item.code}` : ""}]` : "";
-      return `${(item.range?.start?.line ?? 0) + 1}:${(item.range?.start?.character ?? 0)} ${severityName}${source} ${item.message}`;
-    })
-    .join("\n");
-}
-
 export function formatLocations(result: any): string {
   const list = Array.isArray(result) ? result : result ? [result] : [];
   if (list.length === 0) return "No results found";
@@ -123,11 +112,6 @@ function formatWorkdirSuffix(args: any, theme: any, cwd?: string): string {
   return usedDefault ? "" : `${styleOutput(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
 }
 
-export function formatLspDiagnosticsCall(args: any, theme: any, cwd?: string): string {
-  const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
-  return `${styleToolTitle(theme, "lsp_diagnostics")} ${styleAccent(theme, path)}${formatWorkdirSuffix(args, theme, cwd)}${styleOutput(theme, formatOptionalArgs([["severity", args?.severity]]))}`;
-}
-
 export function formatLspGotoDefinitionCall(args: any, theme: any, cwd?: string): string {
   const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
   const suffix = formatOptionalArgs([["line", args?.line], ["character", args?.character ?? 0]]);
@@ -171,41 +155,6 @@ export function renderLspResult(toolName: string, result: any, renderOptions: an
 export function renderLspCall(text: string, theme: any, context: CallRenderContextLike | undefined) {
   return renderStreamingCallText(text, theme, context);
 }
-export async function executeLspDiagnostics(params: any, signal: AbortSignal | undefined, ctx: any, resolverFactory: LspResolverFactory | undefined, manager: { getClient: typeof import("./client.js").lspManager.getClient }): Promise<any> {
-  let serverId = "unknown";
-  try {
-    throwIfAborted(signal);
-    const cwd = getToolCwd(params, ctx);
-    const filePath = resolveFromCwd(params.path, cwd);
-    const resolver = getResolverForPath(params.path, cwd, resolverFactory);
-    const client = await withAbort(manager.getClient(filePath, resolver), signal);
-    serverId = client.serverId();
-    let items = await client.diagnostics(filePath, signal);
-    if (params.severity && params.severity !== "all") {
-      items = items.filter((item: any) => ([, "error", "warning", "information", "hint"][item.severity] ?? "") === params.severity);
-    }
-    return { content: [{ type: "text" as const, text: formatDiagnostics(items) }] };
-  } catch (error) {
-    const e = error as Error & { code?: number };
-    if (e.code == null && e.message === "Internal error") {
-      const displayPath = resolveFromCwd(String(params.path), getToolCwd(params, ctx));
-      return {
-        content: [{
-          type: "text" as const,
-          text: `Error: LSP server '${serverId}' returned "Internal error" for ${displayPath}. ` +
-                `This often means the server has not finished opening the file or processing the ` +
-                `workspace yet (common on the first call or after opening a large project). Retry ` +
-                `in a few seconds. If the error persists, inspect the server logs or increase the ` +
-                `configured request timeout for this server in ~/.pi/agent/pi-base.json if it is ` +
-                `legitimately slow.`,
-        }],
-        isError: true,
-      };
-    }
-    return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
-  }
-}
-
 export async function executeLspGotoDefinition(params: any, signal: AbortSignal | undefined, ctx: any, resolverFactory: LspResolverFactory | undefined, manager: { getClient: typeof import("./client.js").lspManager.getClient }): Promise<any> {
   try {
     throwIfAborted(signal);

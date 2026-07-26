@@ -6,7 +6,6 @@ import {
   DEFAULT_MAX_CONCURRENCY,
   DEFAULT_MAX_DEPTH,
   DEFAULT_MAX_TURNS,
-  loadSubagentConfig,
   resolveSubagentConfig,
 } from "../src/subagent/config.js";
 import { createTempWorkspace } from "./helpers.js";
@@ -40,7 +39,7 @@ describe("subagent config", () => {
     // Intent: operator-provided limits must win over defaults.
     const root = await createTempWorkspace();
     await writeProjectConfig(root, { subagent: { maxDepth: 4, maxConcurrency: 3, maxTotalConcurrency: 12, idleTimeoutMs: 45000, maxTurns: 6 } });
-    expect(loadSubagentConfig(root)).toEqual({ maxDepth: 4, maxConcurrency: 3, maxTotalConcurrency: 12, idleTimeoutMs: 45000, maxTurns: 6 });
+    expect(resolveSubagentConfig(loadPiBaseSettings(root))).toEqual({ maxDepth: 4, maxConcurrency: 3, maxTotalConcurrency: 12, idleTimeoutMs: 45000, maxTurns: 6 });
   });
 
   it("fills only the missing field with its default", async () => {
@@ -52,7 +51,7 @@ describe("subagent config", () => {
     try {
       await writeFile(isolatedGlobal, JSON.stringify({}), "utf8");
       process.env.PI_BASE_GLOBAL_SETTINGS_PATH = isolatedGlobal;
-      expect(loadSubagentConfig(root)).toEqual({ maxDepth: 5, maxConcurrency: DEFAULT_MAX_CONCURRENCY, maxTurns: DEFAULT_MAX_TURNS });
+      expect(resolveSubagentConfig(loadPiBaseSettings(root))).toEqual({ maxDepth: 5, maxConcurrency: DEFAULT_MAX_CONCURRENCY, maxTurns: DEFAULT_MAX_TURNS });
     } finally {
       if (original === undefined) delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
       else process.env.PI_BASE_GLOBAL_SETTINGS_PATH = original;
@@ -67,7 +66,7 @@ describe("subagent config", () => {
     try {
       await writeFile(isolatedGlobal, JSON.stringify({}), "utf8");
       process.env.PI_BASE_GLOBAL_SETTINGS_PATH = isolatedGlobal;
-      expect(loadSubagentConfig(root)).toEqual({ maxDepth: DEFAULT_MAX_DEPTH, maxConcurrency: DEFAULT_MAX_CONCURRENCY, maxTurns: DEFAULT_MAX_TURNS });
+      expect(resolveSubagentConfig(loadPiBaseSettings(root))).toEqual({ maxDepth: DEFAULT_MAX_DEPTH, maxConcurrency: DEFAULT_MAX_CONCURRENCY, maxTurns: DEFAULT_MAX_TURNS });
     } finally {
       if (original === undefined) delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
       else process.env.PI_BASE_GLOBAL_SETTINGS_PATH = original;

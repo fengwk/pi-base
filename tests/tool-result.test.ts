@@ -32,7 +32,7 @@ describe("inferToolResultIsError", () => {
     expect(inferToolResultIsError("edit", textResult("No changes were made"))).toBe(true);
     expect(inferToolResultIsError("edit", textResult("Applied 1 edit"))).toBe(false);
     expect(inferToolResultIsError("grep", textResult("Error: bad pattern"))).toBe(true);
-    expect(inferToolResultIsError("lsp_diagnostics", textResult("Error: no server"))).toBe(true);
+    expect(inferToolResultIsError("lsp_goto_definition", textResult("Error: no server"))).toBe(true);
     expect(inferToolResultIsError("write", textResult("Wrote 3 lines"))).toBe(false);
     expect(inferToolResultIsError("unknown-tool", textResult("Error: anything"))).toBe(false);
   });

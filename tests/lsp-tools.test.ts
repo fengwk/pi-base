@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { registerLspTools } from "../src/lsp/tools.js";
-import { executeLspDiagnostics, formatDiagnostics, withAbort } from "../src/lsp/tool-helpers.js";
+import { withAbort } from "../src/lsp/tool-helpers.js";
 import { lspManager } from "../src/lsp/client.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 
@@ -11,7 +11,7 @@ import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } 
  * Tests that need to opt out of a capability pass `unsupported: [...]`.
  */
 function mockLspClient(overrides: Record<string, unknown> = {}, unsupported: string[] = []): any {
-  const supported = new Set(["textDocument/publishDiagnostics", "textDocument/definition", "workspace/symbol", "java/classFileContents"]);
+  const supported = new Set(["textDocument/definition", "workspace/symbol", "java/classFileContents"]);
   for (const m of unsupported) supported.delete(m);
   return {
     supportsMethod: (method: string) => supported.has(method),
@@ -21,189 +21,6 @@ function mockLspClient(overrides: Record<string, unknown> = {}, unsupported: str
 }
 
 describe("lsp tools", () => {
-  /* Temporarily disabled with the lsp_diagnostics tool registration.
-  it("filters diagnostics by severity", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const original = lspManager.getClient.bind(lspManager);
-    lspManager.getClient = async () => mockLspClient({
-      diagnostics: async () => [
-        { severity: 1, message: "type error", range: { start: { line: 1, character: 0 } } },
-        { severity: 2, message: "warning", range: { start: { line: 2, character: 1 } } },
-      ],
-    });
-    try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts", severity: "error" }, undefined, undefined, { cwd: process.cwd() });
-      const text = getText(result);
-      expect(text).toContain("type error");
-      expect(text).not.toContain("warning");
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-
-  it("returns no diagnostics when the list is empty", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const original = lspManager.getClient.bind(lspManager);
-    lspManager.getClient = async () => mockLspClient({ diagnostics: async () => [] });
-    try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
-      expect(getText(result)).toBe("No diagnostics found");
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-  it("handles a non-aborted diagnostics signal", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const original = lspManager.getClient.bind(lspManager);
-    const controller = new AbortController();
-    lspManager.getClient = async () => mockLspClient({ diagnostics: async () => [] });
-    try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
-      expect(getText(result)).toBe("No diagnostics found");
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-
-  it("surfaces diagnostics timeouts instead of returning an empty success result", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const original = lspManager.getClient.bind(lspManager);
-    lspManager.getClient = async () => mockLspClient({ diagnostics: async () => { throw new Error("LSP diagnostics timeout after 60000ms"); } });
-    try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
-      expect(result.isError).toBe(true);
-      expect(getText(result)).toContain("LSP diagnostics timeout");
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-
-  it("returns a generic actionable hint for transient Internal error diagnostics failures", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const original = lspManager.getClient.bind(lspManager);
-    lspManager.getClient = async () => mockLspClient({
-      serverId: () => "mock-lsp",
-      diagnostics: async () => {
-        throw new Error("Internal error");
-      },
-    });
-    try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
-      expect(result.isError).toBe(true);
-      const text = getText(result);
-      expect(text).toContain("LSP server 'mock-lsp' returned \"Internal error\"");
-      expect(text).toContain("configured request timeout");
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-
-  it("surfaces diagnostics client errors", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const original = lspManager.getClient.bind(lspManager);
-    lspManager.getClient = async () => {
-      throw new Error("no server");
-    };
-    try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, undefined, undefined, { cwd: process.cwd() });
-      expect(result.isError).toBe(true);
-      expect(getText(result)).toContain("no server");
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-
-  it("surfaces the concise no-server-configured message without extra configuration guidance", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const original = lspManager.getClient.bind(lspManager);
-    lspManager.getClient = async () => {
-      throw new Error("No LSP server configured for /tmp/demo/README.md.");
-    };
-    try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "/tmp/demo/README.md", severity: "error" }, undefined, undefined, { cwd: process.cwd() });
-      expect(result.isError).toBe(true);
-      const text = getText(result);
-      expect(text).toContain("No LSP server configured for /tmp/demo/README.md.");
-      expect(text).not.toContain("Configure it under lsp.servers");
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-
-  it("aborts pending diagnostics client acquisition", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const original = lspManager.getClient.bind(lspManager);
-    const controller = new AbortController();
-    lspManager.getClient = () => new Promise(() => undefined) as any;
-    try {
-      const pending = registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
-      controller.abort();
-      const result = await pending;
-      expect(result.isError).toBe(true);
-      expect(getText(result)).toContain("Operation aborted");
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-  */
-
-  it("does not register the temporarily disabled diagnostics tool", () => {
-    // Intent: keep the temporary removal explicit so accidental re-registration is caught.
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    expect(() => registry.getTool("lsp_diagnostics")).toThrow("Tool not registered: lsp_diagnostics");
-  });
-
-  it("keeps the disabled diagnostics executor independently testable", async () => {
-    // Intent: temporary registration removal must not let the retained implementation silently rot.
-    const manager = {
-      getClient: async () => mockLspClient({
-        diagnostics: async () => [
-          { severity: 1, source: "ts", code: 100, message: "type error", range: { start: { line: 1, character: 2 } } },
-          { severity: 2, message: "warning", range: { start: { line: 2, character: 0 } } },
-        ],
-      }),
-    };
-    const result = await executeLspDiagnostics(
-      { path: "src/example.ts", severity: "error" },
-      undefined,
-      { cwd: process.cwd() },
-      () => ({}) as never,
-      manager as never,
-    );
-
-    expect(getText(result)).toBe("2:2 error [ts 100] type error");
-    expect(formatDiagnostics([])).toBe("No diagnostics found");
-  });
-
-  it("returns the diagnostics-specific hint for transient internal errors", async () => {
-    // Intent: the dormant diagnostics path still provides its actionable first-call guidance.
-    const result = await executeLspDiagnostics(
-      { path: "src/example.ts" },
-      undefined,
-      { cwd: process.cwd() },
-      () => ({}) as never,
-      {
-        getClient: async () => mockLspClient({
-          serverId: () => "mock-lsp",
-          diagnostics: async () => { throw new Error("Internal error"); },
-        }),
-      } as never,
-    );
-
-    expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("LSP server 'mock-lsp' returned \"Internal error\"");
-    expect(getText(result)).toContain("configured request timeout");
-  });
-
   it("handles resolved, rejected, and pre-aborted LSP work", async () => {
     // Intent: withAbort must preserve the original outcome while giving cancellation priority.
     const controller = new AbortController();

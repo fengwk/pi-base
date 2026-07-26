@@ -118,7 +118,14 @@ function buildGenericTargetDescriptor(_toolName: string): TargetDescriptor {
 
 function describeTarget(toolName: string, input: Record<string, unknown>, cwd: string, loaded: LoadedPiBaseSettings): TargetDescriptor {
   if (typeof input.path === "string" && input.path.trim().length > 0) {
-    const { cwd: targetCwd } = resolveToolWorkdir(input.workdir, cwd);
+    // Argument validation belongs to the tool. Permission falls back to the session cwd when
+    // workdir is malformed instead of throwing, matching evaluateApplyPatchPermission.
+    let targetCwd: string;
+    try {
+      targetCwd = resolveToolWorkdir(input.workdir, cwd).cwd;
+    } catch {
+      targetCwd = cwd;
+    }
     return buildPathTargetDescriptor(input.path, targetCwd, loaded);
   }
   if (typeof input.command === "string") {

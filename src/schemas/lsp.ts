@@ -1,11 +1,5 @@
 import { Type } from "@sinclair/typebox";
 
-export const lspDiagnosticsSchema = Type.Object({
-  path: Type.String({ description: "Existing source file path supported by an LSP server. This path is also used to infer the workspace root." }),
-  workdir: Type.Optional(Type.String({ description: "Working directory for resolving relative paths. Defaults to the agent's current working directory. If provided, relative paths resolve from that directory." })),
-  severity: Type.Optional(Type.Union([Type.Literal("error"), Type.Literal("warning"), Type.Literal("information"), Type.Literal("hint"), Type.Literal("all")], { description: "Optional severity filter. Default: `all`." })),
-});
-
 export const lspGotoDefinitionSchema = Type.Object({
   path: Type.String({ description: "Existing source file path supported by an LSP server. This path is also used to infer the workspace root." }),
   workdir: Type.Optional(Type.String({ description: "Working directory for resolving relative paths. Defaults to the agent's current working directory. If provided, relative paths resolve from that directory." })),

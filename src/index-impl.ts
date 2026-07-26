@@ -63,7 +63,6 @@ const BASE_TOOL_NAMES = [
   "edit",
   "write",
   "apply_patch",
-  // "lsp_diagnostics", // Disabled for 0.1.x evaluation; restore or remove before the next minor release.
   "lsp_goto_definition",
   "lsp_workspace_symbols",
   "lsp_java_decompile",

@@ -13,11 +13,6 @@ describe("lsp tool render behavior", () => {
     const registry = createToolRegistry();
     registerLspTools(registry.pi as any);
 
-    // Temporarily disabled with the lsp_diagnostics tool registration.
-    // const diagnostics = render(registry.getTool("lsp_diagnostics").renderCall({ path: "src/example.ts", severity: "warning" }, {} as any, { lastComponent: undefined }));
-    // expect(diagnostics).toContain("lsp_diagnostics src/example.ts [severity=warning]");
-    // expect(diagnostics).not.toContain("(default)");
-
     const gotoDefinition = render(registry.getTool("lsp_goto_definition").renderCall({ path: "src/example.ts", line: 3 }, {} as any, { lastComponent: undefined }));
     expect(gotoDefinition).toContain("[line=3, character=0]");
     expect(gotoDefinition).not.toContain("(default)");
@@ -41,7 +36,6 @@ describe("lsp tool render behavior", () => {
       workspaceSymbols: async () => [],
       classFileContents: async () => "",
       decompileClass: async () => "",
-      diagnostics: async () => [],
       definition: async () => [],
     } as any);
 
@@ -85,7 +79,6 @@ describe("lsp tool render behavior", () => {
         seenTarget = targetUri;
         return "decompiled";
       },
-      diagnostics: async () => [],
       definition: async () => [],
       workspaceSymbols: async () => [],
     } as any);

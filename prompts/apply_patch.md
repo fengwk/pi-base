@@ -31,8 +31,7 @@ An in-place Update requires one or more hunks. A Move may omit hunks for a pure 
 
 - Text after @@ is a search anchor. Matching for that hunk starts after the anchor line; do not repeat the anchor as the first context line.
 - Context lines start with a space. Removed lines start with -. Added lines start with +.
-- Show 3 lines of context above and below each change, copied verbatim from the file.
-- Each search anchor and each context/removed sequence must identify exactly one location. Add more context or a more specific anchor when a match is ambiguous.
+- Each search anchor and each context/removed sequence must identify exactly one location. Include enough surrounding context lines, copied verbatim from the file, to make the match unique; add more context or use a more specific anchor whenever the match would otherwise be ambiguous.
 - Every @@ hunk must contain at least one context, removed, or added line.
 - A hunk containing only added lines appends them at the end of the file. Include context or removed lines to edit a specific location.
 - Put `*** End of File` after the final hunk when its match must end at the file tail; this also ends the Update body.

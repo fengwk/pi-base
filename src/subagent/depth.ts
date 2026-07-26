@@ -66,11 +66,6 @@ export function isRootSession(ctx: DepthContext): boolean {
   return readDepth(ctx) === ROOT_DEPTH;
 }
 
-/** Build the depth entry payload for a child session created at `childDepth`. */
-export function depthEntryData(childDepth: number): { depth: number } {
-  return { depth: childDepth };
-}
-
 /** Build the root-session entry payload for a child session created under `rootSessionId`. */
 export function rootSessionEntryData(rootSessionId: string): { rootSessionId: string } {
   return { rootSessionId };

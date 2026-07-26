@@ -4,13 +4,13 @@
 
 ## 目录
 
-- [快速开始](#快速开始)
-- [工具](#工具)
-- [Agent](#agent)
-- [配置](#配置)
+- [快速开始](#快速开始) — [配置文件](#配置文件) · [安装](#安装) · [启动 Agent 选择](#启动-agent-选择)
+- [工具](#工具) — [速查表](#工具速查) · [模型路由](#文件修改工具的模型路由) · [apply_patch](#apply_patch-协议与提交语义) · [task](#task子-agent-委派) · [MCP](#mcp-工具) · [LSP](#lsp-工具)
+- [Agent](#agent) — [Frontmatter](#frontmatter-字段) · [行为规则](#行为规则速查) · [切换](#切换)
+- [配置](#配置) — [合并规则](#全局项目配置合并规则) · [`lsp`](#lsp) · [`permission`](#permission) · [`yolo`](#yolo) · [`render`](#render) · [`notify`](#notify) · [`contextCompression`](#contextcompression) · [`compactionModel`](#compactionmodel) · [`subagent`](#subagent) · [`mcp`](#mcp)
 - [命令](#命令)
 - [目标模式](#目标模式)
-- [运行时行为](#运行时行为)
+- [运行时行为](#运行时行为) — [输出截断](#输出截断) · [错误标记](#错误标记修复) · [状态栏](#状态栏ui-session)
 - [开发](#开发)
 
 ## 快速开始
@@ -28,9 +28,25 @@
 
 ### 安装
 
+推荐作为 Pi package 安装，写入 settings 后自动加载，支持 `/reload` 和 `task` 子 agent：
+
 ```bash
-# 作为 Pi package 安装（推荐，支持自动加载、/reload 和 task 子 agent）
-# 或仅从源码入口启动：
+pi install git:github.com/fengwk/pi-base     # 全局安装（~/.pi/settings.json）
+pi install git:github.com/fengwk/pi-base -l  # 仅当前项目（.pi/settings.json）
+pi install ./path/to/pi-base                 # 本地开发目录
+```
+
+常用配套命令：
+
+| 命令 | 说明 |
+|------|------|
+| `pi list` | 列出已安装的 package |
+| `pi update git:github.com/fengwk/pi-base` | 更新到最新版本 |
+| `pi remove git:github.com/fengwk/pi-base` | 卸载 |
+
+也可以只从源码入口临时启动，但有下述限制：
+
+```bash
 pi -e /path/to/pi-base/index.ts
 ```
 
@@ -38,8 +54,16 @@ pi -e /path/to/pi-base/index.ts
 
 ### 启动 Agent 选择
 
+优先级从高到低：
+
 ```
 session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  >  default
+```
+
+`--agent` 是 `pi-base` 注册的启动 flag，仅对新 session 生效；resume 已有 agent 的 session 时会被忽略：
+
+```bash
+pi --agent reviewer
 ```
 
 `default` 复用 `~/.pi/agent/SYSTEM.md` + `settings.json` 的默认 provider/model/thinkingLevel。
@@ -48,7 +72,7 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 
 ## 工具
 
-启动时 `pi-base` 注册以下 10 个基础工具；文件修改能力会按当前模型在 `apply_patch` 与 `edit`/`write` 之间投影。残留的已退役 `task` 自动移除。
+启动时 `pi-base` 注册以下 10 个基础工具定义；其中 `apply_patch` 与 `edit`/`write` 按当前模型互斥投影，因此默认实际暴露 8 或 9 个基础工具。`task` 由 Agent 委派能力另行注入，旧 session 中不应保留的残留 `task` 会自动移除。
 
 ### 工具速查
 
@@ -61,14 +85,9 @@ session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  
 | `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
 | `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
 | `apply_patch` | `patchText` | freeform；可选 `*** Workdir:`，默认 session cwd | 基于 Codex freeform + Lark grammar，并采用更严格的 hunk 唯一匹配；支持 Add/Update/Delete/Move；可选 `*** Workdir:` 指定根目录且不改 session cwd；多文件先整体 preflight、再按顺序提交；参数流式生成和落定后的 Add 内容预览有界，参数完成及权限/执行期间完整展示 patch，逐文件持久化 diff 仍有界且行数统计不截断 |
-<!-- 暂时禁用；恢复注册时一并取消此注释。
-| `lsp_diagnostics` | `path` | severity=all | 需 `lsp.servers` 声明 server；不做能力前置检查 |
--->
 | `lsp_goto_definition` | `path`, `line` | character=0 | 需 server 声明 `textDocument/definition` |
 | `lsp_workspace_symbols` | `path`, `query` | limit=50 | 需 server 声明 `workspace/symbol` |
 | `lsp_java_decompile` | `path`, `target` | — | 需 server 支持 `java/classFileContents`（通常 jdtls） |
-
-`lsp_diagnostics` 在 0.1.x 期间暂时禁用评估；下一个 minor release 前必须明确恢复注册或完整删除其实现。
 
 所有工具的 `path`/`workdir` 都将 `/` 与 `\\` 视为目录分隔符，并在权限匹配、实际执行和 context compression 前解析为同一目标。因此文件工具不用于寻址 POSIX 文件名中的字面反斜杠字符。
 
@@ -302,7 +321,7 @@ Agent 正文（覆盖 system prompt）
 | 路径类匹配 | 同时匹配原始路径、相对 workdir 路径、相对项目根路径、绝对路径 |
 | apply_patch 继承 | 执行前解析全部 target（含 Move 目标）；普通 Update 源路径继承 `edit`，Add/Delete 与 Move 源/目标路径继承 `write`；随后叠加 `permission.apply_patch` 作为覆盖层 |
 | apply_patch 聚合 | 对所有 target 取 `deny > ask > allow`；确认框只显示单行、总长有界的 `A/M/D path` 摘要，具体 patch 内容在工具调用预览中查看；畸形 patch 不执行文件操作，仅退回全局 `*` + `apply_patch` 通用规则 |
-| bash 匹配 | 识别 `&&`/`||`/`|`/`;`/换行 分割的顶层 command 段；不展开变量；动态命令头、命令头/前置重定向、复合/控制流语法、命令替换、可展开 heredoc、process substitution、shell/eval/source 动态执行，以及 command/env/exec/nohup 执行包装器无法保守分析时，显式整条命令 deny 仍 deny，否则退回 ask |
+| bash 匹配 | 识别 `&&`/`||`/`|`/`;`/换行 分割的顶层 command 段；不展开变量；动态命令头、命令头/前置重定向、复合/控制流语法、命令替换、可展开 heredoc、process substitution、shell/eval/source 动态执行，以及 command/env/exec/nohup 执行包装器无法保守分析时，显式整条命令 deny 仍 deny，否则退回 ask。包装器识别是启发式白名单而非穷举：`sudo`、`ssh`、`xargs`、`docker`、`python -c` 等同样能承载任意命令的调用不在其中，规则按其字面命令头匹配 |
 
 `permission` 是用于防误操作的词法规则，不是安全沙箱。它不会执行完整 shell 解析或提供文件系统隔离；文件路径检查也不防御 symlink 穿透或 TOCTOU 竞态。需要强隔离时应在 Pi 之外使用容器、受限账户或其他系统级沙箱。
 
@@ -478,6 +497,8 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
 | `/yolo` | 切换当前进程权限绕过状态，不回写配置 |
 | `/mcp-status` | 输出 MCP server/工具状态树，含冲突和 stale 工具 |
 | `/resume-all` | 跨项目恢复 session，需交互式 UI |
+| `/subagent` | 弹出运行中 subagent session 选择器 |
+| `/subagent <session-id>` | 只读查看该 subagent 的 transcript，支持唯一前缀 |
 | `/goal [--tokens 50k] <objective>` | 创建或替换持久化目标；默认不设 token budget |
 | `/goal status\|edit <objective>\|pause\|resume\|clear` | 查看、编辑、暂停、恢复或清除目标 |
 | `/goal statusbar [on\|off]` | 切换 footer 的 goal 状态项 |

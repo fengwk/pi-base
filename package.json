@@ -11,6 +11,15 @@
     "pi-extension"
   ],
   "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fengwk/pi-base.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fengwk/pi-base/issues"
+  },
+  "homepage": "https://github.com/fengwk/pi-base#readme",
   "pi": {
     "extensions": [
       "./index.ts"

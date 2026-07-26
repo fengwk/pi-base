@@ -8,9 +8,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { buildJdtlsWorkspaceDataDir, LspClient, LspManager, lspManager } from "../src/lsp/client.js";
 import { LspDiscoveryResolver } from "../src/lsp/discovery.js";
-// import { registerLspTools } from "../src/lsp/tools.js"; // Temporarily disabled with lsp_diagnostics tests.
 import { createTempWorkspace, writeWorkspaceFile } from "./helpers.js";
-// import { createToolRegistry, getText } from "./helpers.js"; // Temporarily disabled with lsp_diagnostics tests.
 
 function encodeMessage(payload: unknown): Buffer {
   const body = JSON.stringify(payload);
@@ -42,16 +40,6 @@ async function waitForPidFile(filePath: string, timeoutMs = 2_000): Promise<numb
   }
   throw new Error(`pid file was not written within ${timeoutMs}ms`);
 }
-
-/* Temporarily disabled with the lsp_diagnostics tests.
-function mockToolLspClient(overrides: Record<string, unknown> = {}): any {
-  return {
-    supportsMethod: () => true,
-    serverId: () => "mock-server",
-    ...overrides,
-  };
-}
-*/
 
 describe("LspClient internals", () => {
   describe("jdtls workspace data", () => {
@@ -92,80 +80,18 @@ describe("LspClient internals", () => {
     expect((client as any).toEncodedCharacter("/tmp/demo/a.ts", 0, 2)).toBe(Buffer.byteLength("a😀", "utf8"));
   });
 
-  it("waits for publishDiagnostics instead of returning immediately", async () => {
-    const client = new LspClient("/tmp/demo", { id: "typescript", command: ["tsserver"], extensions: [".ts"] } as any);
-    const promise = (client as any).waitForPublishedDiagnostics("file:///tmp/demo.ts", 1000);
-    setTimeout(() => {
-      (client as any).onData(encodeMessage({
-        jsonrpc: "2.0",
-        method: "textDocument/publishDiagnostics",
-        params: { uri: "file:///tmp/demo.ts", diagnostics: [{ message: "boom" }] },
-      }));
-    }, 10);
-    await expect(promise).resolves.toEqual([{ message: "boom" }]);
-  });
-
   it("recovers from a malformed protocol header before the next valid message", async () => {
     // Intent: an LSP server that accidentally writes one malformed header to stdout must not pin
     // the parser on those bytes and make every later response time out.
-    vi.useFakeTimers();
-    try {
-      const client = new LspClient("/tmp/demo", { id: "typescript", command: ["tsserver"], extensions: [".ts"] } as any);
-      const uri = "file:///tmp/recovered.ts";
-      const promise = (client as any).waitForPublishedDiagnostics(uri, 100);
-      const observed = promise.then(
-        (value: unknown) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+    const client = new LspClient("/tmp/demo", { id: "typescript", command: ["tsserver"], extensions: [".ts"] } as any);
+    (client as any).proc = { exitCode: null, killed: false, stdin: { write: () => true } };
+    const promise = (client as any).send("workspace/symbol", { query: "demo" });
 
-      (client as any).onData(Buffer.from("unexpected server output\r\n\r\n", "utf8"));
-      (client as any).onData(encodeMessage({
-        jsonrpc: "2.0",
-        method: "textDocument/publishDiagnostics",
-        params: { uri, diagnostics: [{ message: "recovered" }] },
-      }));
-      await vi.advanceTimersByTimeAsync(120);
+    (client as any).onData(Buffer.from("unexpected server output\r\n\r\n", "utf8"));
+    (client as any).onData(encodeMessage({ jsonrpc: "2.0", id: 1, result: [{ name: "recovered" }] }));
 
-      expect(await observed).toEqual({ value: [{ message: "recovered" }] });
-      expect((client as any).buffer.length).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("clears the diagnostics timeout once publishDiagnostics arrives", async () => {
-    vi.useFakeTimers();
-    try {
-      const client = new LspClient("/tmp/demo", { id: "typescript", command: ["tsserver"], extensions: [".ts"] } as any);
-      const uri = "file:///tmp/demo.ts";
-      const promise = (client as any).waitForPublishedDiagnostics(uri, 1000);
-      setTimeout(() => {
-        (client as any).onData(encodeMessage({
-          jsonrpc: "2.0",
-          method: "textDocument/publishDiagnostics",
-          params: { uri, diagnostics: [{ message: "boom" }] },
-        }));
-      }, 10);
-      expect(vi.getTimerCount()).toBe(2);
-      await vi.advanceTimersByTimeAsync(10);
-      await expect(promise).resolves.toEqual([{ message: "boom" }]);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("rejects diagnostics waits that never receive any server result", async () => {
-    vi.useFakeTimers();
-    try {
-      const client = new LspClient("/tmp/demo", { id: "typescript", command: ["tsserver"], extensions: [".ts"], requestTimeoutMs: 100 } as any);
-      const promise = (client as any).waitForPublishedDiagnostics("file:///tmp/demo.ts", 100);
-      const assertion = expect(promise).rejects.toThrow(/LSP diagnostics timeout after 100ms/);
-      await vi.advanceTimersByTimeAsync(120);
-      await assertion;
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(promise).resolves.toEqual([{ name: "recovered" }]);
+    expect((client as any).buffer.length).toBe(0);
   });
 
   it.each([
@@ -209,12 +135,6 @@ describe("LspClient internals", () => {
       expect(client("foo", { definitionProvider: {} }).supportsMethod("textDocument/definition")).toBe(true);
       expect(client("foo", { definitionProvider: false }).supportsMethod("textDocument/definition")).toBe(false);
       expect(client("foo", {}).supportsMethod("textDocument/definition")).toBe(false);
-    });
-    it("always reports diagnostics supported (no pre-check; relies on timeout)", () => {
-      // jdtls and others push diagnostics in practice even when the capability
-      // is missing or uses a non-standard field, so we don't pre-check.
-      expect(client("foo", {}).supportsMethod("textDocument/publishDiagnostics")).toBe(true);
-      expect(client("foo", { publishDiagnosticsProvider: null }).supportsMethod("textDocument/publishDiagnostics")).toBe(true);
     });
     it("reports java/classFileContents only for jdtls", () => {
       expect(client("jdtls", {}).supportsMethod("java/classFileContents")).toBe(true);
@@ -343,8 +263,8 @@ describe("LspClient internals", () => {
 
   describe("file synchronization and request helpers", () => {
     it("sends didChange/didSave for changed open files and closes missing files", async () => {
-      // Intent: diagnostics and definition requests depend on the LSP client
-      // keeping the server synchronized with local edits and deleted files.
+      // Intent: definition and symbol requests depend on the LSP client keeping the server
+      // synchronized with local edits and deleted files.
       const root = await createTempWorkspace();
       const filePath = await writeWorkspaceFile(root, "src/example.ts", "first\n");
       const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
@@ -352,7 +272,6 @@ describe("LspClient internals", () => {
       await client.openFile(filePath);
 
       const uri = pathToFileURL(filePath).href;
-      (client as any).diagnosticsStore.set(uri, [{ message: "stale" }]);
       await writeFile(filePath, "second\n");
       client.syncFile(filePath);
 
@@ -361,7 +280,6 @@ describe("LspClient internals", () => {
         contentChanges: [{ text: "second\n" }],
       });
       expect(notifySpy).toHaveBeenCalledWith("textDocument/didSave", { textDocument: { uri } });
-      expect((client as any).diagnosticsStore.has(uri)).toBe(false);
       expect((client as any).fileContents.get(filePath)).toBe("second\n");
 
       const missingPath = join(root, "src", "missing.ts");
@@ -418,7 +336,7 @@ describe("LspClient internals", () => {
 
     it("closes an open file and clears all per-file client state", async () => {
       // Intent: apply_patch Delete cannot call syncFile after unlink; it needs a
-      // direct didClose transition that also removes stale diagnostics and caches.
+      // direct didClose transition that also clears the per-file caches.
       const root = await createTempWorkspace();
       const filePath = await writeWorkspaceFile(root, "src/deleted.ts", "export const value = 1;\n");
       const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
@@ -427,9 +345,6 @@ describe("LspClient internals", () => {
       notifySpy.mockClear();
 
       const uri = pathToFileURL(filePath).href;
-      const rejectWaiter = vi.fn();
-      (client as any).diagnosticsStore.set(uri, [{ message: "stale" }]);
-      (client as any).diagnosticsWaiters.set(uri, [{ resolve: vi.fn(), reject: rejectWaiter }]);
       client.closeFile(filePath);
 
       expect(notifySpy).toHaveBeenCalledOnce();
@@ -438,9 +353,6 @@ describe("LspClient internals", () => {
       expect((client as any).fileVersions.has(filePath)).toBe(false);
       expect((client as any).fileMtimes.has(filePath)).toBe(false);
       expect((client as any).fileContents.has(filePath)).toBe(false);
-      expect((client as any).diagnosticsStore.has(uri)).toBe(false);
-      expect((client as any).diagnosticsWaiters.has(uri)).toBe(false);
-      expect(rejectWaiter).toHaveBeenCalledWith(expect.objectContaining({ message: `LSP file closed: ${filePath}` }));
 
       client.closeFile(filePath);
       expect(notifySpy).toHaveBeenCalledOnce();
@@ -562,268 +474,7 @@ describe("LspClient internals", () => {
     });
   });
 
-  describe("diagnostics fallback", () => {
-    it("returns pull diagnostics items when textDocument/diagnostic succeeds", async () => {
-      const root = await createTempWorkspace();
-      const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");
-      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
-      const items = [{ message: "from pull diagnostics" }];
-      const openSpy = vi.spyOn(client, "openFile").mockResolvedValue(undefined);
-      const sendSpy = vi.spyOn(client as any, "send").mockResolvedValue({ items });
-      const waitSpy = vi.spyOn(client as any, "waitForPublishedDiagnostics");
-
-      const result = await client.diagnostics(filePath);
-
-      expect(openSpy).toHaveBeenCalledWith(filePath);
-      expect(sendSpy).toHaveBeenCalledWith(
-        "textDocument/diagnostic",
-        { textDocument: { uri: pathToFileURL(filePath).href } },
-        undefined,
-      );
-      expect(waitSpy).not.toHaveBeenCalled();
-      expect(result).toBe(items);
-    });
-    it("prefers publishDiagnostics for jdtls instead of pull diagnostics", async () => {
-      const root = await createTempWorkspace();
-      const filePath = await writeWorkspaceFile(root, "src/App.java", "class App {}\n");
-      const client = new LspClient(root, { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 200 } as any);
-      const openSpy = vi.spyOn(client, "openFile").mockResolvedValue(undefined);
-      const sendSpy = vi.spyOn(client as any, "send");
-      const waitSpy = vi.spyOn(client as any, "waitForPublishedDiagnostics").mockResolvedValue([{ message: "from push diagnostics" }]);
-
-      const result = await client.diagnostics(filePath);
-
-      expect(openSpy).toHaveBeenCalledWith(filePath);
-      expect(sendSpy).not.toHaveBeenCalled();
-      expect(waitSpy).toHaveBeenCalledWith(pathToFileURL(filePath).href, 200, undefined);
-      expect(result).toEqual([{ message: "from push diagnostics" }]);
-    });
-    it("serializes concurrent cold-start diagnostics for jdtls until the first publish result arrives", async () => {
-      const root = await createTempWorkspace();
-      const firstPath = await writeWorkspaceFile(root, "src/First.java", "class First {}\n");
-      const secondPath = await writeWorkspaceFile(root, "src/Second.java", "class Second {}\n");
-      const client = new LspClient(root, { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 200 } as any);
-      const sequence: string[] = [];
-      let releaseFirst!: () => void;
-      const firstWait = new Promise<void>((resolve) => { releaseFirst = resolve; });
-      vi.spyOn(client, "openFile").mockImplementation(async (path: string) => {
-        sequence.push(`open:${path}`);
-      });
-      vi.spyOn(client as any, "waitForPublishedDiagnostics")
-        .mockImplementationOnce(async (...args: any[]) => {
-          const uri = args[0] as string;
-          sequence.push(`wait:${uri}`);
-          await firstWait;
-          return [];
-        })
-        .mockImplementationOnce(async (...args: any[]) => {
-          const uri = args[0] as string;
-          sequence.push(`wait:${uri}`);
-          return [];
-        });
-
-      const firstPromise = client.diagnostics(firstPath);
-      const secondPromise = client.diagnostics(secondPath);
-      await vi.waitFor(() => {
-        expect(sequence).toEqual([
-          `open:${firstPath}`,
-          `wait:${pathToFileURL(firstPath).href}`,
-        ]);
-      });
-
-      releaseFirst();
-      await Promise.all([firstPromise, secondPromise]);
-
-      expect(sequence).toEqual([
-        `open:${firstPath}`,
-        `wait:${pathToFileURL(firstPath).href}`,
-        `open:${secondPath}`,
-        `wait:${pathToFileURL(secondPath).href}`,
-      ]);
-    });
-
-    it("does not poison the jdtls cold-start queue when a queued diagnostics call is aborted", async () => {
-      // Intent: aborting while waiting for the previous cold-start diagnostics
-      // must release that queue slot so later diagnostics can still run.
-      const root = await createTempWorkspace();
-      const firstPath = await writeWorkspaceFile(root, "src/First.java", "class First {}\n");
-      const secondPath = await writeWorkspaceFile(root, "src/Second.java", "class Second {}\n");
-      const thirdPath = await writeWorkspaceFile(root, "src/Third.java", "class Third {}\n");
-      const client = new LspClient(root, { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 200 } as any);
-      const sequence: string[] = [];
-      let rejectFirst!: (error: Error) => void;
-      const firstWait = new Promise<never>((_resolve, reject) => { rejectFirst = reject; });
-      vi.spyOn(client, "openFile").mockImplementation(async (path: string) => {
-        sequence.push(`open:${path}`);
-      });
-      vi.spyOn(client as any, "waitForPublishedDiagnostics")
-        .mockImplementationOnce(async (...args: any[]) => {
-          sequence.push(`wait:${args[0] as string}`);
-          return firstWait;
-        })
-        .mockImplementationOnce(async (...args: any[]) => {
-          sequence.push(`wait:${args[0] as string}`);
-          return [];
-        });
-
-      const firstPromise = client.diagnostics(firstPath);
-      await vi.waitFor(() => {
-        expect(sequence).toEqual([
-          `open:${firstPath}`,
-          `wait:${pathToFileURL(firstPath).href}`,
-        ]);
-      });
-
-      const controller = new AbortController();
-      const secondPromise = client.diagnostics(secondPath, controller.signal);
-      controller.abort();
-      await expect(secondPromise).rejects.toThrow(/Operation aborted/);
-
-      rejectFirst(new Error("first failed"));
-      await expect(firstPromise).rejects.toThrow("first failed");
-
-      await expect(client.diagnostics(thirdPath)).resolves.toEqual([]);
-      expect(sequence).toEqual([
-        `open:${firstPath}`,
-        `wait:${pathToFileURL(firstPath).href}`,
-        `open:${thirdPath}`,
-        `wait:${pathToFileURL(thirdPath).href}`,
-      ]);
-    });
-
-    it("allows concurrent jdtls diagnostics after the first publish result warms the workspace", async () => {
-      const root = await createTempWorkspace();
-      const firstPath = await writeWorkspaceFile(root, "src/First.java", "class First {}\n");
-      const secondPath = await writeWorkspaceFile(root, "src/Second.java", "class Second {}\n");
-      const client = new LspClient(root, { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 200 } as any);
-      const sequence: string[] = [];
-      let releaseSecond!: () => void;
-      let releaseThird!: () => void;
-      const secondWait = new Promise<void>((resolve) => { releaseSecond = resolve; });
-      const thirdWait = new Promise<void>((resolve) => { releaseThird = resolve; });
-      vi.spyOn(client, "openFile").mockResolvedValue(undefined);
-      vi.spyOn(client as any, "waitForPublishedDiagnostics")
-        .mockImplementationOnce(async (...args: any[]) => {
-          const uri = args[0] as string;
-          sequence.push(`warm:${uri}`);
-          return [];
-        })
-        .mockImplementationOnce(async (...args: any[]) => {
-          const uri = args[0] as string;
-          sequence.push(`wait:${uri}`);
-          await secondWait;
-          return [];
-        })
-        .mockImplementationOnce(async (...args: any[]) => {
-          const uri = args[0] as string;
-          sequence.push(`wait:${uri}`);
-          await thirdWait;
-          return [];
-        });
-
-      await client.diagnostics(firstPath);
-      const secondPromise = client.diagnostics(firstPath);
-      const thirdPromise = client.diagnostics(secondPath);
-      await vi.waitFor(() => {
-        expect(sequence).toEqual([
-          `warm:${pathToFileURL(firstPath).href}`,
-          `wait:${pathToFileURL(firstPath).href}`,
-          `wait:${pathToFileURL(secondPath).href}`,
-        ]);
-      });
-
-      releaseSecond();
-      releaseThird();
-      await Promise.all([secondPromise, thirdPromise]);
-    });
-
-    it("does not serialize cold-start diagnostics for non-jdtls servers", async () => {
-      const root = await createTempWorkspace();
-      const firstPath = await writeWorkspaceFile(root, "src/first.ts", "export const first = 1;\n");
-      const secondPath = await writeWorkspaceFile(root, "src/second.ts", "export const second = 2;\n");
-      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
-      const sequence: string[] = [];
-      let releaseFirst!: () => void;
-      const firstSend = new Promise<void>((resolve) => { releaseFirst = resolve; });
-      vi.spyOn(client, "openFile").mockResolvedValue(undefined);
-      vi.spyOn(client as any, "send")
-        .mockImplementationOnce(async () => {
-          sequence.push(`send:${firstPath}`);
-          await firstSend;
-          return { items: [] };
-        })
-        .mockImplementationOnce(async () => {
-          sequence.push(`send:${secondPath}`);
-          return { items: [] };
-        });
-
-      const firstPromise = client.diagnostics(firstPath);
-      const secondPromise = client.diagnostics(secondPath);
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(sequence).toEqual([
-        `send:${firstPath}`,
-        `send:${secondPath}`,
-      ]);
-
-      releaseFirst();
-      await Promise.all([firstPromise, secondPromise]);
-    });
-    it("re-throws when the diagnostic request fails for a non-Method-Not-Found reason", async () => {
-      const root = await createTempWorkspace();
-      const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");
-      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
-      const sendSpy = vi.spyOn(client as any, "send").mockRejectedValue(new Error("LSP request timeout (textDocument/diagnostic) after 100ms"));
-      await expect(client.diagnostics(filePath)).rejects.toThrow(/LSP request timeout/);
-      expect(sendSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it("re-throws JSON-RPC Internal Error (-32603) instead of treating it as a transient startup race", async () => {
-      const root = await createTempWorkspace();
-      const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");
-      const client = new LspClient(root, { id: "mock-lsp", command: ["mock-lsp"], extensions: [".java"] } as any);
-      const internalError = new Error("Internal error") as Error & { code?: number };
-      internalError.code = -32603;
-      const sendSpy = vi.spyOn(client as any, "send").mockRejectedValue(internalError);
-      const waitSpy = vi.spyOn(client as any, "waitForPublishedDiagnostics");
-      await expect(client.diagnostics(filePath)).rejects.toThrow(/^Internal error$/);
-      expect(sendSpy).toHaveBeenCalledTimes(1);
-      expect(waitSpy).not.toHaveBeenCalled();
-    });
-
-    it("falls back to publishDiagnostics when the server reports Method Not Found (-32601)", async () => {
-      const root = await createTempWorkspace();
-      const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");
-      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"], requestTimeoutMs: 200 } as any);
-      const methodNotFound = new Error("Method not found: textDocument/diagnostic") as Error & { code?: number };
-      methodNotFound.code = -32601;
-      const sendSpy = vi.spyOn(client as any, "send").mockRejectedValue(methodNotFound);
-      // Deliver diagnostics via publishDiagnostics right away to resolve the wait.
-      setTimeout(() => {
-        (client as any).onData(encodeMessage({
-          jsonrpc: "2.0",
-          method: "textDocument/publishDiagnostics",
-          params: { uri: pathToFileURL(filePath).href, diagnostics: [{ message: "boom" }] },
-        }));
-      }, 10);
-      const result = await client.diagnostics(filePath);
-      expect(sendSpy).toHaveBeenCalledTimes(1);
-      expect(result).toEqual([{ message: "boom" }]);
-    });
-
-    it("rejects publishDiagnostics waiters when the client stops", async () => {
-      // Intent: stop/reload should fail pending diagnostics immediately instead
-      // of waiting for the full requestTimeoutMs.
-      const client = new LspClient("/tmp/demo", { id: "jdtls", command: ["jdtls"], extensions: [".java"], requestTimeoutMs: 60_000 } as any);
-      const pending = (client as any).waitForPublishedDiagnostics("file:///tmp/demo/App.java", 60_000);
-      await Promise.resolve();
-
-      await client.stop();
-
-      await expect(pending).rejects.toThrow("LSP client stopped");
-    });
-
+  describe("transport failures and shutdown", () => {
     it.skipIf(process.platform === "win32")("rejects requests instead of crashing when the server closes stdin", async () => {
       // Intent: a broken LSP input pipe must become a normal client failure;
       // the stdin stream's error event must never escape as an uncaught EPIPE.
@@ -945,77 +596,8 @@ describe("LspClient internals", () => {
       }
     });
 
-    it("surfaces a generic actionable hint when transient Internal error fallback times out", async () => {
-      vi.useFakeTimers();
-      try {
-        const filePath = "/tmp/demo/src/App.java";
-        const client = new LspClient("/tmp/demo", { id: "mock-lsp", command: ["mock-lsp"], extensions: [".java"], requestTimeoutMs: 100 } as any);
-        vi.spyOn(client, "openFile").mockResolvedValue(undefined);
-        const internalError = new Error("Internal error") as Error & { code?: number };
-        const sendSpy = vi.spyOn(client as any, "send").mockRejectedValue(internalError);
-        const promise = client.diagnostics(filePath);
-        const assertion = expect(promise).rejects.toThrow(/LSP server 'mock-lsp' returned "Internal error"/);
-        await vi.advanceTimersByTimeAsync(120);
-        await assertion;
-        await expect(promise).rejects.toThrow(/requestTimeoutMs/);
-        expect(sendSpy).toHaveBeenCalledTimes(1);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
   });
 
-  /* Temporarily disabled with the lsp_diagnostics tool registration.
-  it("uses the target file directory when building the resolver for absolute paths outside cwd", async () => {
-    const rootA = await createTempWorkspace();
-    const rootB = await createTempWorkspace();
-    const absoluteFile = await writeWorkspaceFile(rootB, "src/example.ts", "export const x = 1;\n");
-    const registry = createToolRegistry();
-    let seenBaseDir: string | undefined;
-    registerLspTools(registry.pi as any, {
-      resolverFactory: (baseDir: string) => {
-        seenBaseDir = baseDir;
-        return new LspDiscoveryResolver({});
-      },
-    });
-    const original = lspManager.getClient.bind(lspManager);
-    lspManager.getClient = async () => mockToolLspClient({ diagnostics: async () => [] });
-    try {
-      const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: absoluteFile }, undefined, undefined, { cwd: rootA });
-      expect(getText(result)).toBe("No diagnostics found");
-      expect(seenBaseDir).toBe(join(rootB, "src"));
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-
-  it("returns an abort error when the signal is already aborted before the tool starts", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const controller = new AbortController();
-    controller.abort();
-    const result = await registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
-    expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("Operation aborted");
-  });
-
-  it("returns an abort error when getClient is still in flight and the caller aborts", async () => {
-    const registry = createToolRegistry();
-    registerLspTools(registry.pi as any);
-    const original = lspManager.getClient.bind(lspManager);
-    lspManager.getClient = async () => new Promise(() => undefined) as any;
-    const controller = new AbortController();
-    const pending = registry.getTool("lsp_diagnostics").execute("1", { workdir: ".", path: "src/example.ts" }, controller.signal, undefined, { cwd: process.cwd() });
-    controller.abort();
-    try {
-      const result = await pending;
-      expect(result.isError).toBe(true);
-      expect(getText(result)).toContain("Operation aborted");
-    } finally {
-      lspManager.getClient = original;
-    }
-  });
-  */
 
   describe("resolver isolation", () => {
     it("does not leak server config from one resolver to another", () => {

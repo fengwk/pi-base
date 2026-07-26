@@ -1,4 +1,4 @@
-import { loadPiBaseSettings, type LoadedPiBaseSettings } from "../config.js";
+import { type LoadedPiBaseSettings } from "../config.js";
 
 /** Root=1 can delegate to depth 2; at depth == maxDepth the `task` tool is withheld. */
 export const DEFAULT_MAX_DEPTH = 2;
@@ -32,11 +32,6 @@ export function resolveSubagentConfig(loaded: LoadedPiBaseSettings): ResolvedSub
     ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
     maxTurns,
   };
-}
-
-/** Convenience loader for callers that only have a cwd. */
-export function loadSubagentConfig(cwd: string): ResolvedSubagentConfig {
-  return resolveSubagentConfig(loadPiBaseSettings(cwd));
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
