@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import piBaseExtension from "../index.js";
 import { lspManager } from "../src/lsp/client.js";
 import { DEPTH_ENTRY } from "../src/subagent/depth.js";
@@ -87,5 +87,50 @@ describe("index lifecycle behavior", () => {
 
     expect(getText(first)).toContain("lsp: supported (ts)");
     expect(getText(second)).toContain("lsp: supported (ts)");
+  });
+
+  it("wires project compaction settings into the session compaction hook", async () => {
+    // Exercising the extension entry point catches config-to-handler wiring regressions without making an LLM request.
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(
+      join(root, ".pi", "pi-base.json"),
+      JSON.stringify({ compactionModel: "missing-provider/missing-model" }),
+      "utf8",
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const registry = createToolRegistry({
+      cwd: root,
+      model: { provider: "openai", id: "gpt-5" },
+      modelRegistry: { find: vi.fn().mockReturnValue(undefined) },
+    });
+    piBaseExtension(registry.pi as any);
+
+    try {
+      const result = await registry.emit("session_before_compact", {
+        type: "session_before_compact",
+        preparation: {
+          firstKeptEntryId: "keep-entry",
+          messagesToSummarize: [],
+          turnPrefixMessages: [],
+          isSplitTurn: false,
+          tokensBefore: 1_000,
+          settings: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
+          fileOps: { readFiles: [], modifiedFiles: [] },
+        },
+        branchEntries: [],
+        reason: "manual",
+        willRetry: false,
+        signal: new AbortController().signal,
+      }, { cwd: root });
+
+      expect(result).toBeUndefined();
+      expect(registry.getNotifications().at(-1)).toMatchObject({
+        message: expect.stringContaining("is unavailable"),
+        variant: "warning",
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

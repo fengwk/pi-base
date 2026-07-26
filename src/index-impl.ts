@@ -21,6 +21,7 @@ import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 import { formatOptionalArgs, renderStreamingCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, resolveToolPatternValue, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./render.js";
 import { applyContextCompressionToMessages, shouldApplyContextCompression } from "./context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./anthropic-cache-boundary.js";
+import { registerCompactionModel } from "./compaction-model.js";
 import { registerResumeAllCommand } from "./resume-all.js";
 import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
@@ -49,7 +50,7 @@ import {
   type GoalSupportHandle,
 } from "./goal/index.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
-export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
+export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type CompactionModelConfig, type CompactionThinkingLevel, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
 export type { LocalMcpServerConfig, McpConfig, McpRemoteTransport, McpServerConfig, McpSnapshot, McpToolSnapshot, RemoteMcpServerConfig } from "./mcp/types.js";
 export { type GoalState, type GoalStatus } from "./goal/index.js";
@@ -209,6 +210,10 @@ export function registerFindTool(
 
 export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensionOptions = {}): void {
   const loadSettings = loadRuntimePiBaseSettings;
+  registerCompactionModel(pi, (cwd) => {
+    const { compactionModel, compactionThinkingLevel } = loadSettings(cwd).settings;
+    return { compactionModel, compactionThinkingLevel };
+  });
   let goalToolsAvailableInSession = true;
   // This exact resolver is passed to both the permission guard and mutation call renderers.
   // A yolo-enabled tool call bypasses approval, so it must not briefly expand only to collapse

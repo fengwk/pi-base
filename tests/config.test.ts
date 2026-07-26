@@ -260,6 +260,12 @@ describe("pi-base config", () => {
     ["invalid render chars", { render: { collapsedToolResultMaxChars: { read: -1 } } }, /collapsedToolResultMaxChars\.read/],
     ["invalid notify boolean", { notify: { permissionAsked: "yes" } }, /notify\.permissionAsked/],
     ["invalid notify suppression", { notify: { suppressCompletedAfterRejectionMs: -1 } }, /suppressCompletedAfterRejectionMs/],
+    ["non-string compaction model", { compactionModel: 1 }, /compactionModel must be a string/],
+    ["empty compaction model", { compactionModel: "   " }, /compactionModel must be a non-empty string/],
+    ["missing compaction model id", { compactionModel: "google/" }, /compactionModel must use "provider\/model" format/],
+    ["missing compaction provider", { compactionModel: "/gemini" }, /compactionModel must use "provider\/model" format/],
+    ["invalid compaction model", { compactionModel: "google" }, /compactionModel must use "provider\/model" format/],
+    ["invalid compaction thinking level", { compactionThinkingLevel: "ultra" }, /compactionThinkingLevel/],
     ["invalid context compression shape", { contextCompression: [] }, /contextCompression must be an object/],
     ["invalid context compression rounds", { contextCompression: { retainedUserMessageRounds: 0 } }, /retainedUserMessageRounds/],
     ["invalid context compression tools", { contextCompression: { tools: [""] } }, /empty tool name/],
@@ -429,6 +435,54 @@ describe("pi-base config", () => {
       await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({ defaultAgent: "planner" }), "utf8");
       const loaded = loadPiBaseSettings(root);
       expect(loaded.settings.defaultAgent).toBe("planner");
+    });
+  });
+
+  it("merges compaction model and thinking settings independently", async () => {
+    // Independent merging lets a project change one setting while inheriting the other globally.
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async (globalPath) => {
+      await mkdir(dirname(globalPath), { recursive: true });
+      await writeFile(globalPath, JSON.stringify({
+        compactionModel: "google/gemini-2.5-flash",
+        compactionThinkingLevel: "high",
+      }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        compactionModel: "openai/gpt-5-mini",
+      }), "utf8");
+
+      expect(loadPiBaseSettings(root).settings.compactionModel).toEqual({
+        provider: "openai",
+        modelId: "gpt-5-mini",
+      });
+      expect(loadPiBaseSettings(root).settings.compactionThinkingLevel).toBe("high");
+
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        compactionThinkingLevel: "off",
+      }), "utf8");
+      expect(loadPiBaseSettings(root).settings.compactionModel).toEqual({
+        provider: "google",
+        modelId: "gemini-2.5-flash",
+      });
+      expect(loadPiBaseSettings(root).settings.compactionThinkingLevel).toBe("off");
+    });
+  });
+
+  it("trims compaction model components and preserves slashes in the model id", async () => {
+    // Splitting only the first slash supports provider model ids that contain path segments.
+    const root = await createTempWorkspace();
+    await withTempGlobalSettings(async (globalPath) => {
+      await mkdir(dirname(globalPath), { recursive: true });
+      await writeFile(globalPath, JSON.stringify({
+        compactionModel: " custom-provider / family/model ",
+      }), "utf8");
+
+      expect(loadPiBaseSettings(root).settings.compactionModel).toEqual({
+        provider: "custom-provider",
+        modelId: "family/model",
+      });
     });
   });
 

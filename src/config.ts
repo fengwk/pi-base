@@ -33,6 +33,12 @@ export interface NotifyConfig {
   suppressCompletedAfterRejectionMs?: number;
 }
 
+export interface CompactionModelConfig {
+  provider: string;
+  modelId: string;
+}
+
+export type CompactionThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ContextCompressionConfig {
   anchorHygiene?: boolean;
@@ -67,6 +73,10 @@ export interface PiBaseSettings {
   notify?: NotifyConfig;
   yolo?: YoloMode;
   mcp?: McpConfig;
+  /** Optional provider/model used to generate Pi compaction summaries. */
+  compactionModel?: CompactionModelConfig;
+  /** Optional thinking level used only for the configured compaction model. */
+  compactionThinkingLevel?: CompactionThinkingLevel;
   contextCompression?: ContextCompressionConfig;
   subagent?: SubagentConfig;
   /** Fresh sessions start in this named agent when no agent was persisted and no `--agent` flag is provided. */
@@ -341,6 +351,38 @@ function sanitizeNonEmptyString(value: unknown, path: string): string {
   return trimmed;
 }
 
+function sanitizeCompactionModel(value: unknown): CompactionModelConfig {
+  const raw = sanitizeNonEmptyString(value, "compactionModel");
+  const slashIndex = raw.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === raw.length - 1) {
+    throw new Error('compactionModel must use "provider/model" format.');
+  }
+  const provider = raw.slice(0, slashIndex).trim();
+  const modelId = raw.slice(slashIndex + 1).trim();
+  if (!provider || !modelId) {
+    throw new Error('compactionModel must use "provider/model" format.');
+  }
+  return { provider, modelId };
+}
+
+const compactionThinkingLevels: readonly CompactionThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+function sanitizeCompactionThinkingLevel(value: unknown): CompactionThinkingLevel {
+  const level = sanitizeNonEmptyString(value, "compactionThinkingLevel");
+  if (!compactionThinkingLevels.includes(level as CompactionThinkingLevel)) {
+    throw new Error("compactionThinkingLevel must be one of: off, minimal, low, medium, high, xhigh, max.");
+  }
+  return level as CompactionThinkingLevel;
+}
+
 function sanitizeSubagentConfig(value: unknown): SubagentConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("subagent must be a JSON object.");
@@ -505,6 +547,10 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
     notify: input.notify === undefined ? undefined : sanitizeNotifyConfig(input.notify),
     yolo: input.yolo === undefined ? undefined : sanitizeYoloMode(input.yolo),
     mcp: input.mcp === undefined ? undefined : sanitizeMcpConfig(input.mcp),
+    compactionModel: input.compactionModel === undefined ? undefined : sanitizeCompactionModel(input.compactionModel),
+    compactionThinkingLevel: input.compactionThinkingLevel === undefined
+      ? undefined
+      : sanitizeCompactionThinkingLevel(input.compactionThinkingLevel),
     contextCompression: input.contextCompression === undefined ? undefined : sanitizeContextCompressionConfig(input.contextCompression),
     subagent: input.subagent === undefined ? undefined : sanitizeSubagentConfig(input.subagent),
     defaultAgent: input.defaultAgent === undefined ? undefined : sanitizeNonEmptyString(input.defaultAgent, "defaultAgent"),
@@ -574,6 +620,8 @@ function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
     ...(settings.notify ? { notify: settings.notify } : {}),
     ...(settings.yolo !== undefined ? { yolo: settings.yolo } : {}),
     ...(settings.mcp ? { mcp: normalizeMcpConfigPaths(settings.mcp) } : {}),
+    ...(settings.compactionModel ? { compactionModel: settings.compactionModel } : {}),
+    ...(settings.compactionThinkingLevel ? { compactionThinkingLevel: settings.compactionThinkingLevel } : {}),
     ...(settings.contextCompression ? { contextCompression: settings.contextCompression } : {}),
     ...(settings.subagent ? { subagent: settings.subagent } : {}),
     ...(settings.defaultAgent !== undefined ? { defaultAgent: settings.defaultAgent } : {}),
@@ -628,6 +676,19 @@ function mergeNotify(base: NotifyConfig | undefined, override: NotifyConfig | un
 }
 
 function mergeYolo(base: YoloMode | undefined, override: YoloMode | undefined): YoloMode | undefined {
+  return override ?? base;
+}
+function mergeCompactionModel(
+  base: CompactionModelConfig | undefined,
+  override: CompactionModelConfig | undefined,
+): CompactionModelConfig | undefined {
+  const selected = override ?? base;
+  return selected ? { ...selected } : undefined;
+}
+function mergeCompactionThinkingLevel(
+  base: CompactionThinkingLevel | undefined,
+  override: CompactionThinkingLevel | undefined,
+): CompactionThinkingLevel | undefined {
   return override ?? base;
 }
 function mergeMcp(base: McpConfig | undefined, override: McpConfig | undefined): McpConfig | undefined {
@@ -712,6 +773,11 @@ export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSet
       notify: mergeNotify(globalSettings.notify, projectSettings.notify),
       yolo: mergeYolo(globalSettings.yolo, projectSettings.yolo),
       mcp: mergeMcp(globalSettings.mcp, projectSettings.mcp),
+      compactionModel: mergeCompactionModel(globalSettings.compactionModel, projectSettings.compactionModel),
+      compactionThinkingLevel: mergeCompactionThinkingLevel(
+        globalSettings.compactionThinkingLevel,
+        projectSettings.compactionThinkingLevel,
+      ),
       contextCompression: mergeContextCompression(globalSettings.contextCompression, projectSettings.contextCompression),
       subagent: mergeSubagent(globalSettings.subagent, projectSettings.subagent),
       defaultAgent: mergeDefaultAgent(globalSettings.defaultAgent, projectSettings.defaultAgent),

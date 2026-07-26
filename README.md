@@ -200,6 +200,8 @@ Agent 正文（覆盖 system prompt）
 | `notify` | object | 桌面通知开关 |
 | `yolo` | boolean | 权限绕过模式 |
 | `mcp` | object | MCP server 列表 |
+| `compactionModel` | string | Pi 摘要使用的指定模型 |
+| `compactionThinkingLevel` | string | 指定摘要模型的 thinking level |
 | `contextCompression` | object | 旧工具输出压缩 |
 | `subagent` | object | task 委派深度/并发/超时 |
 | `defaultAgent` | string | fresh session 默认 agent |
@@ -224,6 +226,8 @@ Agent 正文（覆盖 system prompt）
 | `notify` | 浅覆盖，项目只覆盖自己声明的字段 |
 | `yolo` | 项目值直接覆盖 |
 | `mcp.servers` | 按 key 合并；同 key 项目覆盖全局 |
+| `compactionModel` | 项目值直接覆盖 |
+| `compactionThinkingLevel` | 项目值直接覆盖 |
 | `contextCompression` | 标量逐个覆盖；`tools`/`enabledProviders`/`disabledProviders` 数组替换不追加 |
 | `subagent` | 各字段浅覆盖；未配置的继承全局 |
 | `defaultAgent` | 项目值直接覆盖 |
@@ -374,6 +378,21 @@ Agent 正文（覆盖 system prompt）
 年龄压缩从候选工具结果之后的下一条 user 消息开始按 user window 统计。连续 window 累计达到 `retainedAssistantTurns` 次 assistant turn 后计为一个有效 user round；累计达到 `retainedUserMessageRounds` 个有效 round 后才压缩该结果。每个 user window 最多贡献一个有效 round。
 
 生效顺序：`enabledProviders` 过滤 → `disabledProviders` 过滤 → 都通过后启用。仅压缩成功的 `toolResult.content`，失败的永不被压缩。read 到已注入 skill 路径的文件不参与 age compression（除非被后续 anchorHygiene 触发）。
+
+#### `compactionModel`
+
+指定 Pi 的 conversation compaction 使用的摘要模型，格式为 `provider/model`：
+
+```json
+{
+  "compactionModel": "google/gemini-2.5-flash",
+  "compactionThinkingLevel": "high"
+}
+```
+
+`compactionThinkingLevel` 可选，允许值为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。省略时，指定模型继承当前 session 的 thinking level；它只影响指定模型的摘要请求，不改变当前 session 的 thinking level。配置后，手动 `/compact` 与 Pi 自动 compaction 都会复用 Pi 原生切点、摘要格式和 session 写入流程，并将摘要请求发给该模型。未配置时，pi-base 不拦截 compaction，Pi 保持使用当前 session model。指定模型及 thinking level 都与当前 session 相同时直接使用 Pi 原生路径；目标模型找不到、无法鉴权或摘要请求失败时，会显示 warning 并回退到当前 session model。取消 configured-model 请求时会直接取消本次 compaction，不会再发起 fallback 请求。
+
+该功能不改变 Pi 的 compaction 触发条件、阈值或保留窗口。由于 Pi 目前只通过 public extension hook 开放替换摘要结果，指定模型生成的 compaction entry 会被标记为 extension-generated：后续 compaction 不会像 Pi 原生 entry 那样自动继承其结构化文件操作元数据，因此多次摘要后文件操作列表可能不如原生路径完整。该 hook 也不暴露 Pi 内部的 retry 配置或自定义 agent stream；指定模型的瞬时失败会直接进入上述 fallback，而不会复用 Pi 原生的摘要重试流程。Pi 会在触发该 hook 前先解析当前 session model 的摘要鉴权，因此当前模型的鉴权解析若已失败，指定模型不会获得执行机会。
 
 #### `subagent`
 
