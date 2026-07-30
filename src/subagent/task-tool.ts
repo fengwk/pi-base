@@ -1,4 +1,4 @@
-import type { Static } from "@sinclair/typebox";
+import type { Static } from "typebox";
 import { defineTool, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { TASK_TOOL_NAME } from "./constants.js";

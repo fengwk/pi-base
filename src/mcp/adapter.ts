@@ -1,6 +1,6 @@
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver, renderStreamingCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, styleOutput, styleToolTitle } from "../render.js";
 import { convertJsonSchemaToTypeBox } from "./schema.js";
 import type { McpTool, McpToolCallResult, McpServerConfig } from "./types.js";

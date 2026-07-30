@@ -5,7 +5,7 @@ import { GOAL_STATE_ENTRY_TYPE, tokenDeltaFromUsage, type GoalState } from "../s
 import { createToolRegistry } from "./helpers.js";
 
 function assistantMessage(
-  stopReason: "stop" | "length" | "toolUse" | "error" | "aborted",
+  stopReason: "pending" | "stop" | "length" | "toolUse" | "error" | "aborted",
   usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number } = {},
 ) {
   return {

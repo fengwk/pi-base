@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 export const editSchema = Type.Object({
   path: Type.String({ description: "Path to the file to edit (relative or absolute)." }),

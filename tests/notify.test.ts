@@ -487,6 +487,38 @@ describe("notify support", () => {
     expect(payloads).toEqual([]);
   });
 
+  // Intent: pi 0.83 partial-stream stopReason "pending" must not fire completion/error notifications.
+  it("skips agent_end notification when the final assistant stopReason is pending", async () => {
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      notify: { agentEnd: true },
+    });
+
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    await registry.emit("agent_end", {
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "pending" }],
+    }, {
+      cwd: root,
+      sessionManager: {
+        getSessionId: () => "session-pending",
+        getSessionName: () => "Pending Session",
+      },
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
   it("sends a completion notification on agent_end and suppresses it after permission rejection", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {

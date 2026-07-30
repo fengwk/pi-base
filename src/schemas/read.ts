@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 export const readSchema = Type.Object({
   path: Type.String({ description: "File, directory, or supported image path to read." }),

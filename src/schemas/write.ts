@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 export const writeSchema = Type.Object({
   path: Type.String({ description: "File path to create or intentionally overwrite as a whole file." }),

@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 /**
  * Freeform apply_patch input. On grammar-capable models this is sampled as a

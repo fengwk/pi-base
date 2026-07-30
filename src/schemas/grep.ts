@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 export const grepSchema = Type.Object({
   pattern: Type.String({ description: "Pattern to search for." }),

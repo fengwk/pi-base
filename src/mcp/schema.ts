@@ -1,4 +1,4 @@
-import { Type, type TProperties, type TSchema } from "@sinclair/typebox";
+import { Type, type TProperties, type TSchema } from "typebox";
 
 type SharedSchemaOptions = {
   title?: string;

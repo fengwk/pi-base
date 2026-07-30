@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 export const lspGotoDefinitionSchema = Type.Object({
   path: Type.String({ description: "Existing source file path supported by an LSP server. This path is also used to infer the workspace root." }),

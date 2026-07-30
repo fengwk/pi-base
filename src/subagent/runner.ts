@@ -197,6 +197,8 @@ function readPersistedStatus(messages: RuntimeMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (message.role !== "assistant") continue;
+    // Skip incomplete stream snapshots so a later terminal stopReason can win.
+    if (message.stopReason === "pending") continue;
     if (message.stopReason === "error") return "error";
     if (message.stopReason === "aborted") return "cancelled";
     break;
@@ -526,10 +528,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isCountedAssistantMessage(message: unknown): boolean {
+  // pi 0.83+ may emit stopReason "pending" for partial streaming messages; those are not finished turns.
   return isRecord(message)
     && message.role === "assistant"
     && message.stopReason !== "error"
-    && message.stopReason !== "aborted";
+    && message.stopReason !== "aborted"
+    && message.stopReason !== "pending";
 }
 
 function rawTextFromContent(content: unknown): string {

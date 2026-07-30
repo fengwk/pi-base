@@ -179,7 +179,7 @@ function resolveAgentEndNotificationKind(
 ): Exclude<PiBaseNotifyKind, "permission.requested"> | undefined {
   const assistant = findLastAssistantMessage(event.messages);
   if (!assistant) return "session.completed";
-  if (assistant.stopReason === "aborted") return undefined;
+  if (assistant.stopReason === "aborted" || assistant.stopReason === "pending") return undefined;
   if (assistant.stopReason !== "error") return "session.completed";
 
   const finality = loadPiRuntimeFinalitySettings(ctx.cwd);
