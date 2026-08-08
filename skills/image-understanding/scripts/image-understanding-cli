@@ -1,29 +1,180 @@
 #!/usr/bin/env python3
+"""Image understanding via MiniMax Anthropic-compatible Messages API (MiniMax-M3).
+
+Sends a prompt together with local image files or URLs to the MiniMax
+Anthropic-compatible Messages endpoint and prints the model's text answer.
+
+- Native formats: JPEG/PNG/GIF/WEBP
+- Unsupported local formats are converted to PNG automatically
+  (Pillow or ImageMagick)
+"""
+import base64
+import json
+import mimetypes
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.error
+import urllib.request
+
+API_URL = "https://api.minimaxi.com/anthropic/v1/messages"
+MODEL = "MiniMax-M3"
+MAX_TOKENS = 4096
+MAX_IMAGES = 30
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
+
+NATIVE_IMAGE_MIME = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+IMAGE_EXTS = set(NATIVE_IMAGE_MIME) | {
+    ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif", ".svg", ".ico",
+}
 
 
 def usage() -> None:
     print(
         """Usage:
-  image-understanding-cli --prompt <text> --image <path-or-url>
+  image-understanding-cli --prompt <text> (--image <path-or-url>)... [--json]
 
 Options:
   --prompt <text>   Describe what to analyze or extract.
-  --image <path>    Local path or URL of the image.
-  -h, --help              Show this help message.
+  --image <path>    Image file or URL; repeatable (one or more images). Local
+                    formats other than JPEG/PNG/GIF/WEBP are converted to PNG
+                    automatically.
+  --json            Print the full API response as JSON instead of plain text.
+  -h, --help        Show this help message.
 
 Notes:
   Execute this file directly.
   Uses MINIMAX_API_KEY from the environment.
+  Calls the MiniMax Anthropic-compatible Messages API (model: MiniMax-M3).
 """
     )
 
 
-def run(cmd: list[str]) -> int:
-    completed = subprocess.run(cmd)
-    return completed.returncode
+def parse_args(args: list[str]) -> tuple[str | None, list[str], bool]:
+    prompt = None
+    images: list[str] = []
+    as_json = False
+    i = 0
+    while i < len(args):
+        if args[i] == "--prompt":
+            if i + 1 >= len(args):
+                print("Missing value for --prompt", file=sys.stderr)
+                raise SystemExit(2)
+            prompt = args[i + 1]
+            i += 2
+            continue
+        if args[i] == "--image":
+            if i + 1 >= len(args):
+                print("Missing value for --image", file=sys.stderr)
+                raise SystemExit(2)
+            images.append(args[i + 1])
+            i += 2
+            continue
+        if args[i] == "--json":
+            as_json = True
+            i += 1
+            continue
+        print(f"Unknown argument: {args[i]}", file=sys.stderr)
+        usage()
+        raise SystemExit(2)
+    return prompt, images, as_json
+
+
+def is_url(s: str) -> bool:
+    return s.startswith("http://") or s.startswith("https://")
+
+
+def convert_image(path: str, tmpdir: str) -> str:
+    """Convert an image to PNG. Tries Pillow first, then ImageMagick."""
+    out = os.path.join(tmpdir, os.path.splitext(os.path.basename(path))[0] + ".png")
+    err = None
+    try:
+        from PIL import Image
+
+        try:
+            img = Image.open(path)
+            img.load()
+            img.convert("RGBA").save(out, "PNG")
+            return out
+        except Exception as e:  # Pillow missing codec (e.g. HEIC) or corrupt file
+            err = e
+    except ImportError:
+        pass
+    magick = shutil.which("magick") or shutil.which("convert")
+    if magick:
+        try:
+            subprocess.run([magick, path, out], check=True, capture_output=True)
+            return out
+        except subprocess.CalledProcessError as e:
+            err = e
+    raise RuntimeError(
+        f"Failed to convert image {path}: {err or 'no converter available'} "
+        "(Pillow or ImageMagick required)"
+    ) from err
+
+
+def build_source(value: str, tmpdir: str) -> dict:
+    """Build an Anthropic image source block from a local file or URL."""
+    if is_url(value):
+        return {"type": "url", "url": value}
+
+    if not os.path.isfile(value):
+        raise RuntimeError(f"File not found: {value}")
+    ext = os.path.splitext(value)[1].lower()
+    mime = NATIVE_IMAGE_MIME.get(ext)
+    path = value
+    if not mime:
+        if ext not in IMAGE_EXTS:
+            guessed = mimetypes.guess_type(value)[0] or ""
+            if not guessed.startswith("image/"):
+                raise RuntimeError(f"Unsupported image format: {ext or 'unknown'}")
+        path = convert_image(value, tmpdir)
+        mime = "image/png"
+
+    size = os.path.getsize(path)
+    if size > MAX_IMAGE_BYTES:
+        raise RuntimeError(f"Image too large: {size} bytes (max {MAX_IMAGE_BYTES} bytes)")
+    with open(path, "rb") as f:
+        data = base64.b64encode(f.read()).decode("ascii")
+    return {"type": "base64", "media_type": mime, "data": data}
+
+
+def call_api(payload: dict, api_key: str) -> dict:
+    req = urllib.request.Request(
+        API_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        detail = ""
+        try:
+            err = json.loads(body)
+            if isinstance(err, dict):
+                if isinstance(err.get("error"), dict) and err["error"].get("message"):
+                    detail = f": {err['error']['message']}"
+                elif isinstance(err.get("base_resp"), dict):
+                    detail = f": {err['base_resp'].get('status_msg', '')}"
+        except ValueError:
+            pass
+        raise RuntimeError(f"API error: HTTP {e.code}{detail}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Network error: {e.reason}") from e
 
 
 def main() -> int:
@@ -32,52 +183,50 @@ def main() -> int:
         usage()
         return 0
 
-    prompt = None
-    image = None
-    i = 0
-    while i < len(args):
-        if args[i] == "--prompt":
-            if i + 1 >= len(args):
-                print("Missing value for --prompt", file=sys.stderr)
-                return 2
-            prompt = args[i + 1]
-            i += 2
-            continue
-        if args[i] == "--image":
-            if i + 1 >= len(args):
-                print("Missing value for --image", file=sys.stderr)
-                return 2
-            image = args[i + 1]
-            i += 2
-            continue
-        print(f"Unknown argument: {args[i]}", file=sys.stderr)
+    prompt, images, as_json = parse_args(args)
+    if not prompt:
+        print("--prompt is required", file=sys.stderr)
         usage()
         return 2
-
-    if not prompt or not image:
-        print("--prompt and --image are required", file=sys.stderr)
+    if not images:
+        print("At least one --image is required", file=sys.stderr)
         usage()
         return 2
+    if len(images) > MAX_IMAGES:
+        print(
+            f"最多支持 {MAX_IMAGES} 张图片，当前传入了 {len(images)} 张。"
+            "请减少图片数量后重试。",
+            file=sys.stderr,
+        )
+        return 2
 
-    normalized_image = image[1:] if image.startswith("@") else image
     api_key = os.environ.get("MINIMAX_API_KEY")
     if not api_key:
         print("MINIMAX_API_KEY is required", file=sys.stderr)
         return 2
 
-    return run(
-        [
-            "mmx",
-            "vision",
-            "describe",
-            "--image",
-            normalized_image,
-            "--prompt",
-            prompt,
-            "--output",
-            "json",
-        ]
-    )
+    tmpdir = tempfile.mkdtemp(prefix="imgskill-")
+    try:
+        content: list[dict] = [{"type": "text", "text": prompt}]
+        for value in images:
+            content.append({"type": "image", "source": build_source(value, tmpdir)})
+        payload = {
+            "model": MODEL,
+            "max_tokens": MAX_TOKENS,
+            "messages": [{"role": "user", "content": content}],
+        }
+        resp = call_api(payload, api_key)
+        if as_json:
+            print(json.dumps(resp, ensure_ascii=False, indent=2))
+            return 0
+        texts = [b["text"] for b in resp.get("content", []) if b.get("type") == "text"]
+        print("\n".join(texts))
+        return 0
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
