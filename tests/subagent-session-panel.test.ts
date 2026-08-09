@@ -257,4 +257,22 @@ describe("SubagentSessionPanel", () => {
     expect(output).toContain("new message 7");
     expect(output).not.toContain("bottom follows latest");
   });
+
+  it("preserves regular-mode Home behavior on a short transcript", () => {
+    // Intent: the fullscreen ScrollView alignment must not change the existing regular-panel follow-tail behavior.
+    const harness = createHarness([{ role: "user", content: "initial", timestamp: 1 }] as never);
+    harness.panel.render(120);
+    harness.panel.handleInput("home");
+    for (let index = 0; index < 8; index += 1) {
+      harness.emit({
+        type: "message_start",
+        message: { role: "user", content: `new message ${index}`, timestamp: index + 2 },
+      } as never);
+    }
+
+    const output = harness.panel.render(120).join("\n");
+    expect(output).toContain("initial");
+    expect(output).not.toContain("new message 7");
+    expect(output).toContain("bottom follows latest");
+  });
 });

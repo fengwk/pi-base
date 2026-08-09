@@ -293,9 +293,9 @@ export class SubagentSessionPanel implements Component {
     this.tui.requestRender();
   }
 
-  private moveToTop(): void {
+  private moveToTop(followWhenUnscrollable: boolean): void {
     this.scrollTop = 0;
-    this.followTail = this.lastMaxScroll === 0;
+    this.followTail = followWhenUnscrollable && this.lastMaxScroll === 0;
     this.tui.requestRender();
   }
 
@@ -323,7 +323,7 @@ export class SubagentSessionPanel implements Component {
       return;
     }
     if (matchesAnyKey(data, this.viewportKeybindings.top)) {
-      this.moveToTop();
+      this.moveToTop(true);
       return;
     }
     if (matchesAnyKey(data, this.viewportKeybindings.bottom)) {
@@ -351,7 +351,7 @@ export class SubagentSessionPanel implements Component {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorLineStart")) {
-      this.moveToTop();
+      this.moveToTop(false);
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorLineEnd")) {
@@ -378,10 +378,7 @@ export class SubagentSessionPanel implements Component {
     if (contentLines.length === 0) contentLines.push(this.theme.fg("muted", "Waiting for subagent output..."));
     const maxScroll = Math.max(0, contentLines.length - viewportHeight);
     if (this.followTail) this.scrollTop = maxScroll;
-    else {
-      this.scrollTop = Math.min(this.scrollTop, maxScroll);
-      if (this.scrollTop >= maxScroll) this.followTail = true;
-    }
+    else this.scrollTop = Math.min(this.scrollTop, maxScroll);
     this.lastMaxScroll = maxScroll;
     this.lastViewportHeight = viewportHeight;
 

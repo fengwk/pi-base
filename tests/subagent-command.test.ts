@@ -185,6 +185,8 @@ describe("/subagent", () => {
       "tui.altScreen.pageDown": ["pageDown", "ctrl+alt+d"],
       "tui.altScreen.halfPageUp": ["ctrl+u"],
       "tui.altScreen.halfPageDown": ["ctrl+d"],
+      "tui.altScreen.previousPrompt": ["ctrl+shift+up"],
+      "tui.altScreen.nextPrompt": ["ctrl+shift+down"],
       "tui.altScreen.top": ["home", "ctrl+alt+shift+u"],
       "tui.altScreen.bottom": ["end", "ctrl+alt+shift+d"],
     };
@@ -211,6 +213,8 @@ describe("/subagent", () => {
           "tui.altScreen.pageDown": [],
           "tui.altScreen.halfPageUp": [],
           "tui.altScreen.halfPageDown": [],
+          "tui.altScreen.previousPrompt": [],
+          "tui.altScreen.nextPrompt": [],
           "tui.altScreen.top": [],
           "tui.altScreen.bottom": [],
         });
@@ -271,8 +275,8 @@ describe("/subagent", () => {
     const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
       "tui.altScreen.pageUp": ["pageUp", "ctrl+alt+u"],
       "tui.altScreen.pageDown": ["pageDown", "ctrl+alt+d"],
-      "tui.altScreen.halfPageUp": "ctrl+u",
-      "tui.altScreen.halfPageDown": "ctrl+d",
+      "tui.altScreen.halfPageUp": ["ctrl+u", "ctrl+shift+up"],
+      "tui.altScreen.halfPageDown": ["ctrl+d", "ctrl+shift+down"],
       "tui.altScreen.top": ["home", "ctrl+home"],
       "tui.altScreen.bottom": ["end", "ctrl+end"],
     });
@@ -288,6 +292,8 @@ describe("/subagent", () => {
         tui.showOverlay(component, { width: "100%", maxHeight: "100%" });
         try {
           expect(keybindings.getKeys("tui.altScreen.pageUp")).toEqual([]);
+          expect(keybindings.getKeys("tui.altScreen.previousPrompt")).toEqual([]);
+          expect(keybindings.getKeys("tui.altScreen.nextPrompt")).toEqual([]);
           const initial = component.render(120).join("\n");
           expect(initial).not.toContain("inspect persisted state 0");
 
@@ -303,12 +309,21 @@ describe("/subagent", () => {
           expect(component.render(120).join("\n")).toContain("inspect persisted state 0");
 
           terminal.sendInput("\x1b[1;5F");
-          expect(component.render(120).join("\n")).toContain("finished report");
+          const atBottom = component.render(120).join("\n");
+          expect(atBottom).toContain("finished report");
+
+          terminal.sendInput("\x1b[1;6A");
+          const afterConflictingHalfPageUp = component.render(120).join("\n");
+          expect(afterConflictingHalfPageUp).not.toBe(atBottom);
+          terminal.sendInput("\x1b[1;6B");
+          expect(component.render(120).join("\n")).toBe(atBottom);
         } finally {
           tui.hideOverlay();
           component.dispose?.();
         }
         expect(keybindings.getKeys("tui.altScreen.pageUp")).toEqual(["pageUp", "ctrl+alt+u"]);
+        expect(keybindings.getKeys("tui.altScreen.previousPrompt")).toEqual(["ctrl+shift+up"]);
+        expect(keybindings.getKeys("tui.altScreen.nextPrompt")).toEqual(["ctrl+shift+down"]);
       };
 
       await command.handler("scroll-child", createContext(cwd, custom, []));

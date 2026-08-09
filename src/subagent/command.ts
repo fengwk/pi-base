@@ -23,6 +23,8 @@ const FULLSCREEN_VIEWPORT_KEYBINDINGS = [
   "tui.altScreen.pageDown",
   "tui.altScreen.halfPageUp",
   "tui.altScreen.halfPageDown",
+  "tui.altScreen.previousPrompt",
+  "tui.altScreen.nextPrompt",
   "tui.altScreen.top",
   "tui.altScreen.bottom",
 ] as const;
