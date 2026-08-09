@@ -1,8 +1,15 @@
 import { compact, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import type { CompactionModelConfig, CompactionThinkingLevel, PiBaseSettings } from "./config.js";
 
 type CompactRunner = typeof compact;
 type CompactionModelSettings = Pick<PiBaseSettings, "compactionModel" | "compactionThinkingLevel">;
+
+function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<string, string> | undefined {
+  return headers
+    ? Object.fromEntries(Object.entries(headers).filter((entry): entry is [string, string] => entry[1] !== null))
+    : undefined;
+}
 
 function usesCurrentModel(ctx: ExtensionContext, configured: CompactionModelConfig): boolean {
   return ctx.model?.provider === configured.provider && ctx.model.id === configured.modelId;
@@ -57,12 +64,13 @@ export function registerCompactionModel(
         );
         return undefined;
       }
+      const requestModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
 
       const result = await runCompact(
         event.preparation,
-        model,
+        requestModel,
         auth.apiKey,
-        auth.headers,
+        withoutDeletedHeaders(auth.headers),
         event.customInstructions,
         event.signal,
         compactionThinkingLevel ?? ctx.thinkingLevel,

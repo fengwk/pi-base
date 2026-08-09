@@ -1,13 +1,14 @@
 import { initTheme, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { SubagentViewMessage, SubagentViewSource } from "../src/subagent/runner.js";
-import { SubagentSessionPanel } from "../src/subagent/session-panel.js";
+import { SubagentSessionPanel, type SubagentViewportKeybindings } from "../src/subagent/session-panel.js";
 
 initTheme("dark", false);
 
 function createHarness(
   initialMessages: readonly SubagentViewMessage[] = [],
   sourceOverrides: Partial<SubagentViewSource> = {},
+  viewportKeybindings?: SubagentViewportKeybindings,
 ) {
   const listeners = new Set<(event: AgentSessionEvent) => void>();
   const requestRender = vi.fn();
@@ -39,7 +40,10 @@ function createHarness(
   const panel = new SubagentSessionPanel({
     tui: { terminal: { rows: 12 }, requestRender } as never,
     theme: { fg: (_color: string, text: string) => text } as never,
-    keybindings: { matches: (data: string, binding: string) => bindings.get(data) === binding } as never,
+    keybindings: {
+      matches: (data: string, binding: string) => bindings.get(data) === binding,
+      getKeys: () => [],
+    } as never,
     done,
     sessionId: "child-1",
     source,
@@ -55,6 +59,7 @@ function createHarness(
       startedAt: 1,
     }),
     subscribeRegistry: () => unsubscribeRegistry,
+    viewportKeybindings,
   });
   return {
     panel,
@@ -179,7 +184,7 @@ describe("SubagentSessionPanel", () => {
     const harness = createHarness(messages);
     harness.panel.render(50);
     harness.panel.handleInput("up");
-    expect(harness.panel.render(50).join("\n")).toContain("End follow latest");
+    expect(harness.panel.render(120).join("\n")).toContain("bottom follows latest");
     harness.panel.handleInput("end");
     expect(harness.panel.render(50).join("\n")).not.toContain("End follow latest");
     harness.panel.handleInput("cancel");
@@ -187,5 +192,69 @@ describe("SubagentSessionPanel", () => {
 
     harness.panel.dispose();
     expect(harness.unsubscribeRegistry).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses configured fullscreen viewport keys for page and edge navigation", () => {
+    // Intent: fullscreen key customizations must remain usable inside the overlay after Pi's viewport claims are scoped away.
+    const messages = Array.from({ length: 8 }, (_, index) => ({
+      role: "user",
+      content: [{ type: "text", text: `message ${index}` }],
+      timestamp: index,
+    })) as never;
+    const harness = createHarness(messages, {}, {
+      pageUp: ["ctrl+pageUp"],
+      pageDown: ["ctrl+pageDown"],
+      halfPageUp: ["ctrl+u"],
+      halfPageDown: ["ctrl+d"],
+      top: ["ctrl+home"],
+      bottom: ["ctrl+end"],
+    });
+
+    harness.panel.render(120);
+    harness.panel.handleInput("\x1b[1;5H");
+    const atTop = harness.panel.render(200).join("\n");
+    expect(atTop).toContain("message 0");
+    expect(atTop).toContain("ctrl+pageUp");
+    expect(atTop).toContain("ctrl+end");
+    expect(atTop).toContain("ctrl+u/ctrl+d half-page");
+
+    harness.panel.handleInput("\x04");
+    expect(harness.panel.render(120).join("\n")).not.toContain("message 0");
+    harness.panel.handleInput("\x15");
+    expect(harness.panel.render(120).join("\n")).toContain("message 0");
+    harness.panel.handleInput("\x1b[6;5~");
+    expect(harness.panel.render(120).join("\n")).not.toContain("message 0");
+    harness.panel.handleInput("\x1b[5;5~");
+    expect(harness.panel.render(120).join("\n")).toContain("message 0");
+    harness.panel.handleInput("\x1b[1;5F");
+    expect(harness.panel.render(120).join("\n")).toContain("message 7");
+  });
+
+  it("keeps following new output when top is pressed before scrolling is possible", () => {
+    // Intent: top on a short transcript must preserve the same follow-tail semantics as Pi's ScrollView.
+    const harness = createHarness(
+      [{ role: "user", content: "initial", timestamp: 1 }] as never,
+      {},
+      {
+        pageUp: [],
+        pageDown: [],
+        halfPageUp: [],
+        halfPageDown: [],
+        top: ["ctrl+home"],
+        bottom: ["ctrl+end"],
+      },
+    );
+    harness.panel.render(120);
+    harness.panel.handleInput("\x1b[1;5H");
+    for (let index = 0; index < 8; index += 1) {
+      harness.emit({
+        type: "message_start",
+        message: { role: "user", content: `new message ${index}`, timestamp: index + 2 },
+      } as never);
+    }
+
+    const output = harness.panel.render(120).join("\n");
+    expect(output).toContain("new message 7");
+    expect(output).not.toContain("bottom follows latest");
   });
 });

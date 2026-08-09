@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
@@ -13,46 +13,89 @@ describe("image-understanding CLI", () => {
     // Intent: credentials are inherited through the environment; passing them as --api-key would
     // expose the secret to process listings and other local process inspectors.
     const root = await createTempWorkspace();
-    const binDir = join(root, "bin");
     const capturePath = join(root, "capture.json");
-    const fakeMmx = join(binDir, "mmx");
-    await mkdir(binDir, { recursive: true });
-    await writeFile(
-      fakeMmx,
-      `#!/usr/bin/env node
-const fs = require("node:fs");
-fs.writeFileSync(process.env.PI_BASE_MMX_CAPTURE, JSON.stringify({
-  argv: process.argv.slice(2),
-  apiKey: process.env.MINIMAX_API_KEY,
-}));
-`,
-      { mode: 0o755 },
-    );
+    const imagePath = join(root, "image.png");
+    await writeFile(imagePath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
     const cli = resolve("skills/image-understanding/scripts/image-understanding-cli");
+    const harnessPath = join(root, "harness.py");
+    await writeFile(
+      harnessPath,
+      `import importlib.util
+from importlib.machinery import SourceFileLoader
+import json
+import os
+import sys
+
+sys.dont_write_bytecode = True
+cli_path = os.environ["PI_BASE_IMAGE_CLI"]
+spec = importlib.util.spec_from_loader(
+    "image_understanding_cli",
+    SourceFileLoader("image_understanding_cli", cli_path),
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+sys.argv = [cli_path, "--prompt", "inspect", "--image", os.environ["PI_BASE_IMAGE"]]
+
+def fake_call_api(payload, api_key):
+    with open(os.environ["PI_BASE_CAPTURE"], "w", encoding="utf-8") as output:
+        json.dump({
+            "argv": sys.argv[1:],
+            "apiKey": api_key,
+            "payload": payload,
+        }, output)
+    return {"content": [{"type": "text", "text": "ok"}]}
+
+module.call_api = fake_call_api
+raise SystemExit(module.main())
+`,
+    );
     const apiKey = "test-secret-not-for-argv";
 
-    await execFileAsync("python3", [cli, "--prompt", "inspect", "--image", "@/tmp/image.png"], {
+    await execFileAsync("python3", [harnessPath], {
       env: {
         ...process.env,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
         MINIMAX_API_KEY: apiKey,
-        PI_BASE_MMX_CAPTURE: capturePath,
+        PI_BASE_IMAGE_CLI: cli,
+        PI_BASE_IMAGE: imagePath,
+        PI_BASE_CAPTURE: capturePath,
       },
     });
 
-    const captured = JSON.parse(await readFile(capturePath, "utf8")) as { argv: string[]; apiKey?: string };
+    const captured = JSON.parse(await readFile(capturePath, "utf8")) as {
+      argv: string[];
+      apiKey?: string;
+      payload: {
+        model: string;
+        messages: Array<{
+          role: string;
+          content: Array<{
+            type: string;
+            text?: string;
+            source?: { type: string; media_type: string; data: string };
+          }>;
+        }>;
+      };
+    };
     expect(captured.apiKey).toBe(apiKey);
-    expect(captured.argv).toEqual([
-      "vision",
-      "describe",
-      "--image",
-      "/tmp/image.png",
-      "--prompt",
-      "inspect",
-      "--output",
-      "json",
-    ]);
+    expect(captured.argv).toEqual(["--prompt", "inspect", "--image", imagePath]);
     expect(captured.argv).not.toContain("--api-key");
     expect(captured.argv).not.toContain(apiKey);
+    expect(captured.payload.model).toBe("MiniMax-M3");
+    expect(captured.payload.messages).toEqual([{
+      role: "user",
+      content: [
+        { type: "text", text: "inspect" },
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: expect.any(String),
+          },
+        },
+      ],
+    }]);
+    expect(captured.payload.messages[0]?.content[1]?.source?.data).not.toBe("");
   });
 });

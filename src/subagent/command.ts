@@ -15,9 +15,25 @@ import {
 import { isRootSession, readRootSessionId } from "./depth.js";
 import { subagentRegistry, type SubagentNode } from "./registry.js";
 import { getLiveSubagentView, getPersistedSubagentView, type SubagentViewSource } from "./runner.js";
-import { SubagentSessionPanel } from "./session-panel.js";
+import { SubagentSessionPanel, type SubagentViewportKeybindings } from "./session-panel.js";
 
 const OVERLAY_VERTICAL_MARGIN = 1;
+const FULLSCREEN_VIEWPORT_KEYBINDINGS = [
+  "tui.altScreen.pageUp",
+  "tui.altScreen.pageDown",
+  "tui.altScreen.halfPageUp",
+  "tui.altScreen.halfPageDown",
+  "tui.altScreen.top",
+  "tui.altScreen.bottom",
+] as const;
+const EMPTY_VIEWPORT_KEYBINDINGS: SubagentViewportKeybindings = {
+  pageUp: [],
+  pageDown: [],
+  halfPageUp: [],
+  halfPageDown: [],
+  top: [],
+  bottom: [],
+};
 
 interface DisposableComponent extends Component {
   dispose?: () => void;
@@ -79,6 +95,41 @@ function resolveSubagentTarget(
 function padToWidth(value: string, width: number): string {
   const clipped = truncateToWidth(value, width, "…");
   return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
+}
+
+function disableFullscreenViewportBindings(keybindings: KeybindingsManager): () => void {
+  // TuiAltScreen consumes these keys before the focused overlay sees them; scope the
+  // override to this component so the user's normal fullscreen navigation is restored on close.
+  const original = keybindings.getUserBindings();
+  const scoped = { ...original };
+  for (const binding of FULLSCREEN_VIEWPORT_KEYBINDINGS) scoped[binding] = [];
+  keybindings.setUserBindings(scoped);
+
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    const current = keybindings.getUserBindings();
+    const next = { ...current };
+    for (const binding of FULLSCREEN_VIEWPORT_KEYBINDINGS) {
+      const currentKeys = current[binding];
+      if (!Array.isArray(currentKeys) || currentKeys.length !== 0) continue;
+      if (Object.hasOwn(original, binding)) next[binding] = original[binding];
+      else delete next[binding];
+    }
+    keybindings.setUserBindings(next);
+  };
+}
+
+function captureFullscreenViewportBindings(keybindings: KeybindingsManager): SubagentViewportKeybindings {
+  return {
+    pageUp: keybindings.getKeys("tui.altScreen.pageUp"),
+    pageDown: keybindings.getKeys("tui.altScreen.pageDown"),
+    halfPageUp: keybindings.getKeys("tui.altScreen.halfPageUp"),
+    halfPageDown: keybindings.getKeys("tui.altScreen.halfPageDown"),
+    top: keybindings.getKeys("tui.altScreen.top"),
+    bottom: keybindings.getKeys("tui.altScreen.bottom"),
+  };
 }
 
 class SubagentSelector implements Component {
@@ -156,7 +207,12 @@ class SubagentCommandOverlay implements Component {
   private readonly done: () => void;
   private readonly notifyUnavailable: (sessionId: string) => void;
   private readonly nodes: SubagentNode[];
+  private readonly viewportKeybindings: SubagentViewportKeybindings;
+  private readonly restoreFullscreenViewportBindings: () => void;
   private current: DisposableComponent;
+  private closeTimer: ReturnType<typeof setTimeout> | undefined;
+  private closing = false;
+  private disposed = false;
 
   constructor(options: {
     tui: TUI;
@@ -175,7 +231,43 @@ class SubagentCommandOverlay implements Component {
     this.done = options.done;
     this.notifyUnavailable = options.notifyUnavailable;
     this.nodes = options.nodes;
-    this.current = options.initialTarget ? this.createSessionPanel(options.initialTarget) : this.createSelector();
+    const fullscreen = this.tui.mode === "fullscreen";
+    this.viewportKeybindings = fullscreen
+      ? captureFullscreenViewportBindings(this.keybindings)
+      : EMPTY_VIEWPORT_KEYBINDINGS;
+    this.restoreFullscreenViewportBindings = fullscreen
+      ? disableFullscreenViewportBindings(this.keybindings)
+      : () => undefined;
+    try {
+      this.current = options.initialTarget ? this.createSessionPanel(options.initialTarget) : this.createSelector();
+    } catch (error) {
+      this.restoreFullscreenViewportBindings();
+      throw error;
+    }
+  }
+
+  private requestClose(): void {
+    if (this.closing || this.disposed) return;
+    this.closing = true;
+    if (this.closeTimer !== undefined) {
+      clearTimeout(this.closeTimer);
+      this.closeTimer = undefined;
+    }
+    try {
+      this.done();
+    } finally {
+      this.restoreFullscreenViewportBindings();
+    }
+  }
+
+  private scheduleClose(): void {
+    if (this.closeTimer !== undefined) return;
+    // showExtensionCustom stores the component in a promise continuation; defer past that
+    // continuation so its close path can dispose this overlay.
+    this.closeTimer = setTimeout(() => {
+      this.closeTimer = undefined;
+      this.requestClose();
+    }, 0);
   }
 
   private createSelector(): SubagentSelector {
@@ -185,7 +277,7 @@ class SubagentCommandOverlay implements Component {
       keybindings: this.keybindings,
       nodes: this.nodes,
       onSelect: (node) => this.showSession(node),
-      onCancel: this.done,
+      onCancel: () => this.requestClose(),
     });
   }
 
@@ -195,7 +287,7 @@ class SubagentCommandOverlay implements Component {
       const fallback = resolveSubagentTarget(this.cwd, this.nodes, currentTarget.sessionId);
       if (!fallback || fallback === "ambiguous") {
         this.notifyUnavailable(currentTarget.sessionId);
-        queueMicrotask(this.done);
+        this.scheduleClose();
         return this.createSelector();
       }
       currentTarget = fallback;
@@ -204,11 +296,12 @@ class SubagentCommandOverlay implements Component {
       tui: this.tui,
       theme: this.theme,
       keybindings: this.keybindings,
-      done: this.done,
+      done: () => this.requestClose(),
       sessionId: currentTarget.sessionId,
       source: currentTarget.source,
       getNode: currentTarget.getNode,
       subscribeRegistry: (listener) => subagentRegistry.onChange(listener),
+      viewportKeybindings: this.viewportKeybindings,
     });
   }
 
@@ -216,7 +309,7 @@ class SubagentCommandOverlay implements Component {
     const target = resolveSubagentTarget(this.cwd, this.nodes, node.sessionId);
     if (!target || target === "ambiguous") {
       this.notifyUnavailable(node.sessionId);
-      queueMicrotask(this.done);
+      this.scheduleClose();
       return;
     }
     const next = this.createSessionPanel(target);
@@ -238,7 +331,17 @@ class SubagentCommandOverlay implements Component {
   }
 
   dispose(): void {
-    this.current.dispose?.();
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.closeTimer !== undefined) {
+      clearTimeout(this.closeTimer);
+      this.closeTimer = undefined;
+    }
+    try {
+      this.current.dispose?.();
+    } finally {
+      this.restoreFullscreenViewportBindings();
+    }
   }
 }
 

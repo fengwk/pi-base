@@ -56,7 +56,8 @@ describe("configured compaction model", () => {
     const auth = {
       ok: true as const,
       apiKey: "summary-key",
-      headers: { "x-summary": "true" },
+      headers: { "x-summary": "true", "x-delete": null },
+      baseUrl: "https://summary.example/v1",
       env: { SUMMARY_ENV: "1" },
     };
     const find = vi.fn().mockReturnValue(configuredModel);
@@ -89,9 +90,9 @@ describe("configured compaction model", () => {
     expect(getApiKeyAndHeaders).toHaveBeenCalledWith(configuredModel);
     expect(runCompact).toHaveBeenCalledWith(
       event.preparation,
-      configuredModel,
+      { ...configuredModel, baseUrl: auth.baseUrl },
       auth.apiKey,
-      auth.headers,
+      { "x-summary": "true" },
       event.customInstructions,
       signal,
       "high",

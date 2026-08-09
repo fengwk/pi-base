@@ -10,8 +10,10 @@ import {
   Container,
   type Component,
   type KeybindingsManager,
+  matchesKey,
   Spacer,
   type TUI,
+  type KeyId,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -26,6 +28,36 @@ import type {
 const PANEL_MARGIN_ROWS = 2;
 
 type ToolEndEvent = Extract<AgentSessionEvent, { type: "tool_execution_end" }>;
+
+export interface SubagentViewportKeybindings {
+  pageUp: readonly KeyId[];
+  pageDown: readonly KeyId[];
+  halfPageUp: readonly KeyId[];
+  halfPageDown: readonly KeyId[];
+  top: readonly KeyId[];
+  bottom: readonly KeyId[];
+}
+
+const EMPTY_VIEWPORT_KEYBINDINGS: SubagentViewportKeybindings = {
+  pageUp: [],
+  pageDown: [],
+  halfPageUp: [],
+  halfPageDown: [],
+  top: [],
+  bottom: [],
+};
+
+function matchesAnyKey(data: string, keys: readonly KeyId[]): boolean {
+  return keys.some((key) => matchesKey(data, key));
+}
+
+function preferredKeys(preferred: readonly KeyId[], fallback: readonly KeyId[]): readonly KeyId[] {
+  return preferred.length > 0 ? preferred : fallback;
+}
+
+function formatKeys(keys: readonly KeyId[]): string {
+  return keys.length > 0 ? keys.join("/") : "?";
+}
 
 function userText(message: Extract<SubagentViewMessage, { role: "user" }>): string {
   if (typeof message.content === "string") return message.content.trim();
@@ -57,6 +89,7 @@ export class SubagentSessionPanel implements Component {
   private readonly sessionId: string;
   private readonly source: SubagentViewSource;
   private readonly getNode: () => SubagentNode | undefined;
+  private readonly viewportKeybindings: SubagentViewportKeybindings;
   private readonly transcript = new Container();
   private readonly pendingTools = new Map<string, ToolExecutionComponent>();
   private readonly toolComponents = new Set<ToolExecutionComponent>();
@@ -79,6 +112,7 @@ export class SubagentSessionPanel implements Component {
     source: SubagentViewSource;
     getNode: () => SubagentNode | undefined;
     subscribeRegistry: (listener: () => void) => () => void;
+    viewportKeybindings?: SubagentViewportKeybindings;
   }) {
     this.tui = options.tui;
     this.theme = options.theme;
@@ -87,9 +121,16 @@ export class SubagentSessionPanel implements Component {
     this.sessionId = options.sessionId;
     this.source = options.source;
     this.getNode = options.getNode;
+    this.viewportKeybindings = options.viewportKeybindings ?? EMPTY_VIEWPORT_KEYBINDINGS;
     this.rebuildFromSnapshot();
-    this.unsubscribeSession = this.source.subscribe((event) => this.handleSessionEvent(event));
-    this.unsubscribeRegistry = options.subscribeRegistry(() => this.tui.requestRender());
+    const unsubscribeSession = this.source.subscribe((event) => this.handleSessionEvent(event));
+    try {
+      this.unsubscribeRegistry = options.subscribeRegistry(() => this.tui.requestRender());
+      this.unsubscribeSession = unsubscribeSession;
+    } catch (error) {
+      unsubscribeSession();
+      throw error;
+    }
   }
 
   private createTool(toolName: string, toolCallId: string, args: unknown): ToolExecutionComponent {
@@ -252,7 +293,43 @@ export class SubagentSessionPanel implements Component {
     this.tui.requestRender();
   }
 
+  private moveToTop(): void {
+    this.scrollTop = 0;
+    this.followTail = this.lastMaxScroll === 0;
+    this.tui.requestRender();
+  }
+
+  private moveToBottom(): void {
+    this.followTail = true;
+    this.scrollTop = this.lastMaxScroll;
+    this.tui.requestRender();
+  }
+
   handleInput(data: string): void {
+    if (matchesAnyKey(data, this.viewportKeybindings.pageUp)) {
+      this.moveScroll(-this.lastViewportHeight);
+      return;
+    }
+    if (matchesAnyKey(data, this.viewportKeybindings.pageDown)) {
+      this.moveScroll(this.lastViewportHeight);
+      return;
+    }
+    if (matchesAnyKey(data, this.viewportKeybindings.halfPageUp)) {
+      this.moveScroll(-Math.max(1, Math.floor(this.lastViewportHeight / 2)));
+      return;
+    }
+    if (matchesAnyKey(data, this.viewportKeybindings.halfPageDown)) {
+      this.moveScroll(Math.max(1, Math.floor(this.lastViewportHeight / 2)));
+      return;
+    }
+    if (matchesAnyKey(data, this.viewportKeybindings.top)) {
+      this.moveToTop();
+      return;
+    }
+    if (matchesAnyKey(data, this.viewportKeybindings.bottom)) {
+      this.moveToBottom();
+      return;
+    }
     if (this.keybindings.matches(data, "tui.select.cancel")) {
       this.done();
       return;
@@ -274,15 +351,11 @@ export class SubagentSessionPanel implements Component {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorLineStart")) {
-      this.followTail = false;
-      this.scrollTop = 0;
-      this.tui.requestRender();
+      this.moveToTop();
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorLineEnd")) {
-      this.followTail = true;
-      this.scrollTop = this.lastMaxScroll;
-      this.tui.requestRender();
+      this.moveToBottom();
       return;
     }
     if (this.keybindings.matches(data, "app.tools.expand")) {
@@ -305,7 +378,10 @@ export class SubagentSessionPanel implements Component {
     if (contentLines.length === 0) contentLines.push(this.theme.fg("muted", "Waiting for subagent output..."));
     const maxScroll = Math.max(0, contentLines.length - viewportHeight);
     if (this.followTail) this.scrollTop = maxScroll;
-    else this.scrollTop = Math.min(this.scrollTop, maxScroll);
+    else {
+      this.scrollTop = Math.min(this.scrollTop, maxScroll);
+      if (this.scrollTop >= maxScroll) this.followTail = true;
+    }
     this.lastMaxScroll = maxScroll;
     this.lastViewportHeight = viewportHeight;
 
@@ -317,9 +393,22 @@ export class SubagentSessionPanel implements Component {
     const model = this.source.getModel?.();
     const modelLabel = model ? ` · ${model.provider}/${model.modelId}` : "";
     const title = ` subagent ${agentType} · ${status}${modelLabel} · turns: ${turns} · tool calls: ${toolCount} `;
-    const footer = this.followTail
-      ? " Esc close · ↑/↓ scroll · PgUp/PgDn · Home/End · Ctrl+O expand "
-      : " Esc close · End follow latest · ↑/↓ scroll · PgUp/PgDn · Ctrl+O expand ";
+    const pageUpKeys = preferredKeys(this.viewportKeybindings.pageUp, this.keybindings.getKeys("tui.select.pageUp"));
+    const pageDownKeys = preferredKeys(this.viewportKeybindings.pageDown, this.keybindings.getKeys("tui.select.pageDown"));
+    const halfPageUpKeys = this.viewportKeybindings.halfPageUp;
+    const halfPageDownKeys = this.viewportKeybindings.halfPageDown;
+    const topKeys = preferredKeys(this.viewportKeybindings.top, this.keybindings.getKeys("tui.editor.cursorLineStart"));
+    const bottomKeys = preferredKeys(this.viewportKeybindings.bottom, this.keybindings.getKeys("tui.editor.cursorLineEnd"));
+    const navigationParts = [
+      `${formatKeys(this.keybindings.getKeys("tui.select.up"))}/${formatKeys(this.keybindings.getKeys("tui.select.down"))} scroll`,
+      `${formatKeys(pageUpKeys)}/${formatKeys(pageDownKeys)} page`,
+      `${formatKeys(topKeys)}/${formatKeys(bottomKeys)} top/bottom${this.followTail ? "" : " (bottom follows latest)"}`,
+    ];
+    if (halfPageUpKeys.length > 0 || halfPageDownKeys.length > 0) {
+      navigationParts.push(`${formatKeys(halfPageUpKeys)}/${formatKeys(halfPageDownKeys)} half-page`);
+    }
+    const navigation = navigationParts.join(" · ");
+    const footer = ` ${formatKeys(this.keybindings.getKeys("tui.select.cancel"))} close · ${navigation} · ${formatKeys(this.keybindings.getKeys("app.tools.expand"))} expand `;
     const visible = contentLines.slice(this.scrollTop, this.scrollTop + viewportHeight);
     while (visible.length < viewportHeight) visible.push("");
 
