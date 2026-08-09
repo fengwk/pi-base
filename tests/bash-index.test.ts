@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { buildHostShellOptionsFor, describeOsNoteFor, describeShellFor, detectOsLabel, detectOsLabelFrom, registerBashRendererTool } from "../src/bash-renderer.js";
+import { buildHostShellOptionsFor, describeShellFor, registerBashRendererTool } from "../src/bash-renderer.js";
 import piBaseExtension from "../index.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 import { lspManager } from "../src/lsp/client.js";
@@ -16,55 +16,6 @@ function registerMockTool(registry: ReturnType<typeof createToolRegistry>, name:
 }
 
 describe("bash tool and index", () => {
-  it("detects WSL from environment variables and proc fallbacks", () => {
-    expect(detectOsLabelFrom({ platform: "linux", env: { WSL_DISTRO_NAME: "Ubuntu" } })).toBe("wsl");
-    expect(detectOsLabelFrom({ platform: "linux", env: { WSL_INTEROP: "/run/WSL" } })).toBe("wsl");
-    expect(
-      detectOsLabelFrom({
-        platform: "linux",
-        env: {},
-        readTextFile: (path) => (path === "/proc/version" ? "Linux version 5.15.90.1-microsoft-standard-WSL2" : undefined),
-      }),
-    ).toBe("wsl");
-    expect(
-      detectOsLabelFrom({
-        platform: "linux",
-        env: {},
-        readTextFile: (path) => (path === "/proc/sys/kernel/osrelease" ? "5.15.90.1-microsoft-standard-WSL2" : undefined),
-      }),
-    ).toBe("wsl");
-  });
-
-  it("distinguishes plain linux, macos, and windows", () => {
-    expect(detectOsLabelFrom({ platform: "linux", env: {}, readTextFile: () => "Linux version generic" })).toBe("linux");
-    expect(detectOsLabelFrom({ platform: "darwin", env: {} })).toBe("macos");
-    expect(detectOsLabelFrom({ platform: "win32", env: {} })).toBe("windows");
-    expect(describeOsNoteFor("wsl")).toContain("/mnt/<drive>");
-    expect(describeOsNoteFor("linux")).toBe("Linux environment.");
-    expect(describeOsNoteFor("macos")).toBe("macOS environment.");
-    expect(describeOsNoteFor("windows")).toBe("Windows environment.");
-    expect(describeOsNoteFor("plan9")).toBe("plan9 environment.");
-  });
-
-  it("detects the current runtime platform label", () => {
-    expect(["linux", "wsl", "macos", "windows"]).toContain(detectOsLabel());
-  });
-
-  it("falls back to proc files when WSL environment variables are absent", () => {
-    const previousDistro = process.env.WSL_DISTRO_NAME;
-    const previousInterop = process.env.WSL_INTEROP;
-    try {
-      delete process.env.WSL_DISTRO_NAME;
-      delete process.env.WSL_INTEROP;
-      expect(["linux", "wsl", "macos", "windows"]).toContain(detectOsLabel());
-    } finally {
-      if (previousDistro === undefined) delete process.env.WSL_DISTRO_NAME;
-      else process.env.WSL_DISTRO_NAME = previousDistro;
-      if (previousInterop === undefined) delete process.env.WSL_INTEROP;
-      else process.env.WSL_INTEROP = previousInterop;
-    }
-  });
-
   it("describes shell selection and host shell startup options", () => {
     expect(describeShellFor({ platform: "linux", shellPath: "/bin/bash" })).toBe("bash");
     expect(describeShellFor({ platform: "linux", shellPath: "/bin/zsh" })).toBe("zsh");

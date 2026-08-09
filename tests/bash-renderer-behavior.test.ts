@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectOsLabelFrom, registerBashRendererTool } from "../src/bash-renderer.js";
+import { registerBashRendererTool } from "../src/bash-renderer.js";
 import { createToolRegistry } from "./helpers.js";
 
 function render(component: any): string {
@@ -18,16 +18,6 @@ describe("bash renderer behavior", () => {
     expect(rendered).toContain("$ <missing-command>");
     expect(rendered).toContain("timeout 9s");
     expect(rendered).not.toContain("(default)");
-  });
-
-  it("falls back cleanly when proc file reads throw during OS detection", () => {
-    expect(detectOsLabelFrom({
-      platform: "linux",
-      env: {},
-      readTextFile: () => {
-        throw new Error("boom");
-      },
-    })).toBe("linux");
   });
 
   it("falls back to the pi-base renderer when an injected builtin renderer throws", () => {

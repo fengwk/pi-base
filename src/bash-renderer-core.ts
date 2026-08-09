@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { DEFAULT_MAX_BYTES, formatSize, type BashToolOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -134,54 +133,6 @@ function hostShellName(shellPath: string | undefined): string | undefined {
 
 export type RuntimePlatform = NodeJS.Platform | string;
 
-export function detectOsLabelFrom(options: {
-  platform: RuntimePlatform;
-  env: Record<string, string | undefined>;
-  readTextFile?: (path: string) => string | undefined;
-}): string {
-  const { platform, env, readTextFile } = options;
-  if (platform === "win32") return "windows";
-  if (platform === "darwin") return "macos";
-  if (platform !== "linux") return platform;
-
-  if (env.WSL_DISTRO_NAME || env.WSL_INTEROP) return "wsl";
-  try {
-    const procVersion = readTextFile?.("/proc/version")?.toLowerCase();
-    if (procVersion?.includes("microsoft")) return "wsl";
-  } catch {
-    // ignore
-  }
-  try {
-    const osRelease = readTextFile?.("/proc/sys/kernel/osrelease")?.toLowerCase();
-    if (osRelease?.includes("microsoft")) return "wsl";
-  } catch {
-    // ignore
-  }
-  return "linux";
-}
-
-export function detectOsLabel(): string {
-  return detectOsLabelFrom({
-    platform: process.platform,
-    env: process.env,
-    readTextFile: (path) => readFileSync(path, "utf8"),
-  });
-}
-
-export function describeOsNoteFor(os: string): string {
-  if (os === "wsl") {
-    return "WSL environment. Windows files may be accessible under /mnt/<drive>, and some Windows commands may be invocable from WSL.";
-  }
-  if (os === "linux") return "Linux environment.";
-  if (os === "macos") return "macOS environment.";
-  if (os === "windows") return "Windows environment.";
-  return `${os} environment.`;
-}
-
-function describeOsNote(): string {
-  return describeOsNoteFor(detectOsLabel());
-}
-
 export function describeShellFor(options: { platform: RuntimePlatform; shellPath: string | undefined }): string {
   const { platform, shellPath } = options;
   const shellName = hostShellName(shellPath);
@@ -196,7 +147,7 @@ function describeShell(): string {
 
 // loadToolDescription wraps each key as ${key}, so these must be bare names.
 function bashPromptReplacements(): Record<string, string> {
-  return { os: detectOsLabel(), shell: describeShell(), osNote: describeOsNote() };
+  return { shell: describeShell() };
 }
 
 export function loadBashDescription(): string {

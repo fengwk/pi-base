@@ -17,13 +17,7 @@ import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 
 const BASH_DEFAULT_TIMEOUT_SECONDS = 120;
 
-export {
-  buildHostShellOptionsFor,
-  describeOsNoteFor,
-  describeShellFor,
-  detectOsLabel,
-  detectOsLabelFrom,
-} from "./bash-renderer-core.js";
+export { buildHostShellOptionsFor, describeShellFor } from "./bash-renderer-core.js";
 
 export function registerBashRendererTool(
   pi: Pick<ExtensionAPI, "registerTool">,

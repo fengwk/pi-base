@@ -1,9 +1,6 @@
 Run build, test, git, package-manager, move/copy, and external CLI commands.
 
-Environment:
-- OS: ${os}
-- Shell: ${shell}
-- Note: ${osNote}
+Shell: ${shell}
 
 Usage:
 - Use `bash` for commands, not as the default way to read, search, or edit repository files.

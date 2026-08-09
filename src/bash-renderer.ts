@@ -1,1 +1,1 @@
-export { registerBashRendererTool, buildHostShellOptionsFor, describeOsNoteFor, describeShellFor, detectOsLabel, detectOsLabelFrom } from "./bash-renderer-register.js";
+export { registerBashRendererTool, buildHostShellOptionsFor, describeShellFor } from "./bash-renderer-register.js";
