@@ -1,4 +1,4 @@
-import { Text } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 
 const INTERNAL_DEFAULT_COLLAPSED_RESULT_LINES = {
@@ -216,7 +216,7 @@ class StreamingCallWindowComponent {
       s.cachedWidth = width;
     }
     if (s.cachedSkipped && s.cachedSkipped > 0) {
-      const hint = styleMuted(s.theme, `... (${s.cachedSkipped} earlier lines)`);
+      const hint = truncateToWidth(styleMuted(s.theme, `... (${s.cachedSkipped} earlier lines)`), width);
       return [s.cachedTitle ?? "", "", hint, ...(s.cachedTail ?? [])];
     }
     return s.cachedFull ?? [];

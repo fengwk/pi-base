@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import piBaseExtension from "../index.js";
+import { createMcpToolDefinition } from "../src/mcp/adapter.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 function render(component: any): string {
@@ -53,6 +56,77 @@ describe("tool renderers", () => {
         const result = render(tool.renderResult({ content: [{ type: "text", text: "line-1\nline-2" }] }, { expanded: true, isPartial: false }, {} as any, { lastComponent: undefined }));
         expect(call.length).toBeGreaterThan(0);
         expect(result).toContain("line-1");
+      }
+    });
+  });
+
+  it("keeps host-rendered tool rows within fullscreen width bounds across lifecycle transitions", async () => {
+    // Intent: exercise Pi's real ToolExecutionComponent shell, component reuse, and narrow-width contract for every renderer family.
+    await withTempGlobalPiBaseConfig({}, async (root) => {
+      const registry = createToolRegistry({ cwd: root });
+      piBaseExtension(registry.pi as any);
+      const longText = `错误🙂-${"界".repeat(30)}`;
+      const resultText = Array.from({ length: 24 }, (_, index) => `line-${index}-${longText}`).join("\n");
+      const mcpDefinition = createMcpToolDefinition({
+        serverKey: "demo",
+        serverConfig: {} as any,
+        tool: {
+          name: "echo",
+          description: "Echo input",
+          inputSchema: { type: "object", properties: { payload: { type: "string" } } },
+        },
+        callTool: async () => ({ content: [] }),
+      });
+      const cases = [
+        { name: "read", args: { path: `src/${longText}.ts`, offset: 1, limit: 20 } },
+        { name: "grep", args: { pattern: longText, path: "src", include: "**/*.ts" } },
+        { name: "find", args: { pattern: `*${longText}*`, path: "src" } },
+        { name: "bash", args: { command: `printf '%s\\n' ${longText}`, timeout_seconds: 5 } },
+        { name: "edit", args: { path: "src/demo.ts", old_string: longText, new_string: `${longText}x` }, isError: true },
+        { name: "write", args: { path: "src/demo.ts", content: `${longText}\n${resultText}` } },
+        { name: "apply_patch", args: { patchText: `*** Begin Patch\n*** Add File: demo.txt\n+${longText}\n*** End Patch\n` } },
+        { name: "lsp_goto_definition", args: { path: "src/demo.ts", line: 3, character: 0 } },
+        { name: "lsp_workspace_symbols", args: { path: "src/demo.ts", query: longText, limit: 20 } },
+        { name: "lsp_java_decompile", args: { path: "src/App.java", target: `jdt://${longText}` } },
+        { name: "task", args: { subagent_type: "explorer", prompt: resultText } },
+        { name: mcpDefinition.name, args: { payload: resultText }, definition: mcpDefinition },
+      ];
+      const tui = { requestRender: () => undefined } as any;
+      const assertWidthBound = (name: string, component: ToolExecutionComponent) => {
+        for (const width of [16, 32, 80]) {
+          const lines = component.render(width);
+          expect(lines.length, `${name} should render at width ${width}`).toBeGreaterThan(0);
+          expect(
+            lines.every((line) => visibleWidth(line) <= width),
+            `${name} exceeded width ${width}`,
+          ).toBe(true);
+        }
+      };
+
+      for (const testCase of cases) {
+        const component = new ToolExecutionComponent(
+          testCase.name,
+          `render-${testCase.name}`,
+          testCase.args,
+          { showImages: false },
+          testCase.definition ?? registry.getTool(testCase.name),
+          tui,
+          root,
+        );
+        assertWidthBound(`${testCase.name} streaming call`, component);
+        component.setArgsComplete();
+        component.markExecutionStarted();
+        assertWidthBound(`${testCase.name} started call`, component);
+        const result = {
+          content: [{ type: "text", text: resultText }],
+          isError: testCase.isError ?? false,
+        };
+        component.updateResult(result, true);
+        assertWidthBound(`${testCase.name} partial result`, component);
+        component.updateResult(result);
+        assertWidthBound(`${testCase.name} collapsed result`, component);
+        component.setExpanded(true);
+        assertWidthBound(`${testCase.name} expanded result`, component);
       }
     });
   });

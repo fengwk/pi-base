@@ -1,3 +1,4 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { renderRawResult, renderStreamingCallText, resolveCollapsedResultLines, resolveToolPatternValue } from "../src/render.js";
 
@@ -173,6 +174,25 @@ describe("render helpers", () => {
     // Earlier lines are hidden behind the rolling window
     expect(rendered).not.toContain("line-3");
     expect(rendered).toContain("earlier lines");
+  });
+
+  it("keeps the streaming window within narrow and resized render widths", () => {
+    // Intent: fullscreen layout may become very narrow; the synthetic fold hint must obey the same width contract as Text.
+    const raw = ["write", "", ...Array.from({ length: 30 }, (_, index) => `第${index + 1}行-${"界".repeat(12)}`)].join("\n");
+    const ansiTheme = {
+      fg: (_color: string, text: string) => `\x1b[2m${text}\x1b[22m`,
+    };
+    const component = renderStreamingCallText(raw, ansiTheme, {
+      lastComponent: undefined,
+      argsComplete: false,
+      expanded: false,
+    });
+
+    for (const width of [16, 8, 32]) {
+      const lines = component.render(width);
+      expect(lines.some((line: string) => line.includes("earlier") || line.includes("..."))).toBe(true);
+      expect(lines.every((line: string) => visibleWidth(line) <= width)).toBe(true);
+    }
   });
 
   it("leaves completed call text unchanged", () => {
