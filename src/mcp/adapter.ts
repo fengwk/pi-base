@@ -27,7 +27,7 @@ export function buildMcpToolName(serverKey: string, toolName: string, toolPrefix
   return prefix === "" ? toolName : `${prefix}_${toolName}`;
 }
 
-const MCP_DEFAULT_COLLAPSED_RESULT_MAX_CHARS = 10_000;
+const MCP_DEFAULT_COLLAPSED_RESULT_MAX_CHARS = 2_500;
 export function createMcpToolDefinition(options: CreateMcpToolDefinitionOptions): ToolDefinition<TSchema, { server: string; tool: string }> {
   const { serverKey, serverConfig, tool, callTool, getCollapsedResultLines, getCollapsedResultMaxChars } = options;
   const aliasName = buildMcpToolName(serverKey, tool.name, serverConfig.toolPrefix);

@@ -272,6 +272,54 @@ describe("mcp support", () => {
     expect(expandedText).toContain(longLine);
     expect(expandedText).not.toContain("ctrl+o to expand");
   });
+  it("defaults collapsed MCP results to 2500 characters while expansion stays complete", () => {
+    // Intent: large single-line MCP payloads must stay compact by default without losing data from the expanded view.
+    const tool = createMcpToolDefinition({
+      serverKey: "demo",
+      serverConfig: {} as any,
+      tool: echoTool,
+      callTool: async () => ({ content: [] }),
+    });
+    const longLine = "x".repeat(3_000);
+    const result = {
+      content: [{ type: "text" as const, text: longLine }],
+      details: { server: "demo", tool: "echo" },
+    };
+    const context = {
+      args: { text: "hello" },
+      toolCallId: "default-limit",
+      invalidate() {},
+      state: {},
+      cwd: "/tmp/work",
+      executionStarted: true,
+      argsComplete: true,
+      isPartial: false,
+      expanded: false,
+      showImages: false,
+      isError: false,
+      lastComponent: undefined,
+    };
+
+    const collapsed = tool.renderResult?.(
+      result,
+      { expanded: false, isPartial: false },
+      {} as any,
+      context as any,
+    ).render(4_000).join("\n");
+    expect(collapsed).toContain("x".repeat(2_500));
+    expect(collapsed).not.toContain("x".repeat(2_501));
+    expect(collapsed).toContain("output truncated");
+    expect(collapsed).toContain("ctrl+o to expand");
+
+    const expanded = tool.renderResult?.(
+      result,
+      { expanded: true, isPartial: false },
+      {} as any,
+      { ...context, expanded: true } as any,
+    ).render(4_000).join("\n");
+    expect(expanded).toContain(longLine);
+    expect(expanded).not.toContain("output truncated");
+  });
   it("omits an empty JSON block for no-argument MCP tools", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
