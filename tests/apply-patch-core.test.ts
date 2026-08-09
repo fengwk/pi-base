@@ -1,7 +1,7 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import iconv from "iconv-lite";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -309,6 +309,68 @@ describe("apply_patch parser", () => {
 
     expect(await exists(join(root, "old.txt"))).toBe(false);
     expect(await readFile(join(root, "new.txt"), "utf8")).toBe("source\n");
+  });
+
+  it("preserves the source permission bits when Move overwrites a regular destination", async () => {
+    // Intent: writeFile's creation default is commonly 0644 and its overwrite path keeps the
+    // destination mode; an executable source therefore proves Move explicitly reapplies 0755.
+    const root = await createRoot();
+    const source = await put(root, "script.sh", "#!/bin/sh\necho ok\n");
+    const destination = await put(root, "installed.sh", "old\n");
+    if (process.platform !== "win32") {
+      await chmod(source, 0o755);
+      await chmod(destination, 0o600);
+    }
+
+    await executeApplyPatch(patch("*** Update File: script.sh", "*** Move to: installed.sh"), { cwd: root });
+
+    expect(await exists(source)).toBe(false);
+    expect(await readFile(destination, "utf8")).toBe("#!/bin/sh\necho ok\n");
+    if (process.platform !== "win32") expect((await stat(destination)).mode & 0o777).toBe(0o755);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a symbolic-link Move destination during global preflight without changing any path", async () => {
+    // Intent: lstat must identify the destination link itself before an earlier valid operation
+    // can commit; checking stat/readFile would follow the link and overwrite its referent.
+    const root = await createRoot();
+    const source = await put(root, "source.txt", "source\n");
+    const referent = await put(root, "referent.txt", "referent\n");
+    const destination = join(root, "destination.txt");
+    await symlink(referent, destination);
+
+    await expect(executeApplyPatch(patch(
+      "*** Add File: marker.txt",
+      "+must-not-commit",
+      "*** Update File: source.txt",
+      "*** Move to: destination.txt",
+    ), { cwd: root })).rejects.toThrow(/Move destination must not be a symbolic link/);
+
+    expect(await exists(join(root, "marker.txt"))).toBe(false);
+    expect(await readFile(source, "utf8")).toBe("source\n");
+    expect((await lstat(destination)).isSymbolicLink()).toBe(true);
+    expect(await readFile(referent, "utf8")).toBe("referent\n");
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a symbolic-link Move source during global preflight without changing any path", async () => {
+    // Intent: lstat must reject the source link before reading or deleting through it, and the
+    // all-files preflight guarantee must also keep an earlier valid Add from being committed.
+    const root = await createRoot();
+    const referent = await put(root, "referent.txt", "referent\n");
+    const source = join(root, "source.txt");
+    const destination = await put(root, "destination.txt", "destination\n");
+    await symlink(referent, source);
+
+    await expect(executeApplyPatch(patch(
+      "*** Add File: marker.txt",
+      "+must-not-commit",
+      "*** Update File: source.txt",
+      "*** Move to: destination.txt",
+    ), { cwd: root })).rejects.toThrow(/Move source must not be a symbolic link/);
+
+    expect(await exists(join(root, "marker.txt"))).toBe(false);
+    expect((await lstat(source)).isSymbolicLink()).toBe(true);
+    expect(await readFile(referent, "utf8")).toBe("referent\n");
+    expect(await readFile(destination, "utf8")).toBe("destination\n");
   });
 });
 
@@ -988,6 +1050,36 @@ describe("apply_patch commit races and aborts", () => {
     expect(error.failedMoveTo).toBe("destination.txt");
     expect(await readFile(source, "utf8")).toBe("source\n");
     expect(await readFile(destination, "utf8")).toBe("racer\n");
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a Move when source permission bits change after preflight", async () => {
+    // Intent: the committed marker proves preflight captured 0644 before a queued chmod changes
+    // only metadata; Move must treat that mode as stale and leave both source and target untouched.
+    const root = await createRoot();
+    const source = await put(root, "source.txt", "source\n");
+    const destination = await put(root, "destination.txt", "destination\n");
+    await chmod(source, 0o644);
+    await chmod(destination, 0o600);
+    const blocker = await createQueueBlocker(source);
+    const pending = executeApplyPatch(patch(
+      "*** Add File: marker.txt",
+      "+done",
+      "*** Update File: source.txt",
+      "*** Move to: destination.txt",
+    ), { cwd: root });
+    await waitFor(() => exists(join(root, "marker.txt")));
+    await chmod(source, 0o755);
+    blocker.release();
+    await blocker.done;
+
+    const error = await pending.catch((caught) => caught);
+    expect(error).toBeInstanceOf(ApplyPatchCommitError);
+    expect(error.message).toContain("permission bits changed");
+    expect(error.message).toContain("Already applied: marker.txt");
+    expect(await readFile(source, "utf8")).toBe("source\n");
+    expect((await stat(source)).mode & 0o777).toBe(0o755);
+    expect(await readFile(destination, "utf8")).toBe("destination\n");
+    expect((await stat(destination)).mode & 0o777).toBe(0o600);
   });
 
   it("locks opposite Move paths in a deterministic order", async () => {

@@ -4,6 +4,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { formatSkillsForPrompt, getAgentDir, parseFrontmatter, type BuildSystemPromptOptions, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
 import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
 import { projectFileMutationTools } from "./model-tool-routing.js";
+import { escapeXml } from "./xml.js";
 
 const DEFAULT_AGENT_NAME = "default";
 const TASK_SYSTEM_PROMPT = readFileSync(new URL("../prompts/task-system.md", import.meta.url), "utf8").trim();
@@ -105,6 +106,7 @@ export function registerAgentSupport(
   let catalog = loadAgentCatalog();
   let activeAgentName = DEFAULT_AGENT_NAME;
   let activeModelId: string | undefined;
+  const emittedAllowlistWarnings = new Set<string>();
   const subagentControls = options.subagentControls;
 
   // Add/remove the `task` delegation tool for the active agent: present only when the agent
@@ -170,6 +172,28 @@ export function registerAgentSupport(
     if (ctx.hasUI) ctx.ui.notify(message, "warning");
   };
 
+  const warnUnknownAllowlistEntries = (
+    ctx: ExtensionContext,
+    agent: AgentDefinition,
+    field: "tools" | "skills",
+    knownNames: readonly string[],
+  ): void => {
+    const configuredNames = agent[field];
+    if (configuredNames === undefined) return;
+    const known = new Set(knownNames);
+    const unknown = configuredNames.filter((name) => !known.has(name));
+    if (unknown.length === 0) return;
+    const warningKey = `${agent.filePath}:${field}:${unknown.join("\u0000")}`;
+    if (emittedAllowlistWarnings.has(warningKey)) return;
+    emittedAllowlistWarnings.add(warningKey);
+    const availability = field === "tools"
+      ? "They remain allowed and may activate if registered later."
+      : "They will stay hidden unless those skills become available.";
+    const message = `Agent "${agent.name}" declares ${field} that are not currently available: ${unknown.join(", ")}. ${availability}`;
+    console.warn(`pi-base agent warning: ${message}`);
+    if (ctx.hasUI) ctx.ui.notify(message, "warning");
+  };
+
   const allRegisteredToolNames = (): string[] => pi.getAllTools()
     .filter((tool) => options.isToolActivatable?.(tool) ?? true)
     .map((tool) => tool.name);
@@ -226,6 +250,14 @@ export function registerAgentSupport(
       return false;
     }
 
+    warnUnknownAllowlistEntries(ctx, agent, "tools", allRegisteredToolNames());
+    const previousModel = ctx.model;
+    const previousThinkingLevel = pi.getThinkingLevel();
+    const previousTools = [...pi.getActiveTools()];
+    let modelRollbackNeeded = false;
+    let thinkingAttempted = false;
+    let appliedModel: AgentModelRef | undefined;
+    let appliedThinkingLevel: AgentThinkingLevel | undefined;
     let modelId = ctx.model?.id;
     let canApplyThinkingLevel = options.applyModelThinking;
     if (options.applyModelThinking && agent.model) {
@@ -241,9 +273,14 @@ export function registerAgentSupport(
         canApplyThinkingLevel = false;
       } else {
         try {
+          modelRollbackNeeded = true;
           const success = await pi.setModel(model);
-          if (success) modelId = model.id;
+          if (success) {
+            modelId = model.id;
+            appliedModel = { provider: model.provider, modelId: model.id };
+          }
           if (!success) {
+            modelRollbackNeeded = false;
             console.warn(`Agent "${agent.name}": no auth configured for ${agent.model.provider}/${agent.model.modelId}. Agent switch will keep the current session model.`);
             if (ctx.hasUI) {
               ctx.ui.notify(`Agent "${agent.name}": no auth configured for ${agent.model.provider}/${agent.model.modelId}. Keeping the current session model.`, "warning");
@@ -266,7 +303,22 @@ export function registerAgentSupport(
 
     if (canApplyThinkingLevel && agent.thinkingLevel) {
       try {
+        thinkingAttempted = true;
         pi.setThinkingLevel(agent.thinkingLevel);
+        const effectiveThinkingLevel = pi.getThinkingLevel();
+        if (effectiveThinkingLevel === agent.thinkingLevel) {
+          appliedThinkingLevel = effectiveThinkingLevel;
+        } else {
+          console.warn(
+            `Agent "${agent.name}": requested thinking level ${agent.thinkingLevel}, but the session kept ${effectiveThinkingLevel}.`,
+          );
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              `Agent "${agent.name}": requested thinking level ${agent.thinkingLevel}, but the session kept ${effectiveThinkingLevel}.`,
+              "warning",
+            );
+          }
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`Agent "${agent.name}": failed to apply thinking level ${agent.thinkingLevel}: ${message}`);
@@ -279,7 +331,38 @@ export function registerAgentSupport(
       }
     }
 
-    pi.setActiveTools(applyTaskInjection(projectAgentTools(agent, modelId), agent, ctx));
+    try {
+      pi.setActiveTools(applyTaskInjection(projectAgentTools(agent, modelId), agent, ctx));
+    } catch (error) {
+      const activationMessage = error instanceof Error ? error.message : String(error);
+      const rollbackFailures: string[] = [];
+      if (modelRollbackNeeded) {
+        if (!previousModel) {
+          rollbackFailures.push("model: previous model is unavailable");
+        } else {
+          try {
+            const restored = await pi.setModel(previousModel);
+            if (!restored) rollbackFailures.push("model: setModel returned false");
+          } catch (rollbackError) {
+            rollbackFailures.push(`model: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+          }
+        }
+      }
+      if (thinkingAttempted) {
+        try {
+          pi.setThinkingLevel(previousThinkingLevel);
+        } catch (rollbackError) {
+          rollbackFailures.push(`thinking level: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        }
+      }
+      try {
+        pi.setActiveTools(previousTools);
+      } catch (rollbackError) {
+        rollbackFailures.push(`tools: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+      }
+      const rollbackSuffix = rollbackFailures.length > 0 ? ` Rollback failed: ${rollbackFailures.join("; ")}.` : "";
+      throw new Error(`failed to apply tools: ${activationMessage}.${rollbackSuffix}`);
+    }
 
     activeAgentName = agent.name;
     activeModelId = modelId;
@@ -296,9 +379,9 @@ export function registerAgentSupport(
       }
     }
     if (options.notify && ctx.hasUI) {
-      const selectedModel = agent.model ? ` model:${agent.model.provider}/${agent.model.modelId}` : "";
-      const selectedThinking = agent.thinkingLevel ? ` thinking:${agent.thinkingLevel}` : "";
-      const suffix = options.applyModelThinking && (selectedModel || selectedThinking) ? `${selectedModel}${selectedThinking}` : "";
+      const selectedModel = appliedModel ? ` model:${appliedModel.provider}/${appliedModel.modelId}` : "";
+      const selectedThinking = appliedThinkingLevel ? ` thinking:${appliedThinkingLevel}` : "";
+      const suffix = selectedModel || selectedThinking ? `${selectedModel}${selectedThinking}` : "";
       ctx.ui.notify(`Agent "${agent.name}" activated.${suffix}`, "info");
     }
     return true;
@@ -442,7 +525,7 @@ export function registerAgentSupport(
     pi.setActiveTools(applyTaskInjection(projectAgentTools(agent, activeModelId), agent, ctx));
   });
 
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     const activeAgent = resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
     if (!activeAgent) {
       const baseToolGuide = options.baseToolGuide.trim();
@@ -453,6 +536,7 @@ export function registerAgentSupport(
 
     const selectedTools = event.systemPromptOptions.selectedTools ?? pi.getActiveTools();
     const allSkills = event.systemPromptOptions.skills ?? [];
+    warnUnknownAllowlistEntries(ctx, activeAgent, "skills", allSkills.map((skill) => skill.name));
     const visibleSkills = skillsRenderableInPrompt(filterVisibleSkills(allSkills, activeAgent.skills));
     const customPrompt = resolveCustomPrompt(activeAgent, event.systemPromptOptions.customPrompt);
     const systemPrompt = buildAgentSystemPrompt(
@@ -592,20 +676,6 @@ function isFullwidthCodePoint(codePoint: number): boolean {
   return false;
 }
 
-/**
- * Escape a string for safe insertion into an XML text node or attribute value.
- * Mirrors pi-coding-agent's `formatSkillsForPrompt` helper so every XML section in the prompt
- * uses the same escaping rules.
- */
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
 function filterKnownTools(toolNames: string[] | undefined, allToolNames: string[]): string[] {
   if (toolNames === undefined) return [...allToolNames];
   const known = new Set(allToolNames);
@@ -706,7 +776,7 @@ function formatEnvBlock(cwd: string): string {
     "",
     "<env>",
     `  Current date: ${date}`,
-    `  Current working directory: ${normalizedCwd}`,
+    `  Current working directory: ${escapeXml(normalizedCwd)}`,
     "</env>",
   ].join("\n");
 }

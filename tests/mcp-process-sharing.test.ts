@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { McpSessionBinding } from "../src/mcp/binding.js";
 import { registerMcpSupport } from "../src/mcp/register.js";
 import { createMcpHub } from "../src/mcp/hub.js";
-import { DEPTH_ENTRY } from "../src/subagent/depth.js";
+import { createMcpHubRegistry } from "../src/mcp/registry.js";
+import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, rootSessionEntryData } from "../src/subagent/depth.js";
 import type { McpProtocolClient, McpToolCallResult } from "../src/mcp/types.js";
 import { createToolRegistry, getText } from "./helpers.js";
 
@@ -11,17 +13,27 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-function childSessionManager() {
+function rootSessionManager(rootSessionId: string) {
   return {
-    getEntries: () => [{ type: "custom", customType: DEPTH_ENTRY, data: { depth: 2 } }],
+    getEntries: () => [],
+    getSessionId: () => rootSessionId,
+  };
+}
+
+function childSessionManager(rootSessionId: string) {
+  return {
+    getEntries: () => [
+      { type: "custom", customType: DEPTH_ENTRY, data: { depth: 2 } },
+      { type: "custom", customType: ROOT_SESSION_ENTRY, data: rootSessionEntryData(rootSessionId) },
+    ],
     getSessionId: () => "child-session",
   };
 }
 
 describe("process-level MCP sharing", () => {
   it("starts one server, blocks parent and child readiness, and shares calls", async () => {
-    // Intent: all sessions in one Pi process must share one MCP client/server and
-    // wait for the same initial readiness barrier before their first prompt.
+    // Intent: a root and its children must share one MCP client/server and wait
+    // for the same initial readiness barrier before their first prompt.
     const ready = deferred();
     let factoryCalls = 0;
     let disconnectCalls = 0;
@@ -44,14 +56,12 @@ describe("process-level MCP sharing", () => {
         return disconnectCalls === 0;
       },
     };
-    const hub = createMcpHub();
     const config = {
       servers: {
         mm: { type: "local" as const, command: ["mock-mcp"], toolPrefix: "" },
       },
     };
     const options = {
-      hub,
       loadSettings: () => ({ settings: { mcp: config } } as any),
       clientFactory: () => {
         factoryCalls += 1;
@@ -63,14 +73,18 @@ describe("process-level MCP sharing", () => {
     const child = createToolRegistry({ cwd: "/workspace", hasUI: false });
     registerMcpSupport(root.pi as any, options);
     registerMcpSupport(child.pi as any, options);
+    const rootSessionId = "sharing-root";
 
     let rootStarted = false;
     let childStarted = false;
-    const rootStart = root.emit("session_start", { reason: "startup" }, { cwd: "/workspace" }).then(() => { rootStarted = true; });
+    const rootStart = root.emit("session_start", { reason: "startup" }, {
+      cwd: "/workspace",
+      sessionManager: rootSessionManager(rootSessionId),
+    }).then(() => { rootStarted = true; });
     const childStart = child.emit("session_start", { reason: "startup" }, {
       cwd: "/workspace",
       hasUI: false,
-      sessionManager: childSessionManager(),
+      sessionManager: childSessionManager(rootSessionId),
     }).then(() => { childStarted = true; });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -94,13 +108,16 @@ describe("process-level MCP sharing", () => {
     await child.emit("session_shutdown", { reason: "quit" }, {
       cwd: "/workspace",
       hasUI: false,
-      sessionManager: childSessionManager(),
+      sessionManager: childSessionManager(rootSessionId),
     });
     expect(disconnectCalls).toBe(0);
     expect(getText(await root.getTool("echo").execute("3", { text: "still-live" }, undefined, undefined, { cwd: "/workspace" })))
       .toBe("still-live");
 
-    await root.emit("session_shutdown", { reason: "quit" }, { cwd: "/workspace" });
+    await root.emit("session_shutdown", { reason: "quit" }, {
+      cwd: "/workspace",
+      sessionManager: rootSessionManager(rootSessionId),
+    });
     expect(disconnectCalls).toBe(1);
   });
 
@@ -124,9 +141,7 @@ describe("process-level MCP sharing", () => {
         return disconnectCalls === 0;
       },
     };
-    const hub = createMcpHub();
     const options = {
-      hub,
       loadSettings: () => ({
         settings: {
           mcp: {
@@ -146,18 +161,25 @@ describe("process-level MCP sharing", () => {
     const child = createToolRegistry({ cwd: "/workspace", hasUI: false });
     registerMcpSupport(root.pi as any, options);
     registerMcpSupport(child.pi as any, options);
+    const rootSessionId = "root-before-child";
 
     await Promise.all([
-      root.emit("session_start", { reason: "startup" }, { cwd: "/workspace" }),
+      root.emit("session_start", { reason: "startup" }, {
+        cwd: "/workspace",
+        sessionManager: rootSessionManager(rootSessionId),
+      }),
       child.emit("session_start", { reason: "startup" }, {
         cwd: "/workspace",
         hasUI: false,
-        sessionManager: childSessionManager(),
+        sessionManager: childSessionManager(rootSessionId),
       }),
     ]);
     expect(factoryCalls).toBe(1);
 
-    await root.emit("session_shutdown", { reason: "quit" }, { cwd: "/workspace" });
+    await root.emit("session_shutdown", { reason: "quit" }, {
+      cwd: "/workspace",
+      sessionManager: rootSessionManager(rootSessionId),
+    });
     expect(disconnectCalls).toBe(0);
     expect(getText(await child.getTool("echo").execute("1", { text: "still-live" }, undefined, undefined, { cwd: "/workspace" })))
       .toBe("still-live");
@@ -165,7 +187,125 @@ describe("process-level MCP sharing", () => {
     await child.emit("session_shutdown", { reason: "quit" }, {
       cwd: "/workspace",
       hasUI: false,
-      sessionManager: childSessionManager(),
+      sessionManager: childSessionManager(rootSessionId),
+    });
+    expect(disconnectCalls).toBe(1);
+  });
+
+  it("isolates simultaneous roots with different MCP configurations", async () => {
+    // Intent: the production process registry is keyed by root session, so one
+    // root's server discovery and calls cannot replace another root's tools.
+    const calls: string[] = [];
+    const createClient = (toolName: string, result: string): McpProtocolClient => ({
+      async connect() {},
+      async disconnect() {},
+      async listTools() {
+        return [{ name: toolName, inputSchema: { type: "object" } }];
+      },
+      async callTool(name): Promise<McpToolCallResult> {
+        calls.push(name);
+        return { content: [{ type: "text", text: result }] };
+      },
+      isConnected() {
+        return true;
+      },
+    });
+    const rootA = createToolRegistry({ cwd: "/workspace-a" });
+    const rootB = createToolRegistry({ cwd: "/workspace-b" });
+    registerMcpSupport(rootA.pi as any, {
+      loadSettings: () => ({
+        settings: { mcp: { servers: { a: { type: "local", command: ["server-a"], toolPrefix: "" } } } },
+      } as any),
+      clientFactory: () => createClient("tool_a", "result-a"),
+      heartbeatIntervalMs: 10_000,
+    });
+    registerMcpSupport(rootB.pi as any, {
+      loadSettings: () => ({
+        settings: { mcp: { servers: { b: { type: "local", command: ["server-b"], toolPrefix: "" } } } },
+      } as any),
+      clientFactory: () => createClient("tool_b", "result-b"),
+      heartbeatIntervalMs: 10_000,
+    });
+
+    await Promise.all([
+      rootA.emit("session_start", { reason: "startup" }, {
+        cwd: "/workspace-a",
+        sessionManager: rootSessionManager("isolated-root-a"),
+      }),
+      rootB.emit("session_start", { reason: "startup" }, {
+        cwd: "/workspace-b",
+        sessionManager: rootSessionManager("isolated-root-b"),
+      }),
+    ]);
+
+    expect(rootA.getTool("tool_a")).toBeDefined();
+    expect(() => rootA.getTool("tool_b")).toThrow("Tool not registered");
+    expect(rootB.getTool("tool_b")).toBeDefined();
+    expect(() => rootB.getTool("tool_a")).toThrow("Tool not registered");
+    expect(getText(await rootA.getTool("tool_a").execute("a", {}, undefined, undefined, { cwd: "/workspace-a" })))
+      .toBe("result-a");
+    expect(getText(await rootB.getTool("tool_b").execute("b", {}, undefined, undefined, { cwd: "/workspace-b" })))
+      .toBe("result-b");
+    expect(calls).toEqual(["tool_a", "tool_b"]);
+
+    await rootA.emit("session_shutdown", { reason: "quit" }, {
+      cwd: "/workspace-a",
+      sessionManager: rootSessionManager("isolated-root-a"),
+    });
+    expect(getText(await rootB.getTool("tool_b").execute("b2", {}, undefined, undefined, { cwd: "/workspace-b" })))
+      .toBe("result-b");
+    await rootB.emit("session_shutdown", { reason: "quit" }, {
+      cwd: "/workspace-b",
+      sessionManager: rootSessionManager("isolated-root-b"),
+    });
+  });
+
+  it("keeps explicit hub injection shared across root ids", async () => {
+    // Intent: tests and custom integrations that inject a hub retain the former
+    // direct-sharing contract instead of being routed through the root registry.
+    let factoryCalls = 0;
+    let disconnectCalls = 0;
+    const hub = createMcpHub();
+    const options = {
+      hub,
+      loadSettings: () => ({
+        settings: { mcp: { servers: { shared: { type: "local", command: ["shared"], toolPrefix: "" } } } },
+      } as any),
+      clientFactory: (): McpProtocolClient => {
+        factoryCalls += 1;
+        return {
+          async connect() {},
+          async disconnect() { disconnectCalls += 1; },
+          async listTools() { return [{ name: "shared_tool" }]; },
+          async callTool() { return { content: [{ type: "text", text: "shared" }] }; },
+          isConnected() { return disconnectCalls === 0; },
+        };
+      },
+      heartbeatIntervalMs: 10_000,
+    };
+    const first = createToolRegistry();
+    const second = createToolRegistry();
+    registerMcpSupport(first.pi as any, options);
+    registerMcpSupport(second.pi as any, options);
+
+    await Promise.all([
+      first.emit("session_start", { reason: "startup" }, {
+        sessionManager: rootSessionManager("injected-root-a"),
+      }),
+      second.emit("session_start", { reason: "startup" }, {
+        sessionManager: rootSessionManager("injected-root-b"),
+      }),
+    ]);
+    expect(factoryCalls).toBe(1);
+    expect(first.getTool("shared_tool")).toBeDefined();
+    expect(second.getTool("shared_tool")).toBeDefined();
+
+    await first.emit("session_shutdown", { reason: "quit" }, {
+      sessionManager: rootSessionManager("injected-root-a"),
+    });
+    expect(disconnectCalls).toBe(0);
+    await second.emit("session_shutdown", { reason: "quit" }, {
+      sessionManager: rootSessionManager("injected-root-b"),
     });
     expect(disconnectCalls).toBe(1);
   });
@@ -296,8 +436,8 @@ describe("process-level MCP sharing", () => {
   });
 
   it("keeps the shared server across root reload when config is unchanged", async () => {
-    // Intent: extension/session replacement must not restart the process-level MCP
-    // server when the effective configuration did not change.
+    // Intent: extension/session replacement must not restart the root-scoped
+    // process-level MCP server when the effective configuration did not change.
     let factoryCalls = 0;
     let disconnectCalls = 0;
     const makeClient = (): McpProtocolClient => ({
@@ -307,9 +447,7 @@ describe("process-level MCP sharing", () => {
       async callTool() { return { content: [{ type: "text", text: "ok" }] }; },
       isConnected() { return true; },
     });
-    const hub = createMcpHub();
     const options = {
-      hub,
       loadSettings: () => ({
         settings: { mcp: { servers: { mm: { type: "local", command: ["mock-mcp"], toolPrefix: "" } } } },
       } as any),
@@ -321,18 +459,185 @@ describe("process-level MCP sharing", () => {
     };
     const first = createToolRegistry({ cwd: "/workspace" });
     registerMcpSupport(first.pi as any, options);
-    await first.emit("session_start", { reason: "startup" }, { cwd: "/workspace" });
-    await first.emit("session_shutdown", { reason: "reload" }, { cwd: "/workspace" });
+    const rootSessionId = "reload-root";
+    await first.emit("session_start", { reason: "startup" }, {
+      cwd: "/workspace",
+      sessionManager: rootSessionManager(rootSessionId),
+    });
+    await first.emit("session_shutdown", { reason: "reload" }, {
+      cwd: "/workspace",
+      sessionManager: rootSessionManager(rootSessionId),
+    });
 
     const second = createToolRegistry({ cwd: "/workspace" });
     registerMcpSupport(second.pi as any, options);
-    await second.emit("session_start", { reason: "reload" }, { cwd: "/workspace" });
+    await second.emit("session_start", { reason: "reload" }, {
+      cwd: "/workspace",
+      sessionManager: rootSessionManager(rootSessionId),
+    });
 
     expect(factoryCalls).toBe(1);
     expect(disconnectCalls).toBe(0);
     expect(second.getTool("echo")).toBeDefined();
 
-    await second.emit("session_shutdown", { reason: "quit" }, { cwd: "/workspace" });
+    await second.emit("session_shutdown", { reason: "quit" }, {
+      cwd: "/workspace",
+      sessionManager: rootSessionManager(rootSessionId),
+    });
     expect(disconnectCalls).toBe(1);
+  });
+
+  it("terminates the old root hub when session replacement reason is new", async () => {
+    // Intent: every root shutdown except reload ends that delegation tree. A
+    // later session using either the replacement id or the old id needs a fresh Hub.
+    let factoryCalls = 0;
+    let disconnectCalls = 0;
+    const options = {
+      loadSettings: () => ({
+        settings: { mcp: { servers: { mm: { type: "local", command: ["mock-mcp"], toolPrefix: "" } } } },
+      } as any),
+      clientFactory: (): McpProtocolClient => {
+        factoryCalls += 1;
+        let connected = false;
+        return {
+          async connect() { connected = true; },
+          async disconnect() {
+            if (connected) disconnectCalls += 1;
+            connected = false;
+          },
+          async listTools() { return [{ name: "echo" }]; },
+          async callTool() { return { content: [{ type: "text", text: "ok" }] }; },
+          isConnected() { return connected; },
+        };
+      },
+      heartbeatIntervalMs: 10_000,
+    };
+    const replacement = createToolRegistry();
+    registerMcpSupport(replacement.pi as any, options);
+
+    await replacement.emit("session_start", { reason: "startup" }, {
+      sessionManager: rootSessionManager("replacement-old-root"),
+    });
+    await replacement.emit("session_shutdown", { reason: "new" }, {
+      sessionManager: rootSessionManager("replacement-old-root"),
+    });
+    expect(disconnectCalls).toBe(1);
+
+    await replacement.emit("session_start", { reason: "new" }, {
+      sessionManager: rootSessionManager("replacement-new-root"),
+    });
+    expect(factoryCalls).toBe(2);
+    await replacement.emit("session_shutdown", { reason: "quit" }, {
+      sessionManager: rootSessionManager("replacement-new-root"),
+    });
+    expect(disconnectCalls).toBe(2);
+
+    const oldRootProbe = createToolRegistry();
+    registerMcpSupport(oldRootProbe.pi as any, options);
+    await oldRootProbe.emit("session_start", { reason: "resume" }, {
+      sessionManager: rootSessionManager("replacement-old-root"),
+    });
+    expect(factoryCalls).toBe(3);
+    await oldRootProbe.emit("session_shutdown", { reason: "quit" }, {
+      sessionManager: rootSessionManager("replacement-old-root"),
+    });
+    expect(disconnectCalls).toBe(3);
+  });
+
+  it("does not acquire a replacement lease after a superseded root switch", async () => {
+    // Intent: if generation changes while prepareBinding is stopping the previous
+    // root, it must finish terminal cleanup and return without leaking a new lease.
+    let factoryCalls = 0;
+    let disconnectCalls = 0;
+    const options = {
+      loadSettings: () => ({
+        settings: { mcp: { servers: { mm: { type: "local", command: ["mock-mcp"], toolPrefix: "" } } } },
+      } as any),
+      clientFactory: (): McpProtocolClient => {
+        factoryCalls += 1;
+        let connected = false;
+        return {
+          async connect() { connected = true; },
+          async disconnect() {
+            if (connected) disconnectCalls += 1;
+            connected = false;
+          },
+          async listTools() { return [{ name: "echo" }]; },
+          async callTool() { return { content: [{ type: "text", text: "ok" }] }; },
+          isConnected() { return connected; },
+        };
+      },
+      heartbeatIntervalMs: 10_000,
+    };
+    const switching = createToolRegistry();
+    registerMcpSupport(switching.pi as any, options);
+    await switching.emit("session_start", { reason: "startup" }, {
+      sessionManager: rootSessionManager("race-old-root"),
+    });
+
+    const stopEntered = deferred();
+    const allowStop = deferred();
+    const originalStop = McpSessionBinding.prototype.stop;
+    const stopSpy = vi.spyOn(McpSessionBinding.prototype, "stop")
+      .mockImplementationOnce(async function (this: McpSessionBinding) {
+        stopEntered.resolve();
+        await allowStop.promise;
+        await originalStop.call(this);
+      });
+    try {
+      const staleStart = switching.emit("session_start", { reason: "reload" }, {
+        sessionManager: rootSessionManager("race-new-root"),
+      });
+      await stopEntered.promise;
+      await switching.emit("session_shutdown", { reason: "reload" }, {
+        sessionManager: rootSessionManager("race-new-root"),
+      });
+      allowStop.resolve();
+      await staleStart;
+
+      expect(disconnectCalls).toBe(1);
+      expect(factoryCalls).toBe(1);
+
+      const probe = createToolRegistry();
+      registerMcpSupport(probe.pi as any, options);
+      await probe.emit("session_start", { reason: "resume" }, {
+        sessionManager: rootSessionManager("race-new-root"),
+      });
+      expect(factoryCalls).toBe(2);
+      await probe.emit("session_shutdown", { reason: "quit" }, {
+        sessionManager: rootSessionManager("race-new-root"),
+      });
+      expect(disconnectCalls).toBe(2);
+    } finally {
+      allowStop.resolve();
+      stopSpy.mockRestore();
+    }
+  });
+
+  it("keeps a replacement entry when an older terminal release finishes later", async () => {
+    // Intent: a delayed shutdown from an old root lifetime must not delete a new
+    // registry entry that reused the same persisted root session id.
+    const shutdownGate = deferred();
+    const registry = createMcpHubRegistry();
+    const oldLease = registry.acquire("reused-root");
+    const oldShutdown = oldLease.hub.shutdown.bind(oldLease.hub);
+    oldLease.hub.shutdown = async () => {
+      await shutdownGate.promise;
+      await oldShutdown();
+    };
+    oldLease.markTerminal();
+    const releasingOld = oldLease.release();
+
+    const replacement = registry.acquire("reused-root");
+    expect(replacement.hub).not.toBe(oldLease.hub);
+    shutdownGate.resolve();
+    await releasingOld;
+
+    const follower = registry.acquire("reused-root");
+    expect(follower.hub).toBe(replacement.hub);
+    await oldLease.release();
+    replacement.markTerminal();
+    await replacement.release();
+    await follower.release();
   });
 });

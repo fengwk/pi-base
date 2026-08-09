@@ -132,9 +132,24 @@ function requireStringRecord(value: unknown, path: string): Record<string, strin
   return output;
 }
 
+function assertNoUnknownKeys(
+  input: Record<string, unknown>,
+  path: string,
+  allowedKeys: readonly string[],
+  suggestions: Readonly<Record<string, string>> = {},
+): void {
+  const allowed = new Set(allowedKeys);
+  for (const key of Object.keys(input)) {
+    if (allowed.has(key)) continue;
+    const suggestion = suggestions[key];
+    throw new Error(`${path}.${key} is not recognized.${suggestion ? ` Did you mean "${suggestion}"?` : ""}`);
+  }
+}
+
 function sanitizeLspWorkspaceDataConfig(value: unknown, path: string): LspWorkspaceDataConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, path, ["mode", "baseDir"]);
   const output: LspWorkspaceDataConfig = {};
   if (input.mode !== undefined) {
     const mode = input.mode;
@@ -155,6 +170,14 @@ function sanitizeLspWorkspaceDataConfig(value: unknown, path: string): LspWorksp
 function sanitizeLspServerEntry(value: unknown, path: string): LspServerEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, path, [
+    "command",
+    "extensions",
+    "rootMarkers",
+    "firstMatchMarkers",
+    "workspaceData",
+    "requestTimeoutMs",
+  ]);
   const output: LspServerEntry = {
     command: requireNonEmptyStringArray(input.command, `${path}.command`),
     extensions: requireNonEmptyStringArray(input.extensions, `${path}.extensions`),
@@ -183,6 +206,7 @@ function sanitizeLspServersRecord(value: unknown, path: string): Record<string, 
 function sanitizeLspDiscoveryConfig(value: unknown): LspDiscoveryConfig | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("lsp must be an object.");
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, "lsp", ["servers"]);
   const output: LspDiscoveryConfig = {};
   if (input.servers !== undefined) output.servers = sanitizeLspServersRecord(input.servers, "lsp.servers");
   return Object.keys(output).length > 0 ? output : undefined;
@@ -304,6 +328,7 @@ function sanitizeRenderConfig(value: unknown): RenderConfig | undefined {
     throw new Error("render must be an object.");
   }
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, "render", ["collapsedToolResultLines", "collapsedToolResultMaxChars"]);
   const output: RenderConfig = {};
   if (input.collapsedToolResultLines !== undefined) {
     output.collapsedToolResultLines = sanitizeCollapsedToolResultLinesConfig(input.collapsedToolResultLines, "render.collapsedToolResultLines");
@@ -318,6 +343,7 @@ function sanitizeNotifyConfig(value: unknown): NotifyConfig | undefined {
     throw new Error("notify must be an object.");
   }
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, "notify", ["permissionAsked", "agentEnd", "suppressCompletedAfterRejectionMs"]);
   const output: NotifyConfig = {};
   if (input.permissionAsked !== undefined) output.permissionAsked = sanitizeOptionalBoolean(input.permissionAsked, "notify.permissionAsked");
   if (input.agentEnd !== undefined) output.agentEnd = sanitizeOptionalBoolean(input.agentEnd, "notify.agentEnd");
@@ -388,6 +414,7 @@ function sanitizeSubagentConfig(value: unknown): SubagentConfig {
     throw new Error("subagent must be a JSON object.");
   }
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, "subagent", ["maxDepth", "maxConcurrency", "maxTotalConcurrency", "idleTimeoutMs", "maxTurns"]);
   const output: SubagentConfig = {};
   if (input.maxDepth !== undefined) output.maxDepth = sanitizePositiveInteger(input.maxDepth, "subagent.maxDepth");
   if (input.maxConcurrency !== undefined) output.maxConcurrency = sanitizePositiveInteger(input.maxConcurrency, "subagent.maxConcurrency");
@@ -432,6 +459,14 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
     throw new Error("contextCompression must be an object.");
   }
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, "contextCompression", [
+    "anchorHygiene",
+    "retainedUserMessageRounds",
+    "retainedAssistantTurns",
+    "tools",
+    "enabledProviders",
+    "disabledProviders",
+  ]);
   const output: ContextCompressionConfig = {};
   if (input.anchorHygiene !== undefined) output.anchorHygiene = sanitizeOptionalBoolean(input.anchorHygiene, "contextCompression.anchorHygiene");
   if (input.retainedUserMessageRounds !== undefined) {
@@ -452,6 +487,16 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
 function sanitizeMcpLocalServerConfig(value: unknown, path: string): LocalMcpServerConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, path, [
+    "type",
+    "command",
+    "env",
+    "cwd",
+    "enabled",
+    "toolPrefix",
+    "startupTimeoutMs",
+    "callTimeoutMs",
+  ]);
   if (input.type !== "local") throw new Error(`${path}.type must be "local".`);
   const output: LocalMcpServerConfig = {
     type: "local",
@@ -479,6 +524,16 @@ function sanitizeMcpLocalServerConfig(value: unknown, path: string): LocalMcpSer
 function sanitizeMcpRemoteServerConfig(value: unknown, path: string): RemoteMcpServerConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, path, [
+    "type",
+    "transport",
+    "url",
+    "headers",
+    "enabled",
+    "toolPrefix",
+    "startupTimeoutMs",
+    "callTimeoutMs",
+  ]);
   if (input.type !== "remote") throw new Error(`${path}.type must be "remote".`);
   if (typeof input.url !== "string") throw new Error(`${path}.url must be a string.`);
   if (typeof input.transport !== "string" || (input.transport !== "websocket" && input.transport !== "sse" && input.transport !== "streamable-http")) {
@@ -520,6 +575,7 @@ function sanitizeMcpServerConfig(value: unknown, path: string): McpServerConfig 
 function sanitizeMcpConfig(value: unknown): McpConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("mcp must be an object.");
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(input, "mcp", ["servers", "startupTimeoutMs", "callTimeoutMs"]);
   if (input.servers !== undefined && (typeof input.servers !== "object" || input.servers === null || Array.isArray(input.servers))) {
     throw new Error("mcp.servers must be an object keyed by server name.");
   }
@@ -540,6 +596,24 @@ function sanitizeMcpConfig(value: unknown): McpConfig {
 function sanitizeSettings(value: unknown): PiBaseSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("settings must be a JSON object.");
   const input = value as Record<string, unknown>;
+  assertNoUnknownKeys(
+    input,
+    "settings",
+    [
+      "lsp",
+      "permission",
+      "render",
+      "notify",
+      "yolo",
+      "mcp",
+      "compactionModel",
+      "compactionThinkingLevel",
+      "contextCompression",
+      "subagent",
+      "defaultAgent",
+    ],
+    { permissions: "permission" },
+  );
   return {
     lsp: input.lsp === undefined ? undefined : sanitizeLspDiscoveryConfig(input.lsp),
     permission: input.permission === undefined ? undefined : sanitizePermissionConfig(input.permission),

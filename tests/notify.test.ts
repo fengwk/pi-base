@@ -132,7 +132,7 @@ describe("notify support", () => {
     expect(selects).toBe(1);
   });
 
-  it("does not let notification delivery failure reject agent_end", async () => {
+  it("does not let notification delivery failure reject agent_settled", async () => {
     // Intent: final notifications are best-effort lifecycle side effects and cannot turn a
     // completed agent run into an extension error.
     const root = await createTempWorkspace();
@@ -144,14 +144,16 @@ describe("notify support", () => {
       },
     });
 
-    await expect(registry.emit("agent_end", { type: "agent_end", messages: [] }, {
+    const ctx = {
       cwd: root,
       hasUI: true,
       sessionManager: {
         getSessionId: () => "notify-agent-end",
         getSessionName: () => "Notify Agent End",
       },
-    })).resolves.toBeUndefined();
+    };
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, ctx);
+    await expect(registry.emit("agent_settled", { type: "agent_settled" }, ctx)).resolves.toBeUndefined();
   });
 
   it("stays disabled when notify config is omitted", async () => {
@@ -185,13 +187,15 @@ describe("notify support", () => {
       },
     );
 
-    await registry.emit("agent_end", { type: "agent_end", messages: [] }, {
+    const sessionCtx = {
       cwd: root,
       sessionManager: {
         getSessionId: () => "session-0",
         getSessionName: () => "Silent Session",
       },
-    });
+    };
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
 
     expect(payloads).toEqual([]);
   });
@@ -311,13 +315,16 @@ describe("notify support", () => {
     });
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
-    await registry.emit("agent_end", { type: "agent_end", messages: [] }, {
+    const sessionCtx = {
       cwd: root,
       sessionManager: {
         getSessionId: () => "session-yolo",
         getSessionName: () => "Yolo Session",
       },
-    });
+    };
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
+    expect(payloads).toEqual([]);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
 
     expect(payloads).toEqual([{
       kind: "session.completed",
@@ -357,8 +364,10 @@ describe("notify support", () => {
 
     await registry.runCommand("yolo", "", { cwd: root });
     await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
     await registry.runCommand("yolo", "", { cwd: root });
     await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
     expect(payloads).toEqual([
       {
         kind: "session.completed",
@@ -396,17 +405,19 @@ describe("notify support", () => {
     });
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
-    await registry.emit("agent_end", {
-      type: "agent_end",
-      messages: [{ role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 2 }],
-    }, {
+    const sessionCtx = {
       cwd: root,
       sessionManager: {
         getSessionId: () => "session-retrying",
         getSessionName: () => "Retrying Session",
         getEntries: () => [{ type: "message", message: { role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 1 } }],
       },
-    });
+    };
+    await registry.emit("agent_end", {
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 2 }],
+    }, sessionCtx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
 
     expect(payloads).toEqual([]);
   });
@@ -430,10 +441,7 @@ describe("notify support", () => {
     });
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
-    await registry.emit("agent_end", {
-      type: "agent_end",
-      messages: [{ role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 4 }],
-    }, {
+    const sessionCtx = {
       cwd: root,
       sessionManager: {
         getSessionId: () => "session-error",
@@ -444,7 +452,13 @@ describe("notify support", () => {
           { type: "message", message: { role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 3 } },
         ],
       },
-    });
+    };
+    await registry.emit("agent_end", {
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "error", errorMessage: "HTTP 429 overloaded", timestamp: 4 }],
+    }, sessionCtx);
+    expect(payloads).toEqual([]);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
 
     expect(payloads).toEqual([{
       kind: "session.error",
@@ -473,22 +487,24 @@ describe("notify support", () => {
     });
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
-    await registry.emit("agent_end", {
-      type: "agent_end",
-      messages: [{ role: "assistant", stopReason: "aborted" }],
-    }, {
+    const sessionCtx = {
       cwd: root,
       sessionManager: {
         getSessionId: () => "session-aborted",
         getSessionName: () => "Aborted Session",
       },
-    });
+    };
+    await registry.emit("agent_end", {
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "aborted" }],
+    }, sessionCtx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
 
     expect(payloads).toEqual([]);
   });
 
   // Intent: pi 0.83 partial-stream stopReason "pending" must not fire completion/error notifications.
-  it("skips agent_end notification when the final assistant stopReason is pending", async () => {
+  it("skips settled notification when the final assistant stopReason is pending", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
       notify: { agentEnd: true },
@@ -505,21 +521,23 @@ describe("notify support", () => {
     });
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
-    await registry.emit("agent_end", {
-      type: "agent_end",
-      messages: [{ role: "assistant", stopReason: "pending" }],
-    }, {
+    const sessionCtx = {
       cwd: root,
       sessionManager: {
         getSessionId: () => "session-pending",
         getSessionName: () => "Pending Session",
       },
-    });
+    };
+    await registry.emit("agent_end", {
+      type: "agent_end",
+      messages: [{ role: "assistant", stopReason: "pending" }],
+    }, sessionCtx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
 
     expect(payloads).toEqual([]);
   });
 
-  it("sends a completion notification on agent_end and suppresses it after permission rejection", async () => {
+  it("sends a completion notification on agent_settled and suppresses it after permission rejection", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {
       permission: { write: "ask" },
@@ -551,13 +569,15 @@ describe("notify support", () => {
       },
     );
 
-    await registry.emit("agent_end", { type: "agent_end", messages: [] }, {
+    const rejectedCtx = {
       cwd: root,
       sessionManager: {
         getSessionId: () => "session-2",
         getSessionName: () => "Rejected Session",
       },
-    });
+    };
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, rejectedCtx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, rejectedCtx);
 
     expect(payloads).toEqual([
       {
@@ -569,13 +589,16 @@ describe("notify support", () => {
       },
     ]);
 
-    await registry.emit("agent_end", { type: "agent_end", messages: [] }, {
+    const completedCtx = {
       cwd: root,
       sessionManager: {
         getSessionId: () => "session-3",
         getSessionName: () => "Completed Session",
       },
-    });
+    };
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, completedCtx);
+    expect(payloads).toHaveLength(1);
+    await registry.emit("agent_settled", { type: "agent_settled" }, completedCtx);
 
     expect(payloads.at(-1)).toEqual({
       kind: "session.completed",
@@ -614,6 +637,7 @@ describe("notify support", () => {
       type: "agent_end",
       messages: [{ role: "assistant", stopReason: "error", errorMessage: "fatal provider failure", timestamp: 1 }],
     }, ctx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, ctx);
 
     expect(payloads).toEqual([expect.objectContaining({
       kind: "session.error",
@@ -691,7 +715,11 @@ describe("notify support", () => {
     expect(payloads).toEqual([]);
 
     await registry.emit("session_shutdown", { type: "session_shutdown", reason: "switch" }, ctx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, ctx);
+    expect(payloads).toEqual([]);
+
     await registry.emit("agent_end", { type: "agent_end", messages: [] }, ctx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, ctx);
     expect(payloads).toEqual([expect.objectContaining({
       kind: "session.completed",
       sessionID: "reused-session",
@@ -705,6 +733,7 @@ describe("notify support", () => {
     const hooks = registerNotifySupport(registry.pi as any);
 
     await expect(registry.emit("agent_end", { type: "agent_end", messages: [] }, {})).resolves.toBeUndefined();
+    await expect(registry.emit("agent_settled", { type: "agent_settled" }, {})).resolves.toBeUndefined();
     await expect(hooks.onPermissionAsked({ ctx: {} as any })).resolves.toBeUndefined();
     expect(() => hooks.onPermissionRejected({ ctx: {} as any })).not.toThrow();
   });

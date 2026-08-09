@@ -31,6 +31,8 @@ export interface PiBaseNotifyPayload {
 export interface RegisterNotifySupportOptions {
   loadSettings?: (cwd: string) => LoadedPiBaseSettings;
   sendNotification?: (payload: PiBaseNotifyPayload, ctx: ExtensionContext) => Promise<void>;
+  /** Read after goal's agent_settled handler to suppress completions that will auto-continue. */
+  isGoalActive?: () => boolean;
 }
 
 export interface NotifyPermissionAskedInput {
@@ -52,7 +54,9 @@ export function registerNotifySupport(
 ): NotifySupportHooks {
   const loadSettings = options.loadSettings;
   const sendNotification = options.sendNotification ?? createShellNotificationSender(loadSettings);
+  const isGoalActive = options.isGoalActive ?? (() => false);
   const suppressCompletedUntil = new Map<string, number>();
+  const pendingAgentEndNotifications = new Map<string, PiBaseNotifyPayload>();
   // Sessions that already emitted a permission notification for their current turn.
   // A model round (one assistant message plus its whole tool-call batch) is a single
   // "turn", and permission prompts within it are serialized, so we notify only once
@@ -70,9 +74,13 @@ export function registerNotifySupport(
     if (!sessionID) return;
     permissionNotifiedTurns.delete(sessionID);
     suppressCompletedUntil.delete(sessionID);
+    pendingAgentEndNotifications.delete(sessionID);
   });
 
   pi.on("agent_end", async (event: AgentEndEvent, ctx) => {
+    const sessionID = resolveSessionId(ctx);
+    if (!sessionID) return;
+    pendingAgentEndNotifications.delete(sessionID);
     const loaded = loadSettings?.(ctx.cwd);
     if (!shouldNotifyForAgentEnd(loaded?.settings.notify, ctx, event)) return;
 
@@ -81,8 +89,18 @@ export function registerNotifySupport(
 
     const payload = buildPayload(kind, ctx);
     if (!payload.sessionID) return;
+    pendingAgentEndNotifications.set(payload.sessionID, payload);
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    const sessionID = resolveSessionId(ctx);
+    if (!sessionID) return;
+    const payload = pendingAgentEndNotifications.get(sessionID);
+    pendingAgentEndNotifications.delete(sessionID);
+    if (!payload) return;
+    if (payload.kind === "session.completed" && isGoalActive()) return;
     const suppressedUntil = suppressCompletedUntil.get(payload.sessionID) ?? 0;
-    if (kind === "session.completed" && Date.now() < suppressedUntil) return;
+    if (payload.kind === "session.completed" && Date.now() < suppressedUntil) return;
     suppressCompletedUntil.delete(payload.sessionID);
 
     await sendNotificationBestEffort(sendNotification, payload, ctx);

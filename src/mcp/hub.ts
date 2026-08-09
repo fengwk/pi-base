@@ -408,10 +408,6 @@ export function createMcpHub(): McpHub {
   return new McpHub();
 }
 
-const PROCESS_MCP_HUB_KEY = Symbol.for("pi-base.process-mcp-hub");
-const processGlobals = globalThis as typeof globalThis & { [PROCESS_MCP_HUB_KEY]?: McpHub };
-export const processMcpHub = processGlobals[PROCESS_MCP_HUB_KEY] ??= createMcpHub();
-
 function createServerRuntime(key: string, config: McpServerConfig): ServerRuntime {
   return {
     key,

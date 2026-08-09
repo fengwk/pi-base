@@ -78,7 +78,7 @@ pi --agent reviewer
 
 | 工具 | 必填参数 | 默认值 | 关键行为 |
 |------|----------|--------|----------|
-| `read` | `path` | offset=1, limit=200 (max 2000) | 文本文件返回 `行号|内容` 格式头部标注 path/ends_with_newline/lsp；目录列出排序成员；图片返回附件（模型不支持时给出 skill 提示）；二进制直接报错；UTF BOM/编码探测 + LF 规范化；单行 >2000 字符截断标记 |
+| `read` | `path` | offset=1, limit=200 (max 2000) | offset/limit 在文件读取前校验；文本候选文件超过 64 MiB 时在完整读取前拒绝并提示改用 grep/缩小目标；其余文本返回 `行号|内容` 格式并标注 path/ends_with_newline/lsp；目录列出排序成员；图片返回附件（模型不支持时给出 skill 提示）；二进制直接报错；UTF BOM/编码探测 + LF 规范化；单行 >2000 字符截断标记 |
 | `grep` | `pattern`, `path` | timeout=15s, limit=100 | 支持 `include`/`ignore_case`/`literal`/`multiline`；二进制文件报错；结果行 >500 字符截断；输出是候选位置，编辑前先 `read` |
 | `find` | `pattern`, `path` | limit=1000, 无默认超时 | `path` 无隐式默认值，搜当前目录需显式写 `"."`；底层使用 `fd` |
 | `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
@@ -121,7 +121,7 @@ pi --agent reviewer
 
 上例中的 `*** Workdir:` 和 `*** Move to:` 均为可选指令；省略 Workdir 时使用 session cwd。`apply_patch` 基于 Codex freeform 协议：工具仅有字符串参数 `patchText`；grammar-capable 模型上通过 OpenAI Lark（`APPLY_PATCH_LARK_GRAMMAR`）约束采样。pi-base 保留更严格的 hunk 唯一匹配和全量 preflight 语义。`patchText` 为完整 freeform 正文，也可兼容常见 heredoc 包装；`*** Begin Patch`/`*** End Patch` 两侧以及 heredoc closing delimiter 后可带水平空白；Update 内以空格开头的协议标记仍是 context 行。
 
-可选第一行指令 `*** Workdir: <path>` 指定路径解析根（相对 session cwd 或绝对路径），默认 session cwd，无需切换 session cwd。Add body 每行以 `+` 开头，无 body 时创建空文件；Delete 无 body；普通 Update 需要一个或多个非空 `@@` chunk；纯 Move 可不含 hunk。context/删除/新增行分别以空格、`-`、`+` 开头。相对路径相对 Workdir/session cwd 解析。Move 先写目标再删源；目标已存在且为普通文件时覆盖。
+可选第一行指令 `*** Workdir: <path>` 指定路径解析根（相对 session cwd 或绝对路径），默认 session cwd，无需切换 session cwd。Add body 每行以 `+` 开头，无 body 时创建空文件；Delete 无 body；普通 Update 需要一个或多个非空 `@@` chunk；纯 Move 可不含 hunk。context/删除/新增行分别以空格、`-`、`+` 开头。相对路径相对 Workdir/session cwd 解析。Move 先写目标再删源；目标已存在且为普通文件时覆盖；Move 拒绝符号链接源/目标，并在成功时把源文件权限位应用到目标。
 
 执行分两阶段：先解析并 preflight 全部文件（路径、存在性、文本编码、hunk 唯一匹配、输出可编码性等），任一失败则完全不写；preflight 全部成功后按 patch 顺序逐文件提交。提交阶段若后续文件因竞态或文件系统错误失败，前面已提交文件不会回滚，错误会明确标记 partial application，并在 details 中列出实际已提交文件及 diff 元数据；失败文件可能已被底层写操作部分修改，因此同时报告 `failedPathState: "unknown"`，调用方不能假定它保持原样。每次成功提交（包括最终部分失败之前的提交）都会更新 LSP：Add/Update 同步内容，Move 关闭源路径并同步目标路径，Delete 对已打开文档发送 `didClose` 并清理缓存；状态未知的失败路径也会保守关闭已打开的 LSP 文档，避免继续使用可能陈旧的缓存。LSP 处理失败不会覆盖原始文件系统结果。
 
@@ -484,7 +484,7 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
 | `callTimeoutMs` | 单次工具调用超时，覆盖 `mcp.callTimeoutMs` 全局默认；默认 `60000`。超时由 MCP SDK 取消对应请求，不会因单次慢调用重启 server |
 | `mcp.startupTimeoutMs` / `mcp.callTimeoutMs` | 全局默认，可在未声明 `servers` 时单独配置 |
 
-同一 Pi 进程内，每个 MCP server 配置只建立一个共享连接/本地进程，root 与所有 subagent 共用。首次 `session_start` 会并行等待所有 enabled server 完成首次连接或达到 `startupTimeoutMs`，因此首个 prompt 只会在 MCP readiness 确定后开始；后续 subagent 直接复用同一 readiness 和工具列表。`pi-base` 继续在后台维护重连 + heartbeat，状态显示在 footer。
+MCP 连接按 root delegation tree 隔离：同一 root session 与其所有 subagent 对每个 MCP server 配置只建立一个共享连接/本地进程，不同 root session 使用独立 Hub，配置、工具调用和 shutdown 互不影响。首次 `session_start` 会并行等待该 root tree 的所有 enabled server 完成首次连接或达到 `startupTimeoutMs`，因此首个 prompt 只会在 MCP readiness 确定后开始；后续 subagent 直接复用同一 readiness 和工具列表。`pi-base` 继续在后台维护重连 + heartbeat，状态显示在 footer。
 
 ---
 
@@ -538,8 +538,8 @@ parent turn 在委派开始前已取消时不会创建或恢复 child session。
 |------|-----|
 | 最大行数 | 2000 |
 | 最大字节数 | 50 KB |
-| 完整输出 | 保存至 `<tmp>/pi-base-truncation/`（非 Windows 收紧至 `0700`） |
-| 旧文件清理 | 保留约 7 天 |
+| 完整输出 | 保存至进程私有的 `<tmp>/pi-base-truncation-*/`；目录在非 Windows 为 `0700`，输出文件显式为 `0600` |
+| 旧目录清理 | 仅清理约 7 天前、符合 `pi-base-truncation-<pid>-*` 格式、属于当前用户且对应进程已退出的目录 |
 
 上游已自行截断且暴露 `Full output` 路径的工具（如 Pi core bash）保留上游路径，不重复落盘。
 

@@ -1,5 +1,5 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { parseLineEndingDocument, serializeLineEndingDocument, type ConcreteLineEnding } from "./line-endings.js";
 import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
@@ -139,6 +139,7 @@ interface UpdateMutationPlan extends BaseMutationPlan {
   moveTo?: string;
   absoluteMoveToPath?: string;
   expectedMoveToBytes?: Buffer | null;
+  sourceMode?: number;
   expectedBytes: Buffer;
   outputBytes: Buffer;
 }
@@ -677,10 +678,16 @@ async function preflightFile(
   throwIfAborted(signal);
   let fileStat;
   try {
-    fileStat = await throwIfAbortedAfter(stat(absolutePath), signal);
+    fileStat = await throwIfAbortedAfter(
+      file.operation === "update" && file.moveTo !== undefined ? lstat(absolutePath) : stat(absolutePath),
+      signal,
+    );
   } catch (error) {
     if (isNodeErrorWithCode(error, "ENOENT")) throw new Error(`${file.path}: file does not exist.`);
     throw error;
+  }
+  if (file.operation === "update" && file.moveTo !== undefined && fileStat.isSymbolicLink()) {
+    throw new Error(`${file.path}: Move source must not be a symbolic link.`);
   }
   if (!fileStat.isFile()) throw new Error(`${file.path}: path is not a regular file.`);
 
@@ -716,7 +723,10 @@ async function preflightFile(
     await assertAddParentIsDirectory(absoluteMoveToPath, signal);
     let expectedMoveToBytes: Buffer | null = null;
     try {
-      const destStat = await throwIfAbortedAfter(stat(absoluteMoveToPath), signal);
+      const destStat = await throwIfAbortedAfter(lstat(absoluteMoveToPath), signal);
+      if (destStat.isSymbolicLink()) {
+        throw new Error(`${file.moveTo}: Move destination must not be a symbolic link.`);
+      }
       if (!destStat.isFile()) {
         throw new Error(`${file.moveTo}: Move destination exists and is not a regular file.`);
       }
@@ -733,6 +743,7 @@ async function preflightFile(
       moveTo: file.moveTo,
       absoluteMoveToPath,
       expectedMoveToBytes,
+      sourceMode: fileStat.mode & 0o7777,
       before: decoded.text,
       after,
       expectedBytes,
@@ -851,6 +862,13 @@ async function assertMoveDestinationUnchanged(plan: UpdateMutationPlan, signal?:
   if (plan.absoluteMoveToPath === undefined || plan.moveTo === undefined || plan.expectedMoveToBytes === undefined) return;
   let currentBytes: Buffer | null;
   try {
+    const currentStat = await throwIfAbortedAfter(lstat(plan.absoluteMoveToPath), signal);
+    if (currentStat.isSymbolicLink()) {
+      throw new Error(`${plan.moveTo}: Move destination must not be a symbolic link.`);
+    }
+    if (!currentStat.isFile()) {
+      throw new Error(`${plan.moveTo}: Move destination changed after preflight: path is not a regular file.`);
+    }
     currentBytes = await throwIfAbortedAfter(readFile(plan.absoluteMoveToPath), signal);
   } catch (error) {
     if (!isNodeErrorWithCode(error, "ENOENT")) throw error;
@@ -888,6 +906,19 @@ async function commitMutation(plan: MutationPlan, signal?: AbortSignal): Promise
 
       let currentBytes: Buffer;
       try {
+        if (plan.operation === "update" && plan.absoluteMoveToPath !== undefined) {
+          const currentStat = await throwIfAbortedAfter(lstat(plan.absolutePath), signal);
+          if (currentStat.isSymbolicLink()) {
+            throw new Error(`${plan.path}: Move source must not be a symbolic link.`);
+          }
+          if (!currentStat.isFile()) {
+            throw new Error(`${plan.path} changed after preflight: path is not a regular file.`);
+          }
+          if (plan.sourceMode === undefined) throw new Error(`${plan.path}: Move source mode is missing.`);
+          if ((currentStat.mode & 0o7777) !== plan.sourceMode) {
+            throw new Error(`${plan.path} changed after preflight: permission bits changed; refusing to apply a stale Move.`);
+          }
+        }
         currentBytes = await throwIfAbortedAfter(readFile(plan.absolutePath), signal);
       } catch (error) {
         if (isNodeErrorWithCode(error, "ENOENT")) {
@@ -907,10 +938,12 @@ async function commitMutation(plan: MutationPlan, signal?: AbortSignal): Promise
 
       if (plan.absoluteMoveToPath !== undefined) {
         await assertMoveDestinationUnchanged(plan, signal);
+        if (plan.sourceMode === undefined) throw new Error(`${plan.path}: Move source mode is missing.`);
         // Codex-style move: write destination (creating parents), then remove source.
         await mkdir(dirname(plan.absoluteMoveToPath), { recursive: true });
         throwIfAborted(signal);
-        await writeFile(plan.absoluteMoveToPath, plan.outputBytes, { signal });
+        await writeFile(plan.absoluteMoveToPath, plan.outputBytes, { mode: plan.sourceMode, signal });
+        await chmod(plan.absoluteMoveToPath, plan.sourceMode);
         throwIfAborted(signal);
         await unlink(plan.absolutePath);
         return;

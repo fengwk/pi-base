@@ -7,7 +7,11 @@ initTheme("dark", false);
 type MockUiOverrides = Partial<{
   notify: (message: string, variant: string) => void;
   setStatus: (key: string, text: string | undefined) => void;
-  select: (title: string, items: string[]) => Promise<string | undefined> | string | undefined;
+  select: (
+    title: string,
+    items: string[],
+    options?: { signal?: AbortSignal },
+  ) => Promise<string | undefined> | string | undefined;
   confirm: (title: string, message: string) => Promise<boolean> | boolean;
   custom: (factory: any, options?: any) => Promise<any> | any;
 }>;
@@ -111,8 +115,8 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
         }
         uiOverrides.setStatus?.(key, text);
       },
-      async select(title: string, items: string[]) {
-        if (uiOverrides.select) return uiOverrides.select(title, items);
+      async select(title: string, items: string[], options?: { signal?: AbortSignal }) {
+        if (uiOverrides.select) return uiOverrides.select(title, items, options);
         return items[0];
       },
       async confirm(title: string, message: string) {
@@ -221,13 +225,20 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
     };
   };
 
-  const applyToolCallHandlers = async (toolName: string, toolCallId: string, input: any, ctx: any) => {
+  const applyToolCallHandlers = async (
+    toolName: string,
+    toolCallId: string,
+    input: any,
+    ctx: any,
+    signal?: AbortSignal,
+  ) => {
     const handlers = events.get("tool_call") ?? [];
     const current = {
       type: "tool_call",
       toolName,
       toolCallId,
       input,
+      signal,
     };
     for (const handler of handlers) {
       const result = await handler(current, ctx);
@@ -275,7 +286,7 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
           ...tool,
           async execute(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) {
             const eventContext = buildContext(ctx);
-            const blocked = await applyToolCallHandlers(tool.name, toolCallId, params, eventContext);
+            const blocked = await applyToolCallHandlers(tool.name, toolCallId, params, eventContext, signal);
             if (blocked) return blocked;
             const result = await originalExecute(toolCallId, params, signal, onUpdate, ctx);
             return applyToolResultHandlers(tool.name, toolCallId, params, result, eventContext);

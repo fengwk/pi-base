@@ -127,7 +127,7 @@ export function detectTextFileEncoding(buffer: Buffer): DetectedTextEncoding {
   const utf16 = detectUtf16WithoutBom(buffer);
   if (utf16) return { encoding: utf16, bom: "none", source: "utf16-heuristic" };
 
-  const detected = detectEncodingCandidate(buffer, { minimumThreshold: 0 });
+  const detected = detectEncodingCandidate(buffer);
   const normalized = normalizeEncodingName(detected.encoding);
   if (normalized) return { encoding: normalized, bom: "none", source: "detector" };
 
@@ -140,6 +140,7 @@ export function decodeTextFile(buffer: Buffer): DecodedTextFile | null {
   }
 
   const detected = detectTextFileEncoding(buffer);
+  if (detected.source !== "bom" && detected.source !== "utf16-heuristic" && buffer.includes(0)) return null;
   if (detected.source === "default" && looksLikeBinary(buffer)) return null;
 
   const text = decodeWithEncoding(buffer, detected);

@@ -128,21 +128,26 @@ describe("subagent permission relay", () => {
   });
 
   it("stops waiting for the root permission UI when the subagent request is aborted", async () => {
-    // Intent: cancellation must release the headless subagent promptly even if its root-owned
-    // permission selector is still open; the queued UI work can settle independently afterward.
+    // Intent: cancellation must dismiss the root-owned selector and release both the headless
+    // subagent and the serialized host chain, so a later permission request can be shown.
     let markSelectStarted!: () => void;
     const selectStarted = new Promise<void>((resolve) => {
       markSelectStarted = resolve;
     });
-    let finishSelect!: (choice: string) => void;
+    let selectCalls = 0;
     const registry = createToolRegistry({
       hasUI: true,
       cwd: "/tmp/root-project",
       ui: {
-        select: async () => {
+        select: async (_title, _items, options) => {
+          selectCalls += 1;
+          if (selectCalls > 1) return "Yes";
           markSelectStarted();
-          return new Promise<string>((resolve) => {
-            finishSelect = resolve;
+          return new Promise<string>((_resolve, reject) => {
+            const signal = options?.signal;
+            const abort = () => reject(new Error("selector aborted"));
+            if (signal?.aborted) abort();
+            else signal?.addEventListener("abort", abort, { once: true });
           });
         },
       },
@@ -165,22 +170,54 @@ describe("subagent permission relay", () => {
       prompt: "Permission request",
       signal: controller.signal,
     });
-    const observed = decision.then(
-      () => "resolved",
-      (error: unknown) => error instanceof Error ? error.message : String(error),
-    );
     await selectStarted;
     controller.abort();
 
-    try {
-      const outcome = await Promise.race([
-        observed,
-        new Promise<string>((resolve) => setTimeout(() => resolve("timed out"), 50)),
-      ]);
-      expect(outcome).toBe("Operation aborted");
-    } finally {
-      finishSelect("Yes");
-      await decision.catch(() => undefined);
-    }
+    await expect(decision).rejects.toMatchObject({ message: "Operation aborted" });
+    await expect(askSubagentPermissionHost({
+      agentType: "worker",
+      depth: 2,
+      rootSessionId: "root-session-abort",
+      prompt: "Next permission request",
+    })).resolves.toBe(true);
+    expect(selectCalls).toBe(2);
+  });
+
+  it("preserves a subagent host selector error when its signal is not aborted", async () => {
+    // Intent: host error normalization is limited to actual cancellation and must not hide a real
+    // root UI failure behind the generic abort error.
+    const uiError = new Error("root selector failed");
+    const registry = createToolRegistry({
+      hasUI: true,
+      cwd: "/tmp/root-project",
+      ui: {
+        select: async () => {
+          throw uiError;
+        },
+      },
+    });
+    piBaseExtension(registry.pi as any);
+    const rootCtx = {
+      cwd: "/tmp/root-project",
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "root-session-ui-error",
+        getEntries: () => [],
+      },
+    };
+    await registry.emit("session_start", { reason: "startup" }, rootCtx);
+    const controller = new AbortController();
+
+    const decision = askSubagentPermissionHost({
+      agentType: "worker",
+      depth: 2,
+      rootSessionId: "root-session-ui-error",
+      prompt: "Permission request",
+      signal: controller.signal,
+    });
+
+    expect(controller.signal.aborted).toBe(false);
+    await expect(decision).rejects.toBe(uiError);
+    await registry.emit("session_shutdown", { reason: "quit" }, rootCtx);
   });
 });

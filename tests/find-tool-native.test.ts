@@ -153,7 +153,10 @@ describe("createFindToolDefinition native fd path", () => {
     expect(getText(empty)).toBe("No files found matching pattern");
 
     process.env.PI_BASE_FAKE_FD_MODE = "error";
-    await expect(tool.execute("find-3", { path: ".", pattern: "*" })).rejects.toThrow("synthetic fd failure");
+    const failed = await tool.execute("find-3", { path: ".", pattern: "*" });
+    expect(failed.isError).toBe(true);
+    expect(getText(failed)).toContain("fd exited with code 2");
+    expect(getText(failed)).toContain("stderr: synthetic fd failure");
   });
 
   it("reports fd availability failures before spawning a search process", async () => {
@@ -168,8 +171,8 @@ describe("createFindToolDefinition native fd path", () => {
   });
 
   it("keeps partial fd output from non-zero exits", async () => {
-    // Intent: fd can emit useful matches before a non-zero exit; callers should
-    // not lose those matches when fd also reports diagnostics.
+    // Intent: fd can emit useful matches before a non-zero exit, but preserved
+    // stdout must remain explicitly partial and must never turn failure into success.
     const root = await createTempWorkspace();
     await installFakeFd(root);
     const tool = createFindToolDefinition(root);
@@ -177,7 +180,11 @@ describe("createFindToolDefinition native fd path", () => {
     process.env.PI_BASE_FAKE_FD_MODE = "error";
     process.env.PI_BASE_FAKE_FD_OUTPUT = `${join(root, "src", "partial.ts")}\n`;
     const partial = await tool.execute("find-partial", { path: ".", pattern: "*.ts" });
-    expect(getText(partial)).toContain("src/partial.ts");
+    expect(partial.isError).toBe(true);
+    expect(getText(partial)).toContain("Error: fd exited with code 2.");
+    expect(getText(partial)).toContain("stderr: synthetic fd failure");
+    expect(getText(partial)).toContain("Partial output:\nsrc/partial.ts");
+    expect((partial as any).details).toMatchObject({ exitCode: 2, partialOutput: true });
   });
 
   it("leaves byte truncation to the shared tool-output layer", async () => {

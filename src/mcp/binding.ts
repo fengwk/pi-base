@@ -24,18 +24,26 @@ export class McpSessionBinding {
   private readonly reactivateWhenAvailable = new Set<string>();
   private releaseHub: (() => Promise<void>) | undefined;
   private ctx: ExtensionContext | undefined;
+  private hub: McpHub;
   private snapshot: McpSnapshot = { enabledServers: 0, connectedServers: 0, servers: [] };
 
-  constructor(private readonly options: McpSessionBindingOptions) {}
+  constructor(private readonly options: McpSessionBindingOptions) {
+    this.hub = options.hub;
+  }
+
+  setHub(hub: McpHub): void {
+    if (this.releaseHub) throw new Error("Cannot replace an attached MCP hub.");
+    this.hub = hub;
+  }
 
   async start(ctx: ExtensionContext, config: McpConfig | undefined, hubOptions: McpHubOptions): Promise<void> {
     await this.stop();
     this.ctx = ctx;
-    const attachment = this.options.hub.attach((snapshot) => this.sync(snapshot));
+    const attachment = this.hub.attach((snapshot) => this.sync(snapshot));
     this.releaseHub = attachment.release;
     try {
-      await this.options.hub.configure(config, hubOptions);
-      if (this.releaseHub === attachment.release) this.sync(this.options.hub.getSnapshot());
+      await this.hub.configure(config, hubOptions);
+      if (this.releaseHub === attachment.release) this.sync(this.hub.getSnapshot());
     } catch (error) {
       const cleanup = this.releaseHub === attachment.release ? this.stop() : attachment.release();
       await cleanup.catch(() => undefined);
@@ -116,7 +124,7 @@ export class McpSessionBinding {
             serverKey: server.key,
             serverConfig: server.config,
             tool,
-            callTool: (serverKey, toolName, args, _ctx, signal) => this.options.hub.call(serverKey, toolName, args, signal),
+            callTool: (serverKey, toolName, args, _ctx, signal) => this.hub.call(serverKey, toolName, args, signal),
             getCollapsedResultLines: this.options.getCollapsedResultLines,
             getCollapsedResultMaxChars: this.options.getCollapsedResultMaxChars,
           })));

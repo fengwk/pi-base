@@ -132,6 +132,17 @@ function abortError(): Error {
   return new Error("Operation aborted");
 }
 
+function serverConfigFingerprint(server: LspServerConfig): string {
+  return createHash("sha256").update(JSON.stringify({
+    command: server.command,
+    extensions: server.extensions,
+    rootMarkers: server.rootMarkers,
+    firstMatchMarkers: server.firstMatchMarkers,
+    requestTimeoutMs: server.requestTimeoutMs,
+    workspaceData: server.workspaceData,
+  })).digest("hex");
+}
+
 async function waitForGracefulShutdown(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
   let timeout: NodeJS.Timeout | undefined;
   try {
@@ -378,7 +389,6 @@ export class LspClient {
       },
     });
     this.openedFiles.add(absPath);
-    await new Promise((resolve) => setTimeout(resolve, 200));
   }
 
   syncFile(filePath: string): void {
@@ -503,6 +513,11 @@ export class LspClient {
         if (!pending) return;
         this.pending.delete(id);
         clearTimeout(pending.timer);
+        try {
+          this.notify("$/cancelRequest", { id });
+        } catch {
+          // The caller cancellation still wins if the transport is already unavailable.
+        }
         reject(abortError());
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -511,6 +526,11 @@ export class LspClient {
         this.pending.delete(id);
         settled = true;
         signal?.removeEventListener("abort", onAbort);
+        try {
+          this.notify("$/cancelRequest", { id });
+        } catch {
+          // Preserve the actionable timeout when the cancellation notification cannot be sent.
+        }
         reject(new Error(`LSP request timeout (${method}) after ${this.requestTimeoutMs}ms. Increase lsp.servers.${this.server.id}.requestTimeoutMs if this server is legitimately slow, then run /reload for the change to take effect.`));
       }, this.requestTimeoutMs);
       this.pending.set(id, {
@@ -679,7 +699,7 @@ export class LspManager {
   async getClient(filePath: string, resolver: LspDiscoveryResolver): Promise<LspClient> {
     const server = resolver.findServerForFile(filePath);
     const root = resolver.findWorkspaceRoot(filePath, server);
-    const key = `${root}::${server.id}`;
+    const key = `${root}::${server.id}::${serverConfigFingerprint(server)}`;
     const generation = this.generation;
     const retirement = this.retiringClients.get(key);
     if (retirement) await retirement;

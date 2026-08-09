@@ -29,6 +29,7 @@ import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 2000;
 const MAX_LINE_CHARS = 2000;
+const MAX_TEXT_FILE_BYTES = 64 * 1024 * 1024;
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
 type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
@@ -37,6 +38,14 @@ function parsePositiveInteger(value: unknown, name: string, defaultValue: number
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer.`);
   return parsed;
+}
+
+function assertTextFileSize(rawPath: string, size: number): void {
+  if (size <= MAX_TEXT_FILE_BYTES) return;
+  throw new Error(
+    `${rawPath} is larger than the 64 MiB read safety limit. `
+    + "Use grep to locate relevant text or narrow the target before reading; offset/limit cannot safely load this whole file.",
+  );
 }
 
 function formatLine(content: string): { display: string; truncated: boolean } {
@@ -144,6 +153,9 @@ export function registerReadTool(
         throwIfAborted(signal);
         const rawPath = String(params.path ?? "").replace(/^@/, "");
         if (!rawPath) throw new Error("path is required.");
+        const offset = parsePositiveInteger(params.offset, "offset", 1);
+        const limit = parsePositiveInteger(params.limit, "limit", DEFAULT_LIMIT);
+        if (limit > MAX_LIMIT) throw new Error(`limit must be <= ${MAX_LIMIT}.`);
         const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const absolutePath = resolveToCwd(rawPath, cwd);
         const st = await throwIfAbortedAfter(stat(absolutePath), signal);
@@ -187,7 +199,13 @@ export function registerReadTool(
           };
         }
 
-        const buffer = await withFileMutationQueue(absolutePath, () => throwIfAbortedAfter(readFile(absolutePath), signal));
+        if (st.isFile()) assertTextFileSize(rawPath, st.size);
+
+        const buffer = await withFileMutationQueue(absolutePath, async () => {
+          const currentStat = await throwIfAbortedAfter(stat(absolutePath), signal);
+          if (currentStat.isFile()) assertTextFileSize(rawPath, currentStat.size);
+          return throwIfAbortedAfter(readFile(absolutePath), signal);
+        });
         const decodedFile = decodeTextFile(buffer);
         if (decodedFile === null) {
           return {
@@ -195,10 +213,6 @@ export function registerReadTool(
             isError: true,
           };
         }
-
-        const offset = parsePositiveInteger(params.offset, "offset", 1);
-        const limit = parsePositiveInteger(params.limit, "limit", DEFAULT_LIMIT);
-        if (limit > MAX_LIMIT) throw new Error(`limit must be <= ${MAX_LIMIT}.`);
 
         const { text } = decodedFile;
         const { lines: displayedFileLines, endsWithNewline } = buildDisplayedFileLines(text);

@@ -8,7 +8,7 @@ import { registerWriteTool } from "./write.js";
 import { registerApplyPatchTool } from "./apply-patch.js";
 import { registerBashRendererTool } from "./bash-renderer.js";
 import { type LoadedPiBaseSettings } from "./config.js";
-import { registerPermissionGuard, truncatePermissionLine } from "./permission.js";
+import { registerPermissionGuard, selectPermissionChoice, truncatePermissionLine } from "./permission.js";
 import { loadRuntimePiBaseSettings, reloadRuntimePiBaseSettings, toggleRuntimeYolo } from "./runtime-settings.js";
 import { lspManager } from "./lsp/client.js";
 import { registerLspTools, type LspResolverFactory } from "./lsp/tools.js";
@@ -81,7 +81,7 @@ function resolveBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): Readonl
 
 export interface PiBaseExtensionOptions {
   mcp?: RegisterMcpSupportOptions;
-  notify?: RegisterNotifySupportOptions;
+  notify?: Omit<RegisterNotifySupportOptions, "isGoalActive">;
 }
 
 
@@ -312,10 +312,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     isYoloEnabled,
   });
   registerLspTools(pi, { resolverFactory, getCollapsedResultLines, getCollapsedResultMaxChars });
-  const notifyHooks = registerNotifySupport(pi, {
-    loadSettings,
-    ...options.notify,
-  });
   const subagentControls = {
     taskToolName: TASK_TOOL_NAME,
     getMaxDepth: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxDepth,
@@ -346,6 +342,13 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
         : [],
   });
   goalHandle = registerGoalSupport(pi, { isSessionSupported: isRootSession });
+  // Register after goal support: its agent_settled handler must expose the final goal state before
+  // notify decides whether a completed run is terminal or about to continue automatically.
+  const notifyHooks = registerNotifySupport(pi, {
+    loadSettings,
+    ...options.notify,
+    isGoalActive: () => goalHandle?.active === true,
+  });
   registerMcpSupport(pi, {
     ...options.mcp,
     loadSettings,
@@ -414,7 +417,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
         if (req.signal?.aborted) throw new Error("Operation aborted");
         const summary = req.prompt.replace(/^Permission request:\s*/i, "");
         const title = truncatePermissionLine(`⟳ subagent「${req.agentType}」(depth ${req.depth}) requests permission: ${summary}`);
-        const choice = await ctx.ui.select(title, ["Yes", "No"]);
+        const choice = await selectPermissionChoice(ctx, title, ["Yes", "No"], req.signal);
         if (registeredHost !== host || registeredHostRootSessionId !== rootSessionId) {
           throw new Error("Subagent permission host is no longer active");
         }
