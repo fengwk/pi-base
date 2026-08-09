@@ -51,14 +51,6 @@ function matchesAnyKey(data: string, keys: readonly KeyId[]): boolean {
   return keys.some((key) => matchesKey(data, key));
 }
 
-function preferredKeys(preferred: readonly KeyId[], fallback: readonly KeyId[]): readonly KeyId[] {
-  return preferred.length > 0 ? preferred : fallback;
-}
-
-function formatKeys(keys: readonly KeyId[]): string {
-  return keys.length > 0 ? keys.join("/") : "?";
-}
-
 function userText(message: Extract<SubagentViewMessage, { role: "user" }>): string {
   if (typeof message.content === "string") return message.content.trim();
   return message.content
@@ -373,7 +365,7 @@ export class SubagentSessionPanel implements Component {
     const safeWidth = Math.max(4, width);
     const innerWidth = Math.max(1, safeWidth - 2);
     const maxHeight = Math.max(4, this.tui.terminal.rows - PANEL_MARGIN_ROWS);
-    const viewportHeight = Math.max(1, maxHeight - 3);
+    const viewportHeight = Math.max(1, maxHeight - 2);
     const contentLines = this.transcript.render(innerWidth);
     if (contentLines.length === 0) contentLines.push(this.theme.fg("muted", "Waiting for subagent output..."));
     const maxScroll = Math.max(0, contentLines.length - viewportHeight);
@@ -389,30 +381,15 @@ export class SubagentSessionPanel implements Component {
     const toolCount = node?.toolCount ?? this.source.toolCount ?? 0;
     const model = this.source.getModel?.();
     const modelLabel = model ? ` · ${model.provider}/${model.modelId}` : "";
-    const title = ` subagent ${agentType} · ${status}${modelLabel} · turns: ${turns} · tool calls: ${toolCount} `;
-    const pageUpKeys = preferredKeys(this.viewportKeybindings.pageUp, this.keybindings.getKeys("tui.select.pageUp"));
-    const pageDownKeys = preferredKeys(this.viewportKeybindings.pageDown, this.keybindings.getKeys("tui.select.pageDown"));
-    const halfPageUpKeys = this.viewportKeybindings.halfPageUp;
-    const halfPageDownKeys = this.viewportKeybindings.halfPageDown;
-    const topKeys = preferredKeys(this.viewportKeybindings.top, this.keybindings.getKeys("tui.editor.cursorLineStart"));
-    const bottomKeys = preferredKeys(this.viewportKeybindings.bottom, this.keybindings.getKeys("tui.editor.cursorLineEnd"));
-    const navigationParts = [
-      `${formatKeys(this.keybindings.getKeys("tui.select.up"))}/${formatKeys(this.keybindings.getKeys("tui.select.down"))} scroll`,
-      `${formatKeys(pageUpKeys)}/${formatKeys(pageDownKeys)} page`,
-      `${formatKeys(topKeys)}/${formatKeys(bottomKeys)} top/bottom${this.followTail ? "" : " (bottom follows latest)"}`,
-    ];
-    if (halfPageUpKeys.length > 0 || halfPageDownKeys.length > 0) {
-      navigationParts.push(`${formatKeys(halfPageUpKeys)}/${formatKeys(halfPageDownKeys)} half-page`);
-    }
-    const navigation = navigationParts.join(" · ");
-    const footer = ` ${formatKeys(this.keybindings.getKeys("tui.select.cancel"))} close · ${navigation} · ${formatKeys(this.keybindings.getKeys("app.tools.expand"))} expand `;
+    const thinkingLevel = this.source.getThinkingLevel?.();
+    const thinkingLabel = thinkingLevel ? ` · thinking: ${thinkingLevel}` : "";
+    const title = ` subagent ${agentType} · ${status}${modelLabel}${thinkingLabel} · turns: ${turns} · tool calls: ${toolCount} `;
     const visible = contentLines.slice(this.scrollTop, this.scrollTop + viewportHeight);
     while (visible.length < viewportHeight) visible.push("");
 
     return [
       borderLine(this.theme, "╭─", title, "╮", safeWidth),
       ...visible.map((line) => `${this.theme.fg("borderAccent", "│")}${padToWidth(line, innerWidth)}${this.theme.fg("borderAccent", "│")}`),
-      borderLine(this.theme, "├─", footer, "┤", safeWidth),
       borderLine(this.theme, "╰─", ` session ${this.sessionId} `, "╯", safeWidth),
     ];
   }

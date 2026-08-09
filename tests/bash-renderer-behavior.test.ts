@@ -77,4 +77,43 @@ describe("bash renderer behavior", () => {
     ));
     expect(completed).toContain("Took");
   });
+
+  it("shows a bounded error tail when successful Bash previews are disabled", () => {
+    // Intent: a zero-line success policy must still expose the most relevant stderr tail and an expansion path.
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+      getCollapsedResultLines: () => 0,
+    });
+    const tool = registry.getTool("bash");
+    const output = Array.from({ length: 12 }, (_, index) => `error-${index + 1}`).join("\n");
+    const context = {
+      lastComponent: undefined,
+      args: { workdir: "." },
+      cwd: process.cwd(),
+      state: { startedAt: Date.now(), endedAt: Date.now() },
+      isError: true,
+    };
+
+    const collapsed = render(tool.renderResult(
+      { content: [{ type: "text", text: output }] },
+      { expanded: false, isPartial: false },
+      {} as any,
+      context,
+    ));
+    expect(collapsed).not.toContain("error-3");
+    expect(collapsed).toContain("error-4");
+    expect(collapsed).toContain("error-12");
+    expect(collapsed).toContain("3 earlier lines");
+    expect(collapsed).toContain("ctrl+o to expand");
+
+    const expanded = render(tool.renderResult(
+      { content: [{ type: "text", text: output }] },
+      { expanded: true, isPartial: false },
+      {} as any,
+      context,
+    ));
+    expect(expanded).toContain("error-1");
+    expect(expanded).not.toContain("ctrl+o to expand");
+  });
 });

@@ -39,6 +39,60 @@ describe("render helpers", () => {
     expect(collapsed).toBe("");
   });
 
+  it("shows a bounded error preview when collapsedLines is zero until expanded", () => {
+    // Intent: disabling successful previews must not hide the diagnostic needed to understand a failed tool call.
+    const raw = Array.from({ length: 12 }, (_, index) => `failure-${index + 1}-${"x".repeat(300)}`).join("\n");
+    const collapsedComponent = renderRawResult(
+      { content: [{ type: "text", text: raw }] },
+      { expanded: false, collapsedLines: 0 },
+      theme,
+      { lastComponent: undefined, isError: true },
+    );
+    const collapsedLines = collapsedComponent.render(5_000);
+    const collapsed = collapsedLines.join("\n");
+    expect(collapsed).toContain("failure-1");
+    expect(collapsed).not.toContain("failure-10");
+    expect(collapsed).toContain("output truncated");
+    expect(collapsed).toContain("ctrl+o to expand");
+    expect(collapsedLines).toHaveLength(11);
+
+    const expanded = render(renderRawResult(
+      { content: [{ type: "text", text: raw }] },
+      { expanded: true, collapsedLines: 0 },
+      theme,
+      { lastComponent: undefined, isError: true },
+    ));
+    expect(expanded).toContain("failure-12");
+    expect(expanded).not.toContain("ctrl+o to expand");
+  });
+
+  it("keeps an expand hint for a short zero-line error preview", () => {
+    // Intent: errors shown as a zero-line exception must remain visibly expandable even when the entire message fits.
+    const collapsed = render(renderRawResult(
+      { content: [{ type: "text", text: "permission denied" }] },
+      { expanded: false, collapsedLines: 0 },
+      theme,
+      { lastComponent: undefined, isError: true },
+    ));
+    expect(collapsed).toContain("permission denied");
+    expect(collapsed).toContain("ctrl+o to expand");
+    expect(collapsed).not.toContain("output truncated");
+  });
+
+  it("caps a zero-line single-line error preview at 2500 characters", () => {
+    // Intent: the error exception must not reintroduce unbounded single-line output in collapsed mode.
+    const raw = "x".repeat(3_000);
+    const collapsed = renderRawResult(
+      { content: [{ type: "text", text: raw }] },
+      { expanded: false, collapsedLines: 0 },
+      {},
+      { lastComponent: undefined, isError: true },
+    ).render(4_000).join("\n");
+    expect(collapsed).toContain("x".repeat(2_500));
+    expect(collapsed).not.toContain("x".repeat(2_501));
+    expect(collapsed).toContain("output truncated");
+  });
+
   it("shows all content when it fits within the configured line count", () => {
     const raw = Array.from({ length: 2 }, (_, index) => `line-${index + 1}`).join("\n");
     const lines = renderRawResult({ content: [{ type: "text", text: raw }] }, { expanded: false, collapsedLines: 3 }, {}, { lastComponent: undefined }).render(200);

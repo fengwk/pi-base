@@ -61,6 +61,7 @@ export interface SubagentViewSource {
   turns?: number;
   toolCount?: number;
   getModel?: () => SubagentViewModel | undefined;
+  getThinkingLevel?: () => string | undefined;
   getMessages: () => readonly SubagentViewMessage[];
   getStreamingMessage: () => SubagentAssistantMessage | undefined;
   getActiveTools: () => readonly SubagentActiveTool[];
@@ -237,6 +238,7 @@ export function getPersistedSubagentView(cwd: string, query: string): PersistedS
       turns: assistantTurnCount(messages),
       toolCount,
       getModel: () => model,
+      getThinkingLevel: () => context.thinkingLevel,
       getMessages: () => context.messages as SubagentViewMessage[],
       getStreamingMessage: () => undefined,
       getActiveTools: () => [],
@@ -804,6 +806,7 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
         const fallback = selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.id } : null;
         return readPersistedModel(session.messages as unknown as RuntimeMessage[], fallback);
       },
+      getThinkingLevel: () => session.thinkingLevel,
       getMessages: () => session.messages as SubagentViewMessage[],
       getStreamingMessage: () => streamingMessage,
       getActiveTools: () => [...activeTools.values()].map((tool) => ({ ...tool })),

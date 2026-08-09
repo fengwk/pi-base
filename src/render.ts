@@ -8,6 +8,8 @@ const INTERNAL_DEFAULT_COLLAPSED_RESULT_LINES = {
   read: 10,
   write: 10,
 } as const;
+export const ERROR_RESULT_PREVIEW_LINES = 10;
+export const ERROR_RESULT_PREVIEW_MAX_CHARS = 2_500;
 const MISSING_CALL_ARG_RE = / *<missing-[^>]+>/g;
 const KEY_VALUE_RE = /^([A-Za-z][A-Za-z0-9]*):(?!\/\/)(?:\s*(.*))?$/;
 const SECTION_HEADER_RE = /^([A-Za-z][A-Za-z0-9 ]*):$/;
@@ -375,30 +377,41 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
     return text;
   }
 
-  // collapsedLines <= 0 hides the collapsed preview entirely (used by read/grep/find/
-  // edit/write); an empty body has nothing to show either.
-  if (collapsedLines <= 0 || !rawBody) {
+  const errorPreview = collapsedLines <= 0 && Boolean(context.isError);
+  // A zero-line budget suppresses successful output, but errors retain a bounded
+  // diagnostic preview so the failure reason is visible without expanding.
+  if ((!errorPreview && collapsedLines <= 0) || !rawBody) {
     text.setText("");
     return text;
   }
+  const effectiveCollapsedLines = errorPreview ? ERROR_RESULT_PREVIEW_LINES : collapsedLines;
+  const effectiveMaxCollapsedChars = errorPreview
+    ? Math.min(maxCollapsedChars ?? ERROR_RESULT_PREVIEW_MAX_CHARS, ERROR_RESULT_PREVIEW_MAX_CHARS)
+    : maxCollapsedChars;
 
   // Step 1: apply the character budget first so long single-line output stays visible
   // instead of being dropped by the line-count gate below.
-  const charTruncated = typeof maxCollapsedChars === "number" && rawBody.length > maxCollapsedChars;
-  const charLimitedBody = charTruncated ? rawBody.slice(0, maxCollapsedChars) : rawBody;
+  const charTruncated = typeof effectiveMaxCollapsedChars === "number" && rawBody.length > effectiveMaxCollapsedChars;
+  const charLimitedBody = charTruncated ? rawBody.slice(0, effectiveMaxCollapsedChars) : rawBody;
 
   // Step 2: only fold when the content exceeds the configured line count; when it fits,
   // show it as-is. When folding, the last line of the window is reserved for the hint.
   const limitedLines = charLimitedBody ? charLimitedBody.split("\n") : [];
-  const lineTruncated = limitedLines.length > collapsedLines;
-  const visibleLineCount = Math.max(0, lineTruncated ? collapsedLines - 1 : limitedLines.length);
+  const bodyLineBudget = errorPreview ? Math.max(0, effectiveCollapsedLines - 1) : effectiveCollapsedLines;
+  const lineTruncated = limitedLines.length > bodyLineBudget;
+  const visibleLineCount = Math.max(
+    0,
+    lineTruncated
+      ? effectiveCollapsedLines - 1
+      : limitedLines.length,
+  );
   const remaining = Math.max(0, limitedLines.length - visibleLineCount);
   const visibleBody = limitedLines.slice(0, visibleLineCount).join("\n");
 
   const tailDetails = [
     remaining > 0 ? `${remaining} more lines` : undefined,
     charTruncated ? "output truncated" : undefined,
-    remaining > 0 || charTruncated ? "ctrl+o to expand" : undefined,
+    remaining > 0 || charTruncated || errorPreview ? "ctrl+o to expand" : undefined,
   ].filter((part): part is string => Boolean(part));
   const body = visibleBody ? colorizeResultBody(visibleBody, theme, Boolean(context.isError)) : "";
   if (tailDetails.length === 0) {

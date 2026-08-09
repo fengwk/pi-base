@@ -2,7 +2,19 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { DEFAULT_MAX_BYTES, formatSize, type BashToolOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { resolveCollapsedResultLines, resolveCollapsedResultMaxChars, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, styleWarning, withLeadingResultNewline } from "./render.js";
+import {
+  ERROR_RESULT_PREVIEW_LINES,
+  ERROR_RESULT_PREVIEW_MAX_CHARS,
+  resolveCollapsedResultLines,
+  resolveCollapsedResultMaxChars,
+  shortenHomePath,
+  styleAccent,
+  styleMuted,
+  styleOutput,
+  styleToolTitle,
+  styleWarning,
+  withLeadingResultNewline,
+} from "./render.js";
 import { describeToolWorkdirForDisplay, resolveToCwd } from "./path-utils.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
@@ -66,22 +78,30 @@ export function formatBashResultText(result: any, options: any, theme: any, cont
   output = stripStructuredTruncationFooter(output, result, options);
 
   const outputLines = output ? output.split("\n") : [];
+  const errorPreview = !options?.expanded && collapsedLines <= 0 && Boolean(context?.isError);
+  const effectiveCollapsedLines = errorPreview ? ERROR_RESULT_PREVIEW_LINES : collapsedLines;
+  const bodyLineBudget = errorPreview ? Math.max(0, effectiveCollapsedLines - 1) : effectiveCollapsedLines;
+  const effectiveMaxCollapsedChars = errorPreview
+    ? Math.min(maxCollapsedChars ?? ERROR_RESULT_PREVIEW_MAX_CHARS, ERROR_RESULT_PREVIEW_MAX_CHARS)
+    : maxCollapsedChars;
   const collapsedOutput = options?.expanded
     ? output
-    : collapsedLines === 0
+    : bodyLineBudget === 0
       ? ""
-      : outputLines.slice(-collapsedLines).join("\n");
-  const wasCharTruncated = !options?.expanded && typeof maxCollapsedChars === "number" && collapsedOutput.length > maxCollapsedChars;
-  const visibleOutput = wasCharTruncated ? `${collapsedOutput.slice(0, maxCollapsedChars)}...` : collapsedOutput;
+      : outputLines.slice(-bodyLineBudget).join("\n");
+  const wasCharTruncated = !options?.expanded
+    && typeof effectiveMaxCollapsedChars === "number"
+    && collapsedOutput.length > effectiveMaxCollapsedChars;
+  const visibleOutput = wasCharTruncated ? `${collapsedOutput.slice(0, effectiveMaxCollapsedChars)}...` : collapsedOutput;
   const visibleLines = visibleOutput
     ? visibleOutput.split("\n").map((line) => styleOutput(theme, line))
     : [];
   const hiddenLineCount = !options?.expanded
-    ? (collapsedLines === 0 ? outputLines.length : Math.max(0, outputLines.length - collapsedLines))
+    ? (bodyLineBudget === 0 ? outputLines.length : Math.max(0, outputLines.length - bodyLineBudget))
     : 0;
   const sections: string[] = [];
 
-  if (!options?.expanded && (hiddenLineCount > 0 || wasCharTruncated)) {
+  if (!options?.expanded && (hiddenLineCount > 0 || wasCharTruncated || errorPreview)) {
     const details = [
       hiddenLineCount > 0 ? `${hiddenLineCount} earlier lines` : undefined,
       wasCharTruncated ? "output truncated" : undefined,

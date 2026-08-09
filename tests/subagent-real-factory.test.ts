@@ -65,6 +65,7 @@ function fakeSession(
     prompt: vi.fn(async () => undefined),
     steer: vi.fn(async () => undefined),
     messages,
+    thinkingLevel: "high",
     subscribe: vi.fn(() => () => undefined),
     abort: vi.fn(),
     extensionRunner: { emit: vi.fn(async () => undefined) },
@@ -132,6 +133,7 @@ describe("createRealSubagentFactory", () => {
     await child.steer?.("finish now");
     expect(session.steer).toHaveBeenCalledWith("finish now");
     expect(child.collect()).toEqual({ report: "final answer", toolCount: 1 });
+    expect(child.view?.getThinkingLevel?.()).toBe("high");
     child.abort();
     expect(session.abort).toHaveBeenCalledTimes(1);
     await child.dispose();

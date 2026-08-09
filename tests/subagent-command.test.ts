@@ -141,6 +141,7 @@ async function createPersistedSession(cwd: string, sessionId: string, userMessag
     stopReason: "stop",
   } as never);
   session.appendModelChange("selected-provider", "selected-but-unused-model");
+  session.appendThinkingLevelChange("max");
 }
 
 afterEach(() => subagentRegistry.clear());
@@ -561,7 +562,7 @@ describe("/subagent", () => {
           expect(component.render(80).join("\n")).toContain("explorer · done");
           component.handleInput?.("\n");
           const output = component.render(80).join("\n");
-          expect(output).toContain("subagent explorer · done · actual-provider/actual-model");
+          expect(output).toContain("subagent explorer · done · actual-provider/actual-model · thinking: max");
           expect(output).toContain("finished report");
           expect(output).toContain("session race-child");
         } finally {
@@ -630,7 +631,7 @@ describe("/subagent", () => {
         try {
           const output = component.render(120).join("\n");
           expect(output).not.toContain("View subagent");
-          expect(output).toContain("subagent explorer · done · actual-provider/actual-model · turns: 1 · tool calls: 0");
+          expect(output).toContain("subagent explorer · done · actual-provider/actual-model · thinking: max · turns: 1 · tool calls: 0");
           expect(output).toContain("finished report");
           expect(output).toContain("session completed-child");
         } finally {

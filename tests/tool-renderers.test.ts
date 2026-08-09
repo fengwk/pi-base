@@ -167,6 +167,40 @@ describe("tool renderers", () => {
     });
   });
 
+  it("shows zero-line error diagnostics through Pi's real tool host until expanded", async () => {
+    // Intent: ToolExecutionComponent must propagate isError so a zero-line success policy cannot erase failures.
+    await withTempGlobalPiBaseConfig({ render: { collapsedToolResultLines: { find: 0 } } }, async (root) => {
+      const registry = createToolRegistry({ cwd: root });
+      piBaseExtension(registry.pi as any);
+      const component = new ToolExecutionComponent(
+        "find",
+        "find-error",
+        { pattern: "*.ts", path: "src" },
+        { showImages: false },
+        registry.getTool("find"),
+        { requestRender: () => undefined } as any,
+        root,
+      );
+      component.setArgsComplete();
+      component.markExecutionStarted();
+      const errorText = Array.from({ length: 12 }, (_, index) => `find failure ${index + 1}`).join("\n");
+      component.updateResult({
+        content: [{ type: "text", text: errorText }],
+        isError: true,
+      });
+
+      const collapsed = component.render(120).join("\n");
+      expect(collapsed).toContain("find failure 1");
+      expect(collapsed).not.toContain("find failure 10");
+      expect(collapsed).toContain("ctrl+o to expand");
+
+      component.setExpanded(true);
+      const expanded = component.render(120).join("\n");
+      expect(expanded).toContain("find failure 12");
+      expect(expanded).not.toContain("ctrl+o to expand");
+    });
+  });
+
   it("uses pi-base raw renderer for find even without explicit render config", async () => {
     await withTempGlobalPiBaseConfig({}, async (root) => {
       const registry = createToolRegistry();

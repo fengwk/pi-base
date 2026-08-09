@@ -17,6 +17,7 @@ function createHarness(
   const source: SubagentViewSource = {
     cwd: "/tmp/work",
     getModel: () => ({ provider: "minimax-cn", modelId: "MiniMax-M3" }),
+    getThinkingLevel: () => "high",
     getMessages: () => initialMessages,
     getStreamingMessage: () => undefined,
     getActiveTools: () => [],
@@ -98,9 +99,10 @@ describe("SubagentSessionPanel", () => {
     });
 
     const output = harness.panel.render(120).join("\n");
-    expect(output).toContain("subagent explorer · running · minimax-cn/MiniMax-M3 · turns: 1 · tool calls: 1");
+    expect(output).toContain("subagent explorer · running · minimax-cn/MiniMax-M3 · thinking: high · turns: 1 · tool calls: 1");
     expect(output).toContain("Inspecting files");
     expect(output).toContain("read");
+    expect(output).not.toContain("├─");
     expect(harness.requestRender).toHaveBeenCalled();
   });
 
@@ -184,9 +186,13 @@ describe("SubagentSessionPanel", () => {
     const harness = createHarness(messages);
     harness.panel.render(50);
     harness.panel.handleInput("up");
-    expect(harness.panel.render(120).join("\n")).toContain("bottom follows latest");
+    harness.emit({
+      type: "message_start",
+      message: { role: "user", content: "new tail sentinel", timestamp: 9 },
+    } as never);
+    expect(harness.panel.render(50).join("\n")).not.toContain("new tail sentinel");
     harness.panel.handleInput("end");
-    expect(harness.panel.render(50).join("\n")).not.toContain("End follow latest");
+    expect(harness.panel.render(50).join("\n")).toContain("new tail sentinel");
     harness.panel.handleInput("cancel");
     expect(harness.done).toHaveBeenCalledTimes(1);
 
@@ -214,9 +220,9 @@ describe("SubagentSessionPanel", () => {
     harness.panel.handleInput("\x1b[1;5H");
     const atTop = harness.panel.render(200).join("\n");
     expect(atTop).toContain("message 0");
-    expect(atTop).toContain("ctrl+pageUp");
-    expect(atTop).toContain("ctrl+end");
-    expect(atTop).toContain("ctrl+u/ctrl+d half-page");
+    expect(atTop).not.toContain("ctrl+pageUp");
+    expect(atTop).not.toContain("ctrl+end");
+    expect(atTop).not.toContain("half-page");
 
     harness.panel.handleInput("\x04");
     expect(harness.panel.render(120).join("\n")).not.toContain("message 0");
@@ -255,7 +261,6 @@ describe("SubagentSessionPanel", () => {
 
     const output = harness.panel.render(120).join("\n");
     expect(output).toContain("new message 7");
-    expect(output).not.toContain("bottom follows latest");
   });
 
   it("preserves regular-mode Home behavior on a short transcript", () => {
@@ -273,6 +278,5 @@ describe("SubagentSessionPanel", () => {
     const output = harness.panel.render(120).join("\n");
     expect(output).toContain("initial");
     expect(output).not.toContain("new message 7");
-    expect(output).toContain("bottom follows latest");
   });
 });

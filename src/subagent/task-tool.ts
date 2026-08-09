@@ -15,6 +15,8 @@ import {
 import { createTaskSchema, taskSchema } from "./schema.js";
 import { loadToolDescription, loadToolPromptSnippet } from "../tool-prompt.js";
 import {
+  ERROR_RESULT_PREVIEW_LINES,
+  ERROR_RESULT_PREVIEW_MAX_CHARS,
   resolveCollapsedResultLines,
   resolveCollapsedResultMaxChars,
   type CollapsedResultLinesResolver,
@@ -173,6 +175,7 @@ function renderTaskCall(args: Static<typeof taskSchema>, theme: any, lastCompone
 function renderTaskReportBody(
   report: string,
   expanded: boolean | undefined,
+  isError: boolean,
   theme: any,
   context: { cwd?: string } | undefined,
   deps: Pick<SubagentTaskToolDeps, "getCollapsedResultLines" | "getCollapsedResultMaxChars">,
@@ -193,19 +196,25 @@ function renderTaskReportBody(
     deps.getCollapsedResultMaxChars,
   );
 
-  if (collapsedLines <= 0) return "";
+  const errorPreview = collapsedLines <= 0 && isError;
+  if (collapsedLines <= 0 && !errorPreview) return "";
+  const effectiveCollapsedLines = errorPreview ? ERROR_RESULT_PREVIEW_LINES : collapsedLines;
+  const effectiveMaxCollapsedChars = errorPreview
+    ? Math.min(maxCollapsedChars ?? ERROR_RESULT_PREVIEW_MAX_CHARS, ERROR_RESULT_PREVIEW_MAX_CHARS)
+    : maxCollapsedChars;
 
-  const charTruncated = typeof maxCollapsedChars === "number" && normalized.length > maxCollapsedChars;
-  const charLimitedBody = charTruncated ? normalized.slice(0, maxCollapsedChars) : normalized;
+  const charTruncated = typeof effectiveMaxCollapsedChars === "number" && normalized.length > effectiveMaxCollapsedChars;
+  const charLimitedBody = charTruncated ? normalized.slice(0, effectiveMaxCollapsedChars) : normalized;
   const lines = charLimitedBody ? charLimitedBody.split("\n") : [];
-  const lineTruncated = lines.length > collapsedLines;
-  const visibleLineCount = Math.max(0, lineTruncated ? collapsedLines - 1 : lines.length);
+  const bodyLineBudget = errorPreview ? Math.max(0, effectiveCollapsedLines - 1) : effectiveCollapsedLines;
+  const lineTruncated = lines.length > bodyLineBudget;
+  const visibleLineCount = Math.max(0, lineTruncated ? effectiveCollapsedLines - 1 : lines.length);
   const remaining = Math.max(0, lines.length - visibleLineCount);
   const visibleBody = lines.slice(0, visibleLineCount).join("\n");
   const tailDetails = [
     remaining > 0 ? `${remaining} more lines` : undefined,
     charTruncated ? "output truncated" : undefined,
-    remaining > 0 || charTruncated ? "ctrl+o to expand" : undefined,
+    remaining > 0 || charTruncated || errorPreview ? "ctrl+o to expand" : undefined,
   ].filter((part): part is string => Boolean(part));
   if (tailDetails.length === 0) return normalized;
   const tail = paint(theme, "muted", `... (${tailDetails.join(", ")})`);
@@ -230,7 +239,7 @@ function renderFinalResult(
   const icon = state === "completed" ? paint(theme, "success", "✓") : paint(theme, "error", "✗");
   const sessionSuffix = sessionId ? paint(theme, "muted", ` (${sessionId})`) : "";
   const header = `${icon} ${title(theme, `task ${state}`)}${sessionSuffix}`;
-  const body = renderTaskReportBody(report, expanded, theme, context, deps);
+  const body = renderTaskReportBody(report, expanded, state !== "completed", theme, context, deps);
   const container = new Container();
   container.addChild(new Spacer(1));
   container.addChild(new Text(header, 0, 0));

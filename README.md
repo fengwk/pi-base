@@ -346,7 +346,7 @@ Agent 正文（覆盖 system prompt）
 
 | 字段 | 说明 |
 |------|------|
-| `collapsedToolResultLines` | 折叠态最多显示行数；`0`=完全隐藏；匹配优先级：精确名 > 通配符 > `*` |
+| `collapsedToolResultLines` | 折叠态最多显示行数；`0`=隐藏成功结果正文，但错误仍保留最多 10 个逻辑行（含展开提示）和 2500 字符的诊断预览；匹配优先级：精确名 > 通配符 > `*` |
 | `collapsedToolResultMaxChars` | 仅已折叠时生效，不会单独触发折叠 |
 
 默认值：read=10, grep=15, bash=20, write=10，其他工具 `*`=20；MCP 结果的折叠态另有 2500 字符默认上限，显式的精确名/通配符配置仍可覆盖该值。
@@ -437,7 +437,7 @@ Agent 正文（覆盖 system prompt）
 | `idleTimeoutMs` | 关闭 | 无 assistant/session 进展时的空闲超时（tool 执行中不触发）；计时 >0 时生效 |
 | `maxTurns` | 50 | `task.maxTurns` 未指定时的默认有效 assistant turn 预算。达到预算后通过 steer 队列要求未完成的 child 返回阶段性报告；若仍持续发起工具调用，每额外 5 个有效 turn 再提醒一次。`error`/`aborted` 消息不计数；不会强制终止子 agent |
 
-root UI 的 editor-adjacent widget 展示运行中 subagent 的 parent/child 树、turn/tool call 计数和最近活动；历史 `task` tool block 保持稳定。`/subagent` 打开运行中 session 选择器，`/subagent <session-id-or-unique-prefix>` 可直接只读查看运行中或已持久化结束的 session transcript。
+root UI 的 editor-adjacent widget 展示运行中 subagent 的 parent/child 树、turn/tool call 计数和最近活动；历史 `task` tool block 保持稳定。`/subagent` 打开运行中 session 选择器，`/subagent <session-id-or-unique-prefix>` 可直接只读查看运行中或已持久化结束的 session transcript。transcript 面板标题会展示实际 provider/model 与 thinking level；面板沿用外层导航绑定，不重复显示快捷键 footer。
 
 parent turn 在委派开始前已取消时不会创建或恢复 child session。初始化过程中发生的取消会在 startup 返回后立即传播；不使用只提前返回但无法停止后台初始化的 promise race。
 

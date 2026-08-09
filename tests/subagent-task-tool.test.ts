@@ -234,6 +234,42 @@ describe("task tool", () => {
     expect(expanded).not.toContain("ctrl+o to expand");
   });
 
+  it("keeps task errors visible when successful result previews are disabled", () => {
+    // Intent: task failures need a bounded diagnostic body even when zero suppresses successful reports.
+    const tool = registerAndCapture(baseDeps({
+      getCollapsedResultLines: () => 0,
+    }));
+    const report = Array.from({ length: 12 }, (_, index) => `failure ${index + 1} ${"x".repeat(300)}`).join("\n");
+    const result = {
+      content: [{ type: "text", text: "" }],
+      details: { result: { sessionId: "s", state: "error", error: report } },
+      isError: true,
+    };
+
+    const collapsed = render(
+      tool.renderResult(result, { isPartial: false, expanded: false }, {}, {
+        lastComponent: undefined,
+        cwd: "/tmp/work",
+        isError: true,
+      }),
+    );
+    expect(collapsed).toContain("task error");
+    expect(collapsed).toContain("failure 1");
+    expect(collapsed).not.toContain("failure 10");
+    expect(collapsed).toContain("output truncated");
+    expect(collapsed).toContain("ctrl+o to expand");
+
+    const expanded = render(
+      tool.renderResult(result, { isPartial: false, expanded: true }, {}, {
+        lastComponent: undefined,
+        cwd: "/tmp/work",
+        isError: true,
+      }),
+    );
+    expect(expanded).toContain("failure 12");
+    expect(expanded).not.toContain("ctrl+o to expand");
+  });
+
   it("keeps child progress out of task partial updates while updating the registry", async () => {
     // Intent: live counters belong to the registry-backed widget/overlay, not the historical task block.
     let listener: ((event: unknown) => void) | undefined;
