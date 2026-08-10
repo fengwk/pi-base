@@ -28,6 +28,26 @@ function handle(id: string, opts: { prompt?: () => Promise<void>; report?: strin
   };
 }
 
+function handleWithAssistantEvents(
+  id: string,
+  events: unknown[],
+  opts: { report?: string; toolCount?: number } = {},
+): SubagentSession {
+  let listener: ((event: unknown) => void) | undefined;
+  return {
+    ...handle(id, opts),
+    prompt: async () => {
+      for (const event of events) listener?.(event);
+    },
+    subscribe(next) {
+      listener = next;
+      return () => {
+        listener = undefined;
+      };
+    },
+  };
+}
+
 describe("runSubagent", () => {
   it("spawns, marks running then done, and returns the report + session id", async () => {
     // Intent: the happy path must return a real session id + report and reflect done in the registry.
@@ -130,6 +150,79 @@ describe("runSubagent", () => {
     expect(result.sessionId).toBe("child-err");
     expect(result.error).toContain("boom");
     expect(subagentRegistry.get("child-err")!.status).toBe("error");
+  });
+
+  it("uses the final assistant error state even when prompt resolves normally", async () => {
+    // Intent: Pi can represent a provider failure as a terminal assistant message rather than a
+    // rejected prompt promise; delegating tasks must still report the child as failed.
+    const child = handleWithAssistantEvents("child-terminal-error", [{
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "upstream provider returned 502",
+        content: [{ type: "text", text: "partial" }],
+      },
+    }], { report: "partial" });
+
+    const result = await runSubagent(
+      fakeCtx(),
+      { agentType: "worker", prompt: "go", childDepth: 2 },
+      { spawn: async () => child, resume: async () => child },
+    );
+
+    expect(result).toEqual({
+      sessionId: "child-terminal-error",
+      state: "error",
+      error: "upstream provider returned 502",
+    });
+    expect(subagentRegistry.get("child-terminal-error")?.status).toBe("error");
+  });
+
+  it("clears a transient assistant error after a successful retry", async () => {
+    // Intent: only the final assistant message determines the delegation result when Pi retries a
+    // failed provider response within the same prompt.
+    const child = handleWithAssistantEvents("child-terminal-recovered", [
+      {
+        type: "message_end",
+        message: { role: "assistant", stopReason: "error", errorMessage: "temporary", content: [] },
+      },
+      {
+        type: "message_end",
+        message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "recovered" }] },
+      },
+    ], { report: "recovered" });
+
+    const result = await runSubagent(
+      fakeCtx(),
+      { agentType: "worker", prompt: "go", childDepth: 2 },
+      { spawn: async () => child, resume: async () => child },
+    );
+
+    expect(result).toEqual({
+      sessionId: "child-terminal-recovered",
+      state: "completed",
+      report: "recovered",
+    });
+  });
+
+  it("reports a terminal assistant abort as cancelled without a parent abort signal", async () => {
+    // Intent: runtime/provider aborts can end as assistant messages while the parent signal stays
+    // active; these must not be misreported as successful delegations.
+    const child = handleWithAssistantEvents("child-terminal-aborted", [{
+      type: "message_end",
+      message: { role: "assistant", stopReason: "aborted", content: [] },
+    }]);
+
+    const result = await runSubagent(
+      fakeCtx(),
+      { agentType: "worker", prompt: "go", childDepth: 2 },
+      { spawn: async () => child, resume: async () => child },
+    );
+
+    expect(result.state).toBe("cancelled");
+    expect(result.error).toContain("aborted");
+    expect(subagentRegistry.get("child-terminal-aborted")?.status).toBe("cancelled");
   });
 
   it("cascades parent-turn cancellation to the subagent and reports cancelled", async () => {
@@ -672,6 +765,14 @@ describe("runSubagent", () => {
             content: [{ type: "toolCall" }],
           },
         });
+        listener?.({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "recovered" }],
+          },
+        });
       },
       collect: () => ({ report: "recovered", toolCount: 1 }),
       subscribe(next) {
@@ -690,7 +791,7 @@ describe("runSubagent", () => {
     );
 
     expect(steer).toHaveBeenCalledTimes(1);
-    expect(subagentRegistry.get("child-error-turns")?.turns).toBe(1);
+    expect(subagentRegistry.get("child-error-turns")?.turns).toBe(2);
     expect(result).toEqual({ sessionId: "child-error-turns", state: "completed", report: "recovered" });
   });
 });

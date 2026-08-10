@@ -458,7 +458,23 @@ export async function runSubagent(
 
   publishProgress({ kind: "status", text: `started ${args.agentType} session ${handle.sessionId}` });
   const activeToolArgs = new Map<string, string>();
+  let terminalAssistant: { stopReason: "error" | "aborted"; errorMessage?: string } | undefined;
+  const recordTerminalAssistant = (event: unknown) => {
+    if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message)) return;
+    const message = event.message;
+    if (message.role !== "assistant" || message.stopReason === "pending") return;
+    if (message.stopReason !== "error" && message.stopReason !== "aborted") {
+      terminalAssistant = undefined;
+      return;
+    }
+    const errorMessage = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+    terminalAssistant = {
+      stopReason: message.stopReason,
+      ...(errorMessage ? { errorMessage } : {}),
+    };
+  };
   const unsubscribeProgress = handle.subscribe?.((event) => {
+    recordTerminalAssistant(event);
     if (isToolExecutionStartEvent(event)) activeToolCalls += 1;
     else if (isToolExecutionEndEvent(event)) activeToolCalls = Math.max(0, activeToolCalls - 1);
     resetIdleTimer();
@@ -506,6 +522,18 @@ export async function runSubagent(
       };
     }
     if (idleTimedOut) throw new Error("idle timeout watchdog triggered");
+    if (terminalAssistant?.stopReason === "error") {
+      const failure = terminalAssistant.errorMessage || "Subagent assistant message terminated with error.";
+      publishProgress({ kind: "status", text: `error: ${failure}` });
+      finish(handle.sessionId, "error", safeToolCount(handle));
+      return { sessionId: handle.sessionId, state: "error", error: failure };
+    }
+    if (terminalAssistant?.stopReason === "aborted") {
+      const failure = terminalAssistant.errorMessage || 'Subagent assistant message ended with stopReason "aborted".';
+      publishProgress({ kind: "status", text: "cancelled" });
+      finish(handle.sessionId, "cancelled", safeToolCount(handle));
+      return { sessionId: handle.sessionId, state: "cancelled", error: failure };
+    }
     const { report, toolCount } = handle.collect();
     publishProgress({ kind: "status", text: "completed" });
     finish(handle.sessionId, "done", toolCount);

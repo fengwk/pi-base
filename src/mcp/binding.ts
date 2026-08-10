@@ -7,6 +7,15 @@ import type { McpConfig, McpServerSnapshot, McpSnapshot, McpToolSnapshot } from 
 
 type SessionPi = Pick<ExtensionAPI, "registerTool" | "getAllTools" | "getActiveTools" | "setActiveTools">;
 
+interface ToolOwner {
+  serverKey: string;
+  remoteName: string;
+}
+
+function toolOwnerId(serverKey: string, remoteName: string): string {
+  return JSON.stringify([serverKey, remoteName]);
+}
+
 export interface McpSessionBindingOptions {
   hub: McpHub;
   pi: SessionPi;
@@ -18,7 +27,7 @@ export interface McpSessionBindingOptions {
 }
 
 export class McpSessionBinding {
-  private readonly toolOwners = new Map<string, string>();
+  private readonly toolOwners = new Map<string, ToolOwner>();
   private readonly availableAliases = new Set<string>();
   private readonly unavailableAliases = new Set<string>();
   private readonly reactivateWhenAvailable = new Set<string>();
@@ -85,8 +94,9 @@ export class McpSessionBinding {
       for (const { tool, stale } of server.tools) {
         if (stale) continue;
         const aliasName = buildMcpToolName(server.key, tool.name, server.config.toolPrefix);
+        const ownerId = toolOwnerId(server.key, tool.name);
         const owners = advertisedAliasOwners.get(aliasName) ?? new Set<string>();
-        owners.add(server.key);
+        owners.add(ownerId);
         advertisedAliasOwners.set(aliasName, owners);
       }
     }
@@ -101,12 +111,16 @@ export class McpSessionBinding {
       const tools: McpToolSnapshot[] = [];
       for (const { tool, stale } of server.tools) {
         const aliasName = buildMcpToolName(server.key, tool.name, server.config.toolPrefix);
+        const currentOwnerId = toolOwnerId(server.key, tool.name);
         const owner = this.toolOwners.get(aliasName);
-        const registeredByThisServer = owner === server.key;
-        const ownedByUnavailableServer = owner !== undefined
-          && owner !== server.key
-          && !advertisedAliasOwners.get(aliasName)?.has(owner);
-        const conflictsWithExistingTool = !registeredByThisServer && !ownedByUnavailableServer && existingToolNames.has(aliasName);
+        const registeredByThisTool = owner?.serverKey === server.key && owner.remoteName === tool.name;
+        const ownerId = owner ? toolOwnerId(owner.serverKey, owner.remoteName) : undefined;
+        const ownedByUnavailableTool = ownerId !== undefined
+          && ownerId !== currentOwnerId
+          && !advertisedAliasOwners.get(aliasName)?.has(ownerId);
+        const conflictsWithExistingTool = !registeredByThisTool
+          && !ownedByUnavailableTool
+          && existingToolNames.has(aliasName);
 
         if (!stale && conflictsWithExistingTool) {
           tools.push({
@@ -114,7 +128,9 @@ export class McpSessionBinding {
             aliasName,
             description: tool.description,
             state: "conflict",
-            reason: owner && owner !== server.key ? `already registered by ${owner}` : "tool name already exists",
+            reason: owner
+              ? `already registered by ${owner.serverKey}/${owner.remoteName}`
+              : "tool name already exists",
           });
           continue;
         }
@@ -128,17 +144,17 @@ export class McpSessionBinding {
             getCollapsedResultLines: this.options.getCollapsedResultLines,
             getCollapsedResultMaxChars: this.options.getCollapsedResultMaxChars,
           })));
-          this.toolOwners.set(aliasName, server.key);
+          this.toolOwners.set(aliasName, { serverKey: server.key, remoteName: tool.name });
           existingToolNames.add(aliasName);
           nextAvailableAliases.add(aliasName);
           const newlyAvailable = !this.availableAliases.has(aliasName);
           const returningFromUnavailable = this.unavailableAliases.has(aliasName);
           const restoringPreviousActiveState = this.reactivateWhenAvailable.has(aliasName);
-          const preservingActiveOwnerTransfer = ownedByUnavailableServer && currentlyActiveTools.has(aliasName);
+          const preservingActiveOwnerTransfer = ownedByUnavailableTool && currentlyActiveTools.has(aliasName);
           if ((newlyAvailable && (!returningFromUnavailable || restoringPreviousActiveState)) || preservingActiveOwnerTransfer) {
             activationCandidates.add(aliasName);
           }
-        } else if (registeredByThisServer) {
+        } else if (registeredByThisTool) {
           aliasesToDeactivate.add(aliasName);
         }
 

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { McpSessionBinding } from "../src/mcp/binding.js";
 import { createMcpHub } from "../src/mcp/hub.js";
-import { createMcpToolDefinition } from "../src/mcp/adapter.js";
+import { buildMcpToolName, createMcpToolDefinition } from "../src/mcp/adapter.js";
 import type { McpClientFactory, McpProtocolClient, McpTool, McpToolCallResult } from "../src/mcp/types.js";
 import { convertJsonSchemaToTypeBox } from "../src/mcp/schema.js";
 import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";
@@ -411,6 +411,49 @@ describe("mcp support", () => {
     expect(hasTool(registry, "echo")).toBe(false);
     expect(hasTool(registry, "mm_echo")).toBe(true);
   });
+
+  it("reports normalized alias collisions between different tools on the same server", async () => {
+    // Intent: a provider-safe remote name can equal the normalized alias of an unsafe name.
+    // The binding must register exactly one owner and expose the other as a conflict.
+    const root = await createTempWorkspace();
+    const unsafeTool: McpTool = { name: "foo.bar", description: "Unsafe-name owner" };
+    const alias = buildMcpToolName("mm", unsafeTool.name, "");
+    const collidingTool: McpTool = { name: alias, description: "Colliding safe name" };
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: { type: "local", command: ["mock-mcp"], toolPrefix: "" },
+        },
+      },
+    });
+
+    const registry = createMcpRegistry({ hasUI: true, cwd: root });
+    const aliasRegistrations: string[] = [];
+    const registerTool = registry.pi.registerTool.bind(registry.pi);
+    registry.pi.registerTool = (tool: any) => {
+      if (tool.name === alias) aliasRegistrations.push(tool.description);
+      registerTool(tool);
+    };
+    piBaseExtension(registry.pi as any, {
+      mcp: {
+        clientFactory: createClientFactory({ mm: [{ tools: [unsafeTool, collidingTool] }] }),
+        heartbeatIntervalMs: 10_000,
+        retryDelaysMs: [20],
+        callWaitTimeoutMs: 20,
+      },
+    });
+
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+    await waitFor(() => hasTool(registry, alias));
+    expect(aliasRegistrations).toHaveLength(1);
+    expect(registry.getTool(alias).description).toBe(aliasRegistrations[0]);
+
+    await registry.runCommand("mcp-status", "", { cwd: root });
+    const status = String(registry.getMessages().at(-1)?.content ?? "");
+    expect(status).toContain(alias);
+    expect(status).toContain("[conflict: already registered by mm/");
+  });
+
   it("keeps MCP registration idempotent when session_start is emitted twice on the same registry", async () => {
     const root = await createTempWorkspace();
     await writeProjectSettings(root, {

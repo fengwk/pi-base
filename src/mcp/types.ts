@@ -45,6 +45,13 @@ export interface McpToolResultContent {
   type: string;
   text?: string;
   data?: unknown;
+  mimeType?: string;
+  uri?: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  resource?: unknown;
+  [extra: string]: unknown;
 }
 
 export interface McpToolCallResult {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Compile } from "typebox/compile";
 import { convertJsonSchemaToTypeBox } from "../src/mcp/schema.js";
 
 describe("convertJsonSchemaToTypeBox", () => {
@@ -93,5 +94,104 @@ describe("convertJsonSchemaToTypeBox", () => {
     expect((convertJsonSchemaToTypeBox({ type: "custom" }) as any).type).toBeUndefined();
     expect((convertJsonSchemaToTypeBox({ properties: { value: { type: "string" } } }) as any).type).toBe("object");
     expect((convertJsonSchemaToTypeBox({ items: { type: "string" } }) as any).type).toBe("array");
+  });
+
+  it("preserves allOf intersection semantics for primitive constraints", () => {
+    // Intent: JSON Schema allOf is logical AND; treating it as a union or dropping a
+    // constraint-only branch would accept invalid MCP arguments.
+    const stringSchema: any = convertJsonSchemaToTypeBox({
+      allOf: [
+        { type: "string" },
+        { minLength: 3, pattern: "^[a-z]+$" },
+      ],
+    });
+    const stringValidator = Compile(stringSchema);
+    expect(stringSchema.allOf).toHaveLength(2);
+    expect(stringValidator.Check("abc")).toBe(true);
+    expect(stringValidator.Check("ab")).toBe(false);
+    expect(stringValidator.Check("ABC")).toBe(false);
+    expect(stringValidator.Check(3)).toBe(false);
+
+    const integerValidator = Compile(convertJsonSchemaToTypeBox({
+      allOf: [{ type: "integer" }, { minimum: 10 }],
+    }));
+    expect(integerValidator.Check(9)).toBe(false);
+    expect(integerValidator.Check(10)).toBe(true);
+
+    const ambiguous: any = convertJsonSchemaToTypeBox({
+      allOf: [{ type: ["string", "null"] }, { minLength: 3 }],
+    });
+    const ambiguousValidator = Compile(ambiguous);
+    expect(ambiguousValidator.Check(null)).toBe(true);
+    expect(ambiguousValidator.Check("ab")).toBe(false);
+    expect(ambiguousValidator.Check("abc")).toBe(true);
+
+    const siblingValidator = Compile(convertJsonSchemaToTypeBox({
+      type: "string",
+      minLength: 3,
+      allOf: [{ pattern: "^a" }],
+    }));
+    expect(siblingValidator.Check("abc")).toBe(true);
+    expect(siblingValidator.Check("xbc")).toBe(false);
+    expect(siblingValidator.Check("ab")).toBe(false);
+
+    const falseBranch = Compile(convertJsonSchemaToTypeBox({
+      allOf: [false, { type: "string" }],
+    }));
+    expect(falseBranch.Check("anything")).toBe(false);
+  });
+
+  it("keeps unsupported schema keywords visible instead of silently dropping them", () => {
+    // Intent: unresolved references and definitions cannot be enforced locally, but the model
+    // still needs an explicit warning that the permissive schema is incomplete.
+    const reference: any = convertJsonSchemaToTypeBox({ $ref: "#/$defs/Person" });
+    expect(reference.description).toContain("$ref");
+    expect(reference.description).toContain("not enforced");
+
+    const object: any = convertJsonSchemaToTypeBox({
+      type: "object",
+      $defs: { Color: { type: "string", enum: ["red", "blue"] } },
+      properties: { name: { type: "string" } },
+    });
+    expect(object.type).toBe("object");
+    expect(object.description).toContain("$defs");
+
+    const referenceWithSibling = Compile(convertJsonSchemaToTypeBox({
+      $ref: "#/$defs/Name",
+      type: "string",
+      minLength: 3,
+    }));
+    expect(referenceWithSibling.Check("ab")).toBe(false);
+    expect(referenceWithSibling.Check("abc")).toBe(true);
+  });
+
+  it("marks prefixItems unsupported while preserving formats and numeric constraints", () => {
+    // Intent: prefixItems cannot be safely approximated as a fixed tuple; keep the array
+    // permissive with an explicit warning while preserving constraints we can enforce exactly.
+    const positional: any = convertJsonSchemaToTypeBox({
+      type: "array",
+      prefixItems: [{ type: "string" }, { type: "integer" }],
+      items: { type: "boolean" },
+    });
+    const positionalValidator = Compile(positional);
+    expect(positional.type).toBe("array");
+    expect(positional.description).toContain("prefixItems");
+    expect(positional.description).toContain("not enforced");
+    expect(positionalValidator.Check([])).toBe(true);
+    expect(positionalValidator.Check(["value", 1, "unvalidated tail"])).toBe(true);
+
+    const formatted: any = convertJsonSchemaToTypeBox({ type: "string", format: "email" });
+    expect(formatted.format).toBe("email");
+    expect(() => Compile(formatted)).not.toThrow();
+
+    const number: any = convertJsonSchemaToTypeBox({
+      type: "number",
+      exclusiveMinimum: 0,
+      exclusiveMaximum: 100,
+      multipleOf: 0.5,
+    });
+    expect(number.exclusiveMinimum).toBe(0);
+    expect(number.exclusiveMaximum).toBe(100);
+    expect(number.multipleOf).toBe(0.5);
   });
 });

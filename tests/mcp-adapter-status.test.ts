@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildMcpToolName, createMcpToolDefinition, resolveMcpToolPrefix } from "../src/mcp/adapter.js";
 import { renderMcpFooterStatus, renderMcpStatusTree } from "../src/mcp/status.js";
@@ -12,6 +13,30 @@ describe("mcp adapter", () => {
     expect(buildMcpToolName("docs", "search", undefined)).toBe("docs_search");
     expect(buildMcpToolName("docs", "search", "")).toBe("search");
     expect(buildMcpToolName("docs", "search", "kb")).toBe("kb_search");
+  });
+
+  it("normalizes provider-unsafe aliases and bounds long names with a stable hash", () => {
+    // Intent: provider tool-name contracts allow only ASCII letters/digits/_/- and cap names at
+    // 64 characters; normalization must remain deterministic across MCP reconnects.
+    const unsafe = buildMcpToolName("docs server", "search.tool", undefined);
+    const unicode = buildMcpToolName("服务器", "搜索", "知识库");
+    const longPrefix = `provider_${"p".repeat(80)}`;
+    const longTool = `operation_${"t".repeat(80)}`;
+    const longAlias = buildMcpToolName(longPrefix, longTool, undefined);
+    const expectedHash = createHash("sha256")
+      .update(`${longPrefix}_${longTool}`)
+      .digest("hex")
+      .slice(0, 12);
+
+    for (const alias of [unsafe, unicode, longAlias]) {
+      expect(alias).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(alias.length).toBeLessThanOrEqual(64);
+    }
+    expect(unsafe.startsWith("docs_server_search_tool_")).toBe(true);
+    expect(longAlias.endsWith(expectedHash)).toBe(true);
+    expect(buildMcpToolName(longPrefix, longTool, undefined)).toBe(longAlias);
+    expect(buildMcpToolName("另一个", "工具", undefined)).not.toBe(unicode);
+    expect(buildMcpToolName("docs.server", "search/tool", undefined)).not.toBe(unsafe);
   });
 
   it("normalizes MCP execution results, errors, structured content, and cancellation", async () => {
