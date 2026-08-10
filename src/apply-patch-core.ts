@@ -1,6 +1,6 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { chmod, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { parseLineEndingDocument, serializeLineEndingDocument, type ConcreteLineEnding } from "./line-endings.js";
 import { resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
@@ -617,8 +617,21 @@ async function assertAddParentIsDirectory(absolutePath: string, signal?: AbortSi
   while (true) {
     throwIfAborted(signal);
     try {
-      const parentStat = await throwIfAbortedAfter(stat(parent), signal);
-      if (!parentStat.isDirectory()) throw new Error(`Parent path is not a directory: ${parent}.`);
+      const parentEntry = await throwIfAbortedAfter(lstat(parent), signal);
+      if (parentEntry.isSymbolicLink()) {
+        let targetStat;
+        try {
+          targetStat = await throwIfAbortedAfter(stat(parent), signal);
+        } catch (error) {
+          if (isNodeErrorWithCode(error, "ENOENT")) {
+            throw new Error(`Parent path is a dangling symbolic link: ${parent}.`);
+          }
+          throw error;
+        }
+        if (!targetStat.isDirectory()) throw new Error(`Parent path is not a directory: ${parent}.`);
+      } else if (!parentEntry.isDirectory()) {
+        throw new Error(`Parent path is not a directory: ${parent}.`);
+      }
       return;
     } catch (error) {
       if (!isNodeErrorWithCode(error, "ENOENT")) throw error;
@@ -658,7 +671,7 @@ async function preflightFile(
   if (file.operation === "add") {
     throwIfAborted(signal);
     try {
-      await throwIfAbortedAfter(stat(absolutePath), signal);
+      await throwIfAbortedAfter(lstat(absolutePath), signal);
       throw new Error(`${file.path}: Add File requires a path that does not exist.`);
     } catch (error) {
       if (!isNodeErrorWithCode(error, "ENOENT") && !isNodeErrorWithCode(error, "ENOTDIR")) throw error;
@@ -775,21 +788,93 @@ function rememberResolvedPath(
   seenAbsolutePaths.set(key, label);
 }
 
-function rememberOutputPath(outputPaths: Map<string, string>, absolutePath: string, label: string): void {
-  outputPaths.set(mutationPathKey(absolutePath), label);
+interface OutputPathRecord {
+  absolutePath: string;
+  label: string;
 }
 
-function assertNoHierarchicalOutputConflicts(outputPaths: ReadonlyMap<string, string>): void {
-  for (const [key, label] of outputPaths) {
+function rememberOutputPath(outputPaths: Map<string, OutputPathRecord>, absolutePath: string, label: string): void {
+  outputPaths.set(mutationPathKey(absolutePath), { absolutePath, label });
+}
+
+async function resolveCanonicalMutationPath(absolutePath: string, signal?: AbortSignal): Promise<string> {
+  let candidate = absolutePath;
+  const missingSuffix: string[] = [];
+  while (true) {
+    try {
+      const resolved = await throwIfAbortedAfter(realpath(candidate), signal);
+      return missingSuffix.length === 0 ? resolved : join(resolved, ...missingSuffix);
+    } catch (error) {
+      if (!isNodeErrorWithCode(error, "ENOENT") && !isNodeErrorWithCode(error, "ENOTDIR")) throw error;
+      const parent = dirname(candidate);
+      if (parent === candidate) return absolutePath;
+      missingSuffix.unshift(basename(candidate));
+      candidate = parent;
+    }
+  }
+}
+
+async function resolveMutationIdentity(absolutePath: string, signal?: AbortSignal): Promise<string> {
+  try {
+    const info = await throwIfAbortedAfter(stat(absolutePath, { bigint: true }), signal);
+    if (info.ino > 0n) return `inode:${info.dev}:${info.ino}`;
+  } catch (error) {
+    if (!isNodeErrorWithCode(error, "ENOENT") && !isNodeErrorWithCode(error, "ENOTDIR")) throw error;
+  }
+  const canonicalPath = await resolveCanonicalMutationPath(absolutePath, signal);
+  return `path:${mutationPathKey(canonicalPath)}`;
+}
+
+async function assertNoFilesystemIdentityConflicts(plans: readonly MutationPlan[], signal?: AbortSignal): Promise<void> {
+  const seenIdentities = new Map<string, string>();
+  for (const plan of plans) {
+    const paths = [
+      { absolutePath: plan.absolutePath, label: plan.path },
+      ...(plan.operation === "update" && plan.absoluteMoveToPath !== undefined && plan.moveTo !== undefined
+        ? [{ absolutePath: plan.absoluteMoveToPath, label: plan.moveTo }]
+        : []),
+    ];
+    for (const path of paths) {
+      throwIfAborted(signal);
+      const identity = await resolveMutationIdentity(path.absolutePath, signal);
+      const previous = seenIdentities.get(identity);
+      if (previous !== undefined) {
+        throw new Error(`Patch paths ${previous} and ${path.label} resolve to the same filesystem entry.`);
+      }
+      seenIdentities.set(identity, path.label);
+    }
+  }
+}
+
+function assertNoHierarchicalOutputConflicts(outputPaths: ReadonlyMap<string, OutputPathRecord>): void {
+  for (const [key, { label }] of outputPaths) {
     for (let index = 1; index < key.length; index++) {
       const isSeparator = key[index] === "/" || (process.platform === "win32" && key[index] === "\\");
       if (!isSeparator) continue;
-      const ancestor = outputPaths.get(key.slice(0, index));
+      const ancestor = outputPaths.get(key.slice(0, index))?.label;
       if (ancestor !== undefined) {
         throw new Error(`Conflicting patch output paths: ${ancestor} cannot be an ancestor of ${label}.`);
       }
     }
   }
+}
+
+async function assertNoCanonicalOutputConflicts(
+  outputPaths: ReadonlyMap<string, OutputPathRecord>,
+  signal?: AbortSignal,
+): Promise<void> {
+  const canonicalOutputPaths = new Map<string, OutputPathRecord>();
+  for (const { absolutePath, label } of outputPaths.values()) {
+    throwIfAborted(signal);
+    const canonicalPath = await resolveCanonicalMutationPath(absolutePath, signal);
+    const key = mutationPathKey(canonicalPath);
+    const previous = canonicalOutputPaths.get(key);
+    if (previous !== undefined) {
+      throw new Error(`Patch paths ${previous.label} and ${label} resolve to the same output path.`);
+    }
+    canonicalOutputPaths.set(key, { absolutePath: canonicalPath, label });
+  }
+  assertNoHierarchicalOutputConflicts(canonicalOutputPaths);
 }
 
 async function buildMutationPlans(
@@ -805,7 +890,7 @@ async function buildMutationPlans(
       : undefined,
   }));
   const seenAbsolutePaths = new Map<string, string>();
-  const outputPaths = new Map<string, string>();
+  const outputPaths = new Map<string, OutputPathRecord>();
   for (const item of resolved) {
     rememberResolvedPath(seenAbsolutePaths, item.absolutePath, item.file.path);
     if (item.absoluteMoveToPath !== undefined && item.file.operation === "update" && item.file.moveTo !== undefined) {
@@ -827,17 +912,21 @@ async function buildMutationPlans(
       errors.push(error instanceof Error ? error.message : String(error));
     }
   }
+  if (errors.length === 0) {
+    try {
+      await assertNoCanonicalOutputConflicts(outputPaths, options.signal);
+      await assertNoFilesystemIdentityConflicts(plans, options.signal);
+    } catch (error) {
+      if (options.signal?.aborted) throwIfAborted(options.signal);
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
   if (errors.length > 0) throw new Error(`Patch preflight failed:\n- ${errors.join("\n- ")}`);
   return plans;
 }
 
 async function resolveMutationQueuePath(absolutePath: string, signal?: AbortSignal): Promise<string> {
-  try {
-    return await throwIfAbortedAfter(realpath(absolutePath), signal);
-  } catch (error) {
-    if (isNodeErrorWithCode(error, "ENOENT") || isNodeErrorWithCode(error, "ENOTDIR")) return absolutePath;
-    throw error;
-  }
+  return resolveCanonicalMutationPath(absolutePath, signal);
 }
 
 async function withMutationQueues<T>(
@@ -845,7 +934,6 @@ async function withMutationQueues<T>(
   signal: AbortSignal | undefined,
   fn: () => Promise<T>,
 ): Promise<T> {
-  if (absolutePaths.length === 1) return withFileMutationQueue(absolutePaths[0]!, fn);
   const canonicalPaths = await Promise.all(absolutePaths.map((path) => resolveMutationQueuePath(path, signal)));
   const uniquePaths = new Map<string, string>();
   for (const path of canonicalPaths) uniquePaths.set(mutationPathKey(path), path);

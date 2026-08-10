@@ -1,7 +1,7 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import iconv from "iconv-lite";
 import { existsSync } from "node:fs";
-import { chmod, lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -776,6 +776,125 @@ describe("apply_patch filesystem execution", () => {
     expect(await exists(join(root, "sub/a.txt"))).toBe(false);
     expect(await exists(join(root, "absolute.txt"))).toBe(false);
     expect(await exists(join(root, "nested/slash.txt"))).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects same-file symlink aliases during global preflight", async () => {
+    // Intent: lexical path uniqueness is insufficient when two Update headers reach the same file.
+    // Both plans must be rejected before the first write, rather than failing stale after a partial commit.
+    const root = await createRoot();
+    const target = await put(root, "target.txt", "old\n");
+    const alias = join(root, "alias.txt");
+    await symlink("target.txt", alias);
+    const committed: string[] = [];
+    const failed: string[] = [];
+
+    await expect(executeApplyPatch(patch(
+      "*** Update File: target.txt",
+      "@@",
+      "-old",
+      "+first",
+      "*** Update File: alias.txt",
+      "@@",
+      "-old",
+      "+second",
+    ), {
+      cwd: root,
+      onCommitted: (file) => { committed.push(file.path); },
+      onCommitFailed: (file) => { failed.push(file.path); },
+    })).rejects.toThrow(/target\.txt and alias\.txt resolve to the same filesystem entry/);
+
+    expect(committed).toEqual([]);
+    expect(failed).toEqual([]);
+    expect(await readFile(target, "utf8")).toBe("old\n");
+    expect((await lstat(alias)).isSymbolicLink()).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects same-file hard-link aliases during global preflight", async () => {
+    // Intent: realpath alone cannot identify hard links, so device/inode identity must reject the
+    // second plan before either name writes the shared file contents.
+    const root = await createRoot();
+    const target = await put(root, "target.txt", "old\n");
+    const alias = join(root, "hardlink.txt");
+    await link(target, alias);
+
+    await expect(executeApplyPatch(patch(
+      "*** Update File: target.txt",
+      "@@",
+      "-old",
+      "+first",
+      "*** Update File: hardlink.txt",
+      "@@",
+      "-old",
+      "+second",
+    ), { cwd: root })).rejects.toThrow(/target\.txt and hardlink\.txt resolve to the same filesystem entry/);
+
+    expect(await readFile(target, "utf8")).toBe("old\n");
+    expect(await readFile(alias, "utf8")).toBe("old\n");
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a dangling symlink Add target before any mutation", async () => {
+    // Intent: stat follows a dangling symlink and reports ENOENT, but Add must treat the directory
+    // entry itself as existing so an earlier target Add cannot turn the alias into a partial commit.
+    const root = await createRoot();
+    await symlink("target.txt", join(root, "alias.txt"));
+    const committed: string[] = [];
+
+    await expect(executeApplyPatch(patch(
+      "*** Add File: target.txt",
+      "+target",
+      "*** Add File: alias.txt",
+      "+alias",
+    ), {
+      cwd: root,
+      onCommitted: (file) => { committed.push(file.path); },
+    })).rejects.toThrow(/alias\.txt: Add File requires a path that does not exist/);
+
+    expect(committed).toEqual([]);
+    expect(await exists(join(root, "target.txt"))).toBe(false);
+    expect((await lstat(join(root, "alias.txt"))).isSymbolicLink()).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects an Add below a dangling symlink parent before any mutation", async () => {
+    // Intent: a missing parent may be created during commit, but a dangling symlink parent makes
+    // path identity order-dependent and must fail during global preflight.
+    const root = await createRoot();
+    await symlink("real", join(root, "alias"));
+    const committed: string[] = [];
+
+    await expect(executeApplyPatch(patch(
+      "*** Add File: real/item.txt",
+      "+target",
+      "*** Add File: alias/item.txt",
+      "+alias",
+    ), {
+      cwd: root,
+      onCommitted: (file) => { committed.push(file.path); },
+    })).rejects.toThrow(/Parent path is a dangling symbolic link/);
+
+    expect(committed).toEqual([]);
+    expect(await exists(join(root, "real"))).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects canonical hierarchical output aliases before mutation", async () => {
+    // Intent: lexical paths can hide an ancestor relationship through a symlinked directory.
+    // Canonical output paths must be checked before the first file is created.
+    const root = await createRoot();
+    await mkdir(join(root, "real"));
+    await symlink("real", join(root, "alias"));
+    const committed: string[] = [];
+
+    await expect(executeApplyPatch(patch(
+      "*** Add File: real/parent",
+      "+parent",
+      "*** Add File: alias/parent/child.txt",
+      "+child",
+    ), {
+      cwd: root,
+      onCommitted: (file) => { committed.push(file.path); },
+    })).rejects.toThrow(/real\/parent cannot be an ancestor of alias\/parent\/child\.txt/);
+
+    expect(committed).toEqual([]);
+    expect(await exists(join(root, "real/parent"))).toBe(false);
   });
 
   it.each([

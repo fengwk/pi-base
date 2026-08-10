@@ -248,9 +248,9 @@ describe("read tool", () => {
     expect(getText(result)).toContain(`line truncated to 2000 chars`);
   });
 
-  it("delegates supported images to the built-in read tool", async () => {
+  it.each(["image.png", "image.bmp"])("delegates supported image %s to the built-in read tool", async (imagePath) => {
     const root = await createTempWorkspace();
-    await writeWorkspaceFile(root, "image.png", "fake");
+    await writeWorkspaceFile(root, imagePath, "fake");
     const registry = createToolRegistry();
     let seenPath: string | undefined;
     registerReadTool(registry.pi as any, {
@@ -263,12 +263,12 @@ describe("read tool", () => {
     });
     // Intent: image delegation should only happen when the active model
     // explicitly advertises image input support.
-    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "@image.png" }, undefined, undefined, { cwd: root, model: { input: ["text", "image"] } });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: `@${imagePath}` }, undefined, undefined, { cwd: root, model: { input: ["text", "image"] } });
     const text = getText(result);
-    expect(text).toContain("path: image.png");
+    expect(text).toContain(`path: ${imagePath}`);
     expect(text).toContain("mediaType: image");
     expect(text).toContain("image delegated");
-    expect(seenPath).toBe("image.png");
+    expect(seenPath).toBe(imagePath);
   });
 
   it("calls onSuccessfulRead only for text file reads", async () => {

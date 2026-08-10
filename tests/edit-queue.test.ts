@@ -24,6 +24,7 @@ describe("edit queue", () => {
     let writeCount = 0;
 
     vi.doMock("node:fs/promises", () => ({
+      stat: vi.fn(async () => ({ isFile: () => true })),
       readFile: vi.fn(async () => Buffer.from(fileBytes)),
       writeFile: vi.fn(async (_path: string, data: Buffer | string) => {
         if (writeCount++ === 0) {

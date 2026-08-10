@@ -78,12 +78,12 @@ pi --agent reviewer
 
 | 工具 | 必填参数 | 默认值 | 关键行为 |
 |------|----------|--------|----------|
-| `read` | `path` | offset=1, limit=200 (max 2000) | offset/limit 在文件读取前校验；文本候选文件超过 64 MiB 时在完整读取前拒绝并提示改用 grep/缩小目标；其余文本返回 `行号|内容` 格式并标注 path/ends_with_newline/lsp；目录列出排序成员；图片返回附件（模型不支持时给出 skill 提示）；二进制直接报错；UTF BOM/编码探测 + LF 规范化；单行 >2000 字符截断标记 |
-| `grep` | `pattern`, `path` | timeout=15s, limit=100 | 支持 `include`/`ignore_case`/`literal`/`multiline`；二进制文件报错；结果行 >500 字符截断；输出是候选位置，编辑前先 `read` |
+| `read` | `path` | offset=1, limit=200 (max 2000) | offset/limit 在文件读取前校验；文本候选文件超过 64 MiB 时在完整读取前拒绝并提示改用 grep/缩小目标；其余文本返回 `行号|内容` 格式并标注 path/ends_with_newline/lsp；目录列出排序成员；图片（含 BMP）返回附件（模型不支持时给出 skill 提示）；二进制和 FIFO/socket/device 等非普通节点直接报错；UTF BOM/编码探测 + LF 规范化；单行 >2000 字符截断标记 |
+| `grep` | `pattern`, `path` | timeout=15s, limit=100 | 支持 `include`/`ignore_case`/`literal`/`multiline`；二进制和非普通文件节点报错；结果行 >500 字符截断；输出是候选位置，编辑前先 `read` |
 | `find` | `pattern`, `path` | limit=1000, 无默认超时 | `path` 无隐式默认值，搜当前目录需显式写 `"."`；底层使用 `fd` |
 | `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
-| `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
-| `write` | `path`, `content` | — | 新文件/整文件覆盖；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
+| `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；仅接受普通文本文件；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
+| `write` | `path`, `content` | — | 新文件/整文件覆盖；已存在目标必须是普通文件；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
 | `apply_patch` | `patchText` | freeform；可选 `*** Workdir:`，默认 session cwd | 基于 Codex freeform + Lark grammar，并采用更严格的 hunk 唯一匹配；支持 Add/Update/Delete/Move；可选 `*** Workdir:` 指定根目录且不改 session cwd；多文件先整体 preflight、再按顺序提交；参数流式生成和落定后的 Add 内容预览有界，参数完成及权限/执行期间完整展示 patch，逐文件持久化 diff 仍有界且行数统计不截断 |
 | `lsp_goto_definition` | `path`, `line` | character=0 | 需 server 声明 `textDocument/definition` |
 | `lsp_workspace_symbols` | `path`, `query` | limit=50 | 需 server 声明 `workspace/symbol` |
@@ -123,7 +123,7 @@ pi --agent reviewer
 
 可选第一行指令 `*** Workdir: <path>` 指定路径解析根（相对 session cwd 或绝对路径），默认 session cwd，无需切换 session cwd。Add body 每行以 `+` 开头，无 body 时创建空文件；Delete 无 body；普通 Update 需要一个或多个非空 `@@` chunk；纯 Move 可不含 hunk。context/删除/新增行分别以空格、`-`、`+` 开头。相对路径相对 Workdir/session cwd 解析。Move 先写目标再删源；目标已存在且为普通文件时覆盖；Move 拒绝符号链接源/目标，并在成功时把源文件权限位应用到目标。
 
-执行分两阶段：先解析并 preflight 全部文件（路径、存在性、文本编码、hunk 唯一匹配、输出可编码性等），任一失败则完全不写；preflight 全部成功后按 patch 顺序逐文件提交。提交阶段若后续文件因竞态或文件系统错误失败，前面已提交文件不会回滚，错误会明确标记 partial application，并在 details 中列出实际已提交文件及 diff 元数据；失败文件可能已被底层写操作部分修改，因此同时报告 `failedPathState: "unknown"`，调用方不能假定它保持原样。每次成功提交（包括最终部分失败之前的提交）都会更新 LSP：Add/Update 同步内容，Move 关闭源路径并同步目标路径，Delete 对已打开文档发送 `didClose` 并清理缓存；状态未知的失败路径也会保守关闭已打开的 LSP 文档，避免继续使用可能陈旧的缓存。LSP 处理失败不会覆盖原始文件系统结果。
+执行分两阶段：先解析并 preflight 全部文件（路径、存在性、真实文件身份、文本编码、hunk 唯一匹配、输出可编码性等），任一失败则完全不写；词法路径不同但解析到同一文件的 symlink/hardlink 别名、经 symlink canonicalize 后形成的输出父子冲突，以及 dangling symlink Add/parent 都会在此阶段整体拒绝。preflight 全部成功后按 patch 顺序逐文件提交。提交阶段若后续文件因竞态或文件系统错误失败，前面已提交文件不会回滚，错误会明确标记 partial application，并在 details 中列出实际已提交文件及 diff 元数据；失败文件可能已被底层写操作部分修改，因此同时报告 `failedPathState: "unknown"`，调用方不能假定它保持原样。每次成功提交（包括最终部分失败之前的提交）都会更新 LSP：Add/Update 同步内容，Move 关闭源路径并同步目标路径，Delete 对已打开文档发送 `didClose` 并清理缓存；状态未知的失败路径也会保守关闭已打开的 LSP 文档，避免继续使用可能陈旧的缓存。LSP 处理失败不会覆盖原始文件系统结果。
 
 结果中的逐文件 diff 使用 LF 展示视图和 4 行上下文；每个文件最多保留 400 行、单行最多 500 字符，但 `addedLines`/`removedLines` 始终统计完整变更。实际写回仍保留源文件支持的编码、BOM、逐行 EOL 和无最终换行状态。
 
@@ -184,6 +184,8 @@ subagents: [reviewer]             # allowlist；非空 + depth<maxDepth → 注�
 
 Agent 正文（覆盖 system prompt）
 ```
+
+仅支持上述 frontmatter 字段；未知字段会使该 Agent 加载失败并输出 warning，避免 `tools`/`skills` 等策略字段拼写错误后退化为“未配置”的继承语义。
 
 ### 行为规则速查
 
@@ -536,12 +538,12 @@ MCP 连接按 root delegation tree 隔离：同一 root session 与其所有 sub
 
 | 限制 | 值 |
 |------|-----|
-| 最大行数 | 2000 |
+| 最大行数 | 2000（LF、CRLF、CR 均按换行计数） |
 | 最大字节数 | 50 KB |
 | 完整输出 | 保存至进程私有的 `<tmp>/pi-base-truncation-*/`；目录在非 Windows 为 `0700`，输出文件显式为 `0600` |
 | 旧目录清理 | 仅清理约 7 天前、符合 `pi-base-truncation-<pid>-*` 格式、属于当前用户且对应进程已退出的目录 |
 
-上游已自行截断且暴露 `Full output` 路径的工具（如 Pi core bash）保留上游路径，不重复落盘。
+上游已自行截断且暴露 `Full output` 路径的工具（如 Pi core bash）保留上游路径，不重复落盘；若上游留下的 preview 仍超过最终限制，pi-base 会再次有界截断该 preview。
 
 `details.truncation` 字段：
 

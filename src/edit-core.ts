@@ -1,7 +1,7 @@
 import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import * as Diff from "diff";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import {
   detectLineEnding,
   normalizeToLF,
@@ -492,6 +492,8 @@ export function registerEditTool(
         // same file cannot compute from the same stale bytes and clobber each other.
         const computation = await withFileMutationQueue(absolutePath, async (): Promise<EditComputationResult> => {
           throwIfAborted(signal);
+          const currentStat = await throwIfAbortedAfter(stat(absolutePath), signal);
+          if (!currentStat.isFile()) throw new Error(`${rawPath} is not a regular file. edit supports text files only.`);
           const rawBytes = await throwIfAbortedAfter(readFile(absolutePath), signal);
           const decodedFile = decodeTextFile(rawBytes);
           if (decodedFile === null) {

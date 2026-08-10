@@ -12,7 +12,7 @@ import {
   type BashFactory,
 } from "./bash-renderer-core.js";
 import { resolveToolWorkdir } from "./path-utils.js";
-import { parsePositiveNumber } from "./timeout.js";
+import { parseTimeoutSeconds } from "./timeout.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 
 const BASH_DEFAULT_TIMEOUT_SECONDS = 120;
@@ -83,7 +83,7 @@ export function registerBashRendererTool(
       try {
         const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const builtIn = getBuiltIn(cwd);
-        const timeoutSeconds = parsePositiveNumber(params.timeout_seconds, "timeout_seconds", BASH_DEFAULT_TIMEOUT_SECONDS);
+        const timeoutSeconds = parseTimeoutSeconds(params.timeout_seconds, "timeout_seconds", BASH_DEFAULT_TIMEOUT_SECONDS);
         // pi 0.82+ injects PI_* session env from ctx.sessionManager; unit/partial
         // contexts without a session must omit ctx so spawn does not throw.
         const bashCtx = ctx?.sessionManager ? ctx : undefined;

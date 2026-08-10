@@ -98,7 +98,8 @@ export async function executeWrite(
       let outputEncoding = defaultTextEncoding();
       let outputBom = textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none";
       try {
-        await throwIfAbortedAfter(stat(absolutePath), signal);
+        const currentStat = await throwIfAbortedAfter(stat(absolutePath), signal);
+        if (!currentStat.isFile()) throw new Error(`${rawPath} is not a regular file. write supports regular text files only.`);
         const currentBytes = await throwIfAbortedAfter(readFile(absolutePath), signal);
         const detected = detectTextFileEncoding(currentBytes);
         outputEncoding = detected.encoding;

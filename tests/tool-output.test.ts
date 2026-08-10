@@ -53,6 +53,12 @@ describe("tool output truncation", () => {
       expect((truncated.result.content[0] as any)?.type).toBe("text");
       expect(String((truncated.result.content[0] as any)?.text)).toContain("The tool call succeeded but the output was truncated");
       expect((truncated.result.content[1] as any)?.type).toBe("image");
+      const boundedText = truncated.result.content
+        .filter((item: any) => item?.type === "text")
+        .map((item: any) => String(item.text ?? ""))
+        .join("\n\n");
+      expect(Buffer.byteLength(boundedText, "utf8")).toBeLessThanOrEqual(50 * 1024);
+      expect(boundedText.split("\n").length).toBeLessThanOrEqual(2000);
       expect((truncated.result as any).details?.source).toBe("test");
       const outputPath = (truncated.result as any).details?.truncation?.outputPath;
       expect(outputPath).toBeTruthy();
@@ -215,13 +221,93 @@ describe("tool output truncation", () => {
     expect(warnings.some((w) => w.includes("undefined"))).toBe(false);
   });
 
+  it("recognizes structured bash truncation for an oversized single-line preview", async () => {
+    // Intent: Pi uses a distinct "Showing last ... of line" footer for byte-truncated single
+    // lines, so structured metadata must preserve the true upstream full-output path.
+    const outputPath = "/tmp/pi-bash-long-line.log";
+    const preview = `${"x".repeat(60 * 1024)}\n\n[Showing last 50KB of line 1 (line is 60KB). Full output: ${outputPath}]`;
+    const truncated = await applyUnifiedOutputTruncation("bash", {
+      content: [{ type: "text", text: preview }],
+      details: {
+        fullOutputPath: outputPath,
+        truncation: {
+          truncated: true,
+          truncatedBy: "bytes",
+          outputLines: 1,
+          totalLines: 1,
+          maxBytes: 50 * 1024,
+          lastLinePartial: true,
+        },
+      },
+    } as any);
+
+    expect(truncated.truncated).toBe(true);
+    expect((truncated.result as any).details?.truncation).toMatchObject({
+      truncated: true,
+      alreadyTruncated: true,
+      outputPath,
+      truncatedBy: "bytes",
+    });
+    const text = String((truncated.result.content[0] as any)?.text);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(50 * 1024);
+  });
+
+  it("counts CR-only output toward the final line limit", async () => {
+    // Intent: third-party tools may emit classic-Mac CR line endings; the global 2000-line
+    // boundary must not depend on LF being present.
+    const original = Array.from({ length: 2501 }, (_, index) => `line-${index + 1}`).join("\r");
+    const truncated = await applyUnifiedOutputTruncation("third-party", {
+      content: [{ type: "text", text: original }],
+      details: undefined,
+    } as any);
+
+    expect(truncated.truncated).toBe(true);
+    const text = truncated.result.content
+      .filter((item: any) => item?.type === "text")
+      .map((item: any) => String(item.text ?? ""))
+      .join("\n\n");
+    expect(text.replace(/\r\n?/g, "\n").split("\n").length).toBeLessThanOrEqual(2000);
+    const outputPath = (truncated.result as any).details?.truncation?.outputPath;
+    expect(await readFile(outputPath, "utf8")).toBe(original);
+  });
+
   it("marks already-truncated long-line output even when below pi-base size limits", async () => {
+    const preview = "short line\n... (line truncated to 2000 chars)";
     const truncated = await applyUnifiedOutputTruncation("grep", {
-      content: [{ type: "text", text: "short line\n... (line truncated to 2000 chars)" }],
+      content: [{ type: "text", text: preview }],
       details: { upstreamTextTruncated: true },
     } as any);
     expect(truncated.truncated).toBe(true);
+    expect((truncated.result.content[0] as any)?.text).toBe(preview);
     expect((truncated.result as any).details?.truncation?.alreadyTruncated).toBe(true);
+  });
+
+  it("reapplies the final limit to oversized upstream-truncated previews", async () => {
+    // Intent: upstream truncation means the full body must not be saved again, but it cannot allow
+    // an oversized remaining preview to bypass pi-base's documented final model-output boundary.
+    const outputPath = `/tmp/${"p".repeat(60 * 1024)}`;
+    const oversizedPreview = "x".repeat(80 * 1024);
+    const truncated = await applyUnifiedOutputTruncation("grep", {
+      content: [{ type: "text", text: oversizedPreview }],
+      details: {
+        upstreamTextTruncated: true,
+        truncation: { truncated: true, outputPath, truncatedBy: "bytes" },
+      },
+    } as any);
+
+    expect(truncated.truncated).toBe(true);
+    const text = String((truncated.result.content[0] as any)?.text);
+    expect(text).not.toBe(oversizedPreview);
+    expect(text).toContain("upstream tool had already truncated");
+    expect(text).not.toContain(outputPath);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(50 * 1024);
+    expect(text.split("\n").length).toBeLessThanOrEqual(2000);
+    expect((truncated.result as any).details?.truncation).toMatchObject({
+      truncated: true,
+      alreadyTruncated: true,
+      outputPath,
+      truncatedBy: "bytes",
+    });
   });
 
   it("recognizes grep's native truncation metadata as upstream truncation", async () => {

@@ -1,5 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGracefulBashOperations } from "../src/bash-operations.js";
+
+const shellConfigState = vi.hoisted(() => ({
+  override: undefined as { shell: string; args: string[]; commandTransport?: "stdin" } | undefined,
+}));
+
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    getShellConfig: (shellPath?: string) => shellConfigState.override ?? actual.getShellConfig(shellPath),
+  };
+});
+
+afterEach(() => {
+  shellConfigState.override = undefined;
+});
 
 describe("createGracefulBashOperations", () => {
   it("captures stdout and stderr while returning the shell exit code", async () => {
@@ -35,6 +51,17 @@ describe("createGracefulBashOperations", () => {
     })).rejects.toThrow("timeout:0.05");
   });
 
+  it("rejects timer-overflow timeouts before launching a shell", async () => {
+    // Intent: direct adapter callers must receive the same bounded timer contract as the
+    // registered bash wrapper instead of Node silently clamping the timeout to 1ms.
+    const operations = createGracefulBashOperations({ shellPath: "/definitely/missing/pi-base-shell" });
+
+    await expect(operations.exec("printf should-not-run", process.cwd(), {
+      onData: () => undefined,
+      timeout: 3_000_000,
+    })).rejects.toThrow("timeout must be <=");
+  });
+
   it("rejects when the caller aborts a running shell command", async () => {
     // Intent: agent cancellation must stop the child process and surface an
     // aborted result instead of waiting for the command to finish naturally.
@@ -61,5 +88,21 @@ describe("createGracefulBashOperations", () => {
       onData: () => undefined,
       signal: controller.signal,
     })).rejects.toThrow("aborted");
+  });
+
+  it("writes commands to stdin when the shell configuration requires stdin transport", async () => {
+    // Intent: legacy WSL bash uses `bash -s`; appending the command to argv silently executes
+    // nothing, while Pi's public shell contract requires writing the command to stdin.
+    shellConfigState.override = { shell: "/bin/sh", args: ["-s"], commandTransport: "stdin" };
+    const operations = createGracefulBashOperations();
+    const chunks: Buffer[] = [];
+
+    const result = await operations.exec("printf stdin-transport", process.cwd(), {
+      onData: (chunk) => chunks.push(chunk),
+      timeout: 2,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(Buffer.concat(chunks).toString("utf8")).toBe("stdin-transport");
   });
 });

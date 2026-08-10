@@ -163,8 +163,25 @@ function readPersistedSubagentSession(path: string): PersistedSubagentSession | 
   }
 }
 
+const TIMESTAMPED_SUBAGENT_SESSION_FILE_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_(.+)\.jsonl$/;
+
+function readSubagentSessionIdFromFileName(file: string): string | undefined {
+  if (!file.endsWith(".jsonl")) return undefined;
+  const timestamped = TIMESTAMPED_SUBAGENT_SESSION_FILE_PATTERN.exec(file);
+  if (timestamped?.[1]) return timestamped[1];
+  const sessionId = file.slice(0, -".jsonl".length);
+  return sessionId || undefined;
+}
+
 function resolvePersistedSubagentSession(cwd: string, query: string): PersistedSubagentSession | "ambiguous" | undefined {
-  const matches = new Map<string, PersistedSubagentSession>();
+  const exactPath = findSubagentSessionPath(cwd, query);
+  if (exactPath) {
+    const exact = readPersistedSubagentSession(exactPath);
+    return exact?.sessionId === query ? exact : undefined;
+  }
+
+  const matches = new Map<string, string>();
   for (const dir of [subagentSessionDir(cwd), legacySubagentSessionDir(cwd)]) {
     let files: string[];
     try {
@@ -173,17 +190,16 @@ function resolvePersistedSubagentSession(cwd: string, query: string): PersistedS
       continue;
     }
     for (const file of files) {
-      if (!file.endsWith(".jsonl")) continue;
-      const record = readPersistedSubagentSession(join(dir, file));
-      if (!record) continue;
-      if (!matches.has(record.sessionId)) matches.set(record.sessionId, record);
+      const sessionId = readSubagentSessionIdFromFileName(file);
+      if (!sessionId?.startsWith(query) || matches.has(sessionId)) continue;
+      matches.set(sessionId, join(dir, file));
     }
   }
-  const exact = matches.get(query);
-  if (exact) return exact;
-  const prefixed = [...matches.values()].filter((record) => record.sessionId.startsWith(query));
-  if (prefixed.length === 0) return undefined;
-  return prefixed.length === 1 ? prefixed[0] : "ambiguous";
+  if (matches.size === 0) return undefined;
+  if (matches.size > 1) return "ambiguous";
+  const [sessionId, path] = matches.entries().next().value as [string, string];
+  const record = readPersistedSubagentSession(path);
+  return record?.sessionId === sessionId ? record : undefined;
 }
 
 function assistantTurnCount(messages: RuntimeMessage[]): number {
@@ -734,6 +750,7 @@ export function subagentSessionDir(cwd: string): string {
 }
 
 function findSubagentSessionPath(cwd: string, sessionId: string): string | undefined {
+  let legacySuffixMatch: string | undefined;
   for (const dir of [subagentSessionDir(cwd), legacySubagentSessionDir(cwd)]) {
     let files: string[];
     try {
@@ -741,10 +758,14 @@ function findSubagentSessionPath(cwd: string, sessionId: string): string | undef
     } catch {
       continue;
     }
-    const match = files.find((file) => file.endsWith(`_${sessionId}.jsonl`) || file === `${sessionId}.jsonl`);
-    if (match) return join(dir, match);
+    const exactMatch = files.find((file) => readSubagentSessionIdFromFileName(file) === sessionId);
+    if (exactMatch) return join(dir, exactMatch);
+    if (legacySuffixMatch === undefined) {
+      const suffixMatch = files.find((file) => file.endsWith(`_${sessionId}.jsonl`));
+      if (suffixMatch) legacySuffixMatch = join(dir, suffixMatch);
+    }
   }
-  return undefined;
+  return legacySuffixMatch;
 }
 
 interface RuntimeMessage {

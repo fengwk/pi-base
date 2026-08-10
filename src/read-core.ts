@@ -30,7 +30,7 @@ const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 2000;
 const MAX_LINE_CHARS = 2000;
 const MAX_TEXT_FILE_BYTES = 64 * 1024 * 1024;
-const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
 type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
 function parsePositiveInteger(value: unknown, name: string, defaultValue: number): number {
@@ -46,6 +46,11 @@ function assertTextFileSize(rawPath: string, size: number): void {
     `${rawPath} is larger than the 64 MiB read safety limit. `
     + "Use grep to locate relevant text or narrow the target before reading; offset/limit cannot safely load this whole file.",
   );
+}
+
+function assertRegularReadFile(rawPath: string, fileStat: { isFile: () => boolean }): void {
+  if (fileStat.isFile()) return;
+  throw new Error(`${rawPath} is not a regular file. read supports text files, directories, and supported images.`);
 }
 
 function formatLine(content: string): { display: string; truncated: boolean } {
@@ -165,6 +170,7 @@ export function registerReadTool(
           const names = entries.map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`).sort((a, b) => a.localeCompare(b));
           return { content: [{ type: "text" as const, text: [`path: ${rawPath}`, "kind: directory", "", ...names].join("\n") }] };
         }
+        assertRegularReadFile(rawPath, st);
 
         if (IMAGE_EXTENSIONS.has(extname(rawPath).toLowerCase())) {
           if (!modelSupportsImages(ctx?.model)) {
@@ -175,7 +181,11 @@ export function registerReadTool(
           };
           const builtInParams = { ...params, path: rawPath };
           delete builtInParams.workdir;
-          const result = await withFileMutationQueue(absolutePath, () => builtIn.execute(toolCallId, builtInParams, signal, onUpdate, ctx));
+          const result = await withFileMutationQueue(absolutePath, async () => {
+            const currentStat = await throwIfAbortedAfter(stat(absolutePath), signal);
+            assertRegularReadFile(rawPath, currentStat);
+            return builtIn.execute(toolCallId, builtInParams, signal, onUpdate, ctx);
+          });
           const note = (result.content ?? [])
             .filter((item: any) => item.type === "text" && typeof item.text === "string")
             .map((item: any) => item.text)
@@ -199,11 +209,12 @@ export function registerReadTool(
           };
         }
 
-        if (st.isFile()) assertTextFileSize(rawPath, st.size);
+        assertTextFileSize(rawPath, st.size);
 
         const buffer = await withFileMutationQueue(absolutePath, async () => {
           const currentStat = await throwIfAbortedAfter(stat(absolutePath), signal);
-          if (currentStat.isFile()) assertTextFileSize(rawPath, currentStat.size);
+          assertRegularReadFile(rawPath, currentStat);
+          assertTextFileSize(rawPath, currentStat.size);
           return throwIfAbortedAfter(readFile(absolutePath), signal);
         });
         const decodedFile = decodeTextFile(buffer);

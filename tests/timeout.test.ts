@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTimeoutSignal } from "../src/timeout.js";
+import { createTimeoutSignal, MAX_TIMEOUT_SECONDS, parseTimeoutSeconds } from "../src/timeout.js";
 
 describe("createTimeoutSignal", () => {
+  it("rejects timeout values that overflow Node's timer range", () => {
+    // Intent: Node clamps oversized timers to 1ms, so accepting such a value would turn a very
+    // large timeout into an immediate timeout.
+    expect(parseTimeoutSeconds(MAX_TIMEOUT_SECONDS, "timeout_seconds", 1)).toBe(MAX_TIMEOUT_SECONDS);
+    expect(() => parseTimeoutSeconds(MAX_TIMEOUT_SECONDS + 1, "timeout_seconds", 1))
+      .toThrow(`timeout_seconds must be <= ${MAX_TIMEOUT_SECONDS}`);
+    expect(() => createTimeoutSignal(undefined, MAX_TIMEOUT_SECONDS + 1))
+      .toThrow(`timeoutSeconds must be <= ${MAX_TIMEOUT_SECONDS}`);
+  });
+
   it("does not create a timer when the parent signal is already aborted", () => {
     // Intent: callers can pass an already-aborted parent during cancellation;
     // this must not leave a timeout handle behind.

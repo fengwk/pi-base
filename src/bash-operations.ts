@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { getShellEnv, waitForChildProcess } from "./internal/pi-coding-agent-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
+import { parseTimeoutSeconds } from "./timeout.js";
 
 export interface BashOperations {
   exec: (
@@ -29,13 +30,27 @@ export function createGracefulBashOperations(options?: { shellPath?: string }): 
           reject(new Error("aborted"));
           return;
         }
-        const { shell, args } = getShellConfig(options?.shellPath);
-        const child = spawn(shell, [...args, command], {
+        if (timeout !== undefined) {
+          try {
+            timeout = parseTimeoutSeconds(timeout, "timeout", timeout);
+          } catch (error) {
+            reject(error);
+            return;
+          }
+        }
+        const shellConfig = getShellConfig(options?.shellPath);
+        const commandFromStdin = shellConfig.commandTransport === "stdin";
+        const child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
           cwd,
           detached: process.platform !== "win32",
           env: env ?? getShellEnv(),
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
+          windowsHide: true,
         });
+        if (commandFromStdin) {
+          child.stdin?.on("error", () => undefined);
+          child.stdin?.end(command);
+        }
 
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;

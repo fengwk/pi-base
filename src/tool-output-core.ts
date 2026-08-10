@@ -8,6 +8,7 @@ const MAX_BYTES = 50 * 1024;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const TRUNCATION_DIR_PREFIX = "pi-base-truncation-";
 const PROCESS_TRUNCATION_DIR_PREFIX = `${TRUNCATION_DIR_PREFIX}${process.pid}-`;
+const MAX_HINT_OUTPUT_PATH_BYTES = 4 * 1024;
 
 const BASH_TRUNCATION_HINT_REGEX = /\[Showing lines \d+-\d+ of \d+\. Full output: .*?\]/i;
 let truncationDirState: { baseDir: string; promise: Promise<string> } | undefined;
@@ -106,18 +107,45 @@ async function writeFullOutput(text: string, toolName: string): Promise<string> 
   throw new Error("Failed to create private full-output storage.");
 }
 
+function formatOutputPathForHint(outputPath: string): string {
+  return Buffer.byteLength(outputPath, "utf8") <= MAX_HINT_OUTPUT_PATH_BYTES && !/[\r\n]/.test(outputPath)
+    ? outputPath
+    : "(path omitted; see details.truncation.outputPath)";
+}
+
 function buildTruncationHint(totalBytes: number, totalLines: number, outputPath: string | undefined): string {
   return outputPath
-    ? `The tool call succeeded but the output was truncated. Full output (${totalBytes} bytes, ${totalLines} lines) saved to: ${outputPath}\nUse grep to search the full content or read with offset/limit to inspect specific sections.`
+    ? `The tool call succeeded but the output was truncated. Full output (${totalBytes} bytes, ${totalLines} lines) saved to: ${formatOutputPathForHint(outputPath)}\nUse grep to search the full content or read with offset/limit to inspect specific sections.`
     : `The tool call succeeded but the output was truncated. Full output could not be saved to temporary storage (${totalBytes} bytes, ${totalLines} lines).\nRe-run the tool with a narrower scope if you need the omitted content.`;
 }
 
+function buildUpstreamRetruncationHint(outputPath: string | undefined): string {
+  return outputPath
+    ? `The upstream tool had already truncated this output, and the remaining preview exceeded pi-base's final output limit. Full upstream output: ${formatOutputPathForHint(outputPath)}\nUse grep to search the full content or read with offset/limit to inspect specific sections.`
+    : "The upstream tool had already truncated this output, and the remaining preview exceeded pi-base's final output limit.\nRe-run the tool with a narrower scope if you need the omitted content.";
+}
+
+function buildTruncationFooter(removed: number, unit: "bytes" | "lines", hint: string): string {
+  return `...${removed} ${unit} truncated...\n\n${hint}`;
+}
+
 function countLines(text: string): number {
-  return text.split("\n").length;
+  let lines = 1;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code === 10) {
+      lines++;
+      continue;
+    }
+    if (code === 13) {
+      lines++;
+      if (text.charCodeAt(index + 1) === 10) index++;
+    }
+  }
+  return lines;
 }
 
 interface TruncationResult {
-  content: string;
   truncated: boolean;
   outputPath?: string;
   totalLines: number;
@@ -141,52 +169,40 @@ function extractUpstreamOutputPath(text: string): string | undefined {
   return undefined;
 }
 
-async function truncateTextOutput(text: string, toolName: string, alreadyTruncatedByUpstream = false): Promise<TruncationResult> {
+function extractDetailsOutputPath(details: any): string | undefined {
+  const candidates = [details?.truncation?.outputPath, details?.fullOutputPath];
+  return candidates.find((candidate) => typeof candidate === "string" && candidate.length > 0);
+}
+
+async function truncateTextOutput(
+  text: string,
+  toolName: string,
+  alreadyTruncatedByUpstream = false,
+  upstreamOutputPath?: string,
+): Promise<TruncationResult> {
   const totalLines = countLines(text);
   const totalBytes = Buffer.byteLength(text, "utf8");
   alreadyTruncatedByUpstream = alreadyTruncatedByUpstream || (toolName === "bash" && BASH_TRUNCATION_HINT_REGEX.test(text));
   if (alreadyTruncatedByUpstream) {
     return {
-      content: text,
       truncated: true,
-      outputPath: extractUpstreamOutputPath(text),
+      outputPath: upstreamOutputPath ?? extractUpstreamOutputPath(text),
       totalLines,
       totalBytes,
       alreadyTruncated: true,
     };
   }
   if (totalLines <= MAX_LINES && totalBytes <= MAX_BYTES) {
-    return { content: text, truncated: false, totalLines, totalBytes, alreadyTruncated: false };
+    return { truncated: false, totalLines, totalBytes, alreadyTruncated: false };
   }
 
-  const lines = text.split("\n");
-  const preview: string[] = [];
-  let bytes = 0;
-  let lineIndex = 0;
-  let hitBytes = false;
-  for (; lineIndex < lines.length && lineIndex < MAX_LINES; lineIndex++) {
-    const line = lines[lineIndex] ?? "";
-    const size = Buffer.byteLength(line, "utf8") + (lineIndex > 0 ? 1 : 0);
-    if (bytes + size > MAX_BYTES) {
-      hitBytes = true;
-      break;
-    }
-    preview.push(line);
-    bytes += size;
-  }
-
-  const removed = hitBytes ? totalBytes - bytes : totalLines - preview.length;
-  const unit = hitBytes ? "bytes" : "lines";
   let outputPath: string | undefined;
   try {
     outputPath = await writeFullOutput(text, toolName);
   } catch {
     // Keep the bounded preview even when auxiliary full-output storage is unavailable.
   }
-  const hint = buildTruncationHint(totalBytes, totalLines, outputPath);
-
   return {
-    content: `${preview.join("\n")}\n\n...${removed} ${unit} truncated...\n\n${hint}`,
     truncated: true,
     outputPath,
     totalLines,
@@ -206,23 +222,20 @@ interface TextPreview {
   content: string;
   usedLines: number;
   usedBytes: number;
-  hitBytes: boolean;
 }
 
 function buildTextPreview(text: string, maxLines: number, maxBytes: number): TextPreview {
   if (maxLines <= 0 || maxBytes <= 0) {
-    return { content: "", usedLines: 0, usedBytes: 0, hitBytes: maxBytes <= 0 };
+    return { content: "", usedLines: 0, usedBytes: 0 };
   }
-  const lines = text.split("\n");
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const preview: string[] = [];
   let bytes = 0;
   let lineIndex = 0;
-  let hitBytes = false;
   for (; lineIndex < lines.length && lineIndex < maxLines; lineIndex++) {
     const line = lines[lineIndex] ?? "";
     const size = Buffer.byteLength(line, "utf8") + (lineIndex > 0 ? 1 : 0);
     if (bytes + size > maxBytes) {
-      hitBytes = true;
       break;
     }
     preview.push(line);
@@ -232,7 +245,6 @@ function buildTextPreview(text: string, maxLines: number, maxBytes: number): Tex
     content: preview.join("\n"),
     usedLines: preview.length,
     usedBytes: bytes,
-    hitBytes,
   };
 }
 
@@ -280,15 +292,30 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
 
   const combined = textParts.join("\n\n");
   const details = (result as any)?.details;
-  const declaredUpstreamTruncation = (toolName === "read" || toolName === "grep" || toolName === "find") && Boolean(
-    details?.upstreamTextTruncated === true
+  const structuredTruncation = details?.truncation;
+  const declaredStructuredTruncation = structuredTruncation === true
+    || (
+      structuredTruncation
+      && typeof structuredTruncation === "object"
+      && !Array.isArray(structuredTruncation)
+      && structuredTruncation.truncated === true
+    );
+  const declaredUpstreamTruncation = Boolean(
+    declaredStructuredTruncation
+      || details?.upstreamTextTruncated === true
       || details?.linesTruncated === true
-      || details?.truncation,
+      || (toolName === "bash" && typeof details?.fullOutputPath === "string" && details.fullOutputPath.length > 0),
   );
-  const truncated = await truncateTextOutput(combined, toolName, declaredUpstreamTruncation);
+  const truncated = await truncateTextOutput(
+    combined,
+    toolName,
+    declaredUpstreamTruncation,
+    extractDetailsOutputPath(details),
+  );
   if (!truncated.truncated) return { result, truncated: false };
 
-  if (truncated.alreadyTruncated) {
+  const exceedsFinalLimit = truncated.totalLines > MAX_LINES || truncated.totalBytes > MAX_BYTES;
+  if (truncated.alreadyTruncated && !exceedsFinalLimit) {
     return {
       truncated: true,
       result: {
@@ -298,7 +325,15 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
     };
   }
 
-  const hint = buildTruncationHint(truncated.totalBytes, truncated.totalLines, truncated.outputPath);
+  const hint = truncated.alreadyTruncated
+    ? buildUpstreamRetruncationHint(truncated.outputPath)
+    : buildTruncationHint(truncated.totalBytes, truncated.totalLines, truncated.outputPath);
+  const unit = truncated.totalBytes > MAX_BYTES ? "bytes" : "lines";
+  const maximumRemoved = unit === "bytes" ? truncated.totalBytes : truncated.totalLines;
+  const maximumFooter = buildTruncationFooter(maximumRemoved, unit, hint);
+  const footerReservation = `\n\n${maximumFooter}`;
+  const previewLineLimit = Math.max(0, MAX_LINES - (countLines(footerReservation) - 1));
+  const previewByteLimit = Math.max(0, MAX_BYTES - Buffer.byteLength(footerReservation, "utf8"));
   const nextContent: any[] = [];
   let usedLines = 0;
   let usedBytes = 0;
@@ -316,7 +351,10 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
     const separatorBytes = seenTextItems > 0 ? 2 : 0;
     const itemLines = countLines(text);
     const itemBytes = Buffer.byteLength(text, "utf8");
-    if (usedLines + separatorLines + itemLines <= MAX_LINES && usedBytes + separatorBytes + itemBytes <= MAX_BYTES) {
+    if (
+      usedLines + separatorLines + itemLines <= previewLineLimit
+      && usedBytes + separatorBytes + itemBytes <= previewByteLimit
+    ) {
       nextContent.push(item);
       usedLines += separatorLines + itemLines;
       usedBytes += separatorBytes + itemBytes;
@@ -324,16 +362,20 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
       continue;
     }
 
-    const preview = buildTextPreview(text, MAX_LINES - usedLines - separatorLines, MAX_BYTES - usedBytes - separatorBytes);
+    const preview = buildTextPreview(
+      text,
+      previewLineLimit - usedLines - separatorLines,
+      previewByteLimit - usedBytes - separatorBytes,
+    );
     const displayedLines = usedLines + separatorLines + preview.usedLines;
     const displayedBytes = usedBytes + separatorBytes + preview.usedBytes;
-    const removed = preview.hitBytes
+    const removed = unit === "bytes"
       ? Math.max(0, truncated.totalBytes - displayedBytes)
       : Math.max(0, truncated.totalLines - displayedLines);
-    const unit = preview.hitBytes ? "bytes" : "lines";
+    const footer = buildTruncationFooter(removed, unit, hint);
     const previewText = preview.content
-      ? `${preview.content}\n\n...${removed} ${unit} truncated...\n\n${hint}`
-      : `...${removed} ${unit} truncated...\n\n${hint}`;
+      ? `${preview.content}\n\n${footer}`
+      : footer;
     nextContent.push({ type: "text" as const, text: previewText });
     insertedTruncation = true;
     seenTextItems++;
@@ -344,12 +386,14 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
     result: {
       ...result,
       content: nextContent,
-      details: mergeDetails((result as any).details, {
-        outputPath: truncated.outputPath,
-        totalLines: truncated.totalLines,
-        totalBytes: truncated.totalBytes,
-        alreadyTruncated: truncated.alreadyTruncated,
-      }),
+      details: truncated.alreadyTruncated
+        ? mergeAlreadyTruncatedDetails((result as any).details, truncated)
+        : mergeDetails((result as any).details, {
+          outputPath: truncated.outputPath,
+          totalLines: truncated.totalLines,
+          totalBytes: truncated.totalBytes,
+          alreadyTruncated: false,
+        }),
     },
   };
 }

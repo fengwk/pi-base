@@ -23,7 +23,7 @@ import { applyContextCompressionToMessages, shouldApplyContextCompression } from
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./anthropic-cache-boundary.js";
 import { registerCompactionModel } from "./compaction-model.js";
 import { registerResumeAllCommand } from "./resume-all.js";
-import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
+import { createTimeoutSignal, parseTimeoutSeconds } from "./timeout.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.js";
@@ -177,7 +177,7 @@ export function registerFindTool(
       try {
         const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const scopedTool = createToolDefinition(cwd);
-        const timeoutSeconds = params.timeout_seconds === undefined ? undefined : parsePositiveNumber(params.timeout_seconds, "timeout_seconds", 1);
+        const timeoutSeconds = params.timeout_seconds === undefined ? undefined : parseTimeoutSeconds(params.timeout_seconds, "timeout_seconds", 1);
         const scopedParams = { ...params, path: resolveToCwd(rawPath, cwd) };
         delete scopedParams.workdir;
         delete scopedParams.timeout_seconds;

@@ -24,6 +24,15 @@ const VALID_THINKING_LEVELS = new Set<ReturnType<ExtensionAPI["getThinkingLevel"
   "xhigh",
   "max",
 ]);
+const AGENT_FRONTMATTER_FIELDS = new Set([
+  "name",
+  "description",
+  "model",
+  "thinkingLevel",
+  "tools",
+  "skills",
+  "subagents",
+]);
 
 export type AgentThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 type RegisteredToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];
@@ -703,9 +712,9 @@ function resolveCustomPrompt(agent: AgentDefinition, fallbackCustomPrompt: strin
  * (used as a body source). The trailing `<env>` block is always emitted by pi-base via
  * `formatEnvBlock` so the model sees one consistent envelope regardless of body source.
  *
- * When we reuse upstream's prebuilt prompt as the body, we first strip its own trailing
- * date/cwd lines (`stripUpstreamEnvInfo`) so the final prompt has exactly one env section. An
- * explicit agent skills allowlist also replaces upstream's already-rendered skill section.
+ * When we reuse upstream's prebuilt prompt as the body, we first strip its own trailing cwd
+ * metadata (`stripUpstreamEnvInfo`) so the final prompt has exactly one env section. An explicit
+ * agent skills allowlist also replaces upstream's already-rendered skill section.
  */
 function buildAgentSystemPrompt(
   options: BuildSystemPromptOptions,
@@ -782,14 +791,13 @@ function formatEnvBlock(cwd: string): string {
 }
 
 /**
- * Upstream's `buildSystemPrompt` always appends two trailing lines to its output:
- *   `\nCurrent date: <date>\nCurrent working directory: <cwd>`
- * Strip them so `formatEnvBlock` can emit exactly one consistent `<env>` envelope at the end
- * of the final prompt. This is the only place we touch upstream's output structure, and the
- * intent (normalize body → then `formatEnvBlock` appends the envelope) is explicit.
+ * Current upstream `buildSystemPrompt` appends `Current working directory` as its trailing line.
+ * Older compatible versions also prefixed it with `Current date`. Strip either form so
+ * `formatEnvBlock` can emit exactly one consistent `<env>` envelope at the end of the final
+ * prompt. This is the only place we touch upstream's output structure.
  */
 function stripUpstreamEnvInfo(prompt: string): string {
-  return prompt.replace(/\r?\nCurrent date: [^\r\n]+\r?\nCurrent working directory: [^\r\n]+$/, "");
+  return prompt.replace(/(?:\r?\nCurrent date: [^\r\n]+)?\r?\nCurrent working directory: [^\r\n]+$/, "");
 }
 
 function loadAgentCatalog(): AgentCatalog {
@@ -860,6 +868,7 @@ function createDefaultAgentDefinition(): AgentDefinition {
 function loadAgentFile(filePath: string): AgentDefinition {
   const content = readFileSync(filePath, "utf8");
   const { frontmatter, body } = parseFrontmatter<AgentFrontmatter>(content);
+  assertKnownAgentFrontmatterFields(frontmatter, filePath);
   const fallbackName = basename(filePath, extname(filePath));
   const name = normalizeName(frontmatter.name, fallbackName, filePath);
   const description = normalizeDescription(frontmatter.description, filePath);
@@ -883,6 +892,15 @@ function loadAgentFile(filePath: string): AgentDefinition {
     ...(skills ? { skills } : {}),
     ...(subagents ? { subagents } : {}),
   };
+}
+
+function assertKnownAgentFrontmatterFields(frontmatter: AgentFrontmatter, filePath: string): void {
+  const unknownFields = Object.keys(frontmatter)
+    .filter((field) => !AGENT_FRONTMATTER_FIELDS.has(field))
+    .sort();
+  if (unknownFields.length === 0) return;
+  const fieldLabel = unknownFields.length === 1 ? "field" : "fields";
+  throw new Error(`agent file ${filePath} has unknown frontmatter ${fieldLabel}: ${unknownFields.join(", ")}`);
 }
 
 function normalizeName(value: unknown, fallbackName: string, filePath: string): string {

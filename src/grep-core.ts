@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -7,7 +8,7 @@ import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from 
 import { createGracefulTerminator } from "./process-termination.js";
 import { formatOptionalArgs, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
 import { decodeTextFile } from "./text-codec.js";
-import { createTimeoutSignal, parsePositiveNumber } from "./timeout.js";
+import { createTimeoutSignal, parsePositiveNumber, parseTimeoutSeconds } from "./timeout.js";
 
 const DEFAULT_LIMIT = 100;
 const DEFAULT_TIMEOUT_SECONDS = 15;
@@ -38,9 +39,14 @@ export function formatGrepCall(args: any, theme: any, cwd?: string): string {
 }
 
 async function readBinaryProbeBuffer(filePath: string, signal?: AbortSignal): Promise<Buffer> {
-  const handle = await open(filePath, "r");
+  const flags = process.platform === "win32"
+    ? "r"
+    : constants.O_RDONLY | constants.O_NONBLOCK;
+  const handle = await open(filePath, flags);
   try {
-    const { size } = await handle.stat();
+    const fileStat = await handle.stat();
+    if (!fileStat.isFile()) throw new Error(`${filePath} is not a regular file.`);
+    const { size } = fileStat;
     const totalBytes = Math.min(size, BINARY_PROBE_MAX_BYTES);
     const sample = Buffer.allocUnsafe(totalBytes);
     let offset = 0;
@@ -384,7 +390,7 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
     if (!rawPath) throw new Error("path is required.");
     const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
     const absolutePath = resolveToCwd(rawPath, cwd);
-    const timeoutSeconds = parsePositiveNumber(params.timeout_seconds, "timeout_seconds", DEFAULT_TIMEOUT_SECONDS);
+    const timeoutSeconds = parseTimeoutSeconds(params.timeout_seconds, "timeout_seconds", DEFAULT_TIMEOUT_SECONDS);
     const limit = parsePositiveNumber(params.limit, "limit", DEFAULT_LIMIT);
     const multiline = params.multiline === true;
 
@@ -392,7 +398,14 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
     try {
       let searchPathIsDirectory = false;
       try {
-        searchPathIsDirectory = (await stat(absolutePath)).isDirectory();
+        const searchPathStat = await stat(absolutePath);
+        searchPathIsDirectory = searchPathStat.isDirectory();
+        if (!searchPathIsDirectory && !searchPathStat.isFile()) {
+          return {
+            content: [{ type: "text" as const, text: `Error: ${rawPath} is not a regular file or directory. grep only supports searching text files or directories.` }],
+            isError: true,
+          };
+        }
       } catch {
         searchPathIsDirectory = false;
       }
@@ -406,7 +419,8 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
             };
           }
         } catch (error) {
-          if ((error as Error).message === "Operation aborted") throw error;
+          const message = (error as Error).message;
+          if (message === "Operation aborted" || message.endsWith(" is not a regular file.")) throw error;
         }
       }
 

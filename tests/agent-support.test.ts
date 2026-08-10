@@ -473,6 +473,48 @@ Broken agent.
     }
   });
 
+  it("rejects unknown frontmatter fields instead of letting tool-policy typos inherit all tools", async () => {
+    // Intent: an invalid `toools` key must not be treated like an omitted `tools` policy, because
+    // omission intentionally inherits every eligible tool while the typo intends an empty policy.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "typo.md",
+        `---
+name: typo
+toools: []
+---
+Typo prompt.
+`,
+      );
+
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("unknown frontmatter field: toools"));
+      await registry.runCommand("agent", "typo", { cwd: root });
+      expect(registry.getNotifications().at(-1)).toMatchObject({
+        variant: "error",
+        message: expect.stringContaining('Unknown agent "typo"'),
+      });
+      expect(registry.getStatuses().get("00-pi-base-agent")).toContain("agent:default");
+    } finally {
+      warn.mockRestore();
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("uses summaries for completions and defaults agents without a tool allowlist to all base tools", async () => {
     // Intent: /agent completion is the discoverability surface for agents, and
     // omitting `tools` should not accidentally disable the baseline toolset.
@@ -615,7 +657,8 @@ Named prompt.
         "verbose.md",
         `---
 name: verbose
-description: ${longDescription}
+description: |
+  ${longDescription.replace(/\n/g, "\n  ")}
 ---
 
 Verbose prompt.
@@ -626,7 +669,8 @@ Verbose prompt.
         "verbose-copy.md",
         `---
 name: verbose-copy
-description: ${longDescription}
+description: |
+  ${longDescription.replace(/\n/g, "\n  ")}
 ---
 
 Verbose prompt.
@@ -1391,6 +1435,8 @@ skills:
       );
       expect(fallbackResult.systemPrompt).toContain(renderedInstructions);
       expect(fallbackResult.systemPrompt).not.toContain("&amp;lt;safe&amp;gt;");
+      expect((fallbackResult.systemPrompt.match(/Current date:/g) ?? [])).toHaveLength(1);
+      expect((fallbackResult.systemPrompt.match(/Current working directory:/g) ?? [])).toHaveLength(1);
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -1450,9 +1496,10 @@ skills:
     }
   });
 
-  it("rebuilds filtered skills in Pi's prebuilt fallback and strips env tails with spaced cwd paths", async () => {
+  it("rebuilds filtered skills in Pi's current cwd-only fallback without duplicating env metadata", async () => {
     // Intent: when neither prompt source exists, explicit agent skills must still replace the
-    // upstream skill block, and a cwd containing spaces must not leave duplicate raw env lines.
+    // upstream skill block. Pi 0.84.1 emits only a trailing cwd line, which pi-base must replace
+    // with its owned env block even when the cwd contains spaces.
     const root = await createTempWorkspace();
     const spacedCwd = join(root, "project with spaces");
     const agentDir = await createTempWorkspace();
@@ -1479,7 +1526,7 @@ skills:
       const result = await registry.emit(
         "before_agent_start",
         {
-          systemPrompt: `Pi fallback prompt.${upstreamSkills}\nCurrent date: 2026-07-14\nCurrent working directory: ${spacedCwd}`,
+          systemPrompt: `Pi fallback prompt.${upstreamSkills}\nCurrent working directory: ${spacedCwd}`,
           systemPromptOptions: {
             cwd: spacedCwd,
             selectedTools: ["read"],
@@ -1493,7 +1540,7 @@ skills:
       expect(result.systemPrompt).toContain("<name>spec</name>");
       expect(result.systemPrompt).not.toContain("<name>other</name>");
       expect((result.systemPrompt.match(/The following skills provide specialized instructions/g) ?? [])).toHaveLength(1);
-      expect(result.systemPrompt).not.toContain("\nCurrent date: 2026-07-14\nCurrent working directory:");
+      expect(result.systemPrompt).not.toContain(`\nCurrent working directory: ${spacedCwd}`);
       expect((result.systemPrompt.match(/Current working directory:/g) ?? [])).toHaveLength(1);
       expect(result.systemPrompt).toContain(`  Current working directory: ${spacedCwd}`);
       expect(result.systemPrompt).not.toContain("**Your tool usage:**");
