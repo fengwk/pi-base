@@ -37,6 +37,7 @@ export interface RunResult {
 /** A bound, runnable subagent session. Abstracted so the orchestration is unit-testable with a fake. */
 type MessageEvent = Extract<AgentSessionEvent, { type: "message_start" }>;
 type ToolUpdateEvent = Extract<AgentSessionEvent, { type: "tool_execution_update" }>;
+type ToolEndEvent = Extract<AgentSessionEvent, { type: "tool_execution_end" }>;
 export type SubagentViewMessage = MessageEvent["message"];
 export type SubagentAssistantMessage = Extract<SubagentViewMessage, { role: "assistant" }>;
 
@@ -54,6 +55,12 @@ export interface SubagentActiveTool {
   partialResult?: ToolUpdateEvent["partialResult"];
 }
 
+export interface SubagentCompletedTool {
+  toolCallId: string;
+  result: ToolEndEvent["result"];
+  isError: boolean;
+}
+
 /** Read-only access used by the interactive subagent transcript panel. */
 export interface SubagentViewSource {
   cwd: string;
@@ -66,6 +73,8 @@ export interface SubagentViewSource {
   getMessages: () => readonly SubagentViewMessage[];
   getStreamingMessage: () => SubagentAssistantMessage | undefined;
   getActiveTools: () => readonly SubagentActiveTool[];
+  /** Final outcomes not yet represented by source-ordered toolResult messages. */
+  getCompletedTools: () => readonly SubagentCompletedTool[];
   getToolDefinition: (name: string) => ToolDefinition | undefined;
   subscribe: (listener: (event: AgentSessionEvent) => void) => () => void;
 }
@@ -243,6 +252,7 @@ export function getPersistedSubagentView(cwd: string, query: string): PersistedS
       getMessages: () => context.messages as SubagentViewMessage[],
       getStreamingMessage: () => undefined,
       getActiveTools: () => [],
+      getCompletedTools: () => [],
       getToolDefinition: () => undefined,
       subscribe: () => () => undefined,
     },
@@ -741,6 +751,9 @@ export function collectFromMessages(messages: RuntimeMessage[]): { report?: stri
 function createLiveViewSource(session: AgentSession, cwd: string): { source: SubagentViewSource; dispose: () => void } {
   let streamingMessage: SubagentAssistantMessage | undefined;
   const activeTools = new Map<string, SubagentActiveTool>();
+  // Pi emits parallel tool completions immediately but persists their result messages only after
+  // every sibling finishes. Retain that gap so a panel opened late can reconstruct final colors.
+  const completedTools = new Map<string, SubagentCompletedTool>();
   const unsubscribe = session.subscribe((event) => {
     if (event.type === "message_start" && event.message.role === "assistant") {
       streamingMessage = event.message;
@@ -762,16 +775,24 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
       }
       return;
     }
-    if (event.type === "message_end" && event.message.role === "assistant") {
-      streamingMessage = undefined;
-      for (const content of event.message.content) {
-        if (content.type !== "toolCall") continue;
-        const existing = activeTools.get(content.id);
-        if (existing) activeTools.set(content.id, { ...existing, args: content.arguments, argsComplete: true });
+    if (event.type === "message_end") {
+      if (event.message.role === "assistant") {
+        streamingMessage = undefined;
+        for (const content of event.message.content) {
+          if (content.type !== "toolCall") continue;
+          const existing = activeTools.get(content.id);
+          if (existing) activeTools.set(content.id, { ...existing, args: content.arguments, argsComplete: true });
+        }
+        return;
       }
-      return;
+      if (event.message.role === "toolResult") {
+        // AgentSession exposes the finalized message through session.messages before listeners run.
+        completedTools.delete(event.message.toolCallId);
+        return;
+      }
     }
     if (event.type === "tool_execution_start") {
+      completedTools.delete(event.toolCallId);
       const existing = activeTools.get(event.toolCallId);
       activeTools.set(event.toolCallId, {
         toolCallId: event.toolCallId,
@@ -795,7 +816,14 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
       });
       return;
     }
-    if (event.type === "tool_execution_end") activeTools.delete(event.toolCallId);
+    if (event.type === "tool_execution_end") {
+      activeTools.delete(event.toolCallId);
+      completedTools.set(event.toolCallId, {
+        toolCallId: event.toolCallId,
+        result: event.result,
+        isError: event.isError,
+      });
+    }
   });
 
   return {
@@ -814,6 +842,7 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
       getMessages: () => session.messages as SubagentViewMessage[],
       getStreamingMessage: () => streamingMessage,
       getActiveTools: () => [...activeTools.values()].map((tool) => ({ ...tool })),
+      getCompletedTools: () => [...completedTools.values()].map((tool) => ({ ...tool })),
       getToolDefinition: (name) => session.getToolDefinition(name),
       subscribe: (listener) => session.subscribe(listener),
     },

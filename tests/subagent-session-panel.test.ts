@@ -21,6 +21,7 @@ function createHarness(
     getMessages: () => initialMessages,
     getStreamingMessage: () => undefined,
     getActiveTools: () => [],
+    getCompletedTools: () => [],
     getToolDefinition: () => undefined,
     subscribe(listener) {
       listeners.add(listener);
@@ -104,6 +105,69 @@ describe("SubagentSessionPanel", () => {
     expect(output).toContain("read");
     expect(output).not.toContain("├─");
     expect(harness.requestRender).toHaveBeenCalled();
+  });
+
+  it("replays completed parallel tools when opened while a sibling is still running", () => {
+    // Intent: a panel opened after one parallel tool ended must use the live completion snapshot;
+    // the core delays persisted toolResult messages until every sibling finishes.
+    const initialMessages = [{
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "finished-call", name: "finished-tool", arguments: { value: "a" } },
+        { type: "toolCall", id: "running-call", name: "running-tool", arguments: { value: "b" } },
+      ],
+      stopReason: "toolUse",
+      timestamp: 1,
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    }] as never;
+    const harness = createHarness(initialMessages, {
+      getCompletedTools: () => [{
+        toolCallId: "finished-call",
+        result: { content: [{ type: "text", text: "finished result" }], details: undefined },
+        isError: false,
+      }],
+      getActiveTools: () => [{
+        toolCallId: "running-call",
+        toolName: "running-tool",
+        args: { value: "b" },
+        executionStarted: true,
+        argsComplete: true,
+      }],
+    });
+
+    harness.panel.handleInput("home");
+    expect(harness.panel.render(120).join("\n")).toContain("finished result");
+  });
+
+  it("settles a pending tool from its persisted result when the execution-end event was missed", () => {
+    // Intent: the persisted message is the final fallback if a live panel did not observe
+    // tool_execution_end, so the card must not remain pending until the panel is reopened.
+    const harness = createHarness([{
+      role: "assistant",
+      content: [{ type: "toolCall", id: "missed-call", name: "missed-tool", arguments: { value: "a" } }],
+      stopReason: "toolUse",
+      timestamp: 1,
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    }] as never);
+    harness.emit({
+      type: "message_end",
+      message: {
+        role: "toolResult",
+        toolCallId: "missed-call",
+        toolName: "missed-tool",
+        content: [{ type: "text", text: "persisted fallback result" }],
+        details: undefined,
+        isError: false,
+        timestamp: 2,
+      },
+    } as never);
+    expect(harness.panel.render(120).join("\n")).toContain("persisted fallback result");
   });
 
   it("rebuilds persisted and active tool state, then handles live error and navigation events", () => {

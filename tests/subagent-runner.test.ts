@@ -78,6 +78,7 @@ describe("runSubagent", () => {
       getMessages: () => [],
       getStreamingMessage: () => undefined,
       getActiveTools: () => [],
+      getCompletedTools: () => [],
       getToolDefinition: () => undefined,
       subscribe: () => () => undefined,
     };
