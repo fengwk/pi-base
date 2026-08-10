@@ -21,6 +21,7 @@ function createHarness(
     getMessages: () => initialMessages,
     getStreamingMessage: () => undefined,
     getActiveTools: () => [],
+    getCompletedTools: () => [],
     getToolDefinition: () => undefined,
     subscribe(listener) {
       listeners.add(listener);
@@ -104,6 +105,57 @@ describe("SubagentSessionPanel", () => {
     expect(output).toContain("read");
     expect(output).not.toContain("├─");
     expect(harness.requestRender).toHaveBeenCalled();
+  });
+
+  it("replays completed parallel tools when opened while a sibling is still running", () => {
+    // Intent: a panel opened after one parallel tool ended must use the live completion snapshot;
+    // the core delays persisted toolResult messages until every sibling finishes.
+    const initialMessages = [{
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "finished-call", name: "finished-tool", arguments: { value: "a" } },
+        { type: "toolCall", id: "running-call", name: "running-tool", arguments: { value: "b" } },
+      ],
+      stopReason: "toolUse",
+      timestamp: 1,
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    }] as never;
+    const harness = createHarness(initialMessages, {
+      getCompletedTools: () => [{
+        toolCallId: "finished-call",
+        toolName: "finished-tool",
+        result: { content: [{ type: "text", text: "finished result" }], details: undefined },
+        isError: false,
+      }],
+      getActiveTools: () => [{
+        toolCallId: "running-call",
+        toolName: "running-tool",
+        args: { value: "b" },
+        executionStarted: true,
+        argsComplete: true,
+      }],
+    });
+
+    harness.panel.handleInput("home");
+    expect(harness.panel.render(120).join("\n")).toContain("finished result");
+
+    harness.emit({
+      type: "message_end",
+      message: {
+        role: "toolResult",
+        toolCallId: "running-call",
+        toolName: "running-tool",
+        content: [{ type: "text", text: "running result persisted" }],
+        details: undefined,
+        isError: false,
+        timestamp: 2,
+      },
+    } as never);
+    harness.panel.handleInput("end");
+    expect(harness.panel.render(120).join("\n")).toContain("running result persisted");
   });
 
   it("rebuilds persisted and active tool state, then handles live error and navigation events", () => {

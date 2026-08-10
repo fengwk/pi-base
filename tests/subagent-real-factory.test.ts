@@ -3,6 +3,7 @@ import { mkdtemp, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, rootSessionEntryData } from "../src/subagent/depth.js";
 import { PI_BASE_MODULE_INSTANCE_MARKER, PI_BASE_MODULE_INSTANCE_TOKEN } from "../src/subagent/runner.js";
 
@@ -60,13 +61,20 @@ function fakeSession(
     { role: "assistant", content: [{ type: "toolCall" }, { type: "text", text: "final answer" }] },
   ],
 ) {
+  const listeners = new Set<(event: AgentSessionEvent) => void>();
   return {
     bindExtensions: vi.fn(async () => undefined),
     prompt: vi.fn(async () => undefined),
     steer: vi.fn(async () => undefined),
     messages,
     thinkingLevel: "high",
-    subscribe: vi.fn(() => () => undefined),
+    subscribe: vi.fn((listener: (event: AgentSessionEvent) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+    emit: (event: AgentSessionEvent) => {
+      for (const listener of listeners) listener(event);
+    },
     abort: vi.fn(),
     extensionRunner: { emit: vi.fn(async () => undefined) },
     dispose: vi.fn(),
@@ -141,6 +149,63 @@ describe("createRealSubagentFactory", () => {
     expect(session.dispose).toHaveBeenCalledTimes(1);
     await child.dispose();
     expect(session.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains completed tool results until their persisted message is emitted", async () => {
+    // Intent: a transcript panel opened between parallel tool completions needs the final result
+    // even though Pi intentionally delays source-ordered toolResult messages until the batch ends.
+    const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
+    const session = fakeSession([]);
+    mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
+    mocked.sessionManagerCreate.mockReturnValue(fakeManager("parallel-child"));
+
+    const child = await createRealSubagentFactory().spawn({
+      ctx: fakeCtx(),
+      agentType: "worker",
+      childDepth: 2,
+    });
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-a",
+      toolName: "task",
+      args: { prompt: "A" },
+    });
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-b",
+      toolName: "task",
+      args: { prompt: "B" },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-a",
+      toolName: "task",
+      result: { content: [{ type: "text", text: "A complete" }], details: undefined },
+      isError: false,
+    });
+
+    expect(child.view?.getActiveTools().map((tool) => tool.toolCallId)).toEqual(["call-b"]);
+    expect(child.view?.getCompletedTools()).toEqual([{
+      toolCallId: "call-a",
+      toolName: "task",
+      result: { content: [{ type: "text", text: "A complete" }], details: undefined },
+      isError: false,
+    }]);
+
+    session.emit({
+      type: "message_end",
+      message: {
+        role: "toolResult",
+        toolCallId: "call-a",
+        toolName: "task",
+        content: [{ type: "text", text: "A complete" }],
+        details: undefined,
+        isError: false,
+        timestamp: 1,
+      },
+    });
+    expect(child.view?.getCompletedTools()).toEqual([]);
+    await child.dispose();
   });
 
   it("rejects a symlinked path that would load a second pi-base module instance", async () => {

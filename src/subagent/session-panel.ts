@@ -21,6 +21,7 @@ import type { SubagentNode } from "./registry.js";
 import type {
   SubagentActiveTool,
   SubagentAssistantMessage,
+  SubagentCompletedTool,
   SubagentViewMessage,
   SubagentViewSource,
 } from "./runner.js";
@@ -180,6 +181,20 @@ export class SubagentSessionPanel implements Component {
     if (snapshot.partialResult !== undefined) component.updateResult({ ...snapshot.partialResult, isError: false }, true);
   }
 
+  private applyCompletedTool(snapshot: SubagentCompletedTool): void {
+    const component = this.pendingTools.get(snapshot.toolCallId);
+    if (!component) return;
+    component.updateResult({ ...snapshot.result, isError: snapshot.isError });
+    this.pendingTools.delete(snapshot.toolCallId);
+  }
+
+  private applyToolResultMessage(message: Extract<SubagentViewMessage, { role: "toolResult" }>): void {
+    const component = this.pendingTools.get(message.toolCallId);
+    if (!component) return;
+    component.updateResult(message);
+    this.pendingTools.delete(message.toolCallId);
+  }
+
   private rebuildFromSnapshot(): void {
     this.transcript.clear();
     this.pendingTools.clear();
@@ -190,11 +205,7 @@ export class SubagentSessionPanel implements Component {
       } else if (message.role === "assistant") {
         this.addAssistantMessage(message);
       } else if (message.role === "toolResult") {
-        const component = this.pendingTools.get(message.toolCallId);
-        if (component) {
-          component.updateResult(message);
-          this.pendingTools.delete(message.toolCallId);
-        }
+        this.applyToolResultMessage(message);
       }
     }
 
@@ -209,6 +220,7 @@ export class SubagentSessionPanel implements Component {
         this.pendingTools.set(content.id, component);
       }
     }
+    for (const tool of this.source.getCompletedTools()) this.applyCompletedTool(tool);
     for (const tool of this.source.getActiveTools()) this.applyActiveTool(tool);
   }
 
@@ -266,6 +278,8 @@ export class SubagentSessionPanel implements Component {
         }
       }
       this.streamingComponent = undefined;
+    } else if (event.type === "message_end" && event.message.role === "toolResult") {
+      this.applyToolResultMessage(event.message);
     } else if (event.type === "tool_execution_start") {
       this.ensureStreamingTool(event.toolCallId, event.toolName, event.args).markExecutionStarted();
     } else if (event.type === "tool_execution_update") {

@@ -159,6 +159,7 @@ describe("/subagent", () => {
       getMessages: () => [],
       getStreamingMessage: () => undefined,
       getActiveTools: () => [],
+      getCompletedTools: () => [],
       getToolDefinition: () => undefined,
       subscribe: () => () => undefined,
     };
@@ -405,6 +406,7 @@ describe("/subagent", () => {
       getMessages: () => [],
       getStreamingMessage: () => undefined,
       getActiveTools: () => [],
+      getCompletedTools: () => [],
       getToolDefinition: () => undefined,
       subscribe: () => () => undefined,
     };
@@ -532,6 +534,7 @@ describe("/subagent", () => {
         getMessages: () => [],
         getStreamingMessage: () => undefined,
         getActiveTools: () => [],
+        getCompletedTools: () => [],
         getToolDefinition: () => undefined,
         subscribe: () => () => undefined,
       };
