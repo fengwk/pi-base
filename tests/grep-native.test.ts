@@ -21,6 +21,7 @@ afterEach(() => {
   delete process.env.PI_BASE_FAKE_RG_TEXT;
   delete process.env.PI_BASE_FAKE_RG_COUNT;
   delete process.env.PI_BASE_FAKE_RG_NO_LINES;
+  delete process.env.PI_BASE_FAKE_RG_REQUIRE_IGNORE_CASE;
 });
 
 async function installFakeRg(root: string): Promise<string> {
@@ -35,7 +36,10 @@ if (process.argv.includes("--version")) {
   process.exit(0);
 }
 const mode = process.env.PI_BASE_FAKE_RG_MODE || "match";
-if (mode === "wait") {
+if (process.env.PI_BASE_FAKE_RG_REQUIRE_IGNORE_CASE === "1" && !process.argv.includes("--ignore-case")) {
+  console.error("missing --ignore-case");
+  process.exit(2);
+} else if (mode === "wait") {
   setInterval(() => {}, 1000);
 } else if (mode === "error") {
   console.error("synthetic rg failure");
@@ -62,6 +66,39 @@ if (mode === "wait") {
 }
 
 describe("executeGrep native ripgrep path", () => {
+  it("returns the required-argument error for a missing pattern", async () => {
+    // Intent: direct callers must receive the same required-argument contract as schema-driven
+    // tool calls instead of an unrelated path or ripgrep failure.
+    const result = await executeGrep("grep-missing-pattern", {
+      path: "does-not-exist",
+    }, undefined, undefined, { cwd: "/does-not-exist" });
+
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toBe("Error: pattern is required.");
+  });
+
+  it("passes ignore_case through to native ripgrep", async () => {
+    // Intent: display-only coverage is insufficient; the native process must receive
+    // `--ignore-case` or mixed-case searches silently return incomplete results.
+    const root = await createTempWorkspace();
+    await installFakeRg(root);
+    const filePath = join(root, "example.txt");
+    await writeFile(filePath, "Alpha\n", "utf8");
+    process.env.PI_BASE_FAKE_RG_FILE = filePath;
+    process.env.PI_BASE_FAKE_RG_TEXT = "Alpha\n";
+    process.env.PI_BASE_FAKE_RG_REQUIRE_IGNORE_CASE = "1";
+
+    const result = await executeGrep("grep-ignore-case", {
+      workdir: ".",
+      path: "example.txt",
+      pattern: "alpha",
+      ignore_case: true,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("example.txt:2: Alpha");
+  });
+
   it("skips unparseable ripgrep output lines and formats matches as relative locations", async () => {
     // Intent: pi-base owns rg JSON parsing; a stray non-JSON line must be ignored while
     // valid match records still render as `path:line: text` candidate locations only
