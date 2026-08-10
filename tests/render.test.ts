@@ -66,16 +66,19 @@ describe("render helpers", () => {
     expect(expanded).not.toContain("ctrl+o to expand");
   });
 
-  it("keeps an expand hint for a short zero-line error preview", () => {
-    // Intent: errors shown as a zero-line exception must remain visibly expandable even when the entire message fits.
+  it("does not show an expand hint when a short zero-line error preview is complete", () => {
+    // Intent: the zero-line error exception should not imply hidden content when the bounded
+    // preview already contains the entire diagnostic.
     const collapsed = render(renderRawResult(
-      { content: [{ type: "text", text: "permission denied" }] },
+      { content: [{ type: "text", text: "Error: permission denied\n/path/to/file" }] },
       { expanded: false, collapsedLines: 0 },
       theme,
       { lastComponent: undefined, isError: true },
     ));
     expect(collapsed).toContain("permission denied");
-    expect(collapsed).toContain("ctrl+o to expand");
+    expect(collapsed).toContain("/path/to/file");
+    expect(collapsed).not.toContain("ctrl+o to expand");
+    expect(collapsed).not.toContain("...");
     expect(collapsed).not.toContain("output truncated");
   });
 

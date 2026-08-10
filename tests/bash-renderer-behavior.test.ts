@@ -106,4 +106,30 @@ describe("bash renderer behavior", () => {
     expect(expanded).toContain("error-1");
     expect(expanded).not.toContain("ctrl+o to expand");
   });
+
+  it("does not offer expansion when a disabled Bash preview shows the complete error", () => {
+    // Intent: retaining a short diagnostic is not truncation and must not imply hidden output.
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, {
+      createBuiltInBashTool: () => ({ execute: async () => ({ content: [{ type: "text", text: "ok" }] }) }),
+      getCollapsedResultLines: () => 0,
+    });
+    const tool = registry.getTool("bash");
+    const rendered = render(tool.renderResult(
+      { content: [{ type: "text", text: "command failed" }] },
+      { expanded: false, isPartial: false },
+      {} as any,
+      {
+        lastComponent: undefined,
+        args: { workdir: "." },
+        cwd: process.cwd(),
+        state: {},
+        isError: true,
+      },
+    ));
+
+    expect(rendered).toContain("command failed");
+    expect(rendered).not.toContain("ctrl+o to expand");
+    expect(rendered).not.toContain("...");
+  });
 });

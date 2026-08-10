@@ -100,7 +100,7 @@ export function formatBashResultText(result: any, options: any, theme: any, cont
     : 0;
   const sections: string[] = [];
 
-  if (!options?.expanded && (hiddenLineCount > 0 || wasCharTruncated || errorPreview)) {
+  if (!options?.expanded && (hiddenLineCount > 0 || wasCharTruncated)) {
     const details = [
       hiddenLineCount > 0 ? `${hiddenLineCount} earlier lines` : undefined,
       wasCharTruncated ? "output truncated" : undefined,

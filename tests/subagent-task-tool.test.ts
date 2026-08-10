@@ -270,6 +270,29 @@ describe("task tool", () => {
     expect(expanded).not.toContain("ctrl+o to expand");
   });
 
+  it("does not offer expansion when a disabled task preview shows the complete error", () => {
+    // Intent: a short retained task error has no hidden body and should not look truncated.
+    const tool = registerAndCapture(baseDeps({
+      getCollapsedResultLines: () => 0,
+    }));
+    const result = {
+      content: [{ type: "text", text: "" }],
+      details: { result: { sessionId: "s", state: "error", error: "short failure" } },
+      isError: true,
+    };
+
+    const rendered = render(
+      tool.renderResult(result, { isPartial: false, expanded: false }, {}, {
+        lastComponent: undefined,
+        cwd: "/tmp/work",
+        isError: true,
+      }),
+    );
+    expect(rendered).toContain("short failure");
+    expect(rendered).not.toContain("ctrl+o to expand");
+    expect(rendered).not.toContain("...");
+  });
+
   it("keeps child progress out of task partial updates while updating the registry", async () => {
     // Intent: live counters belong to the registry-backed widget/overlay, not the historical task block.
     let listener: ((event: unknown) => void) | undefined;

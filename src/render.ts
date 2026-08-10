@@ -411,7 +411,7 @@ export function renderRawResult(result: any, options: { expanded?: boolean; coll
   const tailDetails = [
     remaining > 0 ? `${remaining} more lines` : undefined,
     charTruncated ? "output truncated" : undefined,
-    remaining > 0 || charTruncated || errorPreview ? "ctrl+o to expand" : undefined,
+    remaining > 0 || charTruncated ? "ctrl+o to expand" : undefined,
   ].filter((part): part is string => Boolean(part));
   const body = visibleBody ? colorizeResultBody(visibleBody, theme, Boolean(context.isError)) : "";
   if (tailDetails.length === 0) {
