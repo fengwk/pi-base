@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager, SessionSelectorComponent } from "@earendil-works/pi-coding-agent";
 import piBaseExtension from "../index.js";
+import { formatResumeAllChoice } from "../src/resume-all.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 const ORIGINAL_LIST_ALL = SessionManager.listAll;
@@ -50,6 +51,26 @@ function appendConversation(session: SessionManager, name: string, userText: str
 }
 
 describe("resume-all command", () => {
+  it("formats picker labels with title fallback, whitespace folding, and bounded titles", () => {
+    // Intent: labels are map keys in the non-TUI picker, so their title fallback and length must
+    // remain predictable even when persisted session metadata is blank or contains noisy spacing.
+    const makeChoice = (overrides: Record<string, unknown>) => formatResumeAllChoice({
+      path: "/tmp/session.jsonl",
+      cwd: "/tmp/project",
+      ...overrides,
+    } as any);
+    const titleOf = (label: string) => label.split(" — ", 1)[0]!;
+
+    expect(makeChoice({ name: "  Named\n\tSession  ", firstMessage: "ignored" }))
+      .toBe("Named Session — /tmp/project — /tmp/session.jsonl");
+    expect(titleOf(makeChoice({ name: " ", firstMessage: "first message" }))).toBe("first message");
+    expect(titleOf(makeChoice({ name: " ", firstMessage: "" }))).toBe("(no messages)");
+
+    const longTitle = titleOf(makeChoice({ name: "x".repeat(80) }));
+    expect(longTitle).toHaveLength(60);
+    expect(longTitle.endsWith("…")).toBe(true);
+  });
+
   it("uses the built-in session selector UI in TUI mode and switches to the selected session", async () => {
     await withTempAgentDir(async () => {
       const rootA = await createTempWorkspace();

@@ -1,7 +1,47 @@
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createTempWorkspace } from "./helpers.js";
+
+describe("shell environment", () => {
+  it("prepends the configured agent bin directory once while preserving PATH key casing", async () => {
+    // Intent: fd/rg child processes depend on this PATH projection; custom agent directories and
+    // Windows-style `Path` casing must not drop the caller's PATH or accumulate duplicate entries.
+    const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const originalPathEntries = Object.entries(process.env).filter(([key]) => key.toLowerCase() === "path");
+    const clearPathEntries = () => {
+      for (const key of Object.keys(process.env)) {
+        if (key.toLowerCase() === "path") delete process.env[key];
+      }
+    };
+    const agentDir = await createTempWorkspace();
+    const existingBin = join(agentDir, "existing-bin");
+
+    try {
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      clearPathEntries();
+      process.env.Path = existingBin;
+
+      const { getShellEnv } = await import("../src/internal/pi-coding-agent-utils.js");
+      const expectedAgentBin = join(agentDir, "bin");
+      const originalPathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path");
+      const first = getShellEnv();
+      const firstPathKey = Object.keys(first).find((key) => key.toLowerCase() === "path");
+      expect(firstPathKey).toBe(originalPathKey);
+      expect(first[firstPathKey!]).toBe(`${expectedAgentBin}${delimiter}${existingBin}`);
+      expect(process.env[originalPathKey!]).toBe(existingBin);
+
+      process.env[firstPathKey!] = first[firstPathKey!];
+      const second = getShellEnv();
+      expect(second[firstPathKey!]?.split(delimiter).filter((entry) => entry === expectedAgentBin)).toHaveLength(1);
+    } finally {
+      clearPathEntries();
+      for (const [key, value] of originalPathEntries) process.env[key] = value;
+      if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    }
+  });
+});
 
 describe("managed fd/rg installation", () => {
   it("does not treat invalid managed-tool paths as installed executables", async () => {
