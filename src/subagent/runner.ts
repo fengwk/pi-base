@@ -56,7 +56,6 @@ export interface SubagentActiveTool {
 
 export interface SubagentCompletedTool {
   toolCallId: string;
-  toolName: string;
   result: ToolEndEvent["result"];
   isError: boolean;
 }
@@ -783,6 +782,7 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
         return;
       }
       if (event.message.role === "toolResult") {
+        // AgentSession exposes the finalized message through session.messages before listeners run.
         completedTools.delete(event.message.toolCallId);
         return;
       }
@@ -816,7 +816,6 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
       activeTools.delete(event.toolCallId);
       completedTools.set(event.toolCallId, {
         toolCallId: event.toolCallId,
-        toolName: event.toolName,
         result: event.result,
         isError: event.isError,
       });

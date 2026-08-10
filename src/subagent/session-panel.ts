@@ -28,8 +28,6 @@ import type {
 
 const PANEL_MARGIN_ROWS = 2;
 
-type ToolEndEvent = Extract<AgentSessionEvent, { type: "tool_execution_end" }>;
-
 export interface SubagentViewportKeybindings {
   pageUp: readonly KeyId[];
   pageDown: readonly KeyId[];
@@ -181,7 +179,7 @@ export class SubagentSessionPanel implements Component {
     if (snapshot.partialResult !== undefined) component.updateResult({ ...snapshot.partialResult, isError: false }, true);
   }
 
-  private applyCompletedTool(snapshot: SubagentCompletedTool): void {
+  private applyToolCompletion(snapshot: SubagentCompletedTool): void {
     const component = this.pendingTools.get(snapshot.toolCallId);
     if (!component) return;
     component.updateResult({ ...snapshot.result, isError: snapshot.isError });
@@ -220,7 +218,7 @@ export class SubagentSessionPanel implements Component {
         this.pendingTools.set(content.id, component);
       }
     }
-    for (const tool of this.source.getCompletedTools()) this.applyCompletedTool(tool);
+    for (const tool of this.source.getCompletedTools()) this.applyToolCompletion(tool);
     for (const tool of this.source.getActiveTools()) this.applyActiveTool(tool);
   }
 
@@ -234,13 +232,6 @@ export class SubagentSessionPanel implements Component {
       component.updateArgs(args);
     }
     return component;
-  }
-
-  private handleToolEnd(event: ToolEndEvent): void {
-    const component = this.pendingTools.get(event.toolCallId);
-    if (!component) return;
-    component.updateResult({ ...event.result, isError: event.isError });
-    this.pendingTools.delete(event.toolCallId);
   }
 
   private handleSessionEvent(event: AgentSessionEvent): void {
@@ -287,7 +278,7 @@ export class SubagentSessionPanel implements Component {
       component.markExecutionStarted();
       component.updateResult({ ...event.partialResult, isError: false }, true);
     } else if (event.type === "tool_execution_end") {
-      this.handleToolEnd(event);
+      this.applyToolCompletion(event);
     }
     this.tui.requestRender();
   }

@@ -126,7 +126,6 @@ describe("SubagentSessionPanel", () => {
     const harness = createHarness(initialMessages, {
       getCompletedTools: () => [{
         toolCallId: "finished-call",
-        toolName: "finished-tool",
         result: { content: [{ type: "text", text: "finished result" }], details: undefined },
         isError: false,
       }],
@@ -141,21 +140,34 @@ describe("SubagentSessionPanel", () => {
 
     harness.panel.handleInput("home");
     expect(harness.panel.render(120).join("\n")).toContain("finished result");
+  });
 
+  it("settles a pending tool from its persisted result when the execution-end event was missed", () => {
+    // Intent: the persisted message is the final fallback if a live panel did not observe
+    // tool_execution_end, so the card must not remain pending until the panel is reopened.
+    const harness = createHarness([{
+      role: "assistant",
+      content: [{ type: "toolCall", id: "missed-call", name: "missed-tool", arguments: { value: "a" } }],
+      stopReason: "toolUse",
+      timestamp: 1,
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    }] as never);
     harness.emit({
       type: "message_end",
       message: {
         role: "toolResult",
-        toolCallId: "running-call",
-        toolName: "running-tool",
-        content: [{ type: "text", text: "running result persisted" }],
+        toolCallId: "missed-call",
+        toolName: "missed-tool",
+        content: [{ type: "text", text: "persisted fallback result" }],
         details: undefined,
         isError: false,
         timestamp: 2,
       },
     } as never);
-    harness.panel.handleInput("end");
-    expect(harness.panel.render(120).join("\n")).toContain("running result persisted");
+    expect(harness.panel.render(120).join("\n")).toContain("persisted fallback result");
   });
 
   it("rebuilds persisted and active tool state, then handles live error and navigation events", () => {

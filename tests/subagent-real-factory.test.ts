@@ -151,9 +151,9 @@ describe("createRealSubagentFactory", () => {
     expect(session.dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("retains completed tool results until their persisted message is emitted", async () => {
+  it("retains parallel tool results until source-ordered messages become visible", async () => {
     // Intent: a transcript panel opened between parallel tool completions needs the final result
-    // even though Pi intentionally delays source-ordered toolResult messages until the batch ends.
+    // even though Pi delays all source-ordered toolResult messages until every sibling finishes.
     const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
     const session = fakeSession([]);
     mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
@@ -187,24 +187,52 @@ describe("createRealSubagentFactory", () => {
     expect(child.view?.getActiveTools().map((tool) => tool.toolCallId)).toEqual(["call-b"]);
     expect(child.view?.getCompletedTools()).toEqual([{
       toolCallId: "call-a",
-      toolName: "task",
       result: { content: [{ type: "text", text: "A complete" }], details: undefined },
       isError: false,
     }]);
+    expect(child.view?.getMessages()).toEqual([]);
 
     session.emit({
-      type: "message_end",
-      message: {
-        role: "toolResult",
-        toolCallId: "call-a",
-        toolName: "task",
-        content: [{ type: "text", text: "A complete" }],
-        details: undefined,
-        isError: false,
-        timestamp: 1,
-      },
+      type: "tool_execution_end",
+      toolCallId: "call-b",
+      toolName: "task",
+      result: { content: [{ type: "text", text: "B failed" }], details: undefined },
+      isError: true,
     });
+    expect(child.view?.getActiveTools()).toEqual([]);
+    expect(child.view?.getCompletedTools().map((tool) => [tool.toolCallId, tool.isError])).toEqual([
+      ["call-a", false],
+      ["call-b", true],
+    ]);
+    expect(child.view?.getMessages()).toEqual([]);
+
+    const messageA = {
+      role: "toolResult",
+      toolCallId: "call-a",
+      toolName: "task",
+      content: [{ type: "text", text: "A complete" }],
+      details: undefined,
+      isError: false,
+      timestamp: 1,
+    } satisfies Extract<AgentSessionEvent, { type: "message_end" }>["message"];
+    session.messages.push(messageA);
+    session.emit({ type: "message_end", message: messageA });
+    expect(child.view?.getCompletedTools().map((tool) => tool.toolCallId)).toEqual(["call-b"]);
+    expect(child.view?.getMessages()).toEqual([messageA]);
+
+    const messageB = {
+      role: "toolResult",
+      toolCallId: "call-b",
+      toolName: "task",
+      content: [{ type: "text", text: "B failed" }],
+      details: undefined,
+      isError: true,
+      timestamp: 2,
+    } satisfies Extract<AgentSessionEvent, { type: "message_end" }>["message"];
+    session.messages.push(messageB);
+    session.emit({ type: "message_end", message: messageB });
     expect(child.view?.getCompletedTools()).toEqual([]);
+    expect(child.view?.getMessages()).toEqual([messageA, messageB]);
     await child.dispose();
   });
 
