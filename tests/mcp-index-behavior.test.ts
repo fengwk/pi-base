@@ -32,4 +32,17 @@ describe("mcp index behavior", () => {
     await registry.runCommand("mcp-status", "extra", {});
     expect(registry.getNotifications()).toContainEqual({ message: "Usage: /mcp-status", variant: "warning" });
   });
+
+  it("reports an empty status before the session starts", async () => {
+    // Intent: root-scoped hubs are acquired lazily from session_start, but the
+    // status command remains safe and useful before any hub exists.
+    const registry = createToolRegistry();
+    registerMcpSupport(registry.pi as any, {
+      loadSettings: () => ({ settings: { mcp: { servers: {} } } } as any),
+    });
+
+    await registry.runCommand("mcp-status", "", {});
+    expect(String(registry.getMessages().at(-1)?.content ?? "")).toContain("MCP: 0/0 servers");
+    expect(String(registry.getMessages().at(-1)?.content ?? "")).toContain("(no enabled servers)");
+  });
 });

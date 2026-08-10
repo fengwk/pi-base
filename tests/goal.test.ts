@@ -46,6 +46,19 @@ async function finishAgentRun(
 }
 
 describe("goal support", () => {
+  it("exposes the current active lifecycle state through its handle", async () => {
+    // Intent: external lifecycle consumers can observe whether goal mode will continue without
+    // mutating or duplicating the goal state machine.
+    const registry = createToolRegistry();
+    const handle = registerGoalSupport(registry.pi as never);
+
+    expect(handle.active).toBe(false);
+    await registry.runCommand("goal", "Keep working");
+    expect(handle.active).toBe(true);
+    await registry.runCommand("goal", "pause");
+    expect(handle.active).toBe(false);
+  });
+
   it("steers a user-set goal or starts it immediately while idle", async () => {
     // Intent: one goal-set message gives streaming and idle users equivalent behavior: Pi steers
     // a running agent, or starts a new goal-set turn when no agent is running.

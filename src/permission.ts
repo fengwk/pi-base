@@ -17,6 +17,7 @@ const PERMISSION_PROMPT_MAX_CHARS = 80;
 
 interface TargetDescriptor {
   candidates: string[];
+  caseSensitive: boolean;
 }
 
 interface ApplyPatchPermissionTarget {
@@ -39,7 +40,7 @@ function escapeRegexCharacter(value: string): string {
   return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
 }
 
-function wildcardToRegExp(pattern: string): RegExp {
+function wildcardToRegExp(pattern: string, caseSensitive: boolean): RegExp {
   let body = "";
   for (const char of pattern) {
     if (char === "*") {
@@ -52,13 +53,13 @@ function wildcardToRegExp(pattern: string): RegExp {
     }
     body += escapeRegexCharacter(char);
   }
-  return new RegExp(`^${body}$`);
+  return new RegExp(`^${body}$`, caseSensitive ? undefined : "i");
 }
 
-function wildcardMatches(pattern: string, candidate: string): boolean {
+function wildcardMatches(pattern: string, candidate: string, caseSensitive: boolean): boolean {
   const normalizedPattern = normalizeMatchValue(expandHomePath(pattern));
   const normalizedCandidate = normalizeMatchValue(candidate);
-  return wildcardToRegExp(normalizedPattern).test(normalizedCandidate);
+  return wildcardToRegExp(normalizedPattern, caseSensitive).test(normalizedCandidate);
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
@@ -84,7 +85,12 @@ function projectRootFromSettingsPath(settingsPath: string): string {
   return dirname(dirname(settingsPath));
 }
 
-function buildPathTargetDescriptor(rawPath: string, cwd: string, loaded: LoadedPiBaseSettings): TargetDescriptor {
+function buildPathTargetDescriptor(
+  rawPath: string,
+  cwd: string,
+  loaded: LoadedPiBaseSettings,
+  platform: NodeJS.Platform,
+): TargetDescriptor {
   const normalizedRawPath = normalizeSlashes(stripAtPrefix(rawPath));
   const absolutePath = resolveToCwd(rawPath, cwd);
   const normalizedAbsolutePath = normalizeSlashes(absolutePath);
@@ -99,6 +105,7 @@ function buildPathTargetDescriptor(rawPath: string, cwd: string, loaded: LoadedP
       inProjectRoot ? relativeToProject : undefined,
       normalizedAbsolutePath,
     ]),
+    caseSensitive: platform !== "win32",
   };
 }
 
@@ -107,16 +114,24 @@ function buildCommandTargetDescriptor(commandValue: string): TargetDescriptor {
   const command = commandValue.trim() || "<missing-command>";
   return {
     candidates: [command],
+    caseSensitive: true,
   };
 }
 
 function buildGenericTargetDescriptor(_toolName: string): TargetDescriptor {
   return {
     candidates: ["*"],
+    caseSensitive: true,
   };
 }
 
-function describeTarget(toolName: string, input: Record<string, unknown>, cwd: string, loaded: LoadedPiBaseSettings): TargetDescriptor {
+function describeTarget(
+  toolName: string,
+  input: Record<string, unknown>,
+  cwd: string,
+  loaded: LoadedPiBaseSettings,
+  platform: NodeJS.Platform,
+): TargetDescriptor {
   if (typeof input.path === "string" && input.path.trim().length > 0) {
     // Argument validation belongs to the tool. Permission falls back to the session cwd when
     // workdir is malformed instead of throwing, matching evaluateApplyPatchPermission.
@@ -126,7 +141,7 @@ function describeTarget(toolName: string, input: Record<string, unknown>, cwd: s
     } catch {
       targetCwd = cwd;
     }
-    return buildPathTargetDescriptor(input.path, targetCwd, loaded);
+    return buildPathTargetDescriptor(input.path, targetCwd, loaded, platform);
   }
   if (typeof input.command === "string") {
     return buildCommandTargetDescriptor(input.command);
@@ -134,12 +149,12 @@ function describeTarget(toolName: string, input: Record<string, unknown>, cwd: s
   return buildGenericTargetDescriptor(toolName);
 }
 
-function evaluateRules(candidates: string[], ...rulesets: Array<PermissionRuleEntry[] | undefined>): PermissionAction {
+function evaluateRules(target: TargetDescriptor, ...rulesets: Array<PermissionRuleEntry[] | undefined>): PermissionAction {
   let action: PermissionAction = "allow";
   for (const ruleset of rulesets) {
     if (!ruleset) continue;
     for (const rule of ruleset) {
-      if (candidates.some((candidate) => wildcardMatches(rule.pattern, candidate))) {
+      if (target.candidates.some((candidate) => wildcardMatches(rule.pattern, candidate, target.caseSensitive))) {
         action = rule.action;
       }
     }
@@ -150,14 +165,17 @@ function evaluateRules(candidates: string[], ...rulesets: Array<PermissionRuleEn
 function evaluateBashRules(command: string, ...rulesets: Array<PermissionRuleEntry[] | undefined>): PermissionAction {
   const analysis = analyzeBashSurfaceCommand(command);
   if (analysis.kind === "unsupported") {
-    const staticAction = evaluateRules([command], ...rulesets);
+    const staticAction = evaluateRules(buildCommandTargetDescriptor(command), ...rulesets);
     return staticAction === "deny" ? "deny" : "ask";
   }
-  if (analysis.segments.length === 0) return evaluateRules([command], ...rulesets);
+  if (analysis.segments.length === 0) return evaluateRules(buildCommandTargetDescriptor(command), ...rulesets);
 
   let action: PermissionAction = "allow";
   for (const segment of analysis.segments) {
-    const next = evaluateRules(buildBashSurfaceCandidates(segment), ...rulesets);
+    const next = evaluateRules({
+      candidates: buildBashSurfaceCandidates(segment),
+      caseSensitive: true,
+    }, ...rulesets);
     if (next === "deny") return "deny";
     if (next === "ask") action = "ask";
   }
@@ -182,10 +200,11 @@ function evaluateApplyPatchPermission(
   input: Record<string, unknown>,
   cwd: string,
   loaded: LoadedPiBaseSettings,
+  platform: NodeJS.Platform,
 ): PermissionEvaluation {
   const permission = loaded.settings.permission;
   if (!permission || typeof input.patchText !== "string") {
-    return { action: evaluateRules(["*"], permission?.["*"], permission?.apply_patch) };
+    return { action: evaluateRules(buildGenericTargetDescriptor("apply_patch"), permission?.["*"], permission?.apply_patch) };
   }
 
   try {
@@ -194,22 +213,22 @@ function evaluateApplyPatchPermission(
     const intents = getApplyPatchIntents(applyPatch);
     const targets: ApplyPatchPermissionTarget[] = intents.map((intent) => ({
       intent,
-      descriptor: buildPathTargetDescriptor(intent.path, targetCwd, loaded),
+      descriptor: buildPathTargetDescriptor(intent.path, targetCwd, loaded, platform),
     }));
     const actions = targets.flatMap(({ intent, descriptor }) => {
       const primary = evaluateRules(
-        descriptor.candidates,
+        descriptor,
         permission["*"],
         permission[inheritedApplyPatchToolName(intent)],
         permission.apply_patch,
       );
       if (intent.moveTo === undefined) return [primary];
       // Move removes its source and creates/overwrites its destination, so both inherit write rules.
-      const destination = buildPathTargetDescriptor(intent.moveTo, targetCwd, loaded);
+      const destination = buildPathTargetDescriptor(intent.moveTo, targetCwd, loaded, platform);
       return [
         primary,
         evaluateRules(
-          destination.candidates,
+          destination,
           permission["*"],
           permission.write,
           permission.apply_patch,
@@ -220,7 +239,7 @@ function evaluateApplyPatchPermission(
   } catch {
     // Parsing and workdir validation belong to the tool. Permission falls back to
     // generic apply_patch rules without attempting to infer malformed targets.
-    return { action: evaluateRules(["*"], permission["*"], permission.apply_patch) };
+    return { action: evaluateRules(buildGenericTargetDescriptor("apply_patch"), permission["*"], permission.apply_patch) };
   }
 }
 
@@ -322,6 +341,27 @@ function buildRejectedReason(toolName: string): string {
   return `Permission denied by user for ${toolName}.`;
 }
 
+export async function selectPermissionChoice(
+  ctx: ExtensionContext,
+  title: string,
+  options: string[],
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (signal?.aborted) throw new Error("Operation aborted");
+  try {
+    const choice = await (ctx.ui.select as (
+      title: string,
+      options: string[],
+      opts?: { signal?: AbortSignal },
+    ) => Promise<string | undefined>)(title, options, { signal });
+    if (signal?.aborted) throw new Error("Operation aborted");
+    return choice;
+  } catch (error) {
+    if (signal?.aborted) throw new Error("Operation aborted");
+    throw error;
+  }
+}
+
 export function registerPermissionGuard(
   pi: Pick<ExtensionAPI, "on" | "registerCommand">,
   options: {
@@ -333,6 +373,8 @@ export function registerPermissionGuard(
     onPermissionRejected?: (input: { ctx: ExtensionContext }) => void;
     /** Resolve the delegating agent/depth/root-session of a headless subagent session, for the relayed prompt label. */
     resolveSubagentInfo?: (ctx: ExtensionContext) => { agentType: string; depth: number; rootSessionId: string } | undefined;
+    /** Overrides the runtime platform for deterministic path-matching tests. */
+    platform?: NodeJS.Platform;
   } = {},
 ): void {
   const loadSettings = options.loadSettings ?? loadRuntimePiBaseSettings;
@@ -341,6 +383,7 @@ export function registerPermissionGuard(
   const onPermissionAsked = options.onPermissionAsked;
   const onPermissionRejected = options.onPermissionRejected;
   const resolveSubagentInfo = options.resolveSubagentInfo;
+  const platform = options.platform ?? process.platform;
 
   pi.registerCommand("yolo", {
     description: "Toggle yolo mode (bypass permission checks)",
@@ -369,15 +412,15 @@ export function registerPermissionGuard(
 
     let evaluation: PermissionEvaluation;
     if (event.toolName === "apply_patch") {
-      evaluation = evaluateApplyPatchPermission(event.input, ctx.cwd, loaded);
+      evaluation = evaluateApplyPatchPermission(event.input, ctx.cwd, loaded, platform);
     } else {
-      const target = describeTarget(event.toolName, event.input, ctx.cwd, loaded);
+      const target = describeTarget(event.toolName, event.input, ctx.cwd, loaded, platform);
       const globalRules = getToolPermissionRules(permission, "*");
       const toolRules = getToolPermissionRules(permission, event.toolName);
       evaluation = {
         action: event.toolName === "bash" && typeof event.input.command === "string"
           ? evaluateBashRules(event.input.command, globalRules, toolRules)
-          : evaluateRules(target.candidates, globalRules, toolRules),
+          : evaluateRules(target, globalRules, toolRules),
       };
     }
     const { action } = evaluation;
@@ -407,10 +450,15 @@ export function registerPermissionGuard(
       return { block: true, reason: buildAskWithoutUiReason(event.toolName, loaded) };
     }
 
+    const signal = (event as { signal?: AbortSignal }).signal;
+    if (signal?.aborted) throw new Error("Operation aborted");
     await onPermissionAsked?.({ ctx });
-    const choice = await ctx.ui.select(
+    if (signal?.aborted) throw new Error("Operation aborted");
+    const choice = await selectPermissionChoice(
+      ctx,
       buildPrompt(event.toolName, event.input, ctx.cwd, evaluation.applyPatchTargets),
       [ALLOW_LABEL, DENY_LABEL],
+      signal,
     );
     if (choice === ALLOW_LABEL) return undefined;
     onPermissionRejected?.({ ctx });

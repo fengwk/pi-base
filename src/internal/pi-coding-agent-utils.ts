@@ -218,6 +218,30 @@ const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const toolInstallPromises = new Map<SupportedTool, Promise<string | undefined>>();
 
+function waitForInstall<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new Error("Operation aborted"));
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(new Error("Operation aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
 function isOfflineModeEnabled(): boolean {
   const value = process.env.PI_OFFLINE;
   if (!value) return false;
@@ -428,7 +452,8 @@ const TERMUX_PACKAGES: Record<SupportedTool, string> = {
  * Returns the path to the tool, or `undefined` if it could not be obtained
  * (e.g. unsupported platform, offline mode, or download failure).
  */
-export async function ensureTool(tool: SupportedTool, silent = false): Promise<string | undefined> {
+export async function ensureTool(tool: SupportedTool, silent = false, signal?: AbortSignal): Promise<string | undefined> {
+  if (signal?.aborted) throw new Error("Operation aborted");
   const existingPath = getToolPath(tool);
   if (existingPath) return existingPath;
 
@@ -447,24 +472,28 @@ export async function ensureTool(tool: SupportedTool, silent = false): Promise<s
     return undefined;
   }
 
-  const pendingInstall = toolInstallPromises.get(tool);
-  if (pendingInstall) return pendingInstall;
-
-  const installPromise = (async () => {
-    logInfo(silent, `${config.name} not found. Downloading...`);
-    try {
-      const path = await downloadTool(tool);
-      logInfo(silent, `${config.name} installed to ${path}`);
-      return path;
-    } catch (e) {
-      logWarn(silent, `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`);
-      return undefined;
-    }
-  })();
-  toolInstallPromises.set(tool, installPromise);
-  try {
-    return await installPromise;
-  } finally {
-    if (toolInstallPromises.get(tool) === installPromise) toolInstallPromises.delete(tool);
+  let installPromise = toolInstallPromises.get(tool);
+  if (!installPromise) {
+    installPromise = (async () => {
+      logInfo(silent, `${config.name} not found. Downloading...`);
+      try {
+        const path = await downloadTool(tool);
+        logInfo(silent, `${config.name} installed to ${path}`);
+        return path;
+      } catch (e) {
+        logWarn(silent, `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`);
+        return undefined;
+      }
+    })();
+    toolInstallPromises.set(tool, installPromise);
+    void installPromise.then(
+      () => {
+        if (toolInstallPromises.get(tool) === installPromise) toolInstallPromises.delete(tool);
+      },
+      () => {
+        if (toolInstallPromises.get(tool) === installPromise) toolInstallPromises.delete(tool);
+      },
+    );
   }
+  return waitForInstall(installPromise, signal);
 }

@@ -1,67 +1,109 @@
 import { type AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { chmod, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 50 * 1024;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const TRUNCATION_DIR_NAME = "pi-base-truncation";
+const TRUNCATION_DIR_PREFIX = "pi-base-truncation-";
+const PROCESS_TRUNCATION_DIR_PREFIX = `${TRUNCATION_DIR_PREFIX}${process.pid}-`;
 
 const BASH_TRUNCATION_HINT_REGEX = /\[Showing lines \d+-\d+ of \d+\. Full output: .*?\]/i;
-const cleanupStartedDirs = new Set<string>();
-
-function getTruncationDir(): string {
-  return join(tmpdir(), TRUNCATION_DIR_NAME);
-}
-
-async function ensureTruncationDir(dir: string): Promise<void> {
-  await mkdir(dir, { recursive: true });
-  if (process.platform !== "win32") {
-    await chmod(dir, 0o700).catch(() => undefined);
-  }
-}
+let truncationDirState: { baseDir: string; promise: Promise<string> } | undefined;
 
 function sanitizeToolNameForFilename(toolName: string): string {
   const sanitized = toolName.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return sanitized || "tool";
 }
 
-async function ensureCleanupScheduled(): Promise<string> {
-  const dir = getTruncationDir();
-  if (cleanupStartedDirs.has(dir)) return dir;
-  cleanupStartedDirs.add(dir);
+function truncationDirOwnerPid(name: string): number | undefined {
+  const match = name.match(/^pi-base-truncation-(\d+)-/);
+  if (!match?.[1]) return undefined;
+  const pid = Number(match[1]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (pid === process.pid) return true;
   try {
-    await ensureTruncationDir(dir);
-    const now = Date.now();
-    const entries = await readdir(dir);
-    await Promise.all(entries.map(async (entry) => {
-      const filePath = join(dir, entry);
-      try {
-        const info = await stat(filePath);
-        if (now - info.mtimeMs > RETENTION_MS) await rm(filePath, { force: true });
-      } catch {
-        // best-effort cleanup
-      }
-    }));
-  } catch {
-    // ignore cleanup failures
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
-  return dir;
+}
+
+async function cleanupOldTruncationDirs(baseDir: string): Promise<void> {
+  if (process.platform === "win32" || typeof process.getuid !== "function") return;
+  const uid = process.getuid();
+  const now = Date.now();
+  let entries;
+  try {
+    entries = await readdir(baseDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isDirectory()) return;
+    const ownerPid = truncationDirOwnerPid(entry.name);
+    if (ownerPid === undefined) return;
+    const candidate = join(baseDir, entry.name);
+    try {
+      const info = await lstat(candidate);
+      if (!info.isDirectory() || info.uid !== uid || now - info.mtimeMs <= RETENTION_MS) return;
+      if (isProcessAlive(ownerPid)) return;
+      await rm(candidate, { recursive: true, force: true });
+    } catch {
+      // Old-output cleanup is best-effort and never weakens creation permissions.
+    }
+  }));
+}
+
+async function createTruncationDir(baseDir: string): Promise<string> {
+  await cleanupOldTruncationDirs(baseDir);
+  const dir = await mkdtemp(join(baseDir, PROCESS_TRUNCATION_DIR_PREFIX));
+  if (process.platform === "win32") return dir;
+  try {
+    await chmod(dir, 0o700);
+    return dir;
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function getTruncationDir(): Promise<string> {
+  const baseDir = tmpdir();
+  if (truncationDirState?.baseDir !== baseDir) {
+    const promise = createTruncationDir(baseDir);
+    truncationDirState = { baseDir, promise };
+    void promise.catch(() => {
+      if (truncationDirState?.promise === promise) truncationDirState = undefined;
+    });
+  }
+  return truncationDirState.promise;
 }
 
 async function writeFullOutput(text: string, toolName: string): Promise<string> {
-  const dir = await ensureCleanupScheduled();
-  await ensureTruncationDir(dir);
   const safeToolName = sanitizeToolNameForFilename(toolName);
-  const filePath = join(dir, `${safeToolName}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.txt`);
-  try {
-    await writeFile(filePath, text, "utf8");
-    return filePath;
-  } catch (error) {
-    await rm(filePath, { force: true }).catch(() => undefined);
-    throw error;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const dirPromise = getTruncationDir();
+    const dir = await dirPromise;
+    const filePath = join(dir, `${safeToolName}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.txt`);
+    try {
+      await writeFile(filePath, text, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      return filePath;
+    } catch (error) {
+      await rm(filePath, { force: true }).catch(() => undefined);
+      if (attempt === 0 && (error as NodeJS.ErrnoException).code === "ENOENT") {
+        if (truncationDirState?.promise === dirPromise) truncationDirState = undefined;
+        continue;
+      }
+      throw error;
+    }
   }
+  throw new Error("Failed to create private full-output storage.");
 }
 
 function buildTruncationHint(totalBytes: number, totalLines: number, outputPath: string | undefined): string {
@@ -84,7 +126,7 @@ interface TruncationResult {
    * True when our handler observed the output was already truncated by an
    * earlier layer (for example Pi's built-in bash output or read/grep line
    * formatting). In that case we do not have the full text, so we do not
-   * write to `pi-base-truncation`. If the earlier layer exposed its own
+   * write to a `pi-base-truncation-*` directory. If the earlier layer exposed its own
    * full-output path, we preserve it in
    * `details.truncation.outputPath`.
    */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import piBaseExtension from "../index.js";
 import { applyUnifiedOutputTruncation } from "../src/tool-output.js";
 import { formatBashWarnings } from "../src/bash-renderer-core.js";
@@ -29,25 +29,81 @@ describe("tool output truncation", () => {
   });
 
   it("truncates large text output, preserves attachments, and writes the full output", async () => {
+    // Intent: cleanup may only remove old directories owned by a dead process; live-process
+    // output must survive even when idle longer than the retention window.
+    const staleDeadProcess = await mkdtemp(join(tmpdir(), "pi-base-truncation-2147483647-"));
+    const staleLiveProcess = await mkdtemp(join(tmpdir(), `pi-base-truncation-${process.pid}-`));
+    const recentDeadProcess = await mkdtemp(join(tmpdir(), "pi-base-truncation-2147483647-"));
+    const staleUnrelated = await mkdtemp(join(tmpdir(), "pi-base-unrelated-"));
+    const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    await utimes(staleDeadProcess, staleTime, staleTime);
+    await utimes(staleLiveProcess, staleTime, staleTime);
+    await utimes(staleUnrelated, staleTime, staleTime);
     const big = Array.from({ length: 2505 }, (_, index) => `line-${index + 1}`).join("\n");
-    const truncated = await applyUnifiedOutputTruncation("demo", {
-      content: [
-        { type: "text", text: big },
-        { type: "image", mimeType: "image/png", data: "x" },
-        { type: "text", text: "ignored second text part" },
-      ],
-      details: { source: "test" },
+    try {
+      const truncated = await applyUnifiedOutputTruncation("demo", {
+        content: [
+          { type: "text", text: big },
+          { type: "image", mimeType: "image/png", data: "x" },
+          { type: "text", text: "ignored second text part" },
+        ],
+        details: { source: "test" },
+      } as any);
+      expect(truncated.truncated).toBe(true);
+      expect((truncated.result.content[0] as any)?.type).toBe("text");
+      expect(String((truncated.result.content[0] as any)?.text)).toContain("The tool call succeeded but the output was truncated");
+      expect((truncated.result.content[1] as any)?.type).toBe("image");
+      expect((truncated.result as any).details?.source).toBe("test");
+      const outputPath = (truncated.result as any).details?.truncation?.outputPath;
+      expect(outputPath).toBeTruthy();
+      const outputDir = dirname(outputPath);
+      expect(dirname(outputDir)).toBe(tmpdir());
+      expect(basename(outputDir)).toMatch(new RegExp(`^pi-base-truncation-${process.pid}-.+`));
+      expect(outputDir).not.toBe(join(tmpdir(), "pi-base-truncation"));
+      const saved = await readFile(outputPath, "utf8");
+      expect(saved).toContain("line-2505");
+      if (process.platform !== "win32") {
+        expect((await stat(outputDir)).mode & 0o777).toBe(0o700);
+        expect((await stat(outputPath)).mode & 0o777).toBe(0o600);
+      }
+      if (process.platform === "win32" || typeof process.getuid !== "function") {
+        expect((await stat(staleDeadProcess)).isDirectory()).toBe(true);
+      } else {
+        await expect(stat(staleDeadProcess)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect((await stat(staleLiveProcess)).isDirectory()).toBe(true);
+      expect((await stat(recentDeadProcess)).isDirectory()).toBe(true);
+      expect((await stat(staleUnrelated)).isDirectory()).toBe(true);
+    } finally {
+      await Promise.all([
+        rm(staleDeadProcess, { recursive: true, force: true }),
+        rm(staleLiveProcess, { recursive: true, force: true }),
+        rm(recentDeadProcess, { recursive: true, force: true }),
+        rm(staleUnrelated, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("recreates private storage if its cached directory is removed externally", async () => {
+    // Intent: OS temp cleanup or an administrator may remove the process directory; one missing
+    // cached directory must trigger a fresh private directory instead of losing all later outputs.
+    const big = "x".repeat(60 * 1024);
+    const first = await applyUnifiedOutputTruncation("recreate-demo", {
+      content: [{ type: "text", text: big }],
+      details: undefined,
     } as any);
-    expect(truncated.truncated).toBe(true);
-    expect((truncated.result.content[0] as any)?.type).toBe("text");
-    expect(String((truncated.result.content[0] as any)?.text)).toContain("The tool call succeeded but the output was truncated");
-    expect((truncated.result.content[1] as any)?.type).toBe("image");
-    expect((truncated.result as any).details?.source).toBe("test");
-    const outputPath = (truncated.result as any).details?.truncation?.outputPath;
-    expect(outputPath).toBeTruthy();
-    expect(outputPath).toContain(join(tmpdir(), "pi-base-truncation"));
-    const saved = await readFile(outputPath, "utf8");
-    expect(saved).toContain("line-2505");
+    const firstPath = (first.result as any).details?.truncation?.outputPath;
+    expect(firstPath).toBeTruthy();
+    await rm(dirname(firstPath), { recursive: true, force: true });
+
+    const second = await applyUnifiedOutputTruncation("recreate-demo", {
+      content: [{ type: "text", text: big }],
+      details: undefined,
+    } as any);
+    const secondPath = (second.result as any).details?.truncation?.outputPath;
+    expect(secondPath).toBeTruthy();
+    expect(dirname(secondPath)).not.toBe(dirname(firstPath));
+    expect(await readFile(secondPath, "utf8")).toBe(big);
   });
 
   it("keeps a bounded preview when temporary full-output storage is unavailable", async () => {
@@ -73,6 +129,38 @@ describe("tool output truncation", () => {
     } finally {
       if (previousTmpDir === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = previousTmpDir;
+    }
+  });
+
+  it("retries private directory creation after a transient failure in the same TMPDIR", async () => {
+    // Intent: a rejected cached create promise must be cleared by identity; replacing the same
+    // TMPDIR path with a usable directory then proves the next truncation starts a fresh attempt.
+    const root = await createTempWorkspace();
+    const switchableTmpDir = join(root, "switchable-tmp");
+    await writeFile(switchableTmpDir, "temporarily not a directory", "utf8");
+    const previousTmpDir = process.env.TMPDIR;
+    process.env.TMPDIR = switchableTmpDir;
+    try {
+      const first = await applyUnifiedOutputTruncation("retry-demo", {
+        content: [{ type: "text", text: "x".repeat(60 * 1024) }],
+        details: undefined,
+      } as any);
+      expect((first.result as any).details?.truncation?.outputPath).toBeUndefined();
+
+      await rm(switchableTmpDir);
+      await mkdir(switchableTmpDir);
+      const second = await applyUnifiedOutputTruncation("retry-demo", {
+        content: [{ type: "text", text: "y".repeat(60 * 1024) }],
+        details: undefined,
+      } as any);
+      const outputPath = (second.result as any).details?.truncation?.outputPath;
+      expect(outputPath).toBeTruthy();
+      expect(dirname(dirname(outputPath))).toBe(switchableTmpDir);
+      expect(await readFile(outputPath, "utf8")).toBe("y".repeat(60 * 1024));
+    } finally {
+      if (previousTmpDir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTmpDir;
+      await rm(root, { recursive: true, force: true });
     }
   });
 

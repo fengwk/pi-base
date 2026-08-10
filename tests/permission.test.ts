@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import piBaseExtension from "../index.js";
 import { registerBashRendererTool } from "../src/bash-renderer.js";
+import { registerPermissionGuard } from "../src/permission.js";
 import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";
 
 async function writeProjectSettings(root: string, settings: unknown): Promise<void> {
@@ -62,6 +63,151 @@ describe("permission guard", () => {
     expect(prompts[0]!.items).toEqual(["Yes", "No"]);
     expect(registry.getStatuses().get("01-pi-base-permission")).toBeUndefined();
     expect(await readFile(join(root, "src/allowed.ts"), "utf8")).toBe("export const allowed = true;\n");
+  });
+
+  it("passes the tool AbortSignal to a pending root selector", async () => {
+    // Intent: aborting a tool call must dismiss the real pending permission selector instead of
+    // leaving the tool execution blocked on a human choice that can no longer be used.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, { permission: { write: "ask" } });
+    const controller = new AbortController();
+    let markSelectStarted!: () => void;
+    const selectStarted = new Promise<void>((resolve) => {
+      markSelectStarted = resolve;
+    });
+    let receivedSignal: AbortSignal | undefined;
+    const registry = createToolRegistry({
+      hasUI: true,
+      ui: {
+        select: async (_title, _items, options) => {
+          receivedSignal = options?.signal;
+          markSelectStarted();
+          return new Promise<string>((_resolve, reject) => {
+            const signal = options?.signal;
+            const abort = () => reject(new Error("selector aborted"));
+            if (signal?.aborted) abort();
+            else signal?.addEventListener("abort", abort, { once: true });
+          });
+        },
+      },
+    });
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const execution = registry.getTool("write").execute(
+      "abort-root-selector",
+      { path: "src/never-written.ts", content: "export const unreachable = true;\n" },
+      controller.signal,
+      undefined,
+      { cwd: root },
+    );
+    await selectStarted;
+    expect(receivedSignal).toBe(controller.signal);
+    controller.abort();
+
+    await expect(execution).rejects.toMatchObject({ message: "Operation aborted" });
+    await expect(readFile(join(root, "src/never-written.ts"), "utf8")).rejects.toThrow();
+  });
+
+  it("preserves a root selector error when the tool signal is not aborted", async () => {
+    // Intent: only cancellation is normalized; genuine UI failures must retain their original
+    // identity so callers can distinguish them from an aborted permission request.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, { permission: { write: "ask" } });
+    const controller = new AbortController();
+    const uiError = new Error("permission selector failed");
+    const registry = createToolRegistry({
+      hasUI: true,
+      ui: {
+        select: async () => {
+          throw uiError;
+        },
+      },
+    });
+    piBaseExtension(registry.pi as any);
+    await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+    const execution = registry.getTool("write").execute(
+      "root-selector-error",
+      { path: "src/never-written.ts", content: "export const unreachable = true;\n" },
+      controller.signal,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(controller.signal.aborted).toBe(false);
+    await expect(execution).rejects.toBe(uiError);
+    await expect(readFile(join(root, "src/never-written.ts"), "utf8")).rejects.toThrow();
+  });
+
+  it("matches only path targets case-insensitively on Windows", async () => {
+    // Intent: Windows filesystem aliases should match regardless of case, while command rules stay
+    // case-sensitive even when the injected platform is win32.
+    const root = await createTempWorkspace();
+    const loaded = {
+      settings: {
+        permission: {
+          write: [
+            { pattern: "*", action: "deny" },
+            { pattern: "SRC/*.TS", action: "allow" },
+          ],
+        },
+      },
+      projectPath: join(root, ".pi", "pi-base.json"),
+      globalPath: join(root, "global-pi-base.json"),
+    } as any;
+    const evaluateTarget = async (
+      platform: NodeJS.Platform,
+      toolName: string,
+      input: Record<string, unknown>,
+    ) => {
+      const registry = createToolRegistry({ hasUI: false });
+      registerPermissionGuard(registry.pi as any, {
+        loadSettings: () => loaded,
+        isYoloEnabled: () => false,
+        platform,
+      });
+      return registry.emit("tool_call", {
+        type: "tool_call",
+        toolName,
+        toolCallId: `${platform}-${toolName}`,
+        input,
+      }, { cwd: root, hasUI: false });
+    };
+
+    await expect(evaluateTarget("win32", "write", { path: "src/example.ts" })).resolves.toBeUndefined();
+    await expect(evaluateTarget("linux", "write", { path: "src/example.ts" })).resolves.toMatchObject({ block: true });
+    const patchText = [
+      "*** Begin Patch",
+      "*** Add File: src/example.ts",
+      "+export const example = true;",
+      "*** End Patch",
+    ].join("\n");
+    await expect(evaluateTarget("win32", "apply_patch", { patchText })).resolves.toBeUndefined();
+    await expect(evaluateTarget("linux", "apply_patch", { patchText })).resolves.toMatchObject({ block: true });
+
+    const bashRegistry = createToolRegistry({ hasUI: false });
+    registerPermissionGuard(bashRegistry.pi as any, {
+      loadSettings: () => ({
+        ...loaded,
+        settings: {
+          permission: {
+            bash: [
+              { pattern: "*", action: "ask" },
+              { pattern: "GIT *", action: "allow" },
+            ],
+          },
+        },
+      }),
+      isYoloEnabled: () => false,
+      platform: "win32",
+    });
+    await expect(bashRegistry.emit("tool_call", {
+      type: "tool_call",
+      toolName: "bash",
+      toolCallId: "case-sensitive-command",
+      input: { command: "git status" },
+    }, { cwd: root, hasUI: false })).resolves.toMatchObject({ block: true });
   });
 
   it("blocks ask rules when there is no interactive UI", async () => {

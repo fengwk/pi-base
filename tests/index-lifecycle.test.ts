@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import piBaseExtension from "../index.js";
+import piBaseExtension, { type PiBaseNotifyPayload } from "../index.js";
 import { lspManager } from "../src/lsp/client.js";
 import { DEPTH_ENTRY } from "../src/subagent/depth.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
@@ -11,6 +11,54 @@ function render(component: any): string {
 }
 
 describe("index lifecycle behavior", () => {
+  it("settles goal state before deciding whether to send completion notifications", async () => {
+    // Intent: an active goal is about to auto-continue and must stay silent, while the same
+    // lifecycle sends the ordinary completion notification once that goal is paused.
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await writeFile(
+      join(root, ".pi", "pi-base.json"),
+      JSON.stringify({ notify: { agentEnd: true } }),
+      "utf8",
+    );
+    const payloads: PiBaseNotifyPayload[] = [];
+    const registry = createToolRegistry({ hasUI: true, cwd: root });
+    piBaseExtension(registry.pi as any, {
+      notify: {
+        sendNotification: async (payload) => {
+          payloads.push(payload);
+        },
+      },
+    });
+    const sessionCtx = {
+      cwd: root,
+      hasUI: true,
+      sessionManager: {
+        getSessionId: () => "goal-notify-session",
+        getSessionName: () => "Goal Notify Session",
+        getEntries: () => [],
+      },
+    };
+    await registry.emit("session_start", { type: "session_start", reason: "startup" }, sessionCtx);
+    await registry.runCommand("goal", "Continue until paused", sessionCtx);
+
+    await registry.emit("agent_start", { type: "agent_start" }, sessionCtx);
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
+    expect(payloads).toEqual([]);
+
+    await registry.runCommand("goal", "pause", sessionCtx);
+    await registry.emit("agent_start", { type: "agent_start" }, sessionCtx);
+    await registry.emit("agent_end", { type: "agent_end", messages: [] }, sessionCtx);
+    expect(payloads).toEqual([]);
+    await registry.emit("agent_settled", { type: "agent_settled" }, sessionCtx);
+
+    expect(payloads).toEqual([expect.objectContaining({
+      kind: "session.completed",
+      sessionID: "goal-notify-session",
+    })]);
+  });
+
   it("shuts down root LSP clients on session shutdown and reload", async () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);

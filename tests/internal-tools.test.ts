@@ -76,6 +76,46 @@ describe("managed fd/rg installation", () => {
     }
   });
 
+  it("lets one waiter abort without cancelling the shared installation", async () => {
+    // Intent: callers may stop waiting promptly, but the process-wide install
+    // promise must continue for other waiters and must still be shared once.
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousPath = process.env.PATH;
+    process.env.PI_CODING_AGENT_DIR = await createTempWorkspace();
+    process.env.PATH = "";
+    vi.resetModules();
+
+    let releaseFetch!: () => void;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const fetchMock = vi.fn(async () => {
+      await fetchGate;
+      return new Response("failed", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const { ensureTool } = await import("../src/internal/pi-coding-agent-utils.js");
+      const controller = new AbortController();
+      const cancelledWaiter = ensureTool("rg", true, controller.signal);
+      const sharedWaiter = ensureTool("rg", true);
+      controller.abort();
+
+      await expect(cancelledWaiter).rejects.toThrow("Operation aborted");
+      releaseFetch();
+      await expect(sharedWaiter).resolves.toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
   it("removes partial archives when a managed-tool download stream fails", async () => {
     // Intent: interrupted downloads must not leave a shared archive behind; stale bytes both leak
     // disk space and can collide with another process installing the same tool.

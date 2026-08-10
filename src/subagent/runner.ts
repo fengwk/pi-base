@@ -18,6 +18,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { AGENT_STATE_ENTRY, type AgentRuntimeConfig } from "../agent-support.js";
+import { escapeXml } from "../xml.js";
 import { TASK_TOOL_NAME } from "./constants.js";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, readRootSessionId, rootSessionEntryData } from "./depth.js";
 import { subagentRegistry, type SubagentStatus } from "./registry.js";
@@ -654,11 +655,14 @@ function describeError(error: unknown): string {
 
 /** Format the tool result the delegating agent sees (report/error + session id for resume). */
 export function formatRunResult(result: RunResult): string {
-  const id = result.sessionId;
+  const id = escapeXml(result.sessionId);
   if (result.state === "completed") {
-    return `<task id="${id}" state="completed">\n<task_result>\n${result.report ?? "(no textual report produced)"}\n</task_result>\n</task>`;
+    const report = escapeXml(result.report ?? "(no textual report produced)");
+    return `<task id="${id}" state="completed">\n<task_result>\n${report}\n</task_result>\n</task>`;
   }
-  return `<task id="${id}" state="${result.state}">\n<task_error>${result.error ?? result.state}</task_error>\n</task>`;
+  const state = escapeXml(result.state);
+  const error = escapeXml(result.error ?? result.state);
+  return `<task id="${id}" state="${state}">\n<task_error>${error}</task_error>\n</task>`;
 }
 
 // ---------------------------------------------------------------------------

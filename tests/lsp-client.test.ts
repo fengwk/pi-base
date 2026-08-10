@@ -163,8 +163,9 @@ describe("LspClient internals", () => {
       vi.useFakeTimers();
       try {
         const c = new LspClient("/tmp/demo", { id: "gopls", command: ["gopls"], extensions: [".go"], requestTimeoutMs: 100 } as any);
+        const writes: string[] = [];
         // Simulate a started process so `send` can run.
-        (c as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
+        (c as any).proc = { stdin: { write: (frame: string) => writes.push(frame) }, exitCode: null, killed: false };
         const promise = (c as any).send("workspace/symbol", { query: "x" });
         // Promise must not yet have settled.
         let settled = false;
@@ -173,6 +174,11 @@ describe("LspClient internals", () => {
         expect(settled).toBe(false);
         await vi.advanceTimersByTimeAsync(60);
         await expect(promise).rejects.toThrow(/Increase lsp\.servers\.gopls\.requestTimeoutMs/);
+        expect(decodeMessage(writes[1]!)).toEqual({
+          jsonrpc: "2.0",
+          method: "$/cancelRequest",
+          params: { id: 1 },
+        });
       } finally {
         vi.useRealTimers();
       }
@@ -249,12 +255,18 @@ describe("LspClient internals", () => {
       vi.useFakeTimers();
       try {
         const c = new LspClient("/tmp/demo", { id: "gopls", command: ["gopls"], extensions: [".go"], requestTimeoutMs: 1000 } as any);
-        (c as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
+        const writes: string[] = [];
+        (c as any).proc = { stdin: { write: (frame: string) => writes.push(frame) }, exitCode: null, killed: false };
         const controller = new AbortController();
         const promise = (c as any).send("workspace/symbol", { query: "x" }, controller.signal);
         controller.abort();
         await expect(promise).rejects.toThrow(/Operation aborted/);
         expect(vi.getTimerCount()).toBe(0);
+        expect(decodeMessage(writes[1]!)).toEqual({
+          jsonrpc: "2.0",
+          method: "$/cancelRequest",
+          params: { id: 1 },
+        });
       } finally {
         vi.useRealTimers();
       }
@@ -472,6 +484,46 @@ describe("LspClient internals", () => {
         stopSpy.mockRestore();
       }
     });
+
+    it("does not reuse a client when the same root and server id resolve to different configurations", async () => {
+      // Intent: nested pi-base configs may reuse an id while changing the command or timeout;
+      // the manager key must include the effective server config rather than only root + id.
+      const root = await createTempWorkspace();
+      const binDir = join(root, "bin");
+      const serverA = join(binDir, "fake-lsp-a");
+      const serverB = join(binDir, "fake-lsp-b");
+      await mkdir(binDir, { recursive: true });
+      await writeFile(serverA, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
+      await writeFile(serverB, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
+      const filePath = await writeWorkspaceFile(root, "src/example.ts", "export const x = 1;\n");
+      const resolverA = new LspDiscoveryResolver({
+        servers: { typescript: { command: [serverA], extensions: [".ts"], requestTimeoutMs: 1000 } },
+      });
+      const resolverB = new LspDiscoveryResolver({
+        servers: { typescript: { command: [serverB], extensions: [".ts"], requestTimeoutMs: 2000 } },
+      });
+      const startSpy = vi.spyOn(LspClient.prototype, "start").mockImplementation(async function (this: any) {
+        (this as any).proc = { stdin: { write: () => undefined }, exitCode: null, killed: false };
+      });
+      const initializeSpy = vi.spyOn(LspClient.prototype, "initialize").mockResolvedValue(undefined);
+      const stopSpy = vi.spyOn(LspClient.prototype, "stop").mockResolvedValue(undefined);
+      const manager = new LspManager();
+      try {
+        const first = await manager.getClient(filePath, resolverA);
+        const second = await manager.getClient(filePath, resolverB);
+
+        expect(second).not.toBe(first);
+        expect((first as any).server.command).toEqual([serverA]);
+        expect((second as any).server.command).toEqual([serverB]);
+        expect(startSpy).toHaveBeenCalledTimes(2);
+        expect(initializeSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        await manager.shutdownAll();
+        startSpy.mockRestore();
+        initializeSpy.mockRestore();
+        stopSpy.mockRestore();
+      }
+    });
   });
 
   describe("transport failures and shutdown", () => {
@@ -483,7 +535,7 @@ describe("LspClient internals", () => {
         id: "closed-stdin",
         command: [process.execPath, "-e", "require('node:fs').closeSync(0); setInterval(() => {}, 1000)"],
         extensions: [".ts"],
-        requestTimeoutMs: 1_000,
+        requestTimeoutMs: 10_000,
       } as any);
 
       await client.start();
@@ -493,7 +545,7 @@ describe("LspClient internals", () => {
       } finally {
         await client.stop({ shutdownGraceMs: 0 });
       }
-    });
+    }, 15_000);
 
     it.skipIf(process.platform === "win32")("force-stops descendants of an unresponsive LSP wrapper", async () => {
       // Intent: reload/idle shutdown is complete only after the wrapper's

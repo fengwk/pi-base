@@ -65,9 +65,39 @@ interface MultilineGrepOptions {
   literal?: boolean;
   limit: number;
 }
+
+interface RipgrepMatchEvent {
+  filePath?: string;
+  lineNumber?: number;
+  lineText?: string;
+}
+
+function decodeRipgrepData(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const data = value as { text?: unknown; bytes?: unknown };
+  if (typeof data.text === "string") return data.text;
+  if (typeof data.bytes !== "string") return undefined;
+  return decodeTextFile(Buffer.from(data.bytes, "base64"))?.text;
+}
+
+function parseRipgrepMatchEvent(line: string): RipgrepMatchEvent | null {
+  let event: any;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (event.type !== "match") return null;
+  return {
+    filePath: decodeRipgrepData(event.data?.path),
+    lineNumber: typeof event.data?.line_number === "number" ? event.data.line_number : undefined,
+    lineText: decodeRipgrepData(event.data?.lines),
+  };
+}
+
 async function executeStandardGrep(options: MultilineGrepOptions, signal?: AbortSignal): Promise<any> {
   if (signal?.aborted) throw new Error("Operation aborted");
-  const rgPath = await ensureTool("rg", true);
+  const rgPath = await ensureTool("rg", true, signal);
   if (!rgPath) throw new Error("ripgrep (rg) is not available and could not be downloaded");
   if (signal?.aborted) throw new Error("Operation aborted");
 
@@ -102,7 +132,8 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     const getFileLines = async (filePath: string) => {
       let linesPromise = fileCache.get(filePath);
       if (!linesPromise) {
-        linesPromise = readFile(filePath, "utf8")
+        linesPromise = readFile(filePath)
+          .then((buffer) => decodeTextFile(buffer)?.text ?? "")
           .then((content) => content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n"))
           .catch(() => [] as string[]);
         fileCache.set(filePath, linesPromise);
@@ -144,18 +175,14 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     });
     rl.on("line", (line) => {
       if (!line.trim() || matchCount >= options.limit) return;
-      let event: any;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        return;
-      }
-      if (event.type !== "match") return;
+      const match = parseRipgrepMatchEvent(line);
+      if (!match) return;
       matchCount++;
-      const filePath = event.data?.path?.text;
-      const lineNumber = event.data?.line_number;
-      const lineText = event.data?.lines?.text;
-      if (filePath && typeof lineNumber === "number") matches.push({ filePath, lineNumber, lineText });
+      if (match.filePath && match.lineNumber !== undefined) matches.push({
+        filePath: match.filePath,
+        lineNumber: match.lineNumber,
+        lineText: match.lineText,
+      });
       if (matchCount >= options.limit) {
         matchLimitReached = true;
         stopChild(true);
@@ -242,7 +269,7 @@ function formatMultilineMatchLines(filePath: string, lineNumber: number, lineTex
 
 async function executeMultilineGrep(options: MultilineGrepOptions, signal?: AbortSignal): Promise<any> {
   if (signal?.aborted) throw new Error("Operation aborted");
-  const rgPath = await ensureTool("rg", true);
+  const rgPath = await ensureTool("rg", true, signal);
   if (!rgPath) throw new Error("ripgrep (rg) is not available and could not be downloaded");
   if (signal?.aborted) throw new Error("Operation aborted");
 
@@ -292,20 +319,12 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
 
     rl.on("line", (line) => {
       if (!line.trim() || matchCount >= options.limit) return;
-      let event: any;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        return;
-      }
-      if (event.type !== "match") return;
+      const match = parseRipgrepMatchEvent(line);
+      if (!match) return;
 
       matchCount++;
-      const filePath = event.data?.path?.text;
-      const lineNumber = event.data?.line_number;
-      const lineText = event.data?.lines?.text;
-      if (filePath && typeof lineNumber === "number" && typeof lineText === "string") {
-        const formatted = formatMultilineMatchLines(filePath, lineNumber, lineText, options);
+      if (match.filePath && match.lineNumber !== undefined && match.lineText !== undefined) {
+        const formatted = formatMultilineMatchLines(match.filePath, match.lineNumber, match.lineText, options);
         outputLines.push(...formatted.lines);
         if (formatted.linesTruncated) linesTruncated = true;
       }

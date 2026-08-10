@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { registerReadTool } from "../src/read.js";
@@ -302,13 +302,54 @@ describe("read tool", () => {
     expect(getText(result)).toContain("appears to be a binary file");
   });
 
-  it("reports invalid limits", async () => {
+  it("validates offset and limit before touching the requested filesystem path", async () => {
+    // Intent: using a missing path makes I/O observable: argument errors must win over ENOENT,
+    // proving malformed windows are rejected before stat or a potentially huge readFile call.
     const root = await createTempWorkspace();
-    await writeWorkspaceFile(root, "src/example.ts", "one\n");
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/example.ts", limit: 5000 }, undefined, undefined, { cwd: root });
-    expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("limit must be <= 2000");
+    const invalidOffset = await registry.getTool("read").execute("1", { workdir: ".", path: "missing.txt", offset: 0 }, undefined, undefined, { cwd: root });
+    const invalidLimit = await registry.getTool("read").execute("2", { workdir: ".", path: "missing.txt", limit: 5000 }, undefined, undefined, { cwd: root });
+
+    expect(invalidOffset.isError).toBe(true);
+    expect(getText(invalidOffset)).toContain("offset must be a positive integer");
+    expect(getText(invalidOffset)).not.toContain("ENOENT");
+    expect(invalidLimit.isError).toBe(true);
+    expect(getText(invalidLimit)).toContain("limit must be <= 2000");
+    expect(getText(invalidLimit)).not.toContain("ENOENT");
+  });
+
+  it("rejects a sparse text candidate above 64 MiB before entering the full-read queue", async () => {
+    // Intent: the queue is held for the target path; returning the size error while it remains
+    // held proves readFile/decode never allocate the sparse file's full logical size.
+    const root = await createTempWorkspace();
+    const file = join(root, "huge.txt");
+    const handle = await open(file, "w");
+    await handle.truncate(64 * 1024 * 1024 + 1);
+    await handle.close();
+
+    let releaseMutation!: () => void;
+    let mutationStarted!: () => void;
+    const started = new Promise<void>((resolve) => { mutationStarted = resolve; });
+    const blocker = withFileMutationQueue(file, async () => {
+      mutationStarted();
+      await new Promise<void>((resolve) => { releaseMutation = resolve; });
+    });
+    await started;
+
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any);
+    try {
+      const result = await Promise.race([
+        registry.getTool("read").execute("huge", { path: "huge.txt", offset: 1, limit: 1 }, undefined, undefined, { cwd: root }),
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("read entered the full-file mutation queue")), 1_000)),
+      ]);
+      expect(result.isError).toBe(true);
+      expect(getText(result)).toContain("larger than the 64 MiB read safety limit");
+      expect(getText(result)).toContain("Use grep");
+    } finally {
+      releaseMutation();
+      await blocker;
+    }
   });
 });

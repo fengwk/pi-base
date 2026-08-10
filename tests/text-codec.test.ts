@@ -55,6 +55,13 @@ describe("text codec", () => {
     expect(decoded?.encoding).not.toBe(defaultTextEncoding());
   });
 
+  it("rejects NUL-bearing binary samples after BOM and UTF-16 checks", () => {
+    // Intent: detector confidence must not let confirmed binary bytes through,
+    // while the earlier UTF-16 heuristic still permits legitimate NUL-bearing text.
+    expect(decodeTextFile(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02, 0x03]))).toBeNull();
+    expect(decodeTextFile(Buffer.from([0x41, 0x00, 0x42, 0x00]))?.text).toBe("AB");
+  });
+
   it("falls back to UTF-8 for suspicious decoded text that is not binary bytes", () => {
     // Intent: if the detector cannot identify an encoding and the bytes are
     // still valid text, callers should get a conservative UTF-8 view.

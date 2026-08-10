@@ -36,6 +36,7 @@ interface GoalControlDetails {
 }
 
 export interface GoalSupportHandle {
+  readonly active: boolean;
   getGoal: () => GoalState | null;
   getInjectedToolNames: (hasExplicitToolPolicy: boolean) => string[];
 }
@@ -612,6 +613,9 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
   });
 
   return {
+    get active() {
+      return goal?.status === "active";
+    },
     getGoal: () => goal,
     getInjectedToolNames: (hasExplicitToolPolicy) => {
       if (!sessionSupported) return [];

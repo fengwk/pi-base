@@ -302,6 +302,56 @@ describe("pi-base config", () => {
     });
   });
 
+  it.each([
+    [
+      "top-level permission typo",
+      { permissions: { bash: "allow" } },
+      /settings\.permissions is not recognized\. Did you mean "permission"\?/,
+    ],
+    [
+      "nested notify typo",
+      { notify: { permissionAskd: true } },
+      /notify\.permissionAskd is not recognized/,
+    ],
+    [
+      "deep LSP server typo",
+      { lsp: { servers: { ts: { command: ["ts"], extensions: [".ts"], requestTimoutMs: 100 } } } },
+      /lsp\.servers\.ts\.requestTimoutMs is not recognized/,
+    ],
+  ])("rejects unknown fixed config keys: %s", async (_name, settings, expected) => {
+    // Intent: misspelled fixed fields must fail at load time with their complete path instead of
+    // being silently discarded; the common permissions typo also receives an actionable hint.
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify(settings), "utf8");
+      expect(() => loadPiBaseSettings(root)).toThrowError(expected);
+    });
+  });
+
+  it("keeps dynamic configuration maps open while validating their fixed containers", async () => {
+    // Intent: strict object validation must not reinterpret tool patterns, MCP/LSP server ids, or
+    // render tool names as schema fields because those maps are deliberately user-extensible.
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        permission: { "mcp_custom/tool": { "repo/*": "allow" } },
+        render: { collapsedToolResultLines: { "mcp_custom/tool": 4 } },
+        lsp: { servers: { "custom-language": { command: ["custom-lsp"], extensions: [".custom"] } } },
+        mcp: { servers: { "custom-server": { type: "local", command: ["custom-mcp"] } } },
+      }), "utf8");
+
+      const settings = loadPiBaseSettings(root).settings;
+      expect(settings.permission?.["mcp_custom/tool"]).toEqual([{ pattern: "repo/*", action: "allow" }]);
+      expect(settings.render?.collapsedToolResultLines).toEqual({ "mcp_custom/tool": 4 });
+      expect(settings.lsp?.servers?.["custom-language"]).toBeDefined();
+      expect(settings.mcp?.servers?.["custom-server"]).toBeDefined();
+    });
+  });
+
   it("loads permission rules from unified pi-base config and merges global/project entries", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");

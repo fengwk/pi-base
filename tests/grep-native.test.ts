@@ -1,14 +1,25 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import iconv from "iconv-lite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import piBaseExtension from "../index.js";
 import { executeGrep } from "../src/grep-core.js";
 import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";
 
-const fakeToolState = vi.hoisted(() => ({ rgPath: "" }));
+const fakeToolState = vi.hoisted(() => ({ rgPath: "", acquisitionDelayMs: 0 }));
 
 vi.mock("../src/internal/pi-coding-agent-utils.js", () => ({
-  ensureTool: vi.fn(async (tool: string) => {
+  ensureTool: vi.fn(async (tool: string, _silent?: boolean, signal?: AbortSignal) => {
+    if (fakeToolState.acquisitionDelayMs > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, fakeToolState.acquisitionDelayMs);
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(new Error("Operation aborted"));
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }
     if (tool !== "rg" || !fakeToolState.rgPath) return undefined;
     return fakeToolState.rgPath;
   }),
@@ -16,6 +27,7 @@ vi.mock("../src/internal/pi-coding-agent-utils.js", () => ({
 
 afterEach(() => {
   fakeToolState.rgPath = "";
+  fakeToolState.acquisitionDelayMs = 0;
   delete process.env.PI_BASE_FAKE_RG_MODE;
   delete process.env.PI_BASE_FAKE_RG_FILE;
   delete process.env.PI_BASE_FAKE_RG_TEXT;
@@ -62,6 +74,29 @@ if (mode === "wait") {
 }
 
 describe("executeGrep native ripgrep path", () => {
+  it("decodes real ripgrep path.bytes and lines.bytes for standard and multiline GBK output", async () => {
+    // Intent: real rg emits base64 JSON fields for non-UTF-8 paths/content; both
+    // native parser modes must decode those bytes through the shared text codec.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    const fileName = "这是一个用于路径解码的中文文件名.txt";
+    const sourceLine = "这是一个中文文件，用于测试旧编码识别，确保搜索输出正确。 alpha\n";
+    const filePath = Buffer.concat([Buffer.from(`${root}/`), iconv.encode(fileName, "gbk")]);
+    await writeFile(filePath, iconv.encode(sourceLine, "gbk"));
+
+    for (const multiline of [false, true]) {
+      const result = await executeGrep(`grep-gbk-${multiline}`, {
+        workdir: ".",
+        path: ".",
+        pattern: "alpha",
+        multiline,
+      }, undefined, undefined, { cwd: root });
+
+      expect(result.isError).not.toBe(true);
+      expect(getText(result)).toContain(`${fileName}:1: ${sourceLine.trimEnd()}`);
+    }
+  });
+
   it("skips unparseable ripgrep output lines and formats matches as relative locations", async () => {
     // Intent: pi-base owns rg JSON parsing; a stray non-JSON line must be ignored while
     // valid match records still render as `path:line: text` candidate locations only
@@ -227,5 +262,31 @@ describe("executeGrep native ripgrep path", () => {
 
     expect(result.isError).toBe(true);
     expect(getText(result)).toBe("Error: Search timed out after 0.05s.");
+  });
+
+  it("applies grep timeout while waiting for ripgrep acquisition", async () => {
+    // Intent: a 20ms search timeout must cancel only this caller's wait for a
+    // mocked 250ms acquisition instead of blocking until acquisition completes.
+    vi.useFakeTimers();
+    try {
+      const root = await createTempWorkspace();
+      await writeFile(join(root, "example.txt"), "alpha\n", "utf8");
+      fakeToolState.rgPath = "rg";
+      fakeToolState.acquisitionDelayMs = 250;
+
+      const pending = executeGrep("grep-acquisition-timeout", {
+        workdir: ".",
+        path: "example.txt",
+        pattern: "alpha",
+        timeout_seconds: 0.02,
+      }, undefined, undefined, { cwd: root });
+      await vi.advanceTimersByTimeAsync(20);
+      const result = await pending;
+
+      expect(result.isError).toBe(true);
+      expect(getText(result)).toBe("Error: Search timed out after 0.02s.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

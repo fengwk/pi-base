@@ -48,7 +48,7 @@ export function createFindToolDefinition(cwd: string): any {
           try {
             const searchPath = resolveToCwd(searchDir || ".", cwd);
             const effectiveLimit = limit ?? DEFAULT_LIMIT;
-            const fdPath = await ensureTool("fd", true);
+            const fdPath = await ensureTool("fd", true, signal);
             if (!fdPath) {
               settle(() => reject(new Error("fd is not available and could not be downloaded")));
               return;
@@ -96,18 +96,6 @@ export function createFindToolDefinition(cwd: string): any {
                 return;
               }
               const output = lines.join("\n");
-              if (code !== 0) {
-                const errorMsg = stderr.trim() || `fd exited with code ${code}`;
-                if (!output) {
-                  settle(() => reject(new Error(errorMsg)));
-                  return;
-                }
-              }
-              if (!output) {
-                settle(() => resolve({ content: [{ type: "text" as const, text: "No files found matching pattern" }], details: undefined }));
-                return;
-              }
-
               const relativized: string[] = [];
               for (const rawLine of lines) {
                 const line = rawLine.replace(/\r$/, "");
@@ -119,6 +107,28 @@ export function createFindToolDefinition(cwd: string): any {
                 let relativePath = path.relative(searchPath, line);
                 if (hadTrailingSlash && !relativePath.endsWith("/")) relativePath += "/";
                 relativized.push(toPosixPath(relativePath));
+              }
+
+              if (code !== 0) {
+                const exitCode = code ?? "unknown";
+                const diagnostics = [
+                  `Error: fd exited with code ${exitCode}.`,
+                  `stderr: ${stderr.trim() || "(empty)"}`,
+                ];
+                if (relativized.length > 0) diagnostics.push("", "Partial output:", relativized.join("\n"));
+                settle(() => resolve({
+                  content: [{ type: "text" as const, text: diagnostics.join("\n") }],
+                  details: {
+                    exitCode: code,
+                    ...(relativized.length > 0 ? { partialOutput: true } : {}),
+                  },
+                  isError: true,
+                }));
+                return;
+              }
+              if (!output) {
+                settle(() => resolve({ content: [{ type: "text" as const, text: "No files found matching pattern" }], details: undefined }));
+                return;
               }
 
               const resultLimitReached = relativized.length >= effectiveLimit;
