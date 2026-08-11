@@ -390,6 +390,12 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
   registerResumeAllCommand(pi);
   registerSubagentCommand(pi);
+  // Agent selection runs before MCP startup. Validate its tool allowlist only after MCP's
+  // initial connection/discovery attempt settles, avoiding false warnings during normal startup
+  // while still surfacing names that remain unavailable.
+  pi.on("session_start", (_event, ctx) => {
+    agentHandle.warnUnavailableTools(ctx);
+  });
 
   // Every root owns the process-local diagnostic relay for its child tree. A UI-owning root also
   // hosts subagent permission prompts and the live tree widget.

@@ -93,6 +93,8 @@ export interface AgentSupportHandle {
   resolveAgentRuntimeConfig: (name: string) => AgentRuntimeConfig | undefined;
   /** Whether the active agent's tool policy allows this tool name when it becomes available later. */
   canActivateTool: (toolName: string) => boolean;
+  /** Reports tool allowlist entries that are unavailable at the current lifecycle point. */
+  warnUnavailableTools: (ctx: ExtensionContext) => void;
 }
 
 export function registerAgentSupport(
@@ -243,6 +245,11 @@ export function registerAgentSupport(
     if (!agent) return false;
     return projectAgentTools(agent, activeModelId).includes(toolName);
   };
+  const warnUnavailableTools = (ctx: ExtensionContext): void => {
+    const agent = resolveActiveAgent();
+    if (!agent) return;
+    warnUnknownAllowlistEntries(ctx, agent, "tools", allRegisteredToolNames());
+  };
 
   const applyAgent = async (
     requestedName: string,
@@ -257,7 +264,6 @@ export function registerAgentSupport(
       return false;
     }
 
-    warnUnknownAllowlistEntries(ctx, agent, "tools", allRegisteredToolNames());
     const previousModel = ctx.model;
     const previousThinkingLevel = pi.getThinkingLevel();
     const previousTools = [...pi.getActiveTools()];
@@ -460,7 +466,8 @@ export function registerAgentSupport(
         return;
       }
 
-      await safeApplyAgent(agentName, ctx, { persist: true, notify: true, applyModelThinking: true });
+      const applied = await safeApplyAgent(agentName, ctx, { persist: true, notify: true, applyModelThinking: true });
+      if (applied) warnUnavailableTools(ctx);
     },
   });
 
@@ -569,6 +576,7 @@ export function registerAgentSupport(
       };
     },
     canActivateTool: (toolName: string) => canActivateToolForActiveAgent(toolName),
+    warnUnavailableTools,
   };
 }
 

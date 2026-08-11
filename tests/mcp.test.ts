@@ -866,6 +866,129 @@ describe("mcp support", () => {
     }
   });
 
+  it("validates startup agent tool allowlists after initial MCP discovery", async () => {
+    // Intent: --agent is applied before MCP session startup, so validating immediately would
+    // falsely report valid MCP tools as unavailable. A real typo should still be reported once
+    // the initial dynamic tool set is known.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = await createTempWorkspace();
+    const defaultModel = { provider: "provider-a", id: "model-a" };
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeFile(
+        join(agentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: defaultModel.provider, defaultModel: defaultModel.id }),
+        "utf8",
+      );
+      await writeFile(join(agentDir, "SYSTEM.md"), "Default system prompt.", "utf8");
+      await mkdir(join(agentDir, "agents"), { recursive: true });
+      await writeFile(
+        join(agentDir, "agents", "searcher.md"),
+        `---\nname: searcher\ntools:\n  - read\n  - echo\n  - misspelled_tool\n---\nSearch the web.\n`,
+        "utf8",
+      );
+
+      const registry = createMcpRegistry({ hasUI: true, cwd: root, model: defaultModel, models: [defaultModel] });
+      registry.setFlag("agent", "searcher");
+      piBaseExtension(registry.pi as any, {
+        mcp: {
+          clientFactory: createClientFactory({ mm: [{ connectDelayMs: 20, tools: [echoTool] }] }),
+          heartbeatIntervalMs: 10_000,
+          retryDelaysMs: [20],
+          callWaitTimeoutMs: 20,
+        },
+      });
+
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+      expect(registry.getActiveTools()).toEqual(["read", "echo"]);
+      const toolWarnings = registry.getNotifications()
+        .filter((notification) => notification.variant === "warning" && notification.message.includes("declares tools"));
+      expect(toolWarnings).toEqual([{
+        message: 'Agent "searcher" declares tools that are not currently available: misspelled_tool. They remain allowed and may activate if registered later.',
+        variant: "warning",
+      }]);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
+  it("keeps temporarily unavailable allowlist tools eligible across MCP retry", async () => {
+    // Intent: a failed initial connection makes the warning accurate at that moment, but the
+    // configured name must remain eligible so a later successful retry can register and activate it.
+    const root = await createTempWorkspace();
+    await writeProjectSettings(root, {
+      mcp: {
+        servers: {
+          mm: {
+            type: "local",
+            command: ["mock-mcp"],
+            toolPrefix: "",
+          },
+        },
+      },
+    });
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = await createTempWorkspace();
+    const defaultModel = { provider: "provider-a", id: "model-a" };
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeFile(
+        join(agentDir, "settings.json"),
+        JSON.stringify({ defaultProvider: defaultModel.provider, defaultModel: defaultModel.id }),
+        "utf8",
+      );
+      await writeFile(join(agentDir, "SYSTEM.md"), "Default system prompt.", "utf8");
+      await mkdir(join(agentDir, "agents"), { recursive: true });
+      await writeFile(
+        join(agentDir, "agents", "searcher.md"),
+        `---\nname: searcher\ntools:\n  - read\n  - echo\n---\nSearch the web.\n`,
+        "utf8",
+      );
+
+      const registry = createMcpRegistry({ hasUI: true, cwd: root, model: defaultModel, models: [defaultModel] });
+      registry.setFlag("agent", "searcher");
+      piBaseExtension(registry.pi as any, {
+        mcp: {
+          clientFactory: createClientFactory({
+            mm: [
+              { connectError: "mock server is still starting" },
+              { tools: [echoTool] },
+            ],
+          }),
+          heartbeatIntervalMs: 10_000,
+          retryDelaysMs: [20],
+          callWaitTimeoutMs: 20,
+        },
+      });
+
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+      expect(registry.getNotifications()).toContainEqual({
+        message: 'Agent "searcher" declares tools that are not currently available: echo. They remain allowed and may activate if registered later.',
+        variant: "warning",
+      });
+
+      await waitFor(() => registry.getActiveTools().includes("echo"));
+      expect(registry.getActiveTools()).toEqual(["read", "echo"]);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
   it("preserves closed-object constraints in MCP parameter schemas", () => {
     // Intent: dropping additionalProperties=false makes the model-facing validator accept fields
     // that the MCP server explicitly rejects, turning a schema error into a remote tool failure.

@@ -1,586 +1,98 @@
 # pi-base
 
-`pi-base` 是 Pi 的基础扩展包，提供文件工具、`bash`、LSP、MCP、权限控制、通知，以及基于 Markdown 的 agent 系统。它不是独立应用，通过 Pi 的扩展机制加载。
+`pi-base` 是 [Pi](https://github.com/earendil-works/pi) 的插件仓库，提供一套经过真实开发场景验证的基础插件与工具。
 
-## 目录
+> **Less is more.** 只保留高频、稳定、可组合的能力，让 Agent 更专注地阅读代码、修改文件、运行命令和完成验证。
 
-- [快速开始](#快速开始) — [配置文件](#配置文件) · [安装](#安装) · [启动 Agent 选择](#启动-agent-选择)
-- [工具](#工具) — [速查表](#工具速查) · [模型路由](#文件修改工具的模型路由) · [apply_patch](#apply_patch-协议与提交语义) · [task](#task子-agent-委派) · [MCP](#mcp-工具) · [LSP](#lsp-工具)
-- [Agent](#agent) — [Frontmatter](#frontmatter-字段) · [行为规则](#行为规则速查) · [切换](#切换)
-- [配置](#配置) — [合并规则](#全局项目配置合并规则) · [`lsp`](#lsp) · [`permission`](#permission) · [`yolo`](#yolo) · [`render`](#render) · [`notify`](#notify) · [`contextCompression`](#contextcompression) · [`compactionModel`](#compactionmodel) · [`subagent`](#subagent) · [`mcp`](#mcp)
-- [命令](#命令)
-- [目标模式](#目标模式)
-- [运行时行为](#运行时行为) — [输出截断](#输出截断) · [错误标记](#错误标记修复) · [状态栏](#状态栏ui-session)
-- [开发](#开发)
+安装后即可使用，不需要先理解内部实现，也不需要维护复杂配置。
+
+## 常用内置工具
+
+下表是首次使用时最常见的内置工具。Agent 会从当前可用工具中选择合适方式；实际工具集还会受当前模型、Agent 的 `tools` 配置和运行时能力约束。用户通常只需要用自然语言说明目标、范围和约束。
+
+| 工具 | 用途 | 怎么用 |
+|------|------|--------|
+| `read` | 读取文本、目录和支持的图片 | 告诉 Agent 要查看的路径；大文件可以要求分段读取 |
+| `grep` | 在代码中搜索内容 | 说明关键词和搜索目录，例如“在 `src` 中搜索 `createUser`” |
+| `find` | 按名称查找文件 | 说明文件名模式和目录，例如“在当前项目查找 `*.test.ts`” |
+| `bash` | 运行构建、测试、Git 和其他命令 | 说明要执行的命令，必要时指定工作目录和超时 |
+| `edit` | 精确替换已有文本 | 适合范围明确的单点修改 |
+| `write` | 创建新文件或重写整个文件 | 适合新增文件和完整内容更新 |
+| `apply_patch` | 一次完成多个文件的结构化修改 | 适合包含新增、更新、删除或移动的代码变更 |
+| `lsp_goto_definition` | 跳转到符号定义 | 配置 LSP 后，让 Agent 从指定文件和位置查找定义 |
+| `lsp_workspace_symbols` | 搜索工作区符号 | 配置 LSP 后，按类名、函数名或其他符号搜索 |
+| `lsp_java_decompile` | 反编译 Java 依赖中的 class | 在 jdtls 项目中让 Agent 查看外部类实现 |
+| `task` | 把独立任务委派给子 Agent | 在 Agent 中配置 `subagents` 后，让主 Agent 自动拆分和委派任务 |
+
+默认文件修改能力会按当前模型投影为 `apply_patch` 或 `edit` / `write`，通常不需要用户关心具体工具。
+
+Goal 与 MCP 工具会按运行状态动态出现；MCP 工具连接后仍受当前 Agent 的 `tools` 配置约束。完整列表见[工具实现索引](docs/tools/README.md)。
 
 ## 快速开始
 
-### 配置文件
+### 1. 安装
+
+要求 Node.js `>=22.19.0`，并已安装 Pi。
+
+```bash
+pi install git:github.com/fengwk/pi-base
+```
+
+只在当前项目安装：
+
+```bash
+pi install git:github.com/fengwk/pi-base -l
+```
+
+### 2. 启动 Pi
+
+进入项目目录后启动：
+
+```bash
+cd /path/to/project
+pi
+```
+
+### 3. 直接描述任务
+
+例如：
+
+```text
+阅读这个项目，说明它的启动流程和核心模块。
+
+找出当前失败测试的原因，修复后运行完整测试。
+
+在 src 中找到 UserService 的定义和所有主要调用位置。
+```
+
+`pi-base` 会为 Agent 提供所需的读取、搜索、修改、命令和 LSP 工具。
+
+## 可选配置
+
+不创建配置文件也可以直接使用。需要自定义权限、LSP、通知、MCP 或其他运行时能力时，可添加：
 
 | 作用域 | 路径 |
 |--------|------|
 | 全局 | `~/.pi/agent/pi-base.json` |
-| 项目 | `<repo>/.pi/pi-base.json`（向上查找最近祖先） |
+| 当前项目 | `<repo>/.pi/pi-base.json` |
 
-最小配置为空对象 `{}`。隔离测试可用环境变量覆盖全局路径：`PI_BASE_GLOBAL_SETTINGS_PATH=/tmp/pi-base.json`。
+修改配置后执行 `/reload`。全部字段、默认值、合并规则和示例见[配置参考](docs/configuration.md)。
 
-修改配置后执行 `/reload` 重新加载。
+## Agent 与扩展能力
 
-### 安装
+- 在 `~/.pi/agent/agents/**/*.md` 中定义 [Markdown Agent](docs/agents.md)，通过 `pi --agent <name>` 或 `/agent <name>` 使用。
+- 在 Agent 的 `subagents` 中声明可委派的 Agent，即可启用 [`task`](docs/tools/task.md)。
+- 配置 `mcp.servers` 后，可使用[本地或远程 MCP 工具](docs/tools/mcp.md)。
+- 使用 `/goal <objective>` 创建可持续推进和恢复的[长期目标](docs/tools/goal-tools.md)。
+- 使用 `/mcp-status`、`/subagent` 和 `/goal status` 查看运行状态。
 
-推荐作为 Pi package 安装，写入 settings 后自动加载，支持 `/reload` 和 `task` 子 agent：
+## 说明
 
-```bash
-pi install git:github.com/fengwk/pi-base     # 全局安装（~/.pi/settings.json）
-pi install git:github.com/fengwk/pi-base -l  # 仅当前项目（.pi/settings.json）
-pi install ./path/to/pi-base                 # 本地开发目录
-```
+- 桌面通知主要支持 Linux 和 WSL，其他平台按 best-effort 处理。
+- 系统没有 `fd` 或 `rg` 时会尝试从其 GitHub Release 下载；设置 `PI_OFFLINE=1` 可禁用下载。
+- `permission` 用于降低误操作风险，不是安全沙箱。需要强隔离时请使用容器、受限账户或系统级沙箱。
 
-常用配套命令：
-
-| 命令 | 说明 |
-|------|------|
-| `pi list` | 列出已安装的 package |
-| `pi update git:github.com/fengwk/pi-base` | 更新到最新版本 |
-| `pi remove git:github.com/fengwk/pi-base` | 卸载 |
-
-也可以只从源码入口临时启动，但有下述限制：
-
-```bash
-pi -e /path/to/pi-base/index.ts
-```
-
-`pi -e` 只把源码扩展加载到当前 session；`task` 创建的默认 Pi 子 session 不继承该 flag。需要使用 `task` 时，必须通过 Pi package（推荐）或持久扩展配置让父子 session 从同一加载路径复用同一 `pi-base` 模块实例；否则会 fail-fast，而不会在进程级 registry/permission host 断开的情况下继续运行。若已配置相同路径但缓存曾被其他工作区刷新，请 reload 或重启父 session。
-
-### 启动 Agent 选择
-
-优先级从高到低：
-
-```
-session 已持久化的 agent  >  --agent <name>  >  pi-base.json.defaultAgent  >  default
-```
-
-`--agent` 是 `pi-base` 注册的启动 flag，仅对新 session 生效；resume 已有 agent 的 session 时会被忽略：
-
-```bash
-pi --agent reviewer
-```
-
-`default` 复用 `~/.pi/agent/SYSTEM.md` + `settings.json` 的默认 provider/model/thinkingLevel。
-
----
-
-## 工具
-
-启动时 `pi-base` 注册以下 10 个基础工具定义；其中 `apply_patch` 与 `edit`/`write` 按当前模型互斥投影，因此默认实际暴露 8 或 9 个基础工具。`task` 由 Agent 委派能力另行注入，旧 session 中不应保留的残留 `task` 会自动移除。
-
-### 工具速查
-
-| 工具 | 必填参数 | 默认值 | 关键行为 |
-|------|----------|--------|----------|
-| `read` | `path` | offset=1, limit=200 (max 2000) | offset/limit 在文件读取前校验；文本候选文件超过 64 MiB 时在完整读取前拒绝并提示改用 grep/缩小目标；其余文本返回 `行号|内容` 格式并标注 path/ends_with_newline/lsp；目录列出排序成员；图片（含 BMP）返回附件（模型不支持时给出 skill 提示）；二进制和 FIFO/socket/device 等非普通节点直接报错；UTF BOM/编码探测 + LF 规范化；单行 >2000 字符截断标记 |
-| `grep` | `pattern`, `path` | timeout=15s, limit=100 | 支持 `include`/`ignore_case`/`literal`/`multiline`；二进制和非普通文件节点报错；结果行 >500 字符截断；输出是候选位置，编辑前先 `read` |
-| `find` | `pattern`, `path` | limit=1000, 无默认超时 | `path` 无隐式默认值，搜当前目录需显式写 `"."`；底层使用 `fd` |
-| `bash` | `command` | timeout=120s | 使用 `$SHELL`（bash/zsh）并加载 rc 文件；优先用 `workdir` 切换目录 |
-| `edit` | `path`, `old_string`, `new_string` | — | 精确文本替换；仅接受普通文本文件；基于 LF 视图匹配，按原 BOM/编码/换行回写；支持 `replace_all`；成功返回 diff 预览 |
-| `write` | `path`, `content` | — | 新文件/整文件覆盖；已存在目标必须是普通文件；自动创建父目录；覆盖时沿用原编码/BOM，换行按 `content` 原样写入；新文件默认 UTF-8 |
-| `apply_patch` | `patchText` | freeform；可选 `*** Workdir:`，默认 session cwd | 基于 Codex freeform + Lark grammar，并采用更严格的 hunk 唯一匹配；支持 Add/Update/Delete/Move；可选 `*** Workdir:` 指定根目录且不改 session cwd；多文件先整体 preflight、再按顺序提交；参数流式生成和落定后的 Add 内容预览有界，参数完成及权限/执行期间完整展示 patch，逐文件持久化 diff 仍有界且行数统计不截断 |
-| `lsp_goto_definition` | `path`, `line` | character=0 | 需 server 声明 `textDocument/definition` |
-| `lsp_workspace_symbols` | `path`, `query` | limit=50 | 需 server 声明 `workspace/symbol` |
-| `lsp_java_decompile` | `path`, `target` | — | 需 server 支持 `java/classFileContents`（通常 jdtls） |
-
-所有工具的 `path`/`workdir` 都将 `/` 与 `\\` 视为目录分隔符，并在权限匹配、实际执行和 context compression 前解析为同一目标。因此文件工具不用于寻址 POSIX 文件名中的字面反斜杠字符。
-
-### 文件修改工具的模型路由
-
-三个工具始终注册，但隐式/default agent 只暴露一组文件修改能力：
-
-- model id（大小写不敏感）包含 `gpt-`、且不包含 `oss` 或 `gpt-4` 时，暴露 `apply_patch`，隐藏 `edit`/`write`。这覆盖当前 GPT-5/Codex 及带 namespace 的同类 ID。
-- GPT-4、GPT-OSS、Anthropic、无 model 等其他情况暴露 `edit`/`write`，隐藏 `apply_patch`。
-- agent 显式列出 `apply_patch` 时，任何模型都保留它；匹配 GPT 策略的模型只会在同时具备 `edit` 和 `write` 时将二者投影成一个 `apply_patch`。
-- 仅有 `edit` 或仅有 `write` 的显式 allowlist、以及用户手动缩减后的 active tools，会保留原工具而不会换成能力更宽的 `apply_patch`；完全没有文件修改能力时也不会因模型切换获得该能力。
-
-`/model`/模型循环触发的 `model_select`、`/agent` model 激活、session resume/reload 以及 subagent 启动都会按当前 session model 重新投影；模型判断集中在同一纯函数中。
-
-### `apply_patch` 协议与提交语义
-
-```text
-*** Begin Patch
-*** Workdir: .workspace/my-task/worktree
-*** Add File: src/new.ts
-+export const value = 1;
-*** Update File: src/existing.ts
-*** Move to: src/renamed.ts
-@@ optional function or section context
--old line
-+new line
-*** End of File
-*** Delete File: src/obsolete.ts
-*** End Patch
-```
-
-上例中的 `*** Workdir:` 和 `*** Move to:` 均为可选指令；省略 Workdir 时使用 session cwd。`apply_patch` 基于 Codex freeform 协议：工具仅有字符串参数 `patchText`；grammar-capable 模型上通过 OpenAI Lark（`APPLY_PATCH_LARK_GRAMMAR`）约束采样。pi-base 保留更严格的 hunk 唯一匹配和全量 preflight 语义。`patchText` 为完整 freeform 正文，也可兼容常见 heredoc 包装；`*** Begin Patch`/`*** End Patch` 两侧以及 heredoc closing delimiter 后可带水平空白；Update 内以空格开头的协议标记仍是 context 行。
-
-可选第一行指令 `*** Workdir: <path>` 指定路径解析根（相对 session cwd 或绝对路径），默认 session cwd，无需切换 session cwd。Add body 每行以 `+` 开头，无 body 时创建空文件；Delete 无 body；普通 Update 需要一个或多个非空 `@@` chunk；纯 Move 可不含 hunk。context/删除/新增行分别以空格、`-`、`+` 开头。相对路径相对 Workdir/session cwd 解析。Move 先写目标再删源；目标已存在且为普通文件时覆盖；Move 拒绝符号链接源/目标，并在成功时把源文件权限位应用到目标。
-
-执行分两阶段：先解析并 preflight 全部文件（路径、存在性、真实文件身份、文本编码、hunk 唯一匹配、输出可编码性等），任一失败则完全不写；词法路径不同但解析到同一文件的 symlink/hardlink 别名、经 symlink canonicalize 后形成的输出父子冲突，以及 dangling symlink Add/parent 都会在此阶段整体拒绝。preflight 全部成功后按 patch 顺序逐文件提交。提交阶段若后续文件因竞态或文件系统错误失败，前面已提交文件不会回滚，错误会明确标记 partial application，并在 details 中列出实际已提交文件及 diff 元数据；失败文件可能已被底层写操作部分修改，因此同时报告 `failedPathState: "unknown"`，调用方不能假定它保持原样。每次成功提交（包括最终部分失败之前的提交）都会更新 LSP：Add/Update 同步内容，Move 关闭源路径并同步目标路径，Delete 对已打开文档发送 `didClose` 并清理缓存；状态未知的失败路径也会保守关闭已打开的 LSP 文档，避免继续使用可能陈旧的缓存。LSP 处理失败不会覆盖原始文件系统结果。
-
-结果中的逐文件 diff 使用 LF 展示视图和 4 行上下文；每个文件最多保留 400 行、单行最多 500 字符，但 `addedLines`/`removedLines` 始终统计完整变更。实际写回仍保留源文件支持的编码、BOM、逐行 EOL 和无最终换行状态。
-
-### `task`（子 agent 委派）
-
-仅当 agent 配置了 `subagents` allowlist 且 session depth < `subagent.maxDepth` 时注入。
-
-| 参数 | 说明 |
-|------|------|
-| `subagent_type` (必填) | 委派的目标 agent 名 |
-| `prompt` (必填) | 委派任务的完整描述 |
-| `maxTurns` (可选) | 本次调用覆盖 `subagent.maxTurns` 的正整数交互预算；未设置时使用当前 workspace 的配置值。未完成的 child 到达预算会返回阶段性报告。该值控制 parent/child 的汇报粒度：任务初期宜设小值确认路径，或用于需要频繁交互的任务 |
-| `session_id` (可选) | 恢复已有子 session |
-
-返回 XML 格式结果：
-
-```
-<task id="session-id" state="completed">
-<task_result>Agent 最终报告</task_result>
-</task>
-```
-
-并发限制：`subagent.maxConcurrency`（单父 session）+ `subagent.maxTotalConcurrency`（整棵 delegation tree）。从 `pi -e` 源码模式启动时，子 session 仍须从持久配置复用父 session 的同一 `pi-base` 模块实例，否则会明确报错并安全退出。
-
-### MCP 工具
-
-`mcp.servers` 中连接的 server 自动注册工具：
-
-- 默认别名：`<serverKey>_<toolName>`
-- `toolPrefix: ""` 保留远端原始 tool 名
-- agent 有 `tools` allowlist 时，仅 allowlist 中的 MCP alias 生效
-- 同名冲突时工具不注册，`/mcp-status` 显示冲突原因
-
-### LSP 工具
-
-全部通过 `lsp.servers` 显式声明，`pi-base` 不内置 server 表。后缀未命中任何 server → `No LSP server configured for ...`。
-
-LSP client 在进程内共享，由单个活跃 root session 管理；headless subagent 复用 root client，不独立关闭。当前不支持同一进程同时运行多个 UI root session。
-
----
-
-## Agent
-
-Agent 定义在 `~/.pi/agent/agents/**/*.md`，`pi-base` 递归扫描。`default` 是保留名（不能用于文件），正文为空时回退到 `~/.pi/agent/SYSTEM.md`。
-
-### Frontmatter 字段
-
-```md
----
-name: planner
-description: Planning-focused agent
-model: provider/model-id          # 仅切换时 best-effort 应用
-thinkingLevel: high               # off|minimal|low|medium|high|xhigh|max；仅切换时 best-effort 应用
-tools: [read, grep]               # allowlist；未配置=按模型暴露全部可用工具；[]=全部禁用
-skills: [spec]                    # allowlist；未配置=全部注入；[]=全部禁用
-subagents: [reviewer]             # allowlist；非空 + depth<maxDepth → 注入 task 工具
----
-
-Agent 正文（覆盖 system prompt）
-```
-
-仅支持上述 frontmatter 字段；未知字段会使该 Agent 加载失败并输出 warning，避免 `tools`/`skills` 等策略字段拼写错误后退化为“未配置”的继承语义。
-
-### 行为规则速查
-
-| 维度 | 规则 |
-|------|------|
-| prompt | agent 正文非空覆盖 system prompt；空则回退 Pi customPrompt；都没有保留 Pi 预构建兜底 |
-| model / thinkingLevel | 仅显式切换时 best-effort 应用；resume/reload 不覆盖 session 的值；失败输出 warning 不阻塞切换 |
-| tools | allowlist 机制；文件修改工具再按 model 路由投影（显式 apply_patch 跨模型保留，GPT 上仅完整 edit+write 能力 → apply_patch，单独 edit/write 和空能力均不增权）；LSP/MCP 同样受控；task 由 subagents + depth 动态注入 |
-| skills | allowlist 过滤后统一重建 prompt；仅 `read` 可用时注入 `<available_skills>`；`disable-model-invocation` skill 不暴露给模型；不影响 `/skill:name` |
-| subagents | 不存在的 agent 从 allowlist 剔除并 warning；非空 + depth<maxDepth → 注入 task 并在 prompt 中以 `<available_subagents>` XML 列出 |
-| session 恢复 | 最近一次 `/agent` 写入 session entry；下次 `session_start` 自动恢复；已持久化 agent 不存在时回退 default |
-| 启动顺序 | 已持久化 agent > `--agent` > `defaultAgent` > `default`；`/agent default` 不重置 model/thinkingLevel |
-
-### 切换
-
-| 命令 | 效果 |
-|------|------|
-| `/agent planner` | 切换到指定 agent，应用 model/thinkingLevel + 写 session entry |
-| `/agent default` | 切回默认 agent |
-| `/agent` | 有 UI 时弹选择器；无 UI 需显式带名字 |
-
----
-
-## 配置
-
-`pi-base.json` 顶层字段：
-
-| 字段 | 类型 | 用途 |
-|------|------|------|
-| `lsp` | object | LSP server 列表 |
-| `permission` | object / string | 工具执行策略 |
-| `render` | object | 结果折叠预览控制 |
-| `notify` | object | 桌面通知开关 |
-| `yolo` | boolean | 权限绕过模式 |
-| `mcp` | object | MCP server 列表 |
-| `compactionModel` | string | Pi 摘要使用的指定模型 |
-| `compactionThinkingLevel` | string | 指定摘要模型的 thinking level |
-| `contextCompression` | object | 旧工具输出压缩 |
-| `subagent` | object | task 委派深度/并发/超时 |
-| `defaultAgent` | string | fresh session 默认 agent |
-
-常见配置起点：
-
-```json
-{
-  "permission": { "edit": "ask", "write": "ask", "bash": { "*": "ask", "git *": "allow" } },
-  "lsp": { "servers": { "ts": { "command": ["typescript-language-server", "--stdio"], "extensions": [".ts", ".tsx", ".js", ".jsx"] } } },
-  "notify": { "permissionAsked": true, "agentEnd": true }
-}
-```
-
-### 全局/项目配置合并规则
-
-| 字段 | 合并方式 |
-|------|----------|
-| `lsp.servers` | 项目出现 `servers` → 整体替换全局，不深合并 |
-| `permission` | 按 tool 名追加合并，最后匹配的规则生效 |
-| `render` | 合并；全局单个数字当作 `"*"` 默认值，再叠加项目细粒度规则 |
-| `notify` | 浅覆盖，项目只覆盖自己声明的字段 |
-| `yolo` | 项目值直接覆盖 |
-| `mcp.servers` | 按 key 合并；同 key 项目覆盖全局 |
-| `compactionModel` | 项目值直接覆盖 |
-| `compactionThinkingLevel` | 项目值直接覆盖 |
-| `contextCompression` | 标量逐个覆盖；`tools`/`enabledProviders`/`disabledProviders` 数组替换不追加 |
-| `subagent` | 各字段浅覆盖；未配置的继承全局 |
-| `defaultAgent` | 项目值直接覆盖 |
-
-### 配置参考
-
-#### `lsp`
-
-完全用户定义，`pi-base` 不内置 server 表。禁用某个 server 直接从 map 中移除即可。
-
-```json
-{
-  "lsp": {
-    "servers": {
-      "ts": {
-        "command": ["typescript-language-server", "--stdio"],
-        "extensions": [".ts", ".tsx", ".js", ".jsx"],
-        "firstMatchMarkers": [".git", "package.json", "tsconfig.json"]
-      },
-      "jdtls": {
-        "command": ["$HOME/.local/share/nvim/mason/bin/jdtls"],
-        "extensions": [".java"],
-        "rootMarkers": ["pom.xml", "build.gradle"],
-        "workspaceData": { "mode": "process" }
-      },
-      "gopls": {
-        "command": ["gopls"],
-        "extensions": [".go"],
-        "firstMatchMarkers": [".git", "go.mod"],
-        "requestTimeoutMs": 60000
-      }
-    }
-  }
-}
-```
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `command` | ✅ | `command[0]` 必须是 PATH 命令或绝对路径（支持 `~/`、`$HOME/`、`${HOME}/`）。不支持任意环境变量展开 |
-| `extensions` | ✅ | 负责的文件后缀 |
-| `rootMarkers` | ❌ | 多模块项目根标记，最顶层匹配优先 |
-| `firstMatchMarkers` | ❌ | 备选根标记，首次匹配优先。与 rootMarkers 并存时优先 rootMarkers |
-| `requestTimeoutMs` | ❌ | 默认 `60000` |
-| `workspaceData` | ❌ | 仅 jdtls；`mode`: `stable`(默认) / `process`(per-PID) / `disabled`；`baseDir` 改写生成目录父目录，需绝对路径 |
-
-缺失可执行文件时返回带 `pi-base.json` 片段的错误提示。jdtls 自动追加 `-data ~/.cache/jdtls-workspace/<md5>`。
-
-#### `permission`
-
-`allow` / `ask` / `deny` 三态模型。
-
-```json
-{
-  "permission": {
-    "*": "allow",
-    "edit": "ask",
-    "write": "ask",
-    "apply_patch": { "vendor/**": "deny" },
-    "bash": { "*": "ask", "git *": "allow", "npm test": "deny" }
-  }
-}
-```
-
-| 规则 | 说明 |
-|------|------|
-| 整体字符串 | 作用于所有工具 |
-| 单 tool 字符串 | 该工具固定策略 |
-| 单 tool 对象 | 按 wildcard pattern 匹配 command/路径 |
-| 默认行为 | 未匹配任何规则时为 `allow`；需要默认确认时显式配置 `"*": "ask"` |
-| 匹配顺序 | 先检查全局 `*`，再检查 tool 专属规则；最后匹配的规则生效 |
-| `ask` | 有 UI 弹出 Yes/No；无 UI headless subagent 转发给 root UI；其他无 UI 场景直接拦截 |
-| 路径类匹配 | 同时匹配原始路径、相对 workdir 路径、相对项目根路径、绝对路径 |
-| apply_patch 继承 | 执行前解析全部 target（含 Move 目标）；普通 Update 源路径继承 `edit`，Add/Delete 与 Move 源/目标路径继承 `write`；随后叠加 `permission.apply_patch` 作为覆盖层 |
-| apply_patch 聚合 | 对所有 target 取 `deny > ask > allow`；确认框只显示单行、总长有界的 `A/M/D path` 摘要，具体 patch 内容在工具调用预览中查看；畸形 patch 不执行文件操作，仅退回全局 `*` + `apply_patch` 通用规则 |
-| bash 匹配 | 识别 `&&`/`||`/`|`/`;`/换行 分割的顶层 command 段；不展开变量；动态命令头、命令头/前置重定向、复合/控制流语法、命令替换、可展开 heredoc、process substitution、shell/eval/source 动态执行，以及 command/env/exec/nohup 执行包装器无法保守分析时，显式整条命令 deny 仍 deny，否则退回 ask。包装器识别是启发式白名单而非穷举：`sudo`、`ssh`、`xargs`、`docker`、`python -c` 等同样能承载任意命令的调用不在其中，规则按其字面命令头匹配 |
-
-`permission` 是用于防误操作的词法规则，不是安全沙箱。它不会执行完整 shell 解析或提供文件系统隔离；文件路径检查也不防御 symlink 穿透或 TOCTOU 竞态。需要强隔离时应在 Pi 之外使用容器、受限账户或其他系统级沙箱。
-
-配置按 cwd 缓存在当前进程中；修改全局或项目配置后执行 `/reload` 才会生效。
-
-#### `yolo`
-
-布尔值，默认 `false`。`/yolo` 切换当前进程状态，不回写配置文件。工作区首次载入时用配置值设初值。
-
-#### `render`
-
-控制工具结果折叠预览。
-
-```json
-{
-  "render": {
-    "collapsedToolResultLines": { "*": 20, "read": 10, "grep": 15, "lsp_*": 5, "edit": 0 },
-    "collapsedToolResultMaxChars": { "*": 10000, "bash": 4000, "web_search": 1200 }
-  }
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `collapsedToolResultLines` | 折叠态最多显示行数；`0`=隐藏成功结果正文，但错误仍保留最多 10 个逻辑行（含展开提示）和 2500 字符的诊断预览；匹配优先级：精确名 > 通配符 > `*` |
-| `collapsedToolResultMaxChars` | 仅已折叠时生效，不会单独触发折叠 |
-
-默认值：read=10, grep=15, bash=20, write=10，其他工具 `*`=20；MCP 结果的折叠态另有 2500 字符默认上限，显式的精确名/通配符配置仍可覆盖该值。
-
-文件修改工具的调用预览独立于上述结果折叠配置：`apply_patch` / `edit` / `write` 在参数流式生成时统一限制为 10 行；非 yolo 模式下，参数完成以及权限/执行期间，`apply_patch` 与 `edit` 完整展示变更预览。调用落定后，`apply_patch` 每个 Add 区段默认保留前 10 行，每个显示行最多 1500 字符，并标记剩余行数，Update/Delete 保持完整；`write` 默认收起为 7 行内容预览。yolo 模式下，`apply_patch` 和 `write` 在参数完成后直接使用上述紧凑预览，避免快速执行时先完整展开再收起；手动展开后均可查看完整写入内容。权限确认框只保留不超过 80 字符的单行工具摘要，不重复写入或 diff 正文。
-
-#### `notify`
-
-控制 `scripts/notify.sh` 桌面通知（仅 UI session）。
-
-当前仅承诺支持 Linux 桌面环境（`notify-send`）和 WSL（调用 Windows PowerShell helper）；其他平台无法选择通知 backend 或启动脚本失败时会 best-effort 空跑结束，不影响 permission/session 生命周期。
-
-```json
-{
-  "notify": { "permissionAsked": true, "agentEnd": true, "suppressCompletedAfterRejectionMs": 0 }
-}
-```
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `permissionAsked` | false | 权限确认前通知；同一回合多次确认只通知一次 |
-| `agentEnd` | false | session 正常结束发 completed，异常停止发 error；yolo 模式下仍会发送停止通知 |
-| `suppressCompletedAfterRejectionMs` | 5000 | 用户拒绝权限后抑制 completed 通知的窗口；`0` 关闭抑制 |
-
-#### `contextCompression`
-
-压缩旧的工具输出以减少上下文噪音，默认关闭。
-
-```json
-{
-  "contextCompression": {
-    "anchorHygiene": true,
-    "tools": ["bash", "grep", "find", "read", "write", "edit", "apply_patch"],
-    "retainedUserMessageRounds": 2,
-    "retainedAssistantTurns": 4,
-    "enabledProviders": ["openai"]
-  }
-}
-```
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `anchorHygiene` | false | 后续 write/edit/apply_patch 成功后，折叠同路径旧的 read/edit/apply_patch 文件上下文；write ack 不参与折叠；partial apply_patch 会把已提交路径及 `failedPathState: "unknown"` 的失败路径标脏，但不影响尚未执行的后续目标 |
-| `tools` | — | 按 `toolCall.name` 精确匹配，需压缩的工具名列表 |
-| `retainedUserMessageRounds` | 2 | 压缩前需保留的有效 user round 数 |
-| `retainedAssistantTurns` | 4 | 构成一个有效 user round 所需累计的 assistant turn 数 |
-| `enabledProviders` | 不限制 | 仅对这些 provider id 生效（大小写不敏感）；`[]`=全部不生效 |
-| `disabledProviders` | — | 即使命中 enabledProviders 也跳过压缩（大小写不敏感）；不允许空数组 |
-
-年龄压缩从候选工具结果之后的下一条 user 消息开始按 user window 统计。连续 window 累计达到 `retainedAssistantTurns` 次 assistant turn 后计为一个有效 user round；累计达到 `retainedUserMessageRounds` 个有效 round 后才压缩该结果。每个 user window 最多贡献一个有效 round。
-
-生效顺序：`enabledProviders` 过滤 → `disabledProviders` 过滤 → 都通过后启用。仅压缩成功的 `toolResult.content`，失败的永不被压缩。read 到已注入 skill 路径的文件不参与 age compression（除非被后续 anchorHygiene 触发）。
-
-#### `compactionModel`
-
-指定 Pi 的 conversation compaction 使用的摘要模型，格式为 `provider/model`：
-
-```json
-{
-  "compactionModel": "google/gemini-2.5-flash",
-  "compactionThinkingLevel": "high"
-}
-```
-
-`compactionThinkingLevel` 可选，允许值为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。省略时，指定模型继承当前 session 的 thinking level；它只影响指定模型的摘要请求，不改变当前 session 的 thinking level。配置后，手动 `/compact` 与 Pi 自动 compaction 都会复用 Pi 原生切点、摘要格式和 session 写入流程，并将摘要请求发给该模型。未配置时，pi-base 不拦截 compaction，Pi 保持使用当前 session model。指定模型及 thinking level 都与当前 session 相同时直接使用 Pi 原生路径；目标模型找不到、无法鉴权或摘要请求失败时，会显示 warning 并回退到当前 session model。取消 configured-model 请求时会直接取消本次 compaction，不会再发起 fallback 请求。
-
-该功能不改变 Pi 的 compaction 触发条件、阈值或保留窗口。由于 Pi 目前只通过 public extension hook 开放替换摘要结果，指定模型生成的 compaction entry 会被标记为 extension-generated：后续 compaction 不会像 Pi 原生 entry 那样自动继承其结构化文件操作元数据，因此多次摘要后文件操作列表可能不如原生路径完整。该 hook 也不暴露 Pi 内部的 retry 配置或自定义 agent stream；指定模型的瞬时失败会直接进入上述 fallback，而不会复用 Pi 原生的摘要重试流程。Pi 会在触发该 hook 前先解析当前 session model 的摘要鉴权，因此当前模型的鉴权解析若已失败，指定模型不会获得执行机会。
-
-#### `subagent`
-
-控制 `task` 委派的深度和并发限制。
-
-```json
-{
-  "subagent": {
-    "maxDepth": 2,
-    "maxConcurrency": 10,
-    "maxTotalConcurrency": 20,
-    "idleTimeoutMs": 300000,
-    "maxTurns": 50
-  }
-}
-```
-
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `maxDepth` | 2 | 根 depth=1；depth ≥ maxDepth 时不注入 task |
-| `maxConcurrency` | 10 | 单父 session 直接子 agent 并发上限；超限直接报错 |
-| `maxTotalConcurrency` | 关闭 | 整棵 delegation tree 并发上限；超限即使父 session 未达 maxConcurrency 也报错 |
-| `idleTimeoutMs` | 关闭 | 无 assistant/session 进展时的空闲超时（tool 执行中不触发）；计时 >0 时生效 |
-| `maxTurns` | 50 | `task.maxTurns` 未指定时的默认有效 assistant turn 预算。达到预算后通过 steer 队列要求未完成的 child 返回阶段性报告；若仍持续发起工具调用，每额外 5 个有效 turn 再提醒一次。`error`/`aborted` 消息不计数；不会强制终止子 agent |
-
-root UI 的 editor-adjacent widget 展示运行中 subagent 的 parent/child 树、turn/tool call 计数和最近活动；历史 `task` tool block 保持稳定。`/subagent` 打开运行中 session 选择器，`/subagent <session-id-or-unique-prefix>` 可直接只读查看运行中或已持久化结束的 session transcript。transcript 面板标题会展示实际 provider/model 与 thinking level；面板沿用外层导航绑定，不重复显示快捷键 footer。
-
-parent turn 在委派开始前已取消时不会创建或恢复 child session。初始化过程中发生的取消会在 startup 返回后立即传播；不使用只提前返回但无法停止后台初始化的 promise race。
-
-#### `mcp`
-
-本地和远程 MCP server。
-
-```json
-{
-  "mcp": {
-    "startupTimeoutMs": 60000,
-    "callTimeoutMs": 60000,
-    "servers": {
-      "local-example": {
-        "type": "local",
-        "command": ["my-mcp", "serve"],
-        "cwd": "~/work/mm",
-        "env": { "API_KEY": "${API_KEY}" },
-        "toolPrefix": "",
-        "startupTimeoutMs": 60000,
-        "callTimeoutMs": 60000
-      },
-      "remote-example": {
-        "type": "remote",
-        "transport": "streamable-http",
-        "url": "https://example.com/mcp",
-        "headers": { "Authorization": "${DOCS_TOKEN}" },
-        "toolPrefix": "docs"
-      }
-    }
-  }
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| 本地 `command` | `command[0]` 需 PATH 命令或绝对路径（支持 `~/`/`$HOME/`/`${HOME}/`） |
-| 本地 `cwd` | 绝对路径（支持 HOME shortcut） |
-| 远程 `transport` | `websocket` / `sse` / `streamable-http`；websocket 不支持自定义 headers |
-| `env` / `headers` | 仅支持 `$VAR` 或 `${VAR}` 整值引用，不支持字符串内插；引用不存在则连接失败 |
-| `toolPrefix` | 默认等于 server key；`""`=保留原始 tool 名 |
-| `enabled` | `false` 禁用该 server |
-| `startupTimeoutMs` | server 启动超时，覆盖 `mcp.startupTimeoutMs` 全局默认；默认 `60000` |
-| `callTimeoutMs` | 单次工具调用超时，覆盖 `mcp.callTimeoutMs` 全局默认；默认 `60000`。超时由 MCP SDK 取消对应请求，不会因单次慢调用重启 server |
-| `mcp.startupTimeoutMs` / `mcp.callTimeoutMs` | 全局默认，可在未声明 `servers` 时单独配置 |
-
-MCP 连接按 root delegation tree 隔离：同一 root session 与其所有 subagent 对每个 MCP server 配置只建立一个共享连接/本地进程，不同 root session 使用独立 Hub，配置、工具调用和 shutdown 互不影响。首次 `session_start` 会并行等待该 root tree 的所有 enabled server 完成首次连接或达到 `startupTimeoutMs`，因此首个 prompt 只会在 MCP readiness 确定后开始；后续 subagent 直接复用同一 readiness 和工具列表。`pi-base` 继续在后台维护重连 + heartbeat，状态显示在 footer。
-
----
-
-## 命令
-
-| 命令 | 说明 |
-|------|------|
-| `/agent <name>` | 切换 agent |
-| `/agent` | 有 UI 弹选择器 |
-| `/yolo` | 切换当前进程权限绕过状态，不回写配置 |
-| `/mcp-status` | 输出 MCP server/工具状态树，含冲突和 stale 工具 |
-| `/resume-all` | 跨项目恢复 session，需交互式 UI |
-| `/subagent` | 弹出运行中 subagent session 选择器 |
-| `/subagent <session-id>` | 只读查看该 subagent 的 transcript，支持唯一前缀 |
-| `/goal [--tokens 50k] <objective>` | 创建或替换持久化目标；默认不设 token budget |
-| `/goal status\|edit <objective>\|pause\|resume\|clear` | 查看、编辑、暂停、恢复或清除目标 |
-| `/goal statusbar [on\|off]` | 切换 footer 的 goal 状态项 |
-| `/reload` | (Pi 内置) 重载配置、扩展资源和 agent 定义 |
-
-## 目标模式
-
-`pi-base` 内置持久化 goal。它不依赖、不读取也不迁移任何旧 goal 插件状态；goal 状态只写入 `pi-base-goal-state` session entry，无需改写 session 或 Pi core。
-
-创建方式：
-
-```text
-/goal --tokens 200k 完成 <目标>，并以 <验证证据> 证明完成；保留 <约束>。
-```
-
-默认 agent 也可在用户显式要求目标模式时调用 `create_goal`。有显式 `tools` allowlist 的 agent 使用 `/goal` 创建；目标 active 后，`get_goal` / `update_goal` 会作为运行时控制工具注入。
-
-行为：
-
-- 状态持久化为 `active`、`paused`、`blocked`、`budget_limited` 或 `complete`，可跨 resume 恢复。
-- 模型调用 `update_goal` 时必须提供非空 `reason`，说明完成或阻塞的详细理由及证据；它只约束当前 tool call，不写入 goal 状态或 `update_goal` result。当前只校验非空，不对证据质量做自动审查。
-- `/goal <objective>` 会创建或替换为新的 active goal，并写入一条可见 goal-set message，以 `{ triggerTurn: true, deliverAs: "steer" }` 发送：streaming 时 steer 当前 agent，idle 时用同一条消息启动新 turn。`/goal edit <objective>` 保留现有 ID、状态、预算和已用量；仅在 goal active 时发送同一条 goal-set message，非 active goal 只更新持久化 objective。该 turn settled 后才按正常生命周期发出独立 continuation。模型调用 `create_goal` 只持久化 state，不额外注入 goal-set message。
-- 自动续跑只在 `agent_settled` 后即时发起，不提前排 `followUp`。TUI 中 `Esc` 产生 aborted assistant 后会持久化为 `paused`；`paused` 和 `budget_limited` 都不会在当前 run settled 后投递 goal continuation。使用 `/goal resume` 才会继续 paused goal。
-- goal-set、continuation 和 budget-limit guidance 都是可见的折叠 custom message；按 `ctrl+o` 展开可查看实际注入模型的完整 prompt。goal-set 与 continuation 共享 complete/blocked audit，continuation 使用 `<system-reminder>` 明确它是自动自查而非新用户请求，并要求先检查完成/阻塞状态再推进明确剩余项。
-- `/reload` 会安全地把 active goal 改为 `paused`，避免 reload 后静默恢复自动工作。
-- token budget 按 Codex 语义累计主 session 的非缓存输入、cache write 和 output；`cacheRead` 不重复计入，subagent usage 也不汇入主 goal。达到预算后进入 `budget_limited`，这不是完成或阻塞：发送一次 soft-stop 收尾提示；若当前 run 仍连续发起工具调用，每额外 5 个 tool-driving assistant turn 重发一次。它不强制 abort，只有当前 run settled 后才停止自动续跑。仅当现有证据证明目标真正完成时，模型才可调用 `update_goal(complete, reason)`；否则保持 `budget_limited`。
-- goal 只属于主 session；subagent 不会获得 `create_goal`、`get_goal` 或 `update_goal`，也不会恢复或自动续跑 goal。
-- provider 请求前会过滤 `aborted` / `error` assistant messages 和旧 goal control messages。这使请求 payload、输出 token 估算和 provider replay 一致，规避 compact 后巨大中断 tool call 误把下一请求压到 1/16 output tokens 的路径；它不改变 Pi core 的 compaction threshold、切点或摘要逻辑。
-
-## 运行时行为
-
-### 输出截断
-
-所有工具结果经统一截断层：
-
-| 限制 | 值 |
-|------|-----|
-| 最大行数 | 2000（LF、CRLF、CR 均按换行计数） |
-| 最大字节数 | 50 KB |
-| 完整输出 | 保存至进程私有的 `<tmp>/pi-base-truncation-*/`；目录在非 Windows 为 `0700`，输出文件显式为 `0600` |
-| 旧目录清理 | 非 Windows 仅清理约 7 天前、符合 `pi-base-truncation-<pid>-*` 格式、属于当前用户且对应进程已退出的目录；Windows 依赖用户临时目录的系统清理策略 |
-
-上游已自行截断且暴露 `Full output` 路径的工具（如 Pi core bash）保留上游路径，不重复落盘；若上游留下的 preview 仍超过最终限制，pi-base 会再次有界截断该 preview。
-
-`details.truncation` 字段：
-
-| 字段 | 含义 |
-|------|------|
-| `truncated` | 是否发生截断 |
-| `alreadyTruncated` | 上游是否已截断 |
-| `outputPath` | 完整输出路径 |
-| `totalLines` | 原始总行数 |
-| `totalBytes` | 原始总字节数 |
-
-### 错误标记修复
-
-`pi-base` 工具在错误结果的 `details` 写入内部标记；全局 `tool_result` hook 识别标记 + 文本启发式兜底，确保内置/LSP/MCP 工具稳定补齐 `isError: true`。
-
-### 状态栏（UI session）
-
-| 状态项 | 示例 |
-|--------|------|
-| 权限模式 | `YOLO`（仅 yolo 时显示） |
-| MCP 连接 | `MCP: 2/3 servers` |
-| 当前 agent | `agent:planner`（默认显示 `agent:default`） |
-| 目标状态 | `goal:active (12K / 200K)` |
-
----
-
-## 开发
-
-```bash
-npm run typecheck   # TypeScript 类型检查
-npm test            # 运行测试
-npm run test:coverage  # 测试 + 覆盖率
-```
-
-> 从 shell 用 `pi -p` 调试时，注意对 prompt 做引用，避免 shell 展开 `$(...)`、反引号、`$VAR` 或 glob。
+架构、开发、配置和工具实现文档见 [docs/](docs/)。
 
 ## 许可证
 
