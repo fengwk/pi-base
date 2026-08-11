@@ -304,7 +304,7 @@ describe("configured compaction model", () => {
 
     expect(result).toBeUndefined();
     expect(runCompact).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("is unavailable"));
+    expect(warn).not.toHaveBeenCalled();
     expect(registry.getNotifications().at(-1)).toMatchObject({ variant: "warning" });
   });
 
@@ -343,7 +343,14 @@ describe("configured compaction model", () => {
     );
 
     await expect(requestFailure.emit("session_before_compact", compactEvent(new AbortController().signal))).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("cannot authenticate"));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("summary unavailable"));
+    expect(warn).not.toHaveBeenCalled();
+    expect(authFailure.getNotifications()).toContainEqual({
+      message: expect.stringContaining("cannot authenticate"),
+      variant: "warning",
+    });
+    expect(requestFailure.getNotifications()).toContainEqual({
+      message: expect.stringContaining("summary unavailable"),
+      variant: "warning",
+    });
   });
 });

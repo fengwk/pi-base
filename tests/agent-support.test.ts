@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
 import piBaseExtension from "../index.js";
+import { AGENT_STATE_ENTRY } from "../src/agent-support.js";
 import { CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from "../src/goal/index.js";
+import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, rootSessionEntryData } from "../src/subagent/depth.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 const BASE_TOOL_NAMES = [
@@ -459,7 +461,11 @@ Broken agent.
       piBaseExtension(registry.pi as any);
       await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('field "tools" must be an array of strings'));
+      expect(warn).not.toHaveBeenCalled();
+      expect(registry.getNotifications()).toContainEqual({
+        message: expect.stringContaining('field "tools" must be an array of strings'),
+        variant: "warning",
+      });
 
       await registry.runCommand("agent", "broken", { cwd: root });
       expect(registry.getNotifications().at(-1)?.message).toContain('Unknown agent "broken"');
@@ -498,7 +504,11 @@ Typo prompt.
       piBaseExtension(registry.pi as any);
       await registry.emit("session_start", { reason: "startup" }, { cwd: root });
 
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("unknown frontmatter field: toools"));
+      expect(warn).not.toHaveBeenCalled();
+      expect(registry.getNotifications()).toContainEqual({
+        message: expect.stringContaining("unknown frontmatter field: toools"),
+        variant: "warning",
+      });
       await registry.runCommand("agent", "typo", { cwd: root });
       expect(registry.getNotifications().at(-1)).toMatchObject({
         variant: "error",
@@ -824,6 +834,7 @@ Locked prompt.
     const agentDir = await createTempWorkspace();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     const model = { provider: "provider-a", id: "model-a" };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     process.env.PI_CODING_AGENT_DIR = agentDir;
     try {
@@ -889,7 +900,52 @@ Dynamic allowlist prompt.
         { cwd: root },
       );
       expect(prompt.systemPrompt).toContain("<name>late-skill</name>");
+      expect(warn).not.toHaveBeenCalled();
     } finally {
+      warn.mockRestore();
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("does not write agent diagnostics from a headless subagent into the parent terminal", async () => {
+    // Intent: in-process child sessions have no UI context but share the root TUI's stderr.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "headless.md",
+        `---
+name: headless
+tools:
+  - read
+  - unavailable_tool
+---
+Headless prompt.
+`,
+      );
+
+      const registry = createToolRegistry({ hasUI: false });
+      piBaseExtension(registry.pi as any);
+      registry.pi.appendEntry(AGENT_STATE_ENTRY, { name: "headless" });
+      registry.pi.appendEntry(DEPTH_ENTRY, { depth: 2 });
+      registry.pi.appendEntry(ROOT_SESSION_ENTRY, rootSessionEntryData("headless-root-without-host"));
+
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root, hasUI: false, mode: "print" });
+
+      expect(registry.getActiveTools()).toEqual(["read"]);
+      expect(registry.getNotifications()).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
       } else {

@@ -1,6 +1,7 @@
 import { compact, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import type { CompactionModelConfig, CompactionThinkingLevel, PiBaseSettings } from "./config.js";
+import { reportRuntimeWarning } from "./runtime-diagnostics.js";
 
 type CompactRunner = typeof compact;
 type CompactionModelSettings = Pick<PiBaseSettings, "compactionModel" | "compactionThinkingLevel">;
@@ -25,8 +26,7 @@ function canUseNativeCompaction(
 }
 
 function warnFallback(ctx: ExtensionContext, message: string): void {
-  console.warn(`pi-base compaction model: ${message}`);
-  if (ctx.hasUI) ctx.ui.notify(message, "warning");
+  reportRuntimeWarning(ctx, message, `pi-base compaction model: ${message}`);
 }
 
 /**

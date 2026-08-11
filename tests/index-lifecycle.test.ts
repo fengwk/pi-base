@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import piBaseExtension, { type PiBaseNotifyPayload } from "../index.js";
 import { lspManager } from "../src/lsp/client.js";
-import { DEPTH_ENTRY } from "../src/subagent/depth.js";
+import { reportRuntimeWarning } from "../src/runtime-diagnostics.js";
+import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, rootSessionEntryData } from "../src/subagent/depth.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 
 function render(component: any): string {
@@ -95,6 +96,54 @@ describe("index lifecycle behavior", () => {
       expect(shutdownCalls).toBe(0);
     } finally {
       lspManager.shutdownAll = original;
+    }
+  });
+
+  it("relays child diagnostics through the root UI until that root shuts down", async () => {
+    // Intent: child sessions share process streams, so their diagnostics must use the live root host.
+    const root = await createTempWorkspace();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const childNotify = vi.fn();
+    const registry = createToolRegistry({ cwd: root });
+    piBaseExtension(registry.pi as any);
+    let rootStarted = false;
+    const childCtx = {
+      hasUI: false,
+      sessionManager: {
+        getSessionId: () => "diagnostic-child",
+        getEntries: () => [
+          { type: "custom", customType: DEPTH_ENTRY, data: { depth: 2 } },
+          { type: "custom", customType: ROOT_SESSION_ENTRY, data: rootSessionEntryData("test-session") },
+        ],
+      },
+      ui: { notify: childNotify },
+    } as never;
+
+    try {
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+      rootStarted = true;
+      const initialNotificationCount = registry.getNotifications().length;
+
+      reportRuntimeWarning(childCtx, "relayed warning", "raw child warning");
+
+      expect(registry.getNotifications().slice(initialNotificationCount)).toContainEqual({
+        message: "relayed warning",
+        variant: "warning",
+      });
+      expect(childNotify).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+
+      await registry.emit("session_shutdown", { reason: "quit" }, { cwd: root });
+      rootStarted = false;
+      const notificationCountAfterShutdown = registry.getNotifications().length;
+      reportRuntimeWarning(childCtx, "stale warning", "stale raw warning");
+      expect(registry.getNotifications()).toHaveLength(notificationCountAfterShutdown);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      if (rootStarted) {
+        await registry.emit("session_shutdown", { reason: "quit" }, { cwd: root });
+      }
+      warn.mockRestore();
     }
   });
 

@@ -22,6 +22,7 @@ import { formatOptionalArgs, renderStreamingCallText, renderRawResult, resolveCo
 import { applyContextCompressionToMessages, shouldApplyContextCompression } from "./context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./anthropic-cache-boundary.js";
 import { registerCompactionModel } from "./compaction-model.js";
+import { registerRuntimeDiagnosticHost } from "./runtime-diagnostics.js";
 import { registerResumeAllCommand } from "./resume-all.js";
 import { createTimeoutSignal, parseTimeoutSeconds } from "./timeout.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
@@ -390,23 +391,28 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   registerResumeAllCommand(pi);
   registerSubagentCommand(pi);
 
-  // Only the root (UI-owning) session hosts subagent permission prompts. Headless subagent
-  // sessions relay their `ask` prompts here via the module-level permission host. The same root
-  // also owns the live subagent tree widget.
+  // Every root owns the process-local diagnostic relay for its child tree. A UI-owning root also
+  // hosts subagent permission prompts and the live tree widget.
   let registeredHost: SubagentPermissionHost | null = null;
   let registeredHostRootSessionId: string | null = null;
   let hostChain: Promise<unknown> = Promise.resolve();
   let unsubscribeWidget: (() => void) | null = null;
   let widgetRenderTimer: ReturnType<typeof setTimeout> | null = null;
+  let disposeRuntimeDiagnosticHost: (() => void) | null = null;
+  let runtimeDiagnosticHostRootSessionId: string | null = null;
   pi.on("session_start", async (_event, ctx?: ExtensionContext) => {
-    if (!ctx?.hasUI || !isRootSession(ctx)) return;
+    if (!ctx || !isRootSession(ctx)) return;
+    disposeRuntimeDiagnosticHost?.();
+    const rootSessionId = readRootSessionId(ctx);
+    disposeRuntimeDiagnosticHost = registerRuntimeDiagnosticHost(ctx);
+    runtimeDiagnosticHostRootSessionId = rootSessionId;
+    if (!ctx.hasUI) return;
     if (registeredHost) {
       if (registeredHostRootSessionId === null) clearSubagentPermissionHost(registeredHost);
       else clearSubagentPermissionHost(registeredHostRootSessionId, registeredHost);
       registeredHost = null;
       registeredHostRootSessionId = null;
     }
-    const rootSessionId = readRootSessionId(ctx);
     const host: SubagentPermissionHost = async (req) => {
       const run = hostChain.then(async () => {
         if (registeredHost !== host || registeredHostRootSessionId !== rootSessionId) {
@@ -457,6 +463,11 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     const shutdownRootSessionId = isRootSession(ctx) ? readRootSessionId(ctx) : null;
+    if (shutdownRootSessionId !== null && runtimeDiagnosticHostRootSessionId === shutdownRootSessionId) {
+      disposeRuntimeDiagnosticHost?.();
+      disposeRuntimeDiagnosticHost = null;
+      runtimeDiagnosticHostRootSessionId = null;
+    }
     const ownsRegisteredUi = shutdownRootSessionId !== null
       && registeredHostRootSessionId === shutdownRootSessionId;
     if (registeredHost && ownsRegisteredUi) {

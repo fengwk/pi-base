@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import { basename, extname, join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { formatSkillsForPrompt, getAgentDir, parseFrontmatter, type BuildSystemPromptOptions, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
+import { reportRuntimeError, reportRuntimeWarning } from "./runtime-diagnostics.js";
 import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
 import { projectFileMutationTools } from "./model-tool-routing.js";
 import { escapeXml } from "./xml.js";
@@ -168,17 +169,15 @@ export function registerAgentSupport(
 
   const warnDiagnostics = (ctx: ExtensionContext, diagnostics: string[]): void => {
     if (diagnostics.length === 0) return;
-    for (const message of diagnostics) {
-      console.warn(message);
-    }
-    if (ctx.hasUI) {
-      ctx.ui.notify(`Loaded agents with ${diagnostics.length} warning(s); see stderr for details.`, "warning");
-    }
+    reportRuntimeWarning(
+      ctx,
+      `Loaded agents with ${diagnostics.length} warning(s):\n${diagnostics.join("\n")}`,
+      diagnostics.join("\n"),
+    );
   };
 
   const warnStartupAgentFallback = (ctx: ExtensionContext, message: string): void => {
-    console.warn(`pi-base agent warning: ${message}`);
-    if (ctx.hasUI) ctx.ui.notify(message, "warning");
+    reportRuntimeWarning(ctx, message, `pi-base agent warning: ${message}`);
   };
 
   const warnUnknownAllowlistEntries = (
@@ -199,8 +198,7 @@ export function registerAgentSupport(
       ? "They remain allowed and may activate if registered later."
       : "They will stay hidden unless those skills become available.";
     const message = `Agent "${agent.name}" declares ${field} that are not currently available: ${unknown.join(", ")}. ${availability}`;
-    console.warn(`pi-base agent warning: ${message}`);
-    if (ctx.hasUI) ctx.ui.notify(message, "warning");
+    reportRuntimeWarning(ctx, message, `pi-base agent warning: ${message}`);
   };
 
   const allRegisteredToolNames = (): string[] => pi.getAllTools()
@@ -272,13 +270,11 @@ export function registerAgentSupport(
     if (options.applyModelThinking && agent.model) {
       const model = findModel(ctx, agent.model);
       if (!model) {
-        console.warn(`Agent "${agent.name}": model ${agent.model.provider}/${agent.model.modelId} not found. Agent switch will keep the current session model.`);
-        if (ctx.hasUI) {
-          ctx.ui.notify(
-            `Agent "${agent.name}": model ${agent.model.provider}/${agent.model.modelId} not found. Keeping the current session model.`,
-            "warning",
-          );
-        }
+        reportRuntimeWarning(
+          ctx,
+          `Agent "${agent.name}": model ${agent.model.provider}/${agent.model.modelId} not found. Keeping the current session model.`,
+          `Agent "${agent.name}": model ${agent.model.provider}/${agent.model.modelId} not found. Agent switch will keep the current session model.`,
+        );
         canApplyThinkingLevel = false;
       } else {
         try {
@@ -290,21 +286,20 @@ export function registerAgentSupport(
           }
           if (!success) {
             modelRollbackNeeded = false;
-            console.warn(`Agent "${agent.name}": no auth configured for ${agent.model.provider}/${agent.model.modelId}. Agent switch will keep the current session model.`);
-            if (ctx.hasUI) {
-              ctx.ui.notify(`Agent "${agent.name}": no auth configured for ${agent.model.provider}/${agent.model.modelId}. Keeping the current session model.`, "warning");
-            }
+            reportRuntimeWarning(
+              ctx,
+              `Agent "${agent.name}": no auth configured for ${agent.model.provider}/${agent.model.modelId}. Keeping the current session model.`,
+              `Agent "${agent.name}": no auth configured for ${agent.model.provider}/${agent.model.modelId}. Agent switch will keep the current session model.`,
+            );
             canApplyThinkingLevel = false;
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          console.warn(`Agent "${agent.name}": failed to activate model ${agent.model.provider}/${agent.model.modelId}: ${message}`);
-          if (ctx.hasUI) {
-            ctx.ui.notify(
-              `Agent "${agent.name}": failed to activate model ${agent.model.provider}/${agent.model.modelId}. Keeping the current session model.`,
-              "warning",
-            );
-          }
+          reportRuntimeWarning(
+            ctx,
+            `Agent "${agent.name}": failed to activate model ${agent.model.provider}/${agent.model.modelId}. Keeping the current session model.`,
+            `Agent "${agent.name}": failed to activate model ${agent.model.provider}/${agent.model.modelId}: ${message}`,
+          );
           canApplyThinkingLevel = false;
         }
       }
@@ -318,25 +313,18 @@ export function registerAgentSupport(
         if (effectiveThinkingLevel === agent.thinkingLevel) {
           appliedThinkingLevel = effectiveThinkingLevel;
         } else {
-          console.warn(
+          reportRuntimeWarning(
+            ctx,
             `Agent "${agent.name}": requested thinking level ${agent.thinkingLevel}, but the session kept ${effectiveThinkingLevel}.`,
           );
-          if (ctx.hasUI) {
-            ctx.ui.notify(
-              `Agent "${agent.name}": requested thinking level ${agent.thinkingLevel}, but the session kept ${effectiveThinkingLevel}.`,
-              "warning",
-            );
-          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(`Agent "${agent.name}": failed to apply thinking level ${agent.thinkingLevel}: ${message}`);
-        if (ctx.hasUI) {
-          ctx.ui.notify(
-            `Agent "${agent.name}": failed to apply thinking level ${agent.thinkingLevel}. Keeping the current session thinking level.`,
-            "warning",
-          );
-        }
+        reportRuntimeWarning(
+          ctx,
+          `Agent "${agent.name}": failed to apply thinking level ${agent.thinkingLevel}. Keeping the current session thinking level.`,
+          `Agent "${agent.name}": failed to apply thinking level ${agent.thinkingLevel}: ${message}`,
+        );
       }
     }
 
@@ -381,10 +369,7 @@ export function registerAgentSupport(
         persistActiveAgent(agent.name);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(`Agent "${agent.name}" activated, but its session state could not be saved: ${message}`);
-        if (ctx.hasUI) {
-          ctx.ui.notify(`Agent "${agent.name}" activated, but its session state could not be saved: ${message}`, "warning");
-        }
+        reportRuntimeWarning(ctx, `Agent "${agent.name}" activated, but its session state could not be saved: ${message}`);
       }
     }
     if (options.notify && ctx.hasUI) {
@@ -438,10 +423,12 @@ export function registerAgentSupport(
       return await applyAgent(agentName, ctx, applyOptions);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Agent \"${agentName}\": unexpected activation failure: ${message}`, error);
-      if (applyOptions.notify && ctx.hasUI) {
-        ctx.ui.notify(`Agent "${agentName}": activation failed: ${message}`, "error");
-      }
+      reportRuntimeError(
+        ctx,
+        `Agent "${agentName}": activation failed: ${message}`,
+        `Agent "${agentName}": unexpected activation failure: ${message}`,
+        error,
+      );
       return false;
     }
   };

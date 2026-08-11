@@ -18,6 +18,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { AGENT_STATE_ENTRY, type AgentRuntimeConfig } from "../agent-support.js";
+import { reportRuntimeWarning } from "../runtime-diagnostics.js";
 import { escapeXml } from "../xml.js";
 import { TASK_TOOL_NAME } from "./constants.js";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, readRootSessionId, rootSessionEntryData } from "./depth.js";
@@ -925,7 +926,8 @@ function resolveAgentRuntime(
       model = candidate;
       configuredModel = { provider: candidate.provider, modelId: candidate.id };
     } else {
-      console.warn(
+      reportRuntimeWarning(
+        ctx,
         `Agent "${agentType}": model ${config.model.provider}/${config.model.modelId} is unavailable or has no configured auth. Subagent will keep the parent model.`,
       );
     }
