@@ -53,7 +53,7 @@
 
 Legacy encoding 无法表示新内容时失败。
 
-当前实现使用 `stat`，因此符号链接会按其目标进行普通文件判断并由 `writeFile` 跟随；公共安全边界见[架构说明](../architecture.md#路径与文件写入)。
+`write` 使用 `stat` 判断目标类型，因此符号链接按其目标进行普通文件判断，并由 `writeFile` 跟随；公共安全边界见[架构说明](../architecture.md#路径与文件写入)。
 
 ## 并发与 abort
 

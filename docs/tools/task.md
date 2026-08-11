@@ -4,7 +4,7 @@
 
 ## 作用
 
-创建或恢复一个 Subagent session，把边界清晰的工作委派给指定 Markdown Agent。
+创建或恢复一个 Subagent session，并把 `prompt` 交给指定 Markdown Agent 执行。
 
 ## 注入条件
 
@@ -20,8 +20,8 @@
 | 参数 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `subagent_type` | 是 | — | allowlist 中的 Agent 名 |
-| `prompt` | 是 | — | 独立、完整的任务说明 |
-| `maxTurns` | 否 | 配置值，默认 50 | 本次 soft-stop turn 预算 |
+| `prompt` | 是 | — | 交给 Subagent 执行的任务说明 |
+| `maxTurns` | 否 | 配置值，默认 50 | 该调用的 soft-stop turn 预算 |
 | `session_id` | 否 | — | 恢复已有 Subagent session |
 
 Schema 由 [`src/subagent/schema.ts`](../../src/subagent/schema.ts) 按当前 workspace 的默认 `maxTurns` 构建。
@@ -41,11 +41,11 @@ Schema 由 [`src/subagent/schema.ts`](../../src/subagent/schema.ts) 按当前 wo
   -> completed/error/aborted result
 ```
 
-验证顺序固定，避免在已知无效任务上创建 session 或占用并发槽位。
+Agent、allowlist 和 resume 状态校验在创建 session 和预留并发槽位之前完成。
 
 ## Session 创建
 
-真实 factory 位于 [`src/subagent/runner.ts`](../../src/subagent/runner.ts)：
+Factory 位于 [`src/subagent/runner.ts`](../../src/subagent/runner.ts)：
 
 - 根据 cwd 计算 Subagent session 目录。
 - 创建或恢复 Pi AgentSession。
@@ -62,7 +62,7 @@ Schema 由 [`src/subagent/schema.ts`](../../src/subagent/schema.ts) 按当前 wo
 
 - 已运行中的 session 不能再次 resume。
 - 同一 session 的并发 resume 通过进程级 reservation 阻止。
-- 可以使用指定 `subagent_type` 按最新 Agent config 恢复。
+- 恢复时使用传入的 `subagent_type` 和恢复时加载的 Agent config。
 
 ## 并发
 
@@ -71,7 +71,7 @@ Schema 由 [`src/subagent/schema.ts`](../../src/subagent/schema.ts) 按当前 wo
 - `maxConcurrency`：单个 parent 的直接 child。
 - `maxTotalConcurrency`：整个 root delegation tree。
 
-创建前先预留槽位，Subagent 注册到 registry 后释放 pending reservation，避免并发启动竞态绕过上限。
+创建前先预留并发槽位；Subagent 注册到 registry 后释放 pending reservation，reservation 在此期间计入并发限制。
 
 ## Depth
 
@@ -81,7 +81,7 @@ Root depth 为 1。Child 创建时使用：
 childDepth = parentDepth + 1
 ```
 
-达到 `maxDepth` 后，Agent 不再获得 `task`，而不是等调用时再报错。
+达到 `maxDepth` 后，Agent 不再获得 `task`。
 
 ## maxTurns
 
@@ -91,12 +91,12 @@ childDepth = parentDepth + 1
 - 不会强制终止正在执行的工具。
 - 如果 child 继续工具驱动，每额外 5 个有效 turn 再提醒一次。
 
-这样 parent 可以用较小预算先验证方向，再用 `session_id` 继续。
+达到 soft-stop 后，可使用该 `session_id` 恢复同一 child session 并继续执行。
 
 ## Idle timeout 与 abort
 
 - `idleTimeoutMs` 只在 session 没有 assistant/session 活动时触发。
-- 正在进行的工具调用本身不被误判为空闲。
+- 工具调用进行期间不触发 `idleTimeoutMs`。
 - Parent 取消会传播到当前 child 及其 delegation subtree。
 - 运行状态存储在进程级 `SubagentRegistry`，UI widget 和 `/subagent` 共用该 registry。
 

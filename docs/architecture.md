@@ -19,7 +19,7 @@ Pi
 
 ## 初始化顺序
 
-`piBaseExtension` 的主要初始化顺序如下：
+`piBaseExtension` 按以下顺序注册组件：
 
 1. 注册 compaction model 支持。
 2. 创建按工作目录加载配置的 LSP resolver factory。
@@ -38,9 +38,9 @@ Pi
 7. 注册 Permission guard、`/yolo`、`/resume-all`、`/subagent`。
 8. 注册 context compression、provider request 和统一 `tool_result` 钩子。
 
-顺序是有意义的。例如 Goal 的 settled handler 必须先于 Notify 判断一次运行是否真正结束；Permission 需要复用 Notify 的 permission 回调；Subagent 需要 Agent catalog 提供 allowlist。
+注册顺序受以下依赖约束：Goal 的 settled handler 先于 Notify；Permission 复用 Notify 的 permission 回调；Subagent 在 Agent catalog 可提供 allowlist 后注册。
 
-## 主要模块
+## 模块
 
 | 模块 | 职责 |
 |------|------|
@@ -67,7 +67,7 @@ Pi
 - 清理 LSP resolver cache；reload 时关闭已有 LSP client。
 - 恢复当前 Agent、Goal 和运行时状态。
 - 建立 MCP binding。
-- MCP 初次连接与工具发现阶段结束后，再校验当前 Agent 的 tool allowlist，避免正常启动期间动态工具尚未注册时产生误报。
+- MCP 初次连接与工具发现阶段结束后，再校验当前 Agent 的 tool allowlist。
 - 在 UI root session 注册 Subagent 权限 host、诊断 host 和实时树形 widget。
 
 Subagent session 携带自己的 depth、root session id 和 Agent state，不重复拥有 root UI 资源。
@@ -77,7 +77,7 @@ Subagent session 携带自己的 depth、root session id 和 Agent state，不�
 - 根 session 关闭全部 LSP client。
 - MCP lease 在 terminal shutdown 时释放共享连接。
 - 清理通知、权限 host、widget 和诊断 host。
-- reload 与真正退出采用不同的清理路径，避免重载过程中提前销毁仍需复用的资源。
+- Reload 与 terminal shutdown 使用不同的清理路径；reload 不释放重载后继续复用的资源。
 
 ### `before_agent_start`
 
@@ -130,7 +130,7 @@ tool result
 
 ## 工具公共结构
 
-大部分静态工具采用相同分层：
+静态工具共享以下执行分层：
 
 ```text
 schema
@@ -163,7 +163,7 @@ schema
 - `~/`、`$HOME/`、`${HOME}/`。
 - `filePath` 到 `path` 的兼容别名映射。
 
-`edit`、`write` 和 `apply_patch` 使用文件变更队列串行化同一目标的读改写过程。文本文件统一经过编码检测；修改工具尽量保留已有编码、BOM 和行尾。
+`edit`、`write` 和 `apply_patch` 使用文件变更队列串行化同一目标的读改写过程。文本文件统一经过编码检测。`edit` 和 `apply_patch` 的 Update/Move 保留已有 encoding、BOM 和行尾；`write` 覆盖已有文件时保留 encoding 和 BOM，换行以传入的 `content` 为准。
 
 `permission` 是词法防误操作机制，不是文件系统沙箱。需要安全隔离时必须使用容器、受限账户或操作系统级边界。
 
@@ -171,11 +171,9 @@ schema
 
 ### 模型驱动的文件工具投影
 
-`edit`、`write` 和 `apply_patch` 都会注册，但当前 Agent 的实际工具集会按模型和显式 allowlist 投影：
+`edit`、`write` 和 `apply_patch` 都会注册。未在 Agent `tools` 中指定文件修改工具时，模型 ID 包含 `gpt-` 且不包含 `gpt-4` 或 `oss` 的模型使用 `apply_patch`，其他模型使用 `edit` 和 `write`。
 
-- GPT/Codex 类模型默认使用 `apply_patch`。
-- 其他模型默认使用 `edit` / `write`。
-- 显式 Agent allowlist 不会被扩大权限。
+显式配置不扩大权限。同时配置 `apply_patch` 与 `edit` / `write` 时只启用 `apply_patch`；模型 ID 包含 `gpt-` 且不包含 `gpt-4` 或 `oss` 的模型同时配置 `edit` 和 `write` 时也使用 `apply_patch`；只配置 `edit` 或 `write` 时保留该单项工具。
 
 ### MCP
 
@@ -200,8 +198,6 @@ MCP 工具来自运行时 server 列表，不存在固定工具名。`McpSession
 | Agent state | session entry |
 | Goal state | root session entry |
 | YOLO | 运行时 cwd 配置快照 |
-
-设计目标是让同一 root delegation tree 共享昂贵资源，同时避免不同 root session 互相污染。
 
 ## 第三方边界
 

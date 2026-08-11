@@ -1,5 +1,6 @@
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
@@ -62,6 +63,39 @@ describe("agent support", () => {
       delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
     } else {
       process.env.PI_BASE_GLOBAL_SETTINGS_PATH = previousGlobalSettingsPath;
+    }
+  });
+
+  it("loads the checked-in agent examples with their configured models", async () => {
+    // Intent: published Agent examples should form a self-contained catalog with valid model settings.
+    const root = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const openaiModel = { provider: "openai", id: "gpt-5.6-sol" };
+    const deepseekModel = { provider: "deepseek", id: "deepseek-v4-flash" };
+    process.env.PI_CODING_AGENT_DIR = fileURLToPath(new URL("../examples", import.meta.url));
+    try {
+      const registry = createToolRegistry({
+        model: openaiModel,
+        models: [openaiModel, deepseekModel],
+      });
+      piBaseExtension(registry.pi as any);
+
+      for (const [name, model, thinkingLevel] of [
+        ["jiji", openaiModel, "max"],
+        ["coder", deepseekModel, "max"],
+        ["explorer", deepseekModel, "high"],
+        ["helper", deepseekModel, "high"],
+      ] as const) {
+        await registry.runCommand("agent", name, { cwd: root });
+        expect(registry.getCurrentModel()).toEqual(model);
+        expect(registry.pi.getThinkingLevel()).toBe(thinkingLevel);
+      }
+
+      expect(registry.getNotifications().find((notification) =>
+        notification.variant === "warning" && notification.message.includes("unknown subagents"))).toBeUndefined();
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     }
   });
 

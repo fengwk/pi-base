@@ -1,0 +1,129 @@
+{
+  "defaultAgent": "jiji",
+  "lsp": {
+    "servers": {
+      "jdtls": {
+        "command": [
+          "jdtls"
+        ],
+        "extensions": [
+          ".java"
+        ],
+        "rootMarkers": [
+          "pom.xml",
+          "build.gradle",
+          "build.gradle.kts",
+          "settings.gradle",
+          "settings.gradle.kts"
+        ],
+        "firstMatchMarkers": [
+          ".git"
+        ],
+        "requestTimeoutMs": 120000
+      },
+      "typescript-language-server": {
+        "command": [
+          "typescript-language-server",
+          "--stdio"
+        ],
+        "extensions": [
+          ".ts",
+          ".tsx",
+          ".js",
+          ".jsx",
+          ".mjs",
+          ".cjs",
+          ".mts",
+          ".cts"
+        ],
+        "firstMatchMarkers": [
+          ".git",
+          "package.json",
+          "tsconfig.json",
+          "jsconfig.json"
+        ],
+        "requestTimeoutMs": 90000
+      },
+      "gopls": {
+        "command": [
+          "gopls"
+        ],
+        "extensions": [
+          ".go"
+        ],
+        "firstMatchMarkers": [
+          ".git",
+          "go.mod",
+          "go.work"
+        ],
+        "requestTimeoutMs": 90000
+      },
+      "pylsp": {
+        "command": [
+          "pylsp"
+        ],
+        "extensions": [
+          ".py",
+          ".pyi"
+        ],
+        "firstMatchMarkers": [
+          ".git",
+          "pyproject.toml",
+          "setup.py",
+          "requirements.txt",
+          "Pipfile"
+        ],
+        "requestTimeoutMs": 90000
+      }
+    }
+  },
+  "permission": {
+    "read": "allow",
+    "grep": "allow",
+    "find": "allow",
+    "edit": "ask",
+    "write": "ask",
+    "apply_patch": "ask",
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow"
+    }
+  },
+  "render": {
+    "collapsedToolResultLines": {
+      "*": 10,
+      "bash": 20,
+      "lsp_*": 10
+    },
+    "collapsedToolResultMaxChars": {
+      "*": 4000
+    }
+  },
+  "contextCompression": {
+    "anchorHygiene": true,
+    "retainedUserMessageRounds": 2,
+    "retainedAssistantTurns": 4,
+    "tools": [
+      "read",
+      "grep",
+      "find",
+      "bash",
+      "edit",
+      "write",
+      "apply_patch",
+      "lsp_goto_definition",
+      "lsp_workspace_symbols",
+      "lsp_java_decompile"
+    ]
+  },
+  "subagent": {
+    "maxDepth": 3,
+    "maxConcurrency": 4,
+    "maxTotalConcurrency": 8,
+    "idleTimeoutMs": 120000,
+    "maxTurns": 50
+  }
+}

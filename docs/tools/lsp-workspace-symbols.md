@@ -55,9 +55,9 @@ Symbol kind 数字会映射为 LSP 标准名称；未知值显示为 `kind N`。
 
 ## 使用边界
 
-- 已知或大致知道符号名时使用。
-- 广泛文本搜索优先 `grep`。
-- 文件查找优先 `find`。
+- `lsp_workspace_symbols` 按符号名称查询工作区符号。
+- 文本内容搜索由 `grep` 提供。
+- 文件名查找由 `find` 提供。
 - `path` 必须属于目标工作区，否则可能选择错误 server/root。
 
 ## Abort 与 timeout

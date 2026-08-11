@@ -12,7 +12,7 @@
 npm install
 ```
 
-常用验证：
+验证命令：
 
 ```bash
 npm run typecheck
@@ -34,13 +34,14 @@ src/                     TypeScript 实现
 prompts/                 注入模型的工具说明
 skills/                  随 package 提供的 skill
 scripts/                 通知脚本
+examples/                配置和 Agent 示例
 tests/                   Vitest 测试
 docs/                    开发与实现文档
 ```
 
 ## 修改现有工具
 
-修改工具前至少检查：
+修改工具时检查以下位置：
 
 1. `src/schemas/<tool>.ts` 的公共参数契约。
 2. `prompts/<tool>.md` 的模型说明。
@@ -54,7 +55,7 @@ docs/                    开发与实现文档
 
 ## 新增静态工具
 
-建议遵循现有分层：
+静态工具分层参考：
 
 ```text
 src/schemas/example.ts
@@ -80,7 +81,7 @@ docs/tools/example.md
 
 Schema 是模型侧契约，但 execute 仍需校验直接调用场景。测试可能绕过 Pi 的 schema validation 直接调用 `execute`，因此核心执行函数不能假设参数已经可靠。
 
-推荐：
+执行层校验：
 
 - 必填字符串拒绝缺失和空白值。
 - 数字使用统一 parser，并校验范围。
@@ -161,7 +162,7 @@ Vitest 只收集 `tests/**/*.test.ts`，默认单测试超时 10 秒。
 - 使用 [`tests/helpers.ts`](../tests/helpers.ts) 创建临时工作区和 mock Pi registry。
 - 测试意图写成简短注释。
 - 测试临时文件放在系统临时目录。
-- 不依赖开发者 HOME、真实 checkout 路径或全局配置。
+- 不依赖开发者 HOME、固定 checkout 路径或全局配置。
 - 涉及平台分支时显式模拟或使用平台条件。
 
 ## 文档同步
@@ -174,7 +175,7 @@ Vitest 只收集 `tests/**/*.test.ts`，默认单测试超时 10 秒。
 | 配置字段或合并规则 | `docs/configuration.md` |
 | 生命周期或模块关系 | `docs/architecture.md` |
 | 用户安装和首用流程 | 根 `README.md` |
-| 第三方来源 | `THIRD_PARTY_NOTICES` 和 `LICENSES/` |
+| 第三方来源 | `THIRD_PARTY_NOTICES` 和 `LICENSES` |
 
 ## 发布前检查
 
@@ -191,5 +192,5 @@ git diff --check
 - 工作区无临时文件。
 - README 和 docs 中的本地链接有效。
 - JSON 示例可解析。
-- `LICENSES/` 和 `THIRD_PARTY_NOTICES` 包含新增的第三方代码归属。
-- 不存在可达的 notes refs、密钥、Token 或私人内部地址。
+- 第三方代码的来源和许可证记录在 `LICENSES` 和 `THIRD_PARTY_NOTICES`。
+- Git notes refs 为空；tracked files 不包含密钥、Token 或私人内部地址。

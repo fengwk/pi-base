@@ -48,7 +48,7 @@ Workspace root 按 `.git` 边界、`rootMarkers` 和 `firstMatchMarkers` 计算�
 
 ## Capability
 
-工具在发送请求前检查 server 是否声明 `textDocument/definition`。未声明时直接返回可操作错误，并建议使用 `grep` 或 `read`。
+工具在发送请求前检查 server 是否声明 `textDocument/definition`。未声明时不发送请求并返回错误；错误消息包含使用 `grep` 或 `read` 的替代建议。
 
 ## 位置编码
 

@@ -87,11 +87,11 @@ ripgrep JSON 中的 base64 `bytes` 字段会经过文本解码。若事件缺少
 - 多行模式的 `limit` 统计 match event；一个 event 可能展示多行。
 - 长行截断设置 `details.linesTruncated`。
 
-这些语义性截断通过 metadata 交给[公共结果处理链](../architecture.md#tool_result)，不会重复声称当前结果包含完整原文。
+这些语义性截断通过 metadata 标记，供[公共结果处理链](../architecture.md#tool_result)识别。
 
 ## Timeout 与终止
 
-`timeout_seconds` 使用独立 AbortSignal。超时返回明确的 `Search timed out` 错误；父级 abort 保持为 abort，不会误报为 timeout。
+`timeout_seconds` 使用独立 AbortSignal。独立 timeout signal 返回 `Search timed out`；父级 abort 返回 abort。
 
 子进程通过 [`src/process-termination.ts`](../../src/process-termination.ts) 终止进程树。
 

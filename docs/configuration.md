@@ -1,5 +1,7 @@
 # 配置参考
 
+完整示例见 [`examples/pi-base.json`](../examples/pi-base.json)。
+
 ## 配置文件
 
 | 作用域 | 路径 |
@@ -7,7 +9,7 @@
 | 全局 | `~/.pi/agent/pi-base.json` |
 | 项目 | 从 cwd 向上查找最近的 `<repo>/.pi/pi-base.json` |
 
-环境变量 `PI_BASE_GLOBAL_SETTINGS_PATH` 可覆盖全局配置路径，主要用于隔离测试。
+环境变量 `PI_BASE_GLOBAL_SETTINGS_PATH` 可覆盖全局配置路径。
 
 配置按 cwd 缓存在进程内。修改后执行 `/reload`。
 
@@ -164,10 +166,10 @@ Permission 用于防误操作，不是安全沙箱。
 | 字段 | 默认 | 说明 |
 |------|------|------|
 | `permissionAsked` | `false` | 权限确认前通知 |
-| `agentEnd` | `false` | 一次运行真正结束时通知 |
+| `agentEnd` | `false` | Agent run settled 为 completed 或 non-retryable error 时通知；active Goal continuation 不发送 completed 通知 |
 | `suppressCompletedAfterRejectionMs` | `5000` | 拒绝权限后抑制 completed 通知 |
 
-通知主要支持 Linux desktop 和 WSL。
+桌面通知支持 Linux desktop 和 WSL；其他平台不启用通知。
 
 ## `yolo`
 
@@ -267,7 +269,7 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 
 - `anchorHygiene`：文件修改成功后压缩同路径的旧 read/edit/apply_patch 上下文。
 - `tools`：允许做 age compression 的工具名。
-- `retainedUserMessageRounds` / `retainedAssistantTurns`：控制结果达到多旧时才压缩。
+- `retainedUserMessageRounds` / `retainedAssistantTurns`：分别控制保留的最近 user message rounds 和 assistant turns；更早的工具结果可进入 age compression。
 - `enabledProviders`：仅列出的 provider 生效；空数组表示全部关闭。
 - `disabledProviders`：明确排除 provider，不能是空数组。
 

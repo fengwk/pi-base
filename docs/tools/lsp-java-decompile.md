@@ -50,14 +50,14 @@
 
 工具要求 client 支持 `java/classFileContents`。当前 server 不是 JDTLS 或未声明能力时返回明确错误，不尝试 shell 解压 JAR。
 
-JDTLS client 初始化会声明 `classFileContentsSupport`，并可按配置增强：
+JDTLS client 初始化会声明 `classFileContentsSupport`，并处理以下启动配置：
 
 - Lombok javaagent。
 - 基于项目 Java 文件数的 heap。
 - Workspace `-data`。
 - `JAVA_HOME_<version>` 选择。
 
-这些增强属于 client 启动行为，不改变工具参数。
+这些配置属于 client 启动行为，不改变工具参数。
 
 ## 两条反编译路径
 
@@ -69,7 +69,7 @@ JDTLS client 初始化会声明 `classFileContentsSupport`，并可按配置增�
 java/classFileContents { uri }
 ```
 
-适合 JDTLS 已解析出的 class URI。
+`jdt://` 路径用于 JDTLS 已解析出的 class URI。
 
 ### 文件 URI / class 路径
 
@@ -91,7 +91,7 @@ arguments: [uri]
 
 所有错误返回 `isError: true`。
 
-## 推荐调用链
+## 调用链
 
 ```text
 lsp_workspace_symbols 或 lsp_goto_definition

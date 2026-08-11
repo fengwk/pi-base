@@ -75,7 +75,7 @@ Parser 处理：
 - UTF BOM。
 - LF、CRLF、CR。
 - Begin/End 边界空白。
-- 常见 heredoc wrapper。
+- `<<TOKEN`、`<<'TOKEN'`、`<<"TOKEN"` 及带 `cat ` 前缀的 heredoc wrapper。
 - 可选 `*** Workdir:`，且只能位于 Begin Patch 后。
 
 Malformed patch 在文件系统访问前失败。
@@ -89,7 +89,13 @@ Update 按以下层级寻找唯一匹配：
 3. `trim`
 4. `unicode`
 
-`unicode` 层会规范化常见引号、破折号、省略号和不换行空格。
+`unicode` 层执行以下规范化：
+
+- `‘`、`’`、`‚`、`‛` 转为 `'`。
+- `“`、`”`、`„`、`‟` 转为 `"`。
+- `‐`、`‑`、`‒`、`–`、`—`、`―`、`−` 转为 `-`。
+- `…` 转为 `...`。
+- 不换行空格 U+00A0 转为普通空格。
 
 关键规则：
 
@@ -190,7 +196,7 @@ Permission 会先解析 patch intents：
 - Delete：关闭源 document。
 - Move：关闭源并同步目标。
 
-Commit 失败时保守关闭失败路径；Move 同时关闭目标路径。
+Commit 失败时关闭失败路径对应的 LSP document；Move 失败时同时关闭目标路径对应的 document。
 
 ## Diff 与渲染
 

@@ -4,6 +4,8 @@
 
 `pi-base` 可以从 Markdown 文件加载具名 Agent，为不同任务固定 system prompt、模型、思考级别、工具、skills 和可委派的 Subagent。
 
+Agent 示例见 [`examples/agents`](../examples/agents/)。
+
 ## 文件位置
 
 默认目录：
@@ -45,7 +47,7 @@ Frontmatter 之后的 Markdown 正文作为该 Agent 的自定义 prompt。正�
 | `skills` | 否 | 对模型可见的 skill 名数组 |
 | `subagents` | 否 | 允许通过 `task` 委派的 Agent 名数组 |
 
-未知字段会使整个 Agent 文件失效，避免 `toools` 一类拼写错误意外退化为继承全部工具。字符串数组会去重；空字符串或非数组值会使文件失效。
+未知字段会使整个 Agent 文件失效。字符串数组会去重；空字符串或非数组值会使文件失效。
 
 ## Tool allowlist
 
@@ -55,7 +57,7 @@ Frontmatter 之后的 Markdown 正文作为该 Agent 的自定义 prompt。正�
 - 文件修改工具会结合当前模型做投影，但不会扩大显式 allowlist。
 - MCP 等动态工具可以预先写入 allowlist；初次连接成功后再进行可用性校验。
 
-当前仍不可用的工具会产生警告，但名称不会从 allowlist 删除；工具后续注册或 MCP 重连成功后仍可激活。MCP 首次连接失败时，警告表示该工具在当前启动阶段确实不可用。
+当前不可用的工具会产生警告，但名称不会从 allowlist 删除；工具后续注册或 MCP 重连成功后仍可激活。MCP 首次连接失败时，该工具在当前启动阶段标记为不可用并产生警告。
 
 ## Skill allowlist
 
@@ -92,7 +94,7 @@ Session 启动时的 Agent 选择优先级：
 
 第一项只在恢复或继承了 Agent state 的 session 中存在；全新 session 从 `--agent` 开始判断。
 
-常用方式：
+选择与切换命令：
 
 ```bash
 pi --agent reviewer

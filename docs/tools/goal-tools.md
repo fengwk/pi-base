@@ -20,8 +20,9 @@ Goal mode 为根 session 提供可持久化、可暂停、可恢复的长期目�
 
 - Goal 只属于主 session。
 - Subagent 不恢复 Goal，也不获得 Goal tools。
-- 隐式/default Agent 可以获得 `create_goal`。
-- 显式 tool allowlist 的 Agent 通常通过 `/goal` 创建，Goal active 后按运行时策略注入读取/更新工具。
+- 主 session 的隐式/default Agent 注入 `create_goal`。
+- 显式 tool allowlist 的 Agent 只有在 `tools` 中声明 `create_goal` 时获得该工具；`/goal` 命令也可以创建 Goal。
+- Goal active 后注入 `get_goal` 和 `update_goal`。
 
 ## 状态
 
@@ -50,8 +51,10 @@ Snapshot 使用 session custom entry `pi-base-goal-state`。
 
 Schema：
 
-- `objective`：非空、持久且可验证的目标。
-- `tokenBudget`：可选正数，只应在用户明确要求时设置。
+- `objective`：非空目标文本。
+- `tokenBudget`：可选正数。
+
+工具说明要求仅在用户明确指定预算时传入 `tokenBudget`。
 
 执行：
 
@@ -61,7 +64,7 @@ Schema：
 4. 替换已有 Goal。
 5. 持久化 snapshot。
 
-工具只持久化状态，不额外注入一次 user goal-set message；`/goal` 命令路径会创建可见控制消息。
+`create_goal` 写入 GoalState；可见的 goal-set control message 由 `/goal` 命令创建。
 
 ## `get_goal`
 
@@ -71,7 +74,7 @@ Schema：
 - 格式化状态。
 - Remaining token 信息。
 
-没有 Goal 时返回正常的空状态说明。
+没有 Goal 时返回空状态说明，不作为工具错误。
 
 ## `update_goal`
 
@@ -118,7 +121,6 @@ input + output + cacheWrite
 预算不会强制 abort 当前 run：
 
 - 发送 soft-stop wrap-up guidance。
-- 当前 run 可以完成收尾。
 - Settled 后停止自动 continuation。
 - 每额外 5 个工具驱动 turn 重发提示。
 
@@ -128,10 +130,11 @@ Active Goal 在 `agent_settled` 后检查：
 
 - 已完成/blocked：停止。
 - aborted：转 paused。
-- 不可恢复 error：转 blocked。
-- 仍 active：注入 continuation。
+- context overflow 或 overflow recovery 失败：转 paused。
+- 其他 error：转 blocked。
+- 状态为 active：注入 continuation。
 
-`Esc` 暂停后必须 `/goal resume` 才继续。Reload 会把 active Goal 改为 paused，防止重载后静默续跑。
+`Esc` 暂停后必须 `/goal resume` 才继续。Reload 会把 active Goal 改为 paused；之后必须执行 `/goal resume` 才继续。
 
 ## Context 过滤
 

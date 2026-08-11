@@ -41,14 +41,14 @@
 
 Shell 配置由 Pi 的 `getShellConfig` 决定。
 
-Linux/macOS 下，当 `$SHELL` 是 Bash 或 Zsh 时，renderer 会构造 host shell options，加载常见 startup 文件：
+Linux/macOS 下，当 `$SHELL` 是 Bash 或 Zsh 时，renderer 会构造 host shell options，并加载以下 startup 文件：
 
 - Bash：`.bash_profile`、`.bash_login`、`.profile`、`.bashrc`
 - Zsh：`.zshenv`、`.zprofile`、`.zshrc`
 
 Windows 使用平台默认 shell 配置。
 
-某些 shell 配置通过 argv 传命令，另一些通过 stdin transport；本地 operations 同时支持两者。
+命令传递方式由 `getShellConfig` 返回的 shell 配置决定，可使用 argv 或 stdin transport；本地 operations 支持两种方式。
 
 ## 子进程
 
@@ -64,15 +64,17 @@ Windows 使用平台默认 shell 配置。
 
 Bash 不按路径匹配，而是先经过 [`src/bash-command-analyzer.ts`](../../src/bash-command-analyzer.ts)。
 
-Analyzer 尝试拆分：
+Analyzer 按以下顶层分隔符拆分命令：
 
 - `&&`
 - `||`
 - `|`
+- `|&`
+- `&`
 - `;`
 - 换行
 
-并识别引号、重定向、heredoc 和部分执行 wrapper。
+Analyzer 识别引号、重定向和 heredoc。`command`、`env`、`exec`、`nohup`、`eval`、`source`、`.`、`sh`、`bash`、`dash`、`zsh`、`ksh`、`ksh93`、`mksh` 和 `fish` 标记为动态 wrapper。
 
 动态命令头、命令替换、process substitution、控制流或无法保守分析的 shell 结构不会被当作已安全解析；如果没有明确 deny，则退回 `ask`。公共 Permission 边界见[架构说明](../architecture.md#路径与文件写入)。
 
@@ -84,7 +86,7 @@ Bash renderer：
 - 完成状态显示 total duration。
 - 成功结果折叠时优先保留尾部输出。
 - 错误即使配置为零行也保留有限诊断。
-- 识别上游 `fullOutputPath` 和截断 footer，避免重复展示。
+- 上游结果已包含 `fullOutputPath` 或截断 footer 时，renderer 不再添加同类信息。
 
 ## Error
 

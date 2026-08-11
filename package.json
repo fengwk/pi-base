@@ -31,6 +31,8 @@
     "skills/",
     "scripts/",
     "prompts/",
+    "docs/",
+    "examples/",
     "THIRD_PARTY_NOTICES",
     "LICENSES/"
   ],

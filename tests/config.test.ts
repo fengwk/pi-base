@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { loadPiBaseSettings } from "../src/config.js";
@@ -31,6 +31,28 @@ function testExecutableContent(): string {
 }
 
 describe("pi-base config", () => {
+  it("loads the checked-in example config", async () => {
+    // Intent: the published example should stay aligned with the strict runtime config schema.
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    const example = await readFile(new URL("../examples/pi-base.json", import.meta.url), "utf8");
+    await writeFile(join(projectDir, "pi-base.json"), example, "utf8");
+
+    await withTempGlobalSettings(() => {
+      const loaded = loadPiBaseSettings(root);
+      expect(loaded.settings.defaultAgent).toBe("jiji");
+      expect(Object.keys(loaded.settings.lsp?.servers ?? {})).toEqual([
+        "jdtls",
+        "typescript-language-server",
+        "gopls",
+        "pylsp",
+      ]);
+      expect(loaded.settings.permission?.apply_patch).toEqual([{ pattern: "*", action: "ask" }]);
+      expect(loaded.settings.subagent?.maxTotalConcurrency).toBe(8);
+    });
+  });
+
   it("loads project settings and overrides global lsp server entries", async () => {
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");

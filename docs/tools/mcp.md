@@ -102,13 +102,13 @@ Hub 负责：
 - `""`：保留 remote tool name。
 - 其他字符串：使用指定 prefix。
 
-别名最大 64 字符。非法字符会转换为 `_`；超长或需要规范化时追加 12 字符 SHA-256 hash，降低碰撞概率。
+别名最大 64 字符。原始别名超过 64 字符或包含 `[A-Za-z0-9_-]` 之外的字符时，非法字符转换为 `_`，并追加 12 字符 SHA-256 hash。
 
 ## Schema
 
 Remote `inputSchema` 通过 [`src/mcp/schema.ts`](../../src/mcp/schema.ts) 转换为 TypeBox。
 
-不支持的 JSON Schema 结构会回退为 `Type.Any()`，避免 server 的非标准 schema 阻止工具注册。
+不支持的 JSON Schema 结构转换为 `Type.Any()`；该工具仍会注册。
 
 ## Tool adapter
 
@@ -158,7 +158,7 @@ Remote `isError` 和 transport 异常都映射为 Pi `isError: true`，并在 `d
 
 同名 alias 已被其他工具占用时标记为 `conflict`，不会覆盖现有工具。断线后工具可以标记 `stale`，重连并重新发现后恢复。
 
-Agent tool allowlist 仍然作用于 MCP alias。
+Agent tool allowlist 作用于 MCP alias。
 
 ## 环境变量
 
