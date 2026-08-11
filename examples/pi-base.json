@@ -24,20 +24,6 @@
       "*": 4000
     }
   },
-  "contextCompression": {
-    "anchorHygiene": true,
-    "retainedUserMessageRounds": 2,
-    "retainedAssistantTurns": 4,
-    "tools": [
-      "read",
-      "grep",
-      "find",
-      "bash",
-      "edit",
-      "write",
-      "apply_patch"
-    ]
-  },
   "subagent": {
     "maxDepth": 3,
     "maxConcurrency": 4,

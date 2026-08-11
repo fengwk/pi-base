@@ -254,6 +254,17 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 
 ## `contextCompression`
 
+默认关闭。未配置 `contextCompression` 时，不会替换任何历史工具结果。该功能在 provider request 前投影消息，用短占位文本替换符合条件的旧 `toolResult` 正文，以减少发送给模型的历史工具输出；它不生成对话摘要，也不扩大模型的 context window。
+
+有两种独立的启用方式：
+
+- `anchorHygiene: true`：文件被后续成功修改后，替换同一路径上更早的成功 `read`、`edit` 和 `apply_patch` 结果。失败结果和 `write` acknowledgement 不在此机制中替换。
+- `tools` 使用非空数组：对列出的工具执行 age compression。只有同时满足保留窗口之外和工具名匹配的成功结果才会替换；skill 文件的 `read` 结果保留。
+
+两项都未启用时，`contextCompression` 不生效。压缩只替换发送给模型的工具结果正文，不替换 user message、assistant message、tool call 参数或工具错误。模型需要旧结果细节时必须重新读取或重新执行工具，因此有副作用或成本较高的工具应谨慎加入 `tools`。
+
+只在长时间、工具调用密集且已产生明确上下文压力的 session 中开启。短 session、仍需完整调试输出或不能安全重放命令的任务保持关闭。
+
 ```json
 {
   "contextCompression": {
@@ -267,9 +278,9 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 }
 ```
 
-- `anchorHygiene`：文件修改成功后压缩同路径的旧 read/edit/apply_patch 上下文。
-- `tools`：允许做 age compression 的工具名。
-- `retainedUserMessageRounds` / `retainedAssistantTurns`：分别控制保留的最近 user message rounds 和 assistant turns；更早的工具结果可进入 age compression。
+- `anchorHygiene`：启用失效文件上下文清理；默认 `false`。
+- `tools`：允许做 age compression 的工具名；缺失或空数组时关闭 age compression。
+- `retainedUserMessageRounds` / `retainedAssistantTurns`：共同定义结果进入 age compression 范围的年龄阈值；启用 age compression 后默认值分别为 `2` 和 `4`。
 - `enabledProviders`：仅列出的 provider 生效；空数组表示全部关闭。
 - `disabledProviders`：明确排除 provider，不能是空数组。
 

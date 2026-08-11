@@ -4,6 +4,8 @@
 
 > **Less is More.** 追求简单、稳定的工具组合。
 
+越来越多的人把大量规则和工具注入 Agent，认为这样会让 Agent 更聪明，实际体验却恰恰相反。Agent 很聪明，过度约束一个聪明人会让他变得懒惰，Agent 也是如此。我们需要让 Agent 理解 what 与 why，并只提供少量帮助它发现 how 的工具，而不是不断堆叠 how、how、how……
+
 ## 内置工具
 
 `pi-base` 提供以下内置工具。
@@ -64,6 +66,7 @@ pi install git:github.com/fengwk/pi-base -l
 
 ## 说明
 
+- [上下文压缩](examples/README.md#context-compression)默认关闭；它会用占位文本替换发送给模型的部分旧工具结果，仅在长时间、工具输出密集的 session 已产生明确上下文压力时开启。
 - 桌面通知支持 Linux 和 WSL；其他平台不启用通知。
 - 系统没有 `fd` 或 `rg` 时会尝试从其 GitHub Release 下载；设置 `PI_OFFLINE=1` 可禁用下载。
 - `permission` 用于降低误操作风险，不是安全沙箱。需要强隔离时请使用容器、受限账户或系统级沙箱。

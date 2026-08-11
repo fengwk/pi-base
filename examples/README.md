@@ -34,7 +34,6 @@ Copy-Item examples/agents/*.md "$HOME/.pi/agent/agents/"
 | `defaultAgent` | `jiji` | 全新 session 没有持久化 Agent 且未通过 `--agent` 指定时选择 `jiji` |
 | `permission` | 读取和搜索允许；文件修改询问；Bash 默认询问 | Git 状态、diff、log 和 show 命令直接允许，其他 Bash 命令进入权限确认 |
 | `render` | 默认 10 行、Bash 20 行、最多 4000 字符 | 控制折叠工具结果的可见范围 |
-| `contextCompression` | 保留最近 2 个 user rounds 和 4 个 assistant turns | 压缩更早的指定工具结果，并清理同路径的旧文件操作上下文 |
 | `subagent.maxDepth` | `3` | root session depth 为 1，最大委派深度为 3 |
 | `subagent.maxConcurrency` | `4` | 每个 parent 同时运行最多 4 个直接 child |
 | `subagent.maxTotalConcurrency` | `8` | 同一 root delegation tree 同时运行最多 8 个 Subagent |
@@ -54,7 +53,7 @@ Agent 示例使用以下模型：
 
 模型存在且已配置认证时，Agent 会切换到表中的 model 和 thinking level；否则保留当前 session model 并产生警告。可以在各 Agent 文件的 frontmatter 中替换 `model` 和 `thinkingLevel`。
 
-## 按环境添加的配置
+## 按需添加的配置
 
 以下字段不写入可直接复制的 [`pi-base.json`](pi-base.json)：
 
@@ -63,6 +62,7 @@ Agent 示例使用以下模型：
 | `lsp` | 已安装对应 LSP server，并确认可执行文件路径、文件后缀和项目根标记 |
 | `notify` | 运行环境是 Linux desktop 或 WSL，并需要权限或运行结束通知 |
 | `mcp` | 已确定本地 server 命令或远程 server URL，以及所需环境变量 |
+| `contextCompression` | 长时间、工具调用密集的 session 已产生明确的上下文压力，并且可以接受旧工具输出被占位文本替换 |
 | `compactionModel` / `compactionThinkingLevel` | 已配置用于 context compaction 的 provider 和 model |
 | `yolo` | 明确需要跳过 Permission guard；该配置会关闭操作确认 |
 
@@ -155,6 +155,33 @@ Linux desktop 或 WSL 可以添加：
 本地 MCP server 需要配置 `type: "local"`、`command`，以及可选的 `cwd`、`env` 和 `toolPrefix`。远程 MCP server 需要配置 `type: "remote"`、`transport` 和 `url`。凭证通过完整值 `$VAR` 或 `${VAR}` 引用环境变量，不支持在字符串中插值，也不应直接写入配置文件。
 
 本地和远程示例见 [MCP 配置参考](../docs/configuration.md#mcp)。
+
+### Context compression
+
+Context compression 默认关闭，不写入 [`pi-base.json`](pi-base.json)。它在向模型发送上下文前，用短占位文本替换符合条件的旧 `toolResult` 正文，从而减少请求中的历史工具输出；它不是对话摘要，也不会扩大模型的 context window。
+
+支持两个独立机制：
+
+- `anchorHygiene: true`：文件被后续成功修改后，替换同一路径上更早的成功 `read`、`edit` 和 `apply_patch` 结果。
+- 非空 `tools`：对列出的工具执行 age compression。`retainedUserMessageRounds` 和 `retainedAssistantTurns` 共同定义结果进入压缩范围的年龄阈值，默认值分别为 `2` 和 `4`。
+
+工具错误、user message、assistant message 和 tool call 参数不会被替换。启用后，模型需要旧输出细节时必须重新读取文件或重新执行工具；重新执行 Bash 等有副作用的命令可能不安全。因此只在长时间、工具输出较多且已出现上下文压力的 session 中开启。
+
+可选配置：
+
+```json
+{
+  "contextCompression": {
+    "anchorHygiene": true,
+    "tools": ["read", "grep", "find", "bash", "edit", "write", "apply_patch"],
+    "retainedUserMessageRounds": 2,
+    "retainedAssistantTurns": 4,
+    "enabledProviders": ["openai"]
+  }
+}
+```
+
+只需要清理失效文件上下文时，可以仅设置 `anchorHygiene: true`；需要按年龄压缩工具输出时再添加 `tools`。Provider 过滤和字段语义见 [Context compression 配置参考](../docs/configuration.md#contextcompression)。
 
 ### Compaction model
 
