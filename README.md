@@ -1,6 +1,8 @@
 # pi-base
 
-`pi-base` 是 [Pi](https://github.com/earendil-works/pi) 的插件包，提供文件读写、代码搜索、命令执行、LSP、MCP、Agent、Subagent 和 Goal 能力。
+`pi-base` 是 [Pi](https://github.com/earendil-works/pi) 的插件包，提供文件读写、代码搜索、命令执行、LSP、MCP、Agent、Subagent 和 Goal 能力。这套工具组合经过互联网研发生产环境的实际使用验证。
+
+> **Less is More.** 追求简单、稳定的工具组合。
 
 ## 内置工具
 
@@ -50,7 +52,7 @@ pi install git:github.com/fengwk/pi-base -l
 | 全局 | `~/.pi/agent/pi-base.json` |
 | 当前项目 | `<repo>/.pi/pi-base.json` |
 
-配置示例见 [`examples`](examples/)；全部字段、默认值和合并规则见[配置参考](docs/configuration.md)。修改配置后执行 `/reload`。
+可直接复制的全局配置和 Agent 示例见 [`examples`](examples/)；全部字段、默认值和合并规则见[配置参考](docs/configuration.md)。修改配置后执行 `/reload`。
 
 ## Agent 与扩展能力
 

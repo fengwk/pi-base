@@ -1,11 +1,47 @@
 # 配置示例
 
+本目录提供可直接复制的 `pi-base.json` 和一组 Markdown Agent。`pi-base.json` 只包含不依赖本机可执行文件、服务地址、密钥或通知平台的配置。
+
+## 复制到全局配置目录
+
+Linux、macOS 或 WSL 在仓库根目录执行：
+
+```bash
+mkdir -p ~/.pi/agent/agents
+cp examples/pi-base.json ~/.pi/agent/pi-base.json
+cp examples/agents/*.md ~/.pi/agent/agents/
+```
+
+PowerShell：
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME/.pi/agent/agents"
+Copy-Item examples/pi-base.json "$HOME/.pi/agent/pi-base.json"
+Copy-Item examples/agents/*.md "$HOME/.pi/agent/agents/"
+```
+
+这些文件组成一套可直接加载的全局配置。目标位置已有同名文件时，复制前先备份。Pi 已运行时，复制后执行 `/reload`。
+
 | 示例文件 | 配置位置 |
 |----------|----------|
 | [`pi-base.json`](pi-base.json) | `~/.pi/agent/pi-base.json` 或项目的 `.pi/pi-base.json` |
 | [`agents/*.md`](agents/) | `~/.pi/agent/agents/` |
 
-`pi-base.json` 中的 LSP 命令从 `PATH` 查找。删除不使用的 server，或安装对应的 `jdtls`、`typescript-language-server`、`gopls` 和 `pylsp`。
+## 已包含的配置
+
+| 字段 | 示例值 | 行为 |
+|------|--------|------|
+| `defaultAgent` | `jiji` | 全新 session 没有持久化 Agent 且未通过 `--agent` 指定时选择 `jiji` |
+| `permission` | 读取和搜索允许；文件修改询问；Bash 默认询问 | Git 状态、diff、log 和 show 命令直接允许，其他 Bash 命令进入权限确认 |
+| `render` | 默认 10 行、Bash 20 行、最多 4000 字符 | 控制折叠工具结果的可见范围 |
+| `contextCompression` | 保留最近 2 个 user rounds 和 4 个 assistant turns | 压缩更早的指定工具结果，并清理同路径的旧文件操作上下文 |
+| `subagent.maxDepth` | `3` | root session depth 为 1，最大委派深度为 3 |
+| `subagent.maxConcurrency` | `4` | 每个 parent 同时运行最多 4 个直接 child |
+| `subagent.maxTotalConcurrency` | `8` | 同一 root delegation tree 同时运行最多 8 个 Subagent |
+| `subagent.idleTimeoutMs` | `120000` | Subagent 连续 120 秒没有 session 活动时终止 |
+| `subagent.maxTurns` | `50` | 单次 `task` 未指定 `maxTurns` 时使用 50 turn soft-stop 预算 |
+
+## Agent 模型
 
 Agent 示例使用以下模型：
 
@@ -16,6 +52,121 @@ Agent 示例使用以下模型：
 | `explorer` | `deepseek/deepseek-v4-flash` | `high` |
 | `helper` | `deepseek/deepseek-v4-flash` | `high` |
 
-模型需要存在于 Pi 的模型配置中。可以在各 Agent 文件的 frontmatter 中替换 `model` 和 `thinkingLevel`。
+模型存在且已配置认证时，Agent 会切换到表中的 model 和 thinking level；否则保留当前 session model 并产生警告。可以在各 Agent 文件的 frontmatter 中替换 `model` 和 `thinkingLevel`。
 
-配置字段见[配置参考](../docs/configuration.md)，Agent 字段见[Markdown Agent](../docs/agents.md)。
+## 按环境添加的配置
+
+以下字段不写入可直接复制的 [`pi-base.json`](pi-base.json)：
+
+| 字段 | 添加条件 |
+|------|----------|
+| `lsp` | 已安装对应 LSP server，并确认可执行文件路径、文件后缀和项目根标记 |
+| `notify` | 运行环境是 Linux desktop 或 WSL，并需要权限或运行结束通知 |
+| `mcp` | 已确定本地 server 命令或远程 server URL，以及所需环境变量 |
+| `compactionModel` / `compactionThinkingLevel` | 已配置用于 context compaction 的 provider 和 model |
+| `yolo` | 明确需要跳过 Permission guard；该配置会关闭操作确认 |
+
+### LSP
+
+`pi-base` 不内置 LSP server 表。`lsp.servers.<name>.command[0]` 必须是 `PATH` 中的命令或绝对可执行文件路径。命令不存在时配置文件仍可加载，但对应文件的 LSP 调用会返回 server 未安装错误。
+
+以下模板覆盖 Java、TypeScript/JavaScript、Go 和 Python。只保留当前环境已经安装的 server，并根据项目结构调整 root markers：
+
+```json
+{
+  "lsp": {
+    "servers": {
+      "jdtls": {
+        "command": ["jdtls"],
+        "extensions": [".java"],
+        "rootMarkers": [
+          "pom.xml",
+          "build.gradle",
+          "build.gradle.kts",
+          "settings.gradle",
+          "settings.gradle.kts"
+        ],
+        "firstMatchMarkers": [".git"],
+        "requestTimeoutMs": 120000
+      },
+      "typescript-language-server": {
+        "command": ["typescript-language-server", "--stdio"],
+        "extensions": [
+          ".ts",
+          ".tsx",
+          ".js",
+          ".jsx",
+          ".mjs",
+          ".cjs",
+          ".mts",
+          ".cts"
+        ],
+        "firstMatchMarkers": [
+          ".git",
+          "package.json",
+          "tsconfig.json",
+          "jsconfig.json"
+        ],
+        "requestTimeoutMs": 90000
+      },
+      "gopls": {
+        "command": ["gopls"],
+        "extensions": [".go"],
+        "firstMatchMarkers": [".git", "go.mod", "go.work"],
+        "requestTimeoutMs": 90000
+      },
+      "pylsp": {
+        "command": ["pylsp"],
+        "extensions": [".py", ".pyi"],
+        "firstMatchMarkers": [
+          ".git",
+          "pyproject.toml",
+          "setup.py",
+          "requirements.txt",
+          "Pipfile"
+        ],
+        "requestTimeoutMs": 90000
+      }
+    }
+  }
+}
+```
+
+LSP 字段、workspace root 和 JDTLS workspace data 配置见[配置参考](../docs/configuration.md#lsp)。
+
+### Notify
+
+Linux desktop 或 WSL 可以添加：
+
+```json
+{
+  "notify": {
+    "permissionAsked": true,
+    "agentEnd": true,
+    "suppressCompletedAfterRejectionMs": 5000
+  }
+}
+```
+
+其他平台不启用桌面通知。
+
+### MCP
+
+本地 MCP server 需要配置 `type: "local"`、`command`，以及可选的 `cwd`、`env` 和 `toolPrefix`。远程 MCP server 需要配置 `type: "remote"`、`transport` 和 `url`。凭证通过完整值 `$VAR` 或 `${VAR}` 引用环境变量，不支持在字符串中插值，也不应直接写入配置文件。
+
+本地和远程示例见 [MCP 配置参考](../docs/configuration.md#mcp)。
+
+### Compaction model
+
+需要独立 compaction model 时添加：
+
+```json
+{
+  "compactionModel": "provider/model",
+  "compactionThinkingLevel": "high"
+}
+```
+
+`provider/model` 必须存在于 Pi 的模型配置中。
+
+完整字段、默认值和合并规则见[配置参考](../docs/configuration.md)，Agent frontmatter 字段见[Markdown Agent](../docs/agents.md)。

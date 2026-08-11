@@ -32,7 +32,7 @@ function testExecutableContent(): string {
 
 describe("pi-base config", () => {
   it("loads the checked-in example config", async () => {
-    // Intent: the published example should stay aligned with the strict runtime config schema.
+    // Intent: the direct-copy example must remain schema-valid without environment-specific integrations.
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
     await mkdir(projectDir, { recursive: true });
@@ -42,12 +42,12 @@ describe("pi-base config", () => {
     await withTempGlobalSettings(() => {
       const loaded = loadPiBaseSettings(root);
       expect(loaded.settings.defaultAgent).toBe("jiji");
-      expect(Object.keys(loaded.settings.lsp?.servers ?? {})).toEqual([
-        "jdtls",
-        "typescript-language-server",
-        "gopls",
-        "pylsp",
-      ]);
+      expect(loaded.settings.lsp).toBeUndefined();
+      expect(loaded.settings.notify).toBeUndefined();
+      expect(loaded.settings.mcp).toBeUndefined();
+      expect(loaded.settings.compactionModel).toBeUndefined();
+      expect(loaded.settings.compactionThinkingLevel).toBeUndefined();
+      expect(loaded.settings.yolo).toBeUndefined();
       expect(loaded.settings.permission?.apply_patch).toEqual([{ pattern: "*", action: "ask" }]);
       expect(loaded.settings.subagent?.maxTotalConcurrency).toBe(8);
     });
