@@ -319,7 +319,7 @@ function Invoke-WslJumpCallback([string]$Distro, [string]$NotifyScript, [string]
       '/usr/bin/env',
       ("PI_NOTIFY_TMUX_TARGET={0}" -f $TmuxTarget),
       ("PI_NOTIFY_TMUX_CLIENT_TTY={0}" -f $TmuxClientTty),
-      '/bin/bash',
+      'bash',
       $NotifyScript,
       'jump'
     ) -WindowStyle Hidden | Out-Null

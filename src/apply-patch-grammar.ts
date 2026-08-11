@@ -1,3 +1,10 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 OpenAI
+ * Modified by pi-base contributors in 2026.
+ * See LICENSES/Apache-2.0.txt.
+ */
+
 /**
  * Freeform grammar for the apply_patch protocol.
  *

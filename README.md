@@ -359,6 +359,8 @@ Agent 正文（覆盖 system prompt）
 
 控制 `scripts/notify.sh` 桌面通知（仅 UI session）。
 
+当前仅承诺支持 Linux 桌面环境（`notify-send`）和 WSL（调用 Windows PowerShell helper）；其他平台无法选择通知 backend 或启动脚本失败时会 best-effort 空跑结束，不影响 permission/session 生命周期。
+
 ```json
 {
   "notify": { "permissionAsked": true, "agentEnd": true, "suppressCompletedAfterRejectionMs": 0 }
@@ -541,7 +543,7 @@ MCP 连接按 root delegation tree 隔离：同一 root session 与其所有 sub
 | 最大行数 | 2000（LF、CRLF、CR 均按换行计数） |
 | 最大字节数 | 50 KB |
 | 完整输出 | 保存至进程私有的 `<tmp>/pi-base-truncation-*/`；目录在非 Windows 为 `0700`，输出文件显式为 `0600` |
-| 旧目录清理 | 仅清理约 7 天前、符合 `pi-base-truncation-<pid>-*` 格式、属于当前用户且对应进程已退出的目录 |
+| 旧目录清理 | 非 Windows 仅清理约 7 天前、符合 `pi-base-truncation-<pid>-*` 格式、属于当前用户且对应进程已退出的目录；Windows 依赖用户临时目录的系统清理策略 |
 
 上游已自行截断且暴露 `Full output` 路径的工具（如 Pi core bash）保留上游路径，不重复落盘；若上游留下的 preview 仍超过最终限制，pi-base 会再次有界截断该 preview。
 
@@ -579,3 +581,9 @@ npm run test:coverage  # 测试 + 覆盖率
 ```
 
 > 从 shell 用 `pi -p` 调试时，注意对 prompt 做引用，避免 shell 展开 `$(...)`、反引号、`$VAR` 或 glob。
+
+## 许可证
+
+除单独标注的第三方组件外，本项目采用 [MIT License](LICENSE)。
+
+第三方组件的来源、版权和适用许可证见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) 与 [LICENSES/](LICENSES/)。

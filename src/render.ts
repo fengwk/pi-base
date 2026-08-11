@@ -24,10 +24,16 @@ function emphasize(theme: any, text: string): string {
   return theme.fg("toolTitle", theme.bold ? theme.bold(text) : text);
 }
 
-export function shortenHomePath(path: string): string {
-  const home = homedir();
-  if (path === home) return "~";
-  if (path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`;
+export function shortenHomePath(path: string, home = homedir()): string {
+  const windowsStyle = /^[A-Za-z]:[\\/]/.test(home) || home.startsWith("\\\\");
+  const normalizedPath = windowsStyle ? path.replace(/\\/g, "/") : path;
+  const normalizedHome = windowsStyle ? home.replace(/\\/g, "/") : home;
+  const comparablePath = windowsStyle ? normalizedPath.toLowerCase() : normalizedPath;
+  const comparableHome = windowsStyle ? normalizedHome.toLowerCase() : normalizedHome;
+  if (comparablePath === comparableHome) return "~";
+  const homePrefix = normalizedHome.endsWith("/") ? normalizedHome : `${normalizedHome}/`;
+  const comparableHomePrefix = comparableHome.endsWith("/") ? comparableHome : `${comparableHome}/`;
+  if (comparablePath.startsWith(comparableHomePrefix)) return `~/${normalizedPath.slice(homePrefix.length)}`;
   return path;
 }
 

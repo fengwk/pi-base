@@ -44,6 +44,15 @@ describe("shell environment", () => {
 });
 
 describe("managed fd/rg installation", () => {
+  it("rejects unsupported architectures instead of downloading x86_64 binaries", async () => {
+    // Intent: unknown Node architectures must fail closed rather than installing an incompatible binary.
+    const { resolveManagedToolAssetName } = await import("../src/internal/pi-coding-agent-utils.js");
+    expect(resolveManagedToolAssetName("fd", "10.3.0", "linux", "x64")).toContain("x86_64");
+    expect(resolveManagedToolAssetName("rg", "14.1.1", "linux", "arm64")).toContain("aarch64");
+    expect(resolveManagedToolAssetName("fd", "10.3.0", "linux", "riscv64")).toBeNull();
+    expect(resolveManagedToolAssetName("rg", "14.1.1", "freebsd", "x64")).toBeNull();
+  });
+
   it("does not treat invalid managed-tool paths as installed executables", async () => {
     // Intent: stale or corrupted paths must not short-circuit installation merely because they
     // exist; callers need a non-empty executable file, not a directory or non-executable residue.

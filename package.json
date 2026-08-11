@@ -31,7 +31,8 @@
     "skills/",
     "scripts/",
     "prompts/",
-    "THIRD_PARTY_NOTICES"
+    "THIRD_PARTY_NOTICES",
+    "LICENSES/"
   ],
   "scripts": {
     "test": "vitest run",

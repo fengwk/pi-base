@@ -22,6 +22,13 @@ async function withTempGlobalSettings<T>(run: (globalPath: string) => Promise<T>
   }
 }
 
+function testExecutableName(name: string): string {
+  return process.platform === "win32" ? `${name}.cmd` : name;
+}
+
+function testExecutableContent(): string {
+  return process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n";
+}
 
 describe("pi-base config", () => {
   it("loads project settings and overrides global lsp server entries", async () => {
@@ -576,8 +583,8 @@ describe("pi-base config", () => {
     const root = await createTempWorkspace();
     const binDir = join(root, "bin");
     await mkdir(binDir, { recursive: true });
-    const fake = join(binDir, "fake-lsp");
-    await writeFile(fake, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
+    const fake = join(binDir, testExecutableName("fake-lsp"));
+    await writeFile(fake, testExecutableContent(), { encoding: "utf8", mode: 0o755 });
     const resolver = new LspDiscoveryResolver({});
     expect(resolver.findCommandPath(fake)).toBe(fake);
   });
@@ -586,8 +593,8 @@ describe("pi-base config", () => {
     const root = await createTempWorkspace();
     const binDir = join(root, "bin");
     await mkdir(binDir, { recursive: true });
-    const fake = join(binDir, "fake-ts-lsp");
-    await writeFile(fake, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 });
+    const fake = join(binDir, testExecutableName("fake-ts-lsp"));
+    await writeFile(fake, testExecutableContent(), { encoding: "utf8", mode: 0o755 });
 
     const entry = { typescript: { command: [fake, "--stdio"], extensions: [".ts"] } };
     const installed = new LspDiscoveryResolver({ servers: entry });
@@ -606,7 +613,7 @@ describe("pi-base config", () => {
     const root = await createTempWorkspace();
     const binDir = join(root, "bin");
     await mkdir(binDir, { recursive: true });
-    const fake = join(binDir, "fake-ts-lsp");
+    const fake = join(binDir, process.platform === "win32" ? "fake-ts-lsp.txt" : "fake-ts-lsp");
     await writeFile(fake, "#!/bin/sh\n", { encoding: "utf8", mode: 0o644 });
     const resolver = new LspDiscoveryResolver({
       servers: { typescript: { command: [fake, "--stdio"], extensions: [".ts"] } },

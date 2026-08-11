@@ -68,7 +68,10 @@ function buildServerEntryExample(command: string[]): LspServerEntry {
 function isRunnableCommandFile(filePath: string): boolean {
   try {
     if (!statSync(filePath).isFile()) return false;
-    if (process.platform === "win32") return true;
+    if (process.platform === "win32") {
+      const extension = extname(filePath).toUpperCase();
+      return windowsExecutableSuffixes().some((suffix) => suffix.length > 0 && suffix.toUpperCase() === extension);
+    }
     accessSync(filePath, fsConstants.X_OK);
     return true;
   } catch {
@@ -81,7 +84,8 @@ function windowsExecutableSuffixes(): string[] {
   const fromEnv = (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM")
     .split(";")
     .map((entry) => entry.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((entry) => entry.startsWith(".") ? entry : `.${entry}`);
   return ["", ...fromEnv];
 }
 
@@ -299,18 +303,16 @@ export class LspDiscoveryResolver {
   }
 }
 
-/** Helper: read `JAVA_HOME_<version>` and `JAVA_HOME` env vars, prefer the highest declared version. */
+/** Helper: discover `JAVA_HOME_<version>` and `JAVA_HOME`, preferring the highest declared version. */
 export function findBestJavaHome(): string | null {
-  const candidates = [
-    process.env.JAVA_HOME_22,
-    process.env.JAVA_HOME_21,
-    process.env.JAVA_HOME_20,
-    process.env.JAVA_HOME_19,
-    process.env.JAVA_HOME_18,
-    process.env.JAVA_HOME_17,
-    process.env.JAVA_HOME_11,
-    process.env.JAVA_HOME_8,
-    process.env.JAVA_HOME,
-  ];
-  return candidates.find((p) => typeof p === "string" && p.length > 0 && existsSync(p)) ?? null;
+  const versioned: Array<{ version: number; path: string }> = [];
+  for (const [key, path] of Object.entries(process.env)) {
+    const match = key.match(/^JAVA_HOME_(\d+)$/i);
+    if (!match?.[1] || !path) continue;
+    const version = Number(match[1]);
+    if (Number.isSafeInteger(version)) versioned.push({ version, path });
+  }
+  versioned.sort((left, right) => right.version - left.version);
+  const candidates = [...versioned.map((entry) => entry.path), process.env.JAVA_HOME];
+  return candidates.find((path) => typeof path === "string" && path.length > 0 && existsSync(path)) ?? null;
 }

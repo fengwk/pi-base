@@ -1,3 +1,10 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2025 Mario Zechner
+ * Portions modified by pi-base contributors in 2026.
+ * See LICENSES/pi-coding-agent-MIT.txt.
+ */
+
 /**
  * Internal copies of selected helpers from `@earendil-works/pi-coding-agent`.
  *
@@ -11,6 +18,7 @@
  * that ships as a stable export of `@earendil-works/pi-coding-agent` should
  * continue to be imported from there.
  */
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
 import {
   accessSync,
@@ -24,8 +32,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -113,18 +120,7 @@ export function waitForChildProcess(child: import("node:child_process").ChildPro
 // =============================================================================
 
 function getBinDir(): string {
-  // Mirrors `@earendil-works/pi-coding-agent`'s `getBinDir()`: default agent
-  // dir is `~/.pi/agent`, binaries live under `bin/`. The `PI_CODING_AGENT_DIR`
-  // env var is honored to match upstream.
-  const envDir = process.env.PI_CODING_AGENT_DIR;
-  const agentDir = envDir ? expandTildePath(envDir) : join(homedir(), ".pi", "agent");
-  return join(agentDir, "bin");
-}
-
-function expandTildePath(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return homedir() + p.slice(1);
-  return p;
+  return join(getAgentDir(), "bin");
 }
 
 /**
@@ -146,9 +142,6 @@ export function getShellEnv(): NodeJS.ProcessEnv {
   };
 }
 
-// `delimiter` is platform-dependent; import lazily to keep the module top tidy.
-import { delimiter } from "node:path";
-
 // =============================================================================
 // Tool manager (fd / rg)
 // =============================================================================
@@ -164,6 +157,12 @@ interface ToolConfig {
   getAssetName: (version: string, plat: NodeJS.Platform, architecture: string) => string | null;
 }
 
+function rustTargetArchitecture(architecture: string): "aarch64" | "x86_64" | null {
+  if (architecture === "arm64") return "aarch64";
+  if (architecture === "x64") return "x86_64";
+  return null;
+}
+
 const TOOLS: Record<SupportedTool, ToolConfig> = {
   fd: {
     name: "fd",
@@ -172,16 +171,15 @@ const TOOLS: Record<SupportedTool, ToolConfig> = {
     systemBinaryNames: ["fd", "fdfind"],
     tagPrefix: "v",
     getAssetName: (version, plat, architecture) => {
+      const archStr = rustTargetArchitecture(architecture);
+      if (!archStr) return null;
       if (plat === "darwin") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
         return `fd-v${version}-${archStr}-apple-darwin.tar.gz`;
       }
       if (plat === "linux") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
         return `fd-v${version}-${archStr}-unknown-linux-gnu.tar.gz`;
       }
       if (plat === "win32") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
         return `fd-v${version}-${archStr}-pc-windows-msvc.zip`;
       }
       return null;
@@ -194,18 +192,18 @@ const TOOLS: Record<SupportedTool, ToolConfig> = {
     systemBinaryNames: ["rg"],
     tagPrefix: "",
     getAssetName: (version, plat, architecture) => {
+      const archStr = rustTargetArchitecture(architecture);
+      if (!archStr) return null;
       if (plat === "darwin") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
         return `ripgrep-${version}-${archStr}-apple-darwin.tar.gz`;
       }
       if (plat === "linux") {
-        if (architecture === "arm64") {
+        if (archStr === "aarch64") {
           return `ripgrep-${version}-aarch64-unknown-linux-gnu.tar.gz`;
         }
         return `ripgrep-${version}-x86_64-unknown-linux-musl.tar.gz`;
       }
       if (plat === "win32") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
         return `ripgrep-${version}-${archStr}-pc-windows-msvc.zip`;
       }
       return null;
@@ -217,6 +215,15 @@ const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const toolInstallPromises = new Map<SupportedTool, Promise<string | undefined>>();
+
+export function resolveManagedToolAssetName(
+  tool: SupportedTool,
+  version: string,
+  platform: NodeJS.Platform,
+  architecture: string,
+): string | null {
+  return TOOLS[tool].getAssetName(version, platform, architecture);
+}
 
 function waitForInstall<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
@@ -392,7 +399,7 @@ async function downloadTool(tool: SupportedTool): Promise<string> {
     version = "10.3.0";
   }
 
-  const assetName = config.getAssetName(version, plat, architecture);
+  const assetName = resolveManagedToolAssetName(tool, version, plat, architecture);
   if (!assetName) throw new Error(`Unsupported platform: ${plat}/${architecture}`);
 
   mkdirSync(TOOLS_DIR, { recursive: true });

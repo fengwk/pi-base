@@ -1,5 +1,34 @@
 # Third-Party Notices
 
+## OpenAI Codex apply_patch grammar
+
+`src/apply-patch-grammar.ts` is derived from the OpenAI Codex apply_patch
+grammar and has been modified by pi-base contributors.
+
+Source:
+https://github.com/openai/codex/blob/9417cf969682330ea5fcccbdf39818bc4b213167/codex-rs/core/src/tools/handlers/apply_patch.lark
+
+License: Apache License 2.0 (`LICENSES/Apache-2.0.txt`)
+
+Upstream NOTICE attribution:
+
+OpenAI Codex
+
+Copyright 2025 OpenAI
+
+## pi-coding-agent selected utilities
+
+`src/internal/pi-coding-agent-utils.ts` contains selected utilities derived
+from `@earendil-works/pi-coding-agent@0.84.1` and modified by pi-base
+contributors.
+
+Source:
+https://github.com/earendil-works/pi/tree/53fa77ccd8a279eb87e92294ef3687b03ff80112/packages/coding-agent
+
+License: MIT (`LICENSES/pi-coding-agent-MIT.txt`)
+
+Copyright (c) 2025 Mario Zechner
+
 ## OpenCode apply_patch protocol and fuzzy-matching semantics
 
 The apply_patch protocol parsing and fuzzy-matching compatibility behavior in this package is derived from OpenCode.

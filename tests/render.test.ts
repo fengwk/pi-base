@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { renderRawResult, renderStreamingCallText, resolveCollapsedResultLines, resolveToolPatternValue } from "../src/render.js";
+import { renderRawResult, renderStreamingCallText, resolveCollapsedResultLines, resolveToolPatternValue, shortenHomePath } from "../src/render.js";
 
 function render(component: any): string {
   return component.render(200).join("\n");
@@ -12,6 +12,15 @@ const theme = {
 };
 
 describe("render helpers", () => {
+  it("shortens home-relative paths with POSIX or Windows separators", () => {
+    // Intent: renderer paths should be stable across platforms without depending on the checkout location.
+    expect(shortenHomePath("/home/demo/work/pi-base", "/home/demo")).toBe("~/work/pi-base");
+    expect(shortenHomePath("C:\\Users\\demo\\work\\pi-base", "C:\\Users\\demo")).toBe("~/work/pi-base");
+    expect(shortenHomePath("c:\\users\\DEMO\\work\\pi-base", "C:\\Users\\demo")).toBe("~/work/pi-base");
+    expect(shortenHomePath("/home/demo/name\\part", "/home/demo")).toBe("~/name\\part");
+    expect(shortenHomePath("/srv/pi-base", "/home/demo")).toBe("/srv/pi-base");
+  });
+
   it("collapses long results until expanded", () => {
     const raw = Array.from({ length: 25 }, (_, index) => `line-${index + 1}`).join("\n");
 

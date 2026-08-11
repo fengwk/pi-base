@@ -4,17 +4,28 @@ import { describe, expect, it } from "vitest";
 import { findBestJavaHome, LspDiscoveryResolver, type LspServerConfig } from "../src/lsp/discovery.js";
 import { createTempWorkspace } from "./helpers.js";
 
-const JAVA_HOME_KEYS = [
-  "JAVA_HOME_22",
-  "JAVA_HOME_21",
-  "JAVA_HOME_20",
-  "JAVA_HOME_19",
-  "JAVA_HOME_18",
-  "JAVA_HOME_17",
-  "JAVA_HOME_11",
-  "JAVA_HOME_8",
-  "JAVA_HOME",
-] as const;
+const JAVA_HOME_ENVIRONMENT_KEY = /^JAVA_HOME(?:_\d+)?$/i;
+
+function javaHomeEnvironmentEntries(): Array<[string, string | undefined]> {
+  return Object.entries(process.env)
+    .filter(([key]) => JAVA_HOME_ENVIRONMENT_KEY.test(key));
+}
+
+function clearJavaHomeEnvironment(): void {
+  for (const key of Object.keys(process.env)) {
+    if (JAVA_HOME_ENVIRONMENT_KEY.test(key)) delete process.env[key];
+  }
+}
+
+async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> | T): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  try {
+    return await run();
+  } finally {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor);
+  }
+}
 
 function javaServer(rootMarkers: string[], firstMatchMarkers: string[]): LspServerConfig {
   return {
@@ -66,28 +77,58 @@ describe("findBestJavaHome", () => {
   it("selects the highest configured existing JDK and ignores missing paths", async () => {
     // Intent: jdtls startup must use deterministic version priority rather than whichever
     // JAVA_HOME variable happens to appear first in the process environment.
-    const original = new Map(JAVA_HOME_KEYS.map((key) => [key, process.env[key]]));
+    const original = javaHomeEnvironmentEntries();
     const root = await createTempWorkspace();
     const java17 = join(root, "jdk-17");
-    const java21 = join(root, "jdk-21");
+    const java26 = join(root, "jdk-26");
     await mkdir(java17);
-    await mkdir(java21);
+    await mkdir(java26);
 
     try {
-      for (const key of JAVA_HOME_KEYS) delete process.env[key];
+      clearJavaHomeEnvironment();
       expect(findBestJavaHome()).toBeNull();
 
-      process.env.JAVA_HOME_22 = join(root, "missing-jdk-22");
+      process.env.JAVA_HOME_99 = join(root, "missing-jdk-99");
       process.env.JAVA_HOME_17 = java17;
-      process.env.JAVA_HOME_21 = java21;
+      process.env.JAVA_HOME_26 = java26;
       process.env.JAVA_HOME = java17;
-      expect(findBestJavaHome()).toBe(java21);
+      expect(findBestJavaHome()).toBe(java26);
     } finally {
-      for (const key of JAVA_HOME_KEYS) {
-        const value = original.get(key);
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
+      clearJavaHomeEnvironment();
+      for (const [key, value] of original) {
+        if (value !== undefined) process.env[key] = value;
       }
+    }
+  });
+});
+
+describe("LspDiscoveryResolver command discovery", () => {
+  it("requires explicit Windows executable suffixes", async () => {
+    // Intent: a regular text file must not be reported as an installed LSP server on Windows.
+    const root = await createTempWorkspace();
+    const textFile = join(root, "server.txt");
+    const commandFile = join(root, "server.cmd");
+    const pathCommandFile = join(root, "path-server.CMD");
+    await writeFile(textFile, "not executable");
+    await writeFile(commandFile, "@echo off\r\n");
+    await writeFile(pathCommandFile, "@echo off\r\n");
+    const previousPathExt = process.env.PATHEXT;
+    const previousPath = process.env.PATH;
+
+    try {
+      process.env.PATHEXT = "EXE;CMD;BAT;COM";
+      process.env.PATH = root;
+      await withPlatform("win32", () => {
+        const resolver = new LspDiscoveryResolver({});
+        expect(resolver.findCommandPath(textFile)).toBeNull();
+        expect(resolver.findCommandPath(commandFile)).toBe(commandFile);
+        expect(resolver.findCommandPath("path-server")).toBe(pathCommandFile);
+      });
+    } finally {
+      if (previousPathExt === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = previousPathExt;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
     }
   });
 });
