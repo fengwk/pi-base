@@ -1,10 +1,14 @@
-# 配置示例
+<p align="center">
+  🌐 <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-本目录提供可直接复制的 `pi-base.json` 和一组 Markdown Agent。`pi-base.json` 只包含不依赖本机可执行文件、服务地址、密钥或通知平台的配置。
+# Configuration Examples
 
-## 复制到全局配置目录
+This directory provides a ready-to-copy `pi-base.json` and a set of Markdown Agents. `pi-base.json` only contains configuration that does not depend on local executables, service addresses, secrets, or notification platforms.
 
-Linux、macOS 或 WSL 在仓库根目录执行：
+## Copy to the global configuration directory
+
+On Linux, macOS, or WSL, run from the repository root:
 
 ```bash
 mkdir -p ~/.pi/agent/agents
@@ -12,7 +16,7 @@ cp examples/pi-base.json ~/.pi/agent/pi-base.json
 cp examples/agents/*.md ~/.pi/agent/agents/
 ```
 
-PowerShell：
+PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force "$HOME/.pi/agent/agents"
@@ -20,29 +24,29 @@ Copy-Item examples/pi-base.json "$HOME/.pi/agent/pi-base.json"
 Copy-Item examples/agents/*.md "$HOME/.pi/agent/agents/"
 ```
 
-这些文件组成一套可直接加载的全局配置。目标位置已有同名文件时，复制前先备份。Pi 已运行时，复制后执行 `/reload`。
+These files together form a ready-to-load global configuration. If a file with the same name already exists at the destination, back it up before copying. If Pi is already running, run `/reload` after copying.
 
-| 示例文件 | 配置位置 |
+| Example file | Destination |
 |----------|----------|
-| [`pi-base.json`](pi-base.json) | `~/.pi/agent/pi-base.json` 或项目的 `.pi/pi-base.json` |
+| [`pi-base.json`](pi-base.json) | `~/.pi/agent/pi-base.json` or the project's `.pi/pi-base.json` |
 | [`agents/*.md`](agents/) | `~/.pi/agent/agents/` |
 
-## 已包含的配置
+## Included configuration
 
-| 字段 | 示例值 | 行为 |
+| Field | Example value | Behavior |
 |------|--------|------|
-| `defaultAgent` | `jiji` | 全新 session 没有持久化 Agent 且未通过 `--agent` 指定时选择 `jiji` |
-| `permission` | 读取和搜索允许；文件修改询问；Bash 默认询问 | Git 状态、diff、log 和 show 命令直接允许，其他 Bash 命令进入权限确认 |
-| `render` | 默认 10 行、Bash 20 行、最多 4000 字符 | 控制折叠工具结果的可见范围 |
-| `subagent.maxDepth` | `3` | root session depth 为 1，最大委派深度为 3 |
-| `subagent.maxConcurrency` | `4` | 每个 parent 同时运行最多 4 个直接 child |
-| `subagent.maxTotalConcurrency` | `8` | 同一 root delegation tree 同时运行最多 8 个 Subagent |
-| `subagent.idleTimeoutMs` | `120000` | Subagent 连续 120 秒没有 session 活动时终止 |
-| `subagent.maxTurns` | `50` | 单次 `task` 未指定 `maxTurns` 时使用 50 turn soft-stop 预算 |
+| `defaultAgent` | `jiji` | Selects `jiji` when a new session has no persisted Agent and none is specified via `--agent` |
+| `permission` | Reads and searches are allowed; file modifications ask; Bash asks by default | Git status, diff, log, and show commands are allowed directly; other Bash commands go through permission confirmation |
+| `render` | 10 lines by default, 20 for Bash, up to 4000 characters | Controls the visible range of collapsed tool results |
+| `subagent.maxDepth` | `3` | The root session depth is 1 and the maximum delegation depth is 3 |
+| `subagent.maxConcurrency` | `4` | Each parent runs at most 4 direct children concurrently |
+| `subagent.maxTotalConcurrency` | `8` | At most 8 Subagents run concurrently in the same root delegation tree |
+| `subagent.idleTimeoutMs` | `120000` | Terminates a Subagent after 120 seconds without session activity |
+| `subagent.maxTurns` | `50` | Uses a 50-turn soft-stop budget when a `task` call does not specify `maxTurns` |
 
-## Agent 模型
+## Agent models
 
-Agent 示例使用以下模型：
+The example Agents use the following models:
 
 | Agent | Model | Thinking level |
 |-------|-------|----------------|
@@ -51,26 +55,26 @@ Agent 示例使用以下模型：
 | `explorer` | `deepseek/deepseek-v4-flash` | `high` |
 | `helper` | `deepseek/deepseek-v4-flash` | `high` |
 
-模型存在且已配置认证时，Agent 会切换到表中的 model 和 thinking level；否则保留当前 session model 并产生警告。可以在各 Agent 文件的 frontmatter 中替换 `model` 和 `thinkingLevel`。
+When the model exists and authentication is configured, the Agent switches to the model and thinking level in the table; otherwise it keeps the current session model and issues a warning. You can replace `model` and `thinkingLevel` in the frontmatter of each Agent file.
 
-## 按需添加的配置
+## Configuration to add as needed
 
-以下字段不写入可直接复制的 [`pi-base.json`](pi-base.json)：
+The following fields are not included in the ready-to-copy [`pi-base.json`](pi-base.json):
 
-| 字段 | 添加条件 |
+| Field | When to add |
 |------|----------|
-| `lsp` | 已安装对应 LSP server，并确认可执行文件路径、文件后缀和项目根标记 |
-| `notify` | 运行环境是 Linux desktop 或 WSL，并需要权限或运行结束通知 |
-| `mcp` | 已确定本地 server 命令或远程 server URL，以及所需环境变量 |
-| `contextCompression` | 长时间、工具调用密集的 session 已产生明确的上下文压力，并且可以接受旧工具输出被占位文本替换 |
-| `compactionModel` / `compactionThinkingLevel` | 已配置用于 context compaction 的 provider 和 model |
-| `yolo` | 明确需要跳过 Permission guard；该配置会关闭操作确认 |
+| `lsp` | The corresponding LSP server is installed, and the executable path, file extensions, and root markers are confirmed |
+| `notify` | The environment is a Linux desktop or WSL, and permission or run-completion notifications are needed |
+| `mcp` | The local server command or remote server URL, and the required environment variables, are determined |
+| `contextCompression` | A long session with dense tool calls has created clear context pressure, and replacing old tool output with placeholder text is acceptable |
+| `compactionModel` / `compactionThinkingLevel` | A provider and model are configured for context compaction |
+| `yolo` | Explicitly need to skip the Permission guard; this configuration disables operation confirmation |
 
 ### LSP
 
-`pi-base` 不内置 LSP server 表。`lsp.servers.<name>.command[0]` 必须是 `PATH` 中的命令或绝对可执行文件路径。命令不存在时配置文件仍可加载，但对应文件的 LSP 调用会返回 server 未安装错误。
+`pi-base` does not bundle a built-in LSP server table. `lsp.servers.<name>.command[0]` must be a command on `PATH` or an absolute executable path. If the command does not exist, the configuration file still loads, but LSP calls for the corresponding files return a server-not-installed error.
 
-以下模板覆盖 Java、TypeScript/JavaScript、Go 和 Python。只保留当前环境已经安装的 server，并根据项目结构调整 root markers：
+The following template covers Java, TypeScript/JavaScript, Go, and Python. Keep only the servers installed in your current environment, and adjust the root markers to match your project structure:
 
 ```json
 {
@@ -132,11 +136,11 @@ Agent 示例使用以下模型：
 }
 ```
 
-LSP 字段、workspace root 和 JDTLS workspace data 配置见[配置参考](../docs/configuration.md#lsp)。
+See the [Configuration Reference](../docs/configuration.md#lsp) for LSP fields, workspace root, and JDTLS workspace data configuration.
 
 ### Notify
 
-Linux desktop 或 WSL 可以添加：
+On a Linux desktop or WSL, you can add:
 
 ```json
 {
@@ -148,26 +152,26 @@ Linux desktop 或 WSL 可以添加：
 }
 ```
 
-其他平台不启用桌面通知。
+Desktop notifications are not enabled on other platforms.
 
 ### MCP
 
-本地 MCP server 需要配置 `type: "local"`、`command`，以及可选的 `cwd`、`env` 和 `toolPrefix`。远程 MCP server 需要配置 `type: "remote"`、`transport` 和 `url`。凭证通过完整值 `$VAR` 或 `${VAR}` 引用环境变量，不支持在字符串中插值，也不应直接写入配置文件。
+A local MCP server requires `type: "local"`, `command`, and optionally `cwd`, `env`, and `toolPrefix`. A remote MCP server requires `type: "remote"`, `transport`, and `url`. Credentials reference environment variables with full values `$VAR` or `${VAR}`; interpolation inside strings is not supported, and credentials should not be written directly into the configuration file.
 
-本地和远程示例见 [MCP 配置参考](../docs/configuration.md#mcp)。
+See the [MCP Configuration Reference](../docs/configuration.md#mcp) for local and remote examples.
 
 ### Context compression
 
-Context compression 默认关闭，不写入 [`pi-base.json`](pi-base.json)。它在向模型发送上下文前，用短占位文本替换符合条件的旧 `toolResult` 正文，从而减少请求中的历史工具输出；它不是对话摘要，也不会扩大模型的 context window。
+Context compression is disabled by default and is not included in [`pi-base.json`](pi-base.json). Before sending context to the model, it replaces the bodies of eligible old `toolResult`s with short placeholder text, reducing the historical tool output in requests; it is not a conversation summary and does not expand the model's context window.
 
-支持两个独立机制：
+Two independent mechanisms are supported:
 
-- `anchorHygiene: true`：文件被后续成功修改后，替换同一路径上更早的成功 `read`、`edit` 和 `apply_patch` 结果。
-- 非空 `tools`：对列出的工具执行 age compression。`retainedUserMessageRounds` 和 `retainedAssistantTurns` 共同定义结果进入压缩范围的年龄阈值，默认值分别为 `2` 和 `4`。
+- `anchorHygiene: true`: after a file is subsequently modified successfully, replaces earlier successful `read`, `edit`, and `apply_patch` results for the same path.
+- A non-empty `tools`: applies age compression to the listed tools. `retainedUserMessageRounds` and `retainedAssistantTurns` together define the age threshold at which results enter compression scope, with default values of `2` and `4` respectively.
 
-工具错误、user message、assistant message 和 tool call 参数不会被替换。启用后，模型需要旧输出细节时必须重新读取文件或重新执行工具；重新执行 Bash 等有副作用的命令可能不安全。因此只在长时间、工具输出较多且已出现上下文压力的 session 中开启。
+Tool errors, user messages, assistant messages, and tool call arguments are never replaced. Once enabled, the model must re-read files or re-run tools when it needs details from old output; re-running commands with side effects such as Bash may be unsafe. Therefore, enable it only in long sessions with heavy tool output that have already shown context pressure.
 
-可选配置：
+Optional configuration:
 
 ```json
 {
@@ -181,11 +185,11 @@ Context compression 默认关闭，不写入 [`pi-base.json`](pi-base.json)。�
 }
 ```
 
-只需要清理失效文件上下文时，可以仅设置 `anchorHygiene: true`；需要按年龄压缩工具输出时再添加 `tools`。Provider 过滤和字段语义见 [Context compression 配置参考](../docs/configuration.md#contextcompression)。
+When you only need to clean up stale file context, set just `anchorHygiene: true`; add `tools` when you need to compress tool output by age. See the [Context compression Configuration Reference](../docs/configuration.md#contextcompression) for provider filtering and field semantics.
 
 ### Compaction model
 
-需要独立 compaction model 时添加：
+Add this when a separate compaction model is needed:
 
 ```json
 {
@@ -194,6 +198,6 @@ Context compression 默认关闭，不写入 [`pi-base.json`](pi-base.json)。�
 }
 ```
 
-`provider/model` 必须存在于 Pi 的模型配置中。
+`provider/model` must exist in Pi's model configuration.
 
-完整字段、默认值和合并规则见[配置参考](../docs/configuration.md)，Agent frontmatter 字段见[Markdown Agent](../docs/agents.md)。
+See the [Configuration Reference](../docs/configuration.md) for the complete fields, default values, and merge rules, and [Markdown Agent](../docs/agents.md) for Agent frontmatter fields.

@@ -1,70 +1,74 @@
+<p align="center">
+  🌐 <a href="bash.md">English</a> · <a href="bash.zh-CN.md">简体中文</a>
+</p>
+
 # `bash`
 
-[← 工具索引](README.md) · [公共架构](../architecture.md)
+[← Tool index](README.md) · [Shared architecture](../architecture.md)
 
-## 作用
+## Purpose
 
-在指定工作目录运行 shell 命令，并流式收集 stdout/stderr。
+Runs shell commands in a specified working directory and streams stdout/stderr.
 
-## 入口
+## Entry point
 
-- 注册：[`src/bash-renderer-register.ts`](../../src/bash-renderer-register.ts)
-- 子进程适配：[`src/bash-operations.ts`](../../src/bash-operations.ts)
-- 调用/结果渲染：[`src/bash-renderer-core.ts`](../../src/bash-renderer-core.ts)
-- Schema：[`src/schemas/bash.ts`](../../src/schemas/bash.ts)
-- Prompt：[`prompts/bash.md`](../../prompts/bash.md)
+- Registration: [`src/bash-renderer-register.ts`](../../src/bash-renderer-register.ts)
+- Child process adaptation: [`src/bash-operations.ts`](../../src/bash-operations.ts)
+- Call/result rendering: [`src/bash-renderer-core.ts`](../../src/bash-renderer-core.ts)
+- Schema: [`src/schemas/bash.ts`](../../src/schemas/bash.ts)
+- Prompt: [`prompts/bash.md`](../../prompts/bash.md)
 
-## 参数
+## Parameters
 
-| 参数 | 必填 | 默认 | 说明 |
-|------|------|------|------|
-| `command` | 是 | — | shell 命令 |
-| `workdir` | 否 | session cwd | 命令执行目录 |
-| `timeout_seconds` | 否 | `120` | timeout 秒数 |
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `command` | yes | — | Shell command |
+| `workdir` | no | session cwd | Directory in which the command runs |
+| `timeout_seconds` | no | `120` | Timeout in seconds |
 
-## 执行链
+## Execution chain
 
 ```text
-解析 workdir
-  -> 取得 cwd-scoped Bash tool
-  -> timeout_seconds 映射为上游 timeout
+Resolve workdir
+  -> Get cwd-scoped Bash tool
+  -> Map timeout_seconds to upstream timeout
   -> getShellConfig
-  -> spawn shell
+  -> Spawn shell
   -> stdout/stderr -> onData
   -> exit / timeout / abort
   -> Bash renderer
 ```
 
-注册层复用 `@earendil-works/pi-coding-agent` 的 Bash tool contract，但注入本地 `createGracefulBashOperations`，以统一进程树终止和 inherited stdio 处理。
+The registration layer reuses the Bash tool contract of `@earendil-works/pi-coding-agent` but injects the local `createGracefulBashOperations` to unify process-tree termination and inherited stdio handling.
 
-## Shell 选择
+## Shell selection
 
-Shell 配置由 Pi 的 `getShellConfig` 决定。
+The shell configuration is determined by Pi's `getShellConfig`.
 
-Linux/macOS 下，当 `$SHELL` 是 Bash 或 Zsh 时，renderer 会构造 host shell options，并加载以下 startup 文件：
+On Linux/macOS, when `$SHELL` is Bash or Zsh, the renderer builds host shell options and loads the following startup files:
 
-- Bash：`.bash_profile`、`.bash_login`、`.profile`、`.bashrc`
-- Zsh：`.zshenv`、`.zprofile`、`.zshrc`
+- Bash: `.bash_profile`, `.bash_login`, `.profile`, `.bashrc`
+- Zsh: `.zshenv`, `.zprofile`, `.zshrc`
 
-Windows 使用平台默认 shell 配置。
+Windows uses the platform default shell configuration.
 
-命令传递方式由 `getShellConfig` 返回的 shell 配置决定，可使用 argv 或 stdin transport；本地 operations 支持两种方式。
+How the command is passed is determined by the shell configuration returned by `getShellConfig`, which may use argv or stdin transport; the local operations support both.
 
-## 子进程
+## Child processes
 
-- 非 Windows 使用 detached process group。
-- stdout 和 stderr 都进入同一 `onData` 流。
-- abort 和 timeout 都终止进程树。
-- timeout 先触发 terminate，并可由通用 terminator 升级为强制 kill。
-- 子进程退出后清理 timer、AbortSignal listener 和 stdio handle。
+- Non-Windows uses a detached process group.
+- Both stdout and stderr go into the same `onData` stream.
+- Both abort and timeout terminate the process tree.
+- Timeout first triggers terminate, which can be escalated to a forced kill by the common terminator.
+- After the child exits, the timer, AbortSignal listener, and stdio handles are cleaned up.
 
-实现依赖 [`src/process-termination.ts`](../../src/process-termination.ts) 与内部 `waitForChildProcess` helper。
+The implementation relies on [`src/process-termination.ts`](../../src/process-termination.ts) and the internal `waitForChildProcess` helper.
 
 ## Permission
 
-Bash 不按路径匹配，而是先经过 [`src/bash-command-analyzer.ts`](../../src/bash-command-analyzer.ts)。
+Bash does not match by path; it first goes through [`src/bash-command-analyzer.ts`](../../src/bash-command-analyzer.ts).
 
-Analyzer 按以下顶层分隔符拆分命令：
+The analyzer splits the command on the following top-level separators:
 
 - `&&`
 - `||`
@@ -72,30 +76,30 @@ Analyzer 按以下顶层分隔符拆分命令：
 - `|&`
 - `&`
 - `;`
-- 换行
+- Newlines
 
-Analyzer 识别引号、重定向和 heredoc。`command`、`env`、`exec`、`nohup`、`eval`、`source`、`.`、`sh`、`bash`、`dash`、`zsh`、`ksh`、`ksh93`、`mksh` 和 `fish` 标记为动态 wrapper。
+The analyzer recognizes quotes, redirections, and heredocs. `command`, `env`, `exec`, `nohup`, `eval`, `source`, `.`, `sh`, `bash`, `dash`, `zsh`, `ksh`, `ksh93`, `mksh`, and `fish` are marked as dynamic wrappers.
 
-动态命令头、命令替换、process substitution、控制流或无法保守分析的 shell 结构不会被当作已安全解析；如果没有明确 deny，则退回 `ask`。公共 Permission 边界见[架构说明](../architecture.md#路径与文件写入)。
+Dynamic command heads, command substitution, process substitution, control flow, or shell constructs that cannot be conservatively analyzed are not treated as safely parsed; without an explicit deny, they fall back to `ask`. See the [architecture notes](../architecture.md#paths-and-file-writes) for the public Permission boundaries.
 
-## 结果与渲染
+## Result and rendering
 
-Bash renderer：
+The Bash renderer:
 
-- 流式状态显示 elapsed time。
-- 完成状态显示 total duration。
-- 成功结果折叠时优先保留尾部输出。
-- 错误即使配置为零行也保留有限诊断。
-- 上游结果已包含 `fullOutputPath` 或截断 footer 时，renderer 不再添加同类信息。
+- The streaming status shows elapsed time.
+- The completed status shows total duration.
+- Collapsed successful results keep trailing output first.
+- Errors keep a limited amount of diagnostics even when configured for zero lines.
+- When the upstream result already contains `fullOutputPath` or a truncation footer, the renderer does not add similar information again.
 
 ## Error
 
-- spawn 错误转换为 `Error: ...`。
-- timeout 在 operations 内使用 `timeout:<seconds>` marker，由上游 Bash tool 转换为用户结果。
-- abort 使用 `aborted` marker。
-- 非零命令退出由上游 Bash tool 返回退出码和输出。
+- Spawn errors are converted to `Error: ...`.
+- Timeout uses the `timeout:<seconds>` marker inside the operations and is converted into a user result by the upstream Bash tool.
+- Abort uses the `aborted` marker.
+- Non-zero command exits are returned by the upstream Bash tool with the exit code and output.
 
-## 相关测试
+## Related tests
 
 - [`tests/bash-index.test.ts`](../../tests/bash-index.test.ts)
 - [`tests/bash-operations.test.ts`](../../tests/bash-operations.test.ts)

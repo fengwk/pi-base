@@ -1,112 +1,116 @@
+<p align="center">
+  🌐 <a href="task.md">English</a> · <a href="task.zh-CN.md">简体中文</a>
+</p>
+
 # `task`
 
-[← 工具索引](README.md) · [公共架构](../architecture.md)
+[← Tool index](README.md) · [Shared architecture](../architecture.md)
 
-## 作用
+## Purpose
 
-创建或恢复一个 Subagent session，并把 `prompt` 交给指定 Markdown Agent 执行。
+Creates or resumes a Subagent session and hands `prompt` to the designated Markdown Agent for execution.
 
-## 注入条件
+## Injection conditions
 
-`task` 不是始终可见。当前 Agent 必须：
+`task` is not always visible. The current Agent must:
 
-1. 声明非空 `subagents` allowlist。
-2. 当前 session depth 小于 `subagent.maxDepth`。
+1. Declare a non-empty `subagents` allowlist.
+2. Have a current session depth below `subagent.maxDepth`.
 
-注入逻辑位于 [`src/agent-support.ts`](../../src/agent-support.ts)，工具实现位于 [`src/subagent/task-tool.ts`](../../src/subagent/task-tool.ts)。
+The injection logic lives in [`src/agent-support.ts`](../../src/agent-support.ts), and the tool implementation in [`src/subagent/task-tool.ts`](../../src/subagent/task-tool.ts).
 
-## 参数
+## Parameters
 
-| 参数 | 必填 | 默认 | 说明 |
+| Parameter | Required | Default | Description |
 |------|------|------|------|
-| `subagent_type` | 是 | — | allowlist 中的 Agent 名 |
-| `prompt` | 是 | — | 交给 Subagent 执行的任务说明 |
-| `maxTurns` | 否 | 配置值，默认 50 | 该调用的 soft-stop turn 预算 |
-| `session_id` | 否 | — | 恢复已有 Subagent session |
+| `subagent_type` | yes | — | Agent name in the allowlist |
+| `prompt` | yes | — | Task instructions handed to the Subagent for execution |
+| `maxTurns` | no | configured value, default 50 | Soft-stop turn budget for this invocation |
+| `session_id` | no | — | Resumes an existing Subagent session |
 
-Schema 由 [`src/subagent/schema.ts`](../../src/subagent/schema.ts) 按当前 workspace 的默认 `maxTurns` 构建。
+The schema is built by [`src/subagent/schema.ts`](../../src/subagent/schema.ts) from the default `maxTurns` of the current workspace.
 
-## 执行链
+## Execution chain
 
 ```text
-校验 required args
-  -> Agent 是否存在
-  -> 是否在当前 allowlist
-  -> resume session 是否正在运行
-  -> 预留 parent/root 并发槽位
+validate required args
+  -> Agent exists
+  -> in current allowlist
+  -> resume session not running
+  -> reserve parent/root concurrency slots
   -> create/resume AgentSession
-  -> 写入 Agent/depth/root entries
-  -> 注册 SubagentRegistry
-  -> 运行 + 进度监听
+  -> write Agent/depth/root entries
+  -> register with SubagentRegistry
+  -> run + progress listener
   -> completed/error/aborted result
 ```
 
-Agent、allowlist 和 resume 状态校验在创建 session 和预留并发槽位之前完成。
+Agent, allowlist, and resume-state validation completes before the session is created and concurrency slots are reserved.
 
-## Session 创建
+## Session creation
 
-Factory 位于 [`src/subagent/runner.ts`](../../src/subagent/runner.ts)：
+The factory lives in [`src/subagent/runner.ts`](../../src/subagent/runner.ts):
 
-- 根据 cwd 计算 Subagent session 目录。
-- 创建或恢复 Pi AgentSession。
-- 绑定持久 extension。
-- 写入当前 Agent state。
-- 写入 depth 和 root session id。
-- 检查 child 与 parent 是否加载同一 `pi-base` module instance。
+- Computes the Subagent session directory from cwd.
+- Creates or resumes the Pi AgentSession.
+- Binds persistent extensions.
+- Writes the current Agent state.
+- Writes the depth and root session id.
+- Checks that the child and parent load the same `pi-base` module instance.
 
-仅通过父 session 的临时 `pi -e` flag 加载、而 child 无法继承同一 extension 时会 fail-fast。
+Fails fast when the extension is only loaded via a temporary `pi -e` flag of the parent session and the child cannot inherit the same extension.
 
 ## Resume
 
-传入 `session_id` 时：
+When `session_id` is passed:
 
-- 已运行中的 session 不能再次 resume。
-- 同一 session 的并发 resume 通过进程级 reservation 阻止。
-- 恢复时使用传入的 `subagent_type` 和恢复时加载的 Agent config。
+- A session that is already running cannot be resumed again.
+- Concurrent resumes of the same session are prevented via process-level reservations.
+- On resume, the passed `subagent_type` and the Agent config loaded at resume time are used.
 
-## 并发
+## Concurrency
 
-两层并发限制：
+Two levels of concurrency limits:
 
-- `maxConcurrency`：单个 parent 的直接 child。
-- `maxTotalConcurrency`：整个 root delegation tree。
+- `maxConcurrency`: direct children of a single parent.
+- `maxTotalConcurrency`: the entire root delegation tree.
 
-创建前先预留并发槽位；Subagent 注册到 registry 后释放 pending reservation，reservation 在此期间计入并发限制。
+Concurrency slots are reserved before creation; the pending reservation is released once the Subagent is registered with the registry, and the reservation counts toward the limits in the meantime.
 
 ## Depth
 
-Root depth 为 1。Child 创建时使用：
+Root depth is 1. Children are created with:
 
 ```text
 childDepth = parentDepth + 1
 ```
 
-达到 `maxDepth` 后，Agent 不再获得 `task`。
+Once `maxDepth` is reached, the Agent no longer receives `task`.
 
 ## maxTurns
 
-`maxTurns` 是 soft-stop：
+`maxTurns` is a soft stop:
 
-- 达到预算后向 child 发送提示，要求未完成时返回阶段报告。
-- 不会强制终止正在执行的工具。
-- 如果 child 继续工具驱动，每额外 5 个有效 turn 再提醒一次。
+- When the budget is reached, a hint is sent to the child asking it to return a phase report if unfinished.
+- Tools that are currently executing are not forcibly terminated.
+- If the child continues tool-driven, a reminder is sent every 5 additional valid turns.
 
-达到 soft-stop 后，可使用该 `session_id` 恢复同一 child session 并继续执行。
+After the soft stop is reached, the same child session can be resumed with that `session_id` to continue execution.
 
-## Idle timeout 与 abort
+## Idle timeout and abort
 
-- `idleTimeoutMs` 只在 session 没有 assistant/session 活动时触发。
-- 工具调用进行期间不触发 `idleTimeoutMs`。
-- Parent 取消会传播到当前 child 及其 delegation subtree。
-- 运行状态存储在进程级 `SubagentRegistry`，UI widget 和 `/subagent` 共用该 registry。
+- `idleTimeoutMs` only triggers when the session has no assistant/session activity.
+- `idleTimeoutMs` does not trigger while a tool call is in progress.
+- Parent cancellation propagates to the current child and its delegation subtree.
+- Running state is stored in the process-level `SubagentRegistry`, shared by the UI widget and `/subagent`.
 
 ## Permission
 
-Headless child 遇到 `ask` 时，将请求转发给 root UI 的 permission host。Root UI 不存在或 host 已失效时请求失败，不会隐式 allow。
+When a headless child encounters `ask`, the request is forwarded to the permission host of the root UI. If the root UI does not exist or the host is stale, the request fails without an implicit allow.
 
-## 结果
+## Result
 
-工具返回：
+The tool returns:
 
 ```xml
 <task id="session-id" state="completed">
@@ -114,15 +118,15 @@ Headless child 遇到 `ask` 时，将请求转发给 root UI 的 permission host
 </task>
 ```
 
-非 `completed` state 会设置 `isError: true`。`details.result` 保留结构化 session id、state 和输出。
+Non-`completed` states set `isError: true`. `details.result` keeps the structured session id, state, and output.
 
 ## UI
 
-- Root UI widget 展示运行中 parent/child 树和最近活动。
-- `/subagent` 打开 session 选择器。
-- `/subagent <id-or-prefix>` 只读查看 transcript。
+- The root UI widget shows the running parent/child tree and recent activity.
+- `/subagent` opens the session picker.
+- `/subagent <id-or-prefix>` reads the transcript read-only.
 
-## 相关测试
+## Related tests
 
 - [`tests/subagent-task-tool.test.ts`](../../tests/subagent-task-tool.test.ts)
 - [`tests/subagent-runner.test.ts`](../../tests/subagent-runner.test.ts)

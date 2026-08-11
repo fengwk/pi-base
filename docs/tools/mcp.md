@@ -1,26 +1,30 @@
-# MCP 动态工具
+<p align="center">
+  🌐 <a href="mcp.md">English</a> · <a href="mcp.zh-CN.md">简体中文</a>
+</p>
 
-[← 工具索引](README.md) · [公共架构](../architecture.md)
+# MCP Dynamic Tools
 
-## 作用
+[← Tool index](README.md) · [Shared architecture](../architecture.md)
 
-连接本地或远程 MCP server，把 server 提供的 tools 动态适配为 Pi tools。
+## Purpose
 
-## 入口
+Connect to local or remote MCP servers and dynamically adapt the tools they provide into Pi tools.
 
-- 注册与 lifecycle：[`src/mcp/register.ts`](../../src/mcp/register.ts)
-- Hub：[`src/mcp/hub.ts`](../../src/mcp/hub.ts)
-- Session binding：[`src/mcp/binding.ts`](../../src/mcp/binding.ts)
-- SDK client：[`src/mcp/client.ts`](../../src/mcp/client.ts)
-- Tool adapter：[`src/mcp/adapter.ts`](../../src/mcp/adapter.ts)
-- JSON Schema 转换：[`src/mcp/schema.ts`](../../src/mcp/schema.ts)
-- 配置类型：[`src/mcp/types.ts`](../../src/mcp/types.ts)
+## Entry point
 
-## 支持的 server
+- Registration and lifecycle: [`src/mcp/register.ts`](../../src/mcp/register.ts)
+- Hub: [`src/mcp/hub.ts`](../../src/mcp/hub.ts)
+- Session binding: [`src/mcp/binding.ts`](../../src/mcp/binding.ts)
+- SDK client: [`src/mcp/client.ts`](../../src/mcp/client.ts)
+- Tool adapter: [`src/mcp/adapter.ts`](../../src/mcp/adapter.ts)
+- JSON Schema conversion: [`src/mcp/schema.ts`](../../src/mcp/schema.ts)
+- Configuration types: [`src/mcp/types.ts`](../../src/mcp/types.ts)
+
+## Supported servers
 
 ### Local
 
-使用 stdio transport：
+Uses the stdio transport:
 
 ```json
 {
@@ -35,15 +39,15 @@
 
 ### Remote
 
-支持：
+Supported:
 
 - `streamable-http`
 - `sse`
 - `websocket`
 
-WebSocket 不支持自定义 headers。
+WebSocket does not support custom headers.
 
-## 执行架构
+## Execution architecture
 
 ```text
 session_start
@@ -56,11 +60,11 @@ session_start
   -> pi.registerTool
 ```
 
-同一 root delegation tree 共享一个 Hub；不同 root session 使用独立 Hub。
+A single root delegation tree shares one Hub; different root sessions use independent Hubs.
 
-## Hub 状态
+## Hub states
 
-Server 状态：
+Server states:
 
 ```text
 disabled
@@ -71,125 +75,125 @@ reconnecting
 failed
 ```
 
-Hub 负责：
+The Hub is responsible for:
 
-- 首次连接。
-- Tool 列表。
-- Heartbeat。
-- 断线检测。
-- 指数式重试延迟。
-- Call timeout。
-- Terminal shutdown。
+- First connection.
+- Tool listing.
+- Heartbeat.
+- Disconnect detection.
+- Exponential retry delays.
+- Call timeout.
+- Terminal shutdown.
 
-默认：
+Defaults:
 
-- startup timeout：60000 ms
-- call timeout：60000 ms
-- heartbeat：30000 ms
-- retry delays：5s、10s、20s、40s、60s
+- startup timeout: 60000 ms
+- call timeout: 60000 ms
+- heartbeat: 30000 ms
+- retry delays: 5s, 10s, 20s, 40s, 60s
 
-## Tool 命名
+## Tool naming
 
-默认别名：
+Default alias:
 
 ```text
 <serverKey>_<remoteToolName>
 ```
 
-`toolPrefix`：
+`toolPrefix`:
 
-- 未设置：使用 server key。
-- `""`：保留 remote tool name。
-- 其他字符串：使用指定 prefix。
+- Unset: uses the server key.
+- `""`: keeps the remote tool name.
+- Any other string: uses the specified prefix.
 
-别名最大 64 字符。原始别名超过 64 字符或包含 `[A-Za-z0-9_-]` 之外的字符时，非法字符转换为 `_`，并追加 12 字符 SHA-256 hash。
+Aliases are at most 64 characters. When the original alias exceeds 64 characters or contains characters outside `[A-Za-z0-9_-]`, invalid characters are converted to `_` and a 12-character SHA-256 hash is appended.
 
 ## Schema
 
-Remote `inputSchema` 通过 [`src/mcp/schema.ts`](../../src/mcp/schema.ts) 转换为 TypeBox。
+The remote `inputSchema` is converted to TypeBox via [`src/mcp/schema.ts`](../../src/mcp/schema.ts).
 
-不支持的 JSON Schema 结构转换为 `Type.Any()`；该工具仍会注册。
+Unsupported JSON Schema constructs are converted to `Type.Any()`; the tool is still registered.
 
 ## Tool adapter
 
-每个动态工具包含：
+Each dynamic tool contains:
 
-- Pi alias name。
-- `<server>: <tool>` label。
-- Remote description。
-- 转换后的 parameters。
-- JSON 参数 renderer。
-- 默认 2500 字符的折叠结果上限。
+- Pi alias name.
+- `<server>: <tool>` label.
+- Remote description.
+- Converted parameters.
+- JSON parameters renderer.
+- Collapsed result cap of 2500 characters by default.
 
-执行时调用：
+On execution it calls:
 
 ```text
 callTool(serverKey, remoteToolName, args, ctx, signal)
 ```
 
-## Result 转换
+## Result conversion
 
-支持：
+Supported:
 
-- Text。
-- Base64 image。
-- Structured content。
-- 其他 MCP content item 的 JSON 文本表示。
+- Text.
+- Base64 image.
+- Structured content.
+- JSON text representation of other MCP content items.
 
-Structured content 如果没有与现有 text 重复，会追加：
+If structured content does not duplicate existing text, it is appended:
 
 ```text
 [structured content]
 <json>
 ```
 
-空结果转换为 `No content returned.`。
+Empty results are converted to `No content returned.`
 
-Remote `isError` 和 transport 异常都映射为 Pi `isError: true`，并在 `details` 保留 server/tool。
+Remote `isError` and transport exceptions both map to Pi `isError: true`, keeping server/tool in `details`.
 
-## Binding 与工具冲突
+## Binding and tool conflicts
 
-`McpSessionBinding` 跟踪：
+`McpSessionBinding` tracks:
 
-- alias owner。
-- available aliases。
-- unavailable/stale aliases。
-- 连接恢复后需要重新激活的工具。
+- alias owner.
+- available aliases.
+- unavailable/stale aliases.
+- tools that need to be reactivated after connection recovery.
 
-同名 alias 已被其他工具占用时标记为 `conflict`，不会覆盖现有工具。断线后工具可以标记 `stale`，重连并重新发现后恢复。
+When an alias with the same name is already occupied by another tool, it is marked as `conflict` and does not override the existing tool. After a disconnect, tools can be marked `stale` and are restored after reconnection and rediscovery.
 
-Agent tool allowlist 作用于 MCP alias。
+The agent tool allowlist applies to MCP aliases.
 
-## 环境变量
+## Environment variables
 
-`env` 和 `headers` 只接受整个值引用：
+`env` and `headers` only accept whole-value references:
 
 ```text
 $VAR
 ${VAR}
 ```
 
-不支持：
+Not supported:
 
 ```text
 Bearer ${TOKEN}
 ```
 
-环境变量不存在时连接失败。
+Connection fails when the environment variable does not exist.
 
-## 状态与命令
+## Status and commands
 
-- Footer：`MCP: connected/total servers`
-- `/mcp-status`：显示 server 状态、transport、prefix、错误、重试时间和 tool 状态。
+- Footer: `MCP: connected/total servers`
+- `/mcp-status`: shows server status, transport, prefix, errors, retry time, and tool status.
 
 ## Lifecycle
 
-- `session_start` 建立或重配 binding。
-- Reload 使用新 config 重新绑定。
-- Root terminal shutdown 释放 lease。
-- Hub 没有使用者时关闭 transport 和本地进程。
+- `session_start` establishes or reconfigures the binding.
+- Reload rebinds with the new config.
+- Root terminal shutdown releases the lease.
+- When the Hub has no consumers, the transport and local processes are shut down.
 
-## 相关测试
+## Related tests
 
 - [`tests/mcp.test.ts`](../../tests/mcp.test.ts)
 - [`tests/mcp-client.test.ts`](../../tests/mcp-client.test.ts)

@@ -1,49 +1,53 @@
+<p align="center">
+  🌐 <a href="grep.md">English</a> · <a href="grep.zh-CN.md">简体中文</a>
+</p>
+
 # `grep`
 
-[← 工具索引](README.md) · [公共架构](../architecture.md)
+[← Tool index](README.md) · [Shared architecture](../architecture.md)
 
-## 作用
+## Purpose
 
-使用 ripgrep 搜索文件内容，支持普通、literal、大小写不敏感和多行匹配。
+Searches file contents with ripgrep, supporting plain, literal, case-insensitive, and multiline matching.
 
-## 入口
+## Entry point
 
-- 注册：[`src/grep-register.ts`](../../src/grep-register.ts)
-- 执行：[`src/grep-core.ts`](../../src/grep-core.ts)
-- Schema：[`src/schemas/grep.ts`](../../src/schemas/grep.ts)
-- Prompt：[`prompts/grep.md`](../../prompts/grep.md)
+- Registration: [`src/grep-register.ts`](../../src/grep-register.ts)
+- Execution: [`src/grep-core.ts`](../../src/grep-core.ts)
+- Schema: [`src/schemas/grep.ts`](../../src/schemas/grep.ts)
+- Prompt: [`prompts/grep.md`](../../prompts/grep.md)
 
-## 参数
+## Parameters
 
-| 参数 | 必填 | 默认 | 说明 |
-|------|------|------|------|
-| `pattern` | 是 | — | 正则或 literal 文本 |
-| `path` | 是 | — | 文件或目录 |
-| `workdir` | 否 | session cwd | 相对路径解析基准 |
-| `include` | 否 | — | 文件 glob |
-| `ignore_case` | 否 | `false` | 忽略大小写 |
-| `literal` | 否 | `false` | 固定字符串搜索 |
-| `multiline` | 否 | `false` | 允许跨行匹配 |
-| `limit` | 否 | `100` | 最大 match event 数 |
-| `timeout_seconds` | 否 | `15` | 搜索 timeout |
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `pattern` | yes | — | Regex or literal text |
+| `path` | yes | — | File or directory |
+| `workdir` | no | session cwd | Base for resolving relative paths |
+| `include` | no | — | File glob |
+| `ignore_case` | no | `false` | Ignore case |
+| `literal` | no | `false` | Fixed-string search |
+| `multiline` | no | `false` | Allow matches across lines |
+| `limit` | no | `100` | Maximum number of match events |
+| `timeout_seconds` | no | `15` | Search timeout |
 
-## 执行链
+## Execution chain
 
 ```text
-校验 pattern/path
-  -> 解析 workdir/path
-  -> stat 目标
-  -> 单文件二进制预检查
+Validate pattern/path
+  -> Resolve workdir/path
+  -> stat target
+  -> Single-file binary precheck
   -> ensureTool("rg")
-  -> spawn ripgrep --json
-  -> 解析 match events
-  -> 路径/行号格式化
-  -> limit、长行和 timeout 处理
+  -> Spawn ripgrep --json
+  -> Parse match events
+  -> Format paths/line numbers
+  -> Handle limit, long lines, and timeout
 ```
 
-## ripgrep 参数
+## ripgrep arguments
 
-普通模式固定使用：
+Plain mode always uses:
 
 ```text
 --json
@@ -52,57 +56,57 @@
 --hidden
 ```
 
-可按参数增加：
+Additional flags per parameter:
 
 - `--ignore-case`
 - `--fixed-strings`
 - `--glob`
 - `--multiline`
 
-系统没有 `rg` 时，内部 tool manager 会尝试下载官方 GitHub Release。`PI_OFFLINE=1`、`true` 或 `yes` 可禁用下载。
+When the system has no `rg`, the internal tool manager tries to download the official GitHub Release. `PI_OFFLINE=1`, `true`, or `yes` disables the download.
 
-## 目标预检查
+## Target prechecks
 
-- 目录可以直接搜索。
-- 单文件必须是普通文件。
-- 单文件搜索会先读取最多 1 MiB 做二进制检测。
-- 目录内的二进制过滤交给 ripgrep。
+- Directories can be searched directly.
+- A single file must be a regular file.
+- Single-file searches first read up to 1 MiB for binary detection.
+- Binary filtering inside directories is left to ripgrep.
 
-## 结果格式
+## Result format
 
-普通匹配：
+Plain matches:
 
 ```text
 src/example.ts:42: matching line
 ```
 
-目录搜索使用相对搜索根的路径；单文件搜索使用 basename。
+Directory searches use paths relative to the search root; single-file searches use the basename.
 
-ripgrep JSON 中的 base64 `bytes` 字段会经过文本解码。若事件缺少行文本，普通模式会按行号回读文件。
+The base64 `bytes` field in ripgrep JSON is text-decoded. If an event lacks line text, plain mode re-reads the file by line number.
 
-## Limit 与截断
+## Limit and truncation
 
-- 单个显示行最多 500 字符。
-- 达到 `limit` 时终止 ripgrep 并设置 `details.matchLimitReached`。
-- 多行模式的 `limit` 统计 match event；一个 event 可能展示多行。
-- 长行截断设置 `details.linesTruncated`。
+- A single displayed line is at most 500 characters.
+- When `limit` is reached, ripgrep is terminated and `details.matchLimitReached` is set.
+- In multiline mode, `limit` counts match events; one event may display multiple lines.
+- Long-line truncation sets `details.linesTruncated`.
 
-这些语义性截断通过 metadata 标记，供[公共结果处理链](../architecture.md#tool_result)识别。
+These semantic truncations are marked via metadata so the [public result handling chain](../architecture.md#tool_result) can recognize them.
 
-## Timeout 与终止
+## Timeout and termination
 
-`timeout_seconds` 使用独立 AbortSignal。独立 timeout signal 返回 `Search timed out`；父级 abort 返回 abort。
+`timeout_seconds` uses a separate AbortSignal. The dedicated timeout signal returns `Search timed out`; a parent abort returns the abort.
 
-子进程通过 [`src/process-termination.ts`](../../src/process-termination.ts) 终止进程树。
+The child process tree is terminated via [`src/process-termination.ts`](../../src/process-termination.ts).
 
 ## Error
 
-- ripgrep exit code `0`：有匹配。
-- exit code `1`：无匹配，返回 `No matches found`。
-- 其他 exit code：返回 stderr 错误。
-- 非普通文件、二进制文件、无效正则和下载失败均返回 `isError: true`。
+- ripgrep exit code `0`: there are matches.
+- Exit code `1`: no matches, returns `No matches found`.
+- Other exit codes: returns the stderr error.
+- Non-regular files, binary files, invalid regexes, and download failures all return `isError: true`.
 
-## 相关测试
+## Related tests
 
 - [`tests/grep-native.test.ts`](../../tests/grep-native.test.ts)
 - [`tests/grep-multiline-behavior.test.ts`](../../tests/grep-multiline-behavior.test.ts)

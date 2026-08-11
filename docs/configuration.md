@@ -1,21 +1,25 @@
-# 配置参考
+<p align="center">
+  🌐 <a href="configuration.md">English</a> · <a href="configuration.zh-CN.md">简体中文</a>
+</p>
 
-完整示例见 [`examples/pi-base.json`](../examples/pi-base.json)。
+# Configuration Reference
 
-## 配置文件
+See [`examples/pi-base.json`](../examples/pi-base.json) for a complete example.
 
-| 作用域 | 路径 |
-|--------|------|
-| 全局 | `~/.pi/agent/pi-base.json` |
-| 项目 | 从 cwd 向上查找最近的 `<repo>/.pi/pi-base.json` |
+## Configuration files
 
-环境变量 `PI_BASE_GLOBAL_SETTINGS_PATH` 可覆盖全局配置路径。
+| Scope | Path |
+|-------|------|
+| Global | `~/.pi/agent/pi-base.json` |
+| Project | Nearest `<repo>/.pi/pi-base.json` found by searching upward from cwd |
 
-配置按 cwd 缓存在进程内。修改后执行 `/reload`。
+The `PI_BASE_GLOBAL_SETTINGS_PATH` environment variable overrides the global configuration path.
 
-## 校验
+Configuration is cached in-process per cwd. Run `/reload` after modifying it.
 
-配置必须是 JSON object。顶层只允许：
+## Validation
+
+Configuration must be a JSON object. Only the following top-level keys are allowed:
 
 - `lsp`
 - `permission`
@@ -29,25 +33,25 @@
 - `subagent`
 - `defaultAgent`
 
-未知字段会报错，不会静默忽略。
+Unknown fields produce an error and are not silently ignored.
 
-## 合并规则
+## Merge rules
 
-项目配置与全局配置按字段合并：
+Project configuration and global configuration are merged field by field:
 
-| 字段 | 规则 |
-|------|------|
-| `lsp.servers` | 项目声明 `servers` 时整体替换全局 server map |
-| `permission` | 按 tool 合并规则数组，项目规则追加在全局规则之后 |
-| `render` | 合并默认值和逐工具映射 |
-| `notify` | 浅合并，项目字段覆盖全局字段 |
-| `yolo` | 项目值覆盖 |
-| `mcp.servers` | 按 server key 合并，同 key 项目覆盖 |
-| `compactionModel` | 项目值覆盖 |
-| `compactionThinkingLevel` | 项目值覆盖 |
-| `contextCompression` | 标量逐项覆盖，数组整体替换 |
-| `subagent` | 各字段逐项覆盖 |
-| `defaultAgent` | 项目值覆盖 |
+| Field | Rule |
+|-------|------|
+| `lsp.servers` | When the project declares `servers`, the global server map is replaced entirely |
+| `permission` | Rule arrays are merged per tool, with project rules appended after global rules |
+| `render` | Defaults and per-tool mappings are merged |
+| `notify` | Shallow merge; project fields override global fields |
+| `yolo` | Project value overrides |
+| `mcp.servers` | Merged by server key; same-key project entries override |
+| `compactionModel` | Project value overrides |
+| `compactionThinkingLevel` | Project value overrides |
+| `contextCompression` | Scalars override item by item; arrays are replaced as a whole |
+| `subagent` | Each field overrides item by item |
+| `defaultAgent` | Project value overrides |
 
 ## `lsp`
 
@@ -66,18 +70,18 @@
 }
 ```
 
-Server 字段：
+Server fields:
 
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `command` | 是 | 可执行文件和参数；首项必须在 PATH 或为绝对路径 |
-| `extensions` | 是 | 负责的文件后缀 |
-| `rootMarkers` | 否 | 多模块项目根标记，最顶层匹配优先 |
-| `firstMatchMarkers` | 否 | 向上查找时首次匹配优先 |
-| `requestTimeoutMs` | 否 | 每次请求超时，默认 60000 |
-| `workspaceData` | 否 | jdtls workspace data 配置 |
+| Field | Required | Description |
+|-------|----------|-------------|
+| `command` | Yes | Executable and arguments; the first item must be on PATH or an absolute path |
+| `extensions` | Yes | File extensions the server handles |
+| `rootMarkers` | No | Root markers for multi-module projects; the topmost match wins |
+| `firstMatchMarkers` | No | The first match wins when searching upward |
+| `requestTimeoutMs` | No | Per-request timeout, default 60000 |
+| `workspaceData` | No | jdtls workspace data configuration |
 
-`workspaceData`：
+`workspaceData`:
 
 ```json
 {
@@ -86,15 +90,15 @@ Server 字段：
 }
 ```
 
-- `stable`：同一项目使用稳定 hash 目录。
-- `process`：目录名额外包含 PID。
-- `disabled`：不自动添加 `-data`。
+- `stable`: uses a stable hash directory for the same project.
+- `process`: the directory name additionally includes the PID.
+- `disabled`: does not automatically add `-data`.
 
-命令路径支持 `~/`、`$HOME/`、`${HOME}/`。其他环境变量不会插值。
+Command paths support `~/`, `$HOME/`, and `${HOME}/`. Other environment variables are not interpolated.
 
 ## `permission`
 
-支持 `allow`、`ask`、`deny`。
+Supports `allow`, `ask`, and `deny`.
 
 ```json
 {
@@ -114,18 +118,18 @@ Server 字段：
 }
 ```
 
-规则可以是字符串，也可以是 `pattern -> action` object。规则按顺序覆盖，最后一次匹配生效。
+Rules can be strings or `pattern -> action` objects. Rules override in order; the last match wins.
 
-路径工具会同时考虑：
+Path tools consider all of:
 
-- 原始路径。
-- 相对 workdir 的路径。
-- 相对项目根的路径。
-- 绝对路径。
+- The raw path.
+- The path relative to the workdir.
+- The path relative to the project root.
+- The absolute path.
 
-`apply_patch` 会解析全部源路径和目标路径，并继承 edit/write 规则。Bash 使用静态命令分析；无法保守分析且未明确 deny 的命令会退回 `ask`。
+`apply_patch` resolves all source and target paths and inherits the edit/write rules. Bash uses static command analysis; commands that cannot be conservatively analyzed and are not explicitly denied fall back to `ask`.
 
-Permission 用于防误操作，不是安全沙箱。
+Permission guards against accidental operations; it is not a security sandbox.
 
 ## `render`
 
@@ -146,10 +150,10 @@ Permission 用于防误操作，不是安全沙箱。
 }
 ```
 
-- 数字值表示全局默认。
-- Object 支持精确工具名、通配符和 `*`。
-- 匹配优先级：精确名 > 通配符 > `*`。
-- 行数设为 0 会隐藏成功正文；错误仍保留有限诊断预览。
+- Numeric values represent the global default.
+- Objects support exact tool names, wildcards, and `*`.
+- Match priority: exact name > wildcard > `*`.
+- Setting a line count to 0 hides successful content; errors keep a limited diagnostic preview.
 
 ## `notify`
 
@@ -163,23 +167,23 @@ Permission 用于防误操作，不是安全沙箱。
 }
 ```
 
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `permissionAsked` | `false` | 权限确认前通知 |
-| `agentEnd` | `false` | Agent run settled 为 completed 或 non-retryable error 时通知；active Goal continuation 不发送 completed 通知 |
-| `suppressCompletedAfterRejectionMs` | `5000` | 拒绝权限后抑制 completed 通知 |
+| Field | Default | Description |
+|-------|---------|-------------|
+| `permissionAsked` | `false` | Notify before a permission prompt |
+| `agentEnd` | `false` | Notify when an agent run settles as completed or a non-retryable error; active Goal continuations do not send completed notifications |
+| `suppressCompletedAfterRejectionMs` | `5000` | Suppress completed notifications after a permission rejection |
 
-桌面通知支持 Linux desktop 和 WSL；其他平台不启用通知。
+Desktop notifications are supported on Linux desktop and WSL; notifications are not enabled on other platforms.
 
 ## `yolo`
 
-Boolean，默认 `false`。启用后跳过 Permission guard。
+Boolean, default `false`. When enabled, the permission guard is skipped.
 
-`/yolo` 只切换当前进程内的运行时状态，不写回 JSON。
+`/yolo` only toggles the runtime state in the current process; it does not write back to the JSON.
 
 ## `mcp`
 
-### 本地 server
+### Local servers
 
 ```json
 {
@@ -201,7 +205,7 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 }
 ```
 
-### 远程 server
+### Remote servers
 
 ```json
 {
@@ -220,15 +224,15 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 }
 ```
 
-支持 transport：
+Supported transports:
 
 - `streamable-http`
 - `sse`
 - `websocket`
 
-`env` 和 `headers` 只允许整个值引用 `$VAR` 或 `${VAR}`，不支持字符串内插。WebSocket transport 不支持自定义 headers。
+`env` and `headers` only allow whole-value references to `$VAR` or `${VAR}`; string interpolation is not supported. The WebSocket transport does not support custom headers.
 
-`toolPrefix` 默认使用 server key；空字符串保留远端原始工具名。
+`toolPrefix` defaults to the server key; an empty string keeps the remote tool's original name.
 
 ## `subagent`
 
@@ -244,26 +248,26 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 }
 ```
 
-| 字段 | 默认 | 说明 |
-|------|------|------|
-| `maxDepth` | `2` | root depth 为 1；达到上限不注入 `task` |
-| `maxConcurrency` | `10` | 单父 session 的并发 child 上限 |
-| `maxTotalConcurrency` | 未启用 | 整棵 delegation tree 并发上限 |
-| `idleTimeoutMs` | 未启用 | 无 session 活动时的 timeout |
-| `maxTurns` | `50` | 默认 soft-stop turn 预算 |
+| Field | Default | Description |
+|-------|---------|-------------|
+| `maxDepth` | `2` | Root depth is 1; `task` is not injected once the limit is reached |
+| `maxConcurrency` | `10` | Concurrency limit for children of a single parent session |
+| `maxTotalConcurrency` | Not enabled | Concurrency limit for the whole delegation tree |
+| `idleTimeoutMs` | Not enabled | Timeout when there is no session activity |
+| `maxTurns` | `50` | Default soft-stop turn budget |
 
 ## `contextCompression`
 
-默认关闭。未配置 `contextCompression` 时，不会替换任何历史工具结果。该功能在 provider request 前投影消息，用短占位文本替换符合条件的旧 `toolResult` 正文，以减少发送给模型的历史工具输出；它不生成对话摘要，也不扩大模型的 context window。
+Off by default. When `contextCompression` is not configured, no historical tool results are replaced. Before a provider request, the feature projects the messages and replaces the content of qualifying old `toolResult`s with short placeholder text, reducing the historical tool output sent to the model; it does not generate conversation summaries and does not enlarge the model's context window.
 
-有两种独立的启用方式：
+There are two independent ways to enable it:
 
-- `anchorHygiene: true`：文件被后续成功修改后，替换同一路径上更早的成功 `read`、`edit` 和 `apply_patch` 结果。失败结果和 `write` acknowledgement 不在此机制中替换。
-- `tools` 使用非空数组：对列出的工具执行 age compression。只有同时满足保留窗口之外和工具名匹配的成功结果才会替换；skill 文件的 `read` 结果保留。
+- `anchorHygiene: true`: after a file is later modified successfully, earlier successful `read`, `edit`, and `apply_patch` results for the same path are replaced. Failed results and `write` acknowledgements are not replaced by this mechanism.
+- `tools` with a non-empty array: age compression is applied to the listed tools. Only successful results that are both outside the retention window and match a listed tool name are replaced; `read` results for skill files are kept.
 
-两项都未启用时，`contextCompression` 不生效。压缩只替换发送给模型的工具结果正文，不替换 user message、assistant message、tool call 参数或工具错误。模型需要旧结果细节时必须重新读取或重新执行工具，因此有副作用或成本较高的工具应谨慎加入 `tools`。
+When neither is enabled, `contextCompression` has no effect. Compression only replaces the content of tool results sent to the model; it does not replace user messages, assistant messages, tool call arguments, or tool errors. When the model needs details from old results, it must re-read or re-run the tool, so tools with side effects or high cost should be added to `tools` with caution.
 
-只在长时间、工具调用密集且已产生明确上下文压力的 session 中开启。短 session、仍需完整调试输出或不能安全重放命令的任务保持关闭。
+Enable it only in long sessions with dense tool calls that show clear context pressure. Keep it off for short sessions, tasks that still need full debug output, or commands that cannot be safely replayed.
 
 ```json
 {
@@ -278,11 +282,11 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 }
 ```
 
-- `anchorHygiene`：启用失效文件上下文清理；默认 `false`。
-- `tools`：允许做 age compression 的工具名；缺失或空数组时关闭 age compression。
-- `retainedUserMessageRounds` / `retainedAssistantTurns`：共同定义结果进入 age compression 范围的年龄阈值；启用 age compression 后默认值分别为 `2` 和 `4`。
-- `enabledProviders`：仅列出的 provider 生效；空数组表示全部关闭。
-- `disabledProviders`：明确排除 provider，不能是空数组。
+- `anchorHygiene`: enables stale file context cleanup; default `false`.
+- `tools`: tool names allowed to undergo age compression; age compression is off when missing or an empty array.
+- `retainedUserMessageRounds` / `retainedAssistantTurns`: together define the age threshold at which results enter the age compression scope; defaults are `2` and `4` respectively once age compression is enabled.
+- `enabledProviders`: takes effect only for the listed providers; an empty array disables it for all.
+- `disabledProviders`: explicitly excludes providers; it cannot be an empty array.
 
 ## `compactionModel`
 
@@ -293,9 +297,9 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 }
 ```
 
-`compactionModel` 必须使用 `provider/model` 格式。
+`compactionModel` must use the `provider/model` format.
 
-Thinking level 可选值：
+Allowed thinking level values:
 
 - `off`
 - `minimal`
@@ -313,13 +317,13 @@ Thinking level 可选值：
 }
 ```
 
-Session 启动时的 Agent 选择优先级：
+Agent selection priority at session startup:
 
 ```text
-当前 session 已持久化 Agent
+Agent persisted in the current session
   > --agent
   > defaultAgent
   > built-in default
 ```
 
-第一项只在恢复或继承了 Agent state 的 session 中存在；全新 session 从 `--agent` 开始判断。
+The first item exists only in sessions that restored or inherited agent state; fresh sessions start evaluating from `--agent`.

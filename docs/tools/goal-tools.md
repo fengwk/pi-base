@@ -1,30 +1,34 @@
+<p align="center">
+  🌐 <a href="goal-tools.md">English</a> · <a href="goal-tools.zh-CN.md">简体中文</a>
+</p>
+
 # Goal tools
 
-[← 工具索引](README.md) · [公共架构](../architecture.md)
+[← Tool index](README.md) · [Shared architecture](../architecture.md)
 
-## 作用
+## Purpose
 
-Goal mode 为根 session 提供可持久化、可暂停、可恢复的长期目标，并通过三个工具让模型读取和更新状态。
+Goal mode provides the root session with persistent, pausable, resumable long-term goals, and lets the model read and update state through three tools.
 
-## 工具
+## Tools
 
-| 工具 | 参数 | 作用 |
+| Tool | Parameters | Purpose |
 |------|------|------|
-| `create_goal` | `objective`, optional `tokenBudget` | 创建或替换 Goal |
-| `get_goal` | 无 | 读取当前 Goal 和剩余预算 |
-| `update_goal` | `status`, `reason` | 标记 `complete` 或 `blocked` |
+| `create_goal` | `objective`, optional `tokenBudget` | Create or replace the Goal |
+| `get_goal` | none | Read the current Goal and remaining budget |
+| `update_goal` | `status`, `reason` | Mark `complete` or `blocked` |
 
-实现位于 [`src/goal/index.ts`](../../src/goal/index.ts)，状态模型位于 [`src/goal/state.ts`](../../src/goal/state.ts)。
+The implementation lives in [`src/goal/index.ts`](../../src/goal/index.ts), and the state model in [`src/goal/state.ts`](../../src/goal/state.ts).
 
-## 注入策略
+## Injection policy
 
-- Goal 只属于主 session。
-- Subagent 不恢复 Goal，也不获得 Goal tools。
-- 主 session 的隐式/default Agent 注入 `create_goal`。
-- 显式 tool allowlist 的 Agent 只有在 `tools` 中声明 `create_goal` 时获得该工具；`/goal` 命令也可以创建 Goal。
-- Goal active 后注入 `get_goal` 和 `update_goal`。
+- The Goal belongs only to the main session.
+- Subagents do not restore the Goal and do not get Goal tools.
+- The main session's implicit/default Agent gets `create_goal` injected.
+- Agents with an explicit tool allowlist get the tool only when `create_goal` is declared in `tools`; the `/goal` command can also create a Goal.
+- `get_goal` and `update_goal` are injected once the Goal is active.
 
-## 状态
+## States
 
 ```text
 active
@@ -34,7 +38,7 @@ budget_limited
 complete
 ```
 
-持久化 `GoalState` 包含：
+The persisted `GoalState` contains:
 
 - `id`
 - `objective`
@@ -45,56 +49,56 @@ complete
 - `createdAt`
 - `updatedAt`
 
-Snapshot 使用 session custom entry `pi-base-goal-state`。
+The snapshot uses the session custom entry `pi-base-goal-state`.
 
 ## `create_goal`
 
-Schema：
+Schema:
 
-- `objective`：非空目标文本。
-- `tokenBudget`：可选正数。
+- `objective`: non-empty objective text.
+- `tokenBudget`: optional positive number.
 
-工具说明要求仅在用户明确指定预算时传入 `tokenBudget`。
+The tool description requires passing `tokenBudget` only when the user explicitly specifies a budget.
 
-执行：
+Execution:
 
-1. trim objective。
-2. 规范化预算。
-3. 创建 version 1 GoalState。
-4. 替换已有 Goal。
-5. 持久化 snapshot。
+1. Trim the objective.
+2. Normalize the budget.
+3. Create a version 1 GoalState.
+4. Replace the existing Goal.
+5. Persist the snapshot.
 
-`create_goal` 写入 GoalState；可见的 goal-set control message 由 `/goal` 命令创建。
+`create_goal` writes the GoalState; the visible goal-set control message is created by the `/goal` command.
 
 ## `get_goal`
 
-无参数，返回：
+No parameters; returns:
 
-- 当前 Goal。
-- 格式化状态。
-- Remaining token 信息。
+- The current Goal.
+- Formatted status.
+- Remaining token information.
 
-没有 Goal 时返回空状态说明，不作为工具错误。
+When there is no Goal, it returns an empty-state description, not a tool error.
 
 ## `update_goal`
 
-参数：
+Parameters:
 
 ```text
 status: complete | blocked
 reason: non-empty evidence/rationale
 ```
 
-限制：
+Restrictions:
 
-- 没有 Goal 时失败。
-- Goal 必须 active；budget wrap-up 是特殊例外。
-- Budget-limited wrap-up 只能标记 complete。
-- `reason` 必须非空。
+- Fails when there is no Goal.
+- The Goal must be active; budget wrap-up is a special exception.
+- A budget-limited wrap-up can only be marked complete.
+- `reason` must be non-empty.
 
-工具持久化 status，但 `reason` 只用于当前调用的审计说明，不写入 GoalState。
+The tool persists the status, but `reason` is only used as the audit note for the current call and is not written to GoalState.
 
-## `/goal` 命令
+## The `/goal` command
 
 ```text
 /goal [--tokens 50k] <objective>
@@ -106,47 +110,47 @@ reason: non-empty evidence/rationale
 /goal statusbar [on|off]
 ```
 
-Token budget 支持 `k` / `m` 后缀。
+The token budget supports the `k` / `m` suffixes.
 
-## 预算
+## Budget
 
-每个主 session turn 统计：
+Every main session turn counts:
 
 ```text
 input + output + cacheWrite
 ```
 
-`cacheRead` 不重复计入。达到预算后状态变为 `budget_limited`。
+`cacheRead` is not counted again. When the budget is reached, the state becomes `budget_limited`.
 
-预算不会强制 abort 当前 run：
+The budget does not force-abort the current run:
 
-- 发送 soft-stop wrap-up guidance。
-- Settled 后停止自动 continuation。
-- 每额外 5 个工具驱动 turn 重发提示。
+- Sends soft-stop wrap-up guidance.
+- Stops automatic continuation once settled.
+- Re-sends the prompt every additional 5 tool-driven turns.
 
-## 自动续跑
+## Auto-continuation
 
-Active Goal 在 `agent_settled` 后检查：
+After `agent_settled`, an active Goal is checked:
 
-- 已完成/blocked：停止。
-- aborted：转 paused。
-- context overflow 或 overflow recovery 失败：转 paused。
-- 其他 error：转 blocked。
-- 状态为 active：注入 continuation。
+- Complete/blocked: stop.
+- Aborted: switch to paused.
+- Context overflow or failed overflow recovery: switch to paused.
+- Other errors: switch to blocked.
+- Status active: inject a continuation.
 
-`Esc` 暂停后必须 `/goal resume` 才继续。Reload 会把 active Goal 改为 paused；之后必须执行 `/goal resume` 才继续。
+After `Esc` pauses, `/goal resume` is required to continue. Reload changes an active Goal to paused; `/goal resume` must then be run to continue.
 
-## Context 过滤
+## Context filtering
 
-Provider request 前会过滤：
+Before a provider request, the following are filtered:
 
-- 旧 Goal control messages。
-- aborted/error assistant messages。
-- 已被新状态替代的 continuation。
+- Old Goal control messages.
+- Aborted/error assistant messages.
+- Continuations superseded by a new state.
 
-只保留当前有效 Goal guidance。
+Only the currently valid Goal guidance is kept.
 
-## 相关测试
+## Related tests
 
 - [`tests/goal.test.ts`](../../tests/goal.test.ts)
 - [`tests/goal-state.test.ts`](../../tests/goal-state.test.ts)

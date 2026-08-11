@@ -1,79 +1,83 @@
+<p align="center">
+  🌐 <a href="lsp-java-decompile.md">English</a> · <a href="lsp-java-decompile.zh-CN.md">简体中文</a>
+</p>
+
 # `lsp_java_decompile`
 
-[← 工具索引](README.md) · [公共架构](../architecture.md)
+[← Tool index](README.md) · [Shared architecture](../architecture.md)
 
-## 作用
+## Purpose
 
-通过 JDTLS 获取外部 Java class 的源码或反编译文本。
+Obtain source code or decompiled text of external Java classes through JDTLS.
 
-## 入口
+## Entry point
 
-- 注册：[`src/lsp/tools-register.ts`](../../src/lsp/tools-register.ts)
-- 执行：[`src/lsp/tool-helpers.ts`](../../src/lsp/tool-helpers.ts) `executeLspJavaDecompile`
-- Client：[`src/lsp/client.ts`](../../src/lsp/client.ts)
-- Schema：[`src/schemas/lsp.ts`](../../src/schemas/lsp.ts)
+- Registration: [`src/lsp/tools-register.ts`](../../src/lsp/tools-register.ts)
+- Execution: `executeLspJavaDecompile` in [`src/lsp/tool-helpers.ts`](../../src/lsp/tool-helpers.ts)
+- Client: [`src/lsp/client.ts`](../../src/lsp/client.ts)
+- Schema: [`src/schemas/lsp.ts`](../../src/schemas/lsp.ts)
 
-## 参数
+## Parameters
 
-| 参数 | 必填 | 说明 |
+| Parameter | Required | Description |
 |------|------|------|
-| `path` | 是 | 目标 Java workspace 中任意本地 `.java` 文件 |
-| `workdir` | 否 | 相对路径解析基准 |
-| `target` | 是 | `jdt://` URI、包含 URI 的结果行、`file://` URI 或 `.class` 路径 |
+| `path` | Yes | Any local `.java` file in the target Java workspace |
+| `workdir` | No | Base for resolving relative paths |
+| `target` | Yes | A `jdt://` URI, a result line containing a URI, a `file://` URI, or a `.class` path |
 
-## 执行链
+## Execution chain
 
 ```text
-解析 workspace path
-  -> 选择 JDTLS client
-  -> 检查 java/classFileContents capability
-  -> target 中包含 jdt:// ?
+resolve workspace path
+  -> pick JDTLS client
+  -> check java/classFileContents capability
+  -> does target contain jdt:// ?
      -> java/classFileContents
-     -> 否：转换为 URI，执行 java.decompile command
-  -> 返回源码文本
+     -> no: convert to URI, run java.decompile command
+  -> return source text
 ```
 
-## Target 解析
+## Target resolution
 
-如果 `target` 任意位置包含 `jdt://`，工具从该位置截取 URI。因此可以直接传入：
+If `target` contains `jdt://` anywhere, the tool extracts the URI from that position. So you can pass directly:
 
-- 原始 `jdt://...`
-- `lsp_goto_definition` 的完整结果行
-- `lsp_workspace_symbols` 的完整结果行
+- A raw `jdt://...`
+- A full result line from `lsp_goto_definition`
+- A full result line from `lsp_workspace_symbols`
 
-其他 target：
+Other targets:
 
-- `file://` 保留。
-- 本地路径转换为 `file://` URI。
+- `file://` is kept.
+- Local paths are converted to `file://` URIs.
 
-## JDTLS 限制
+## JDTLS limitations
 
-工具要求 client 支持 `java/classFileContents`。当前 server 不是 JDTLS 或未声明能力时返回明确错误，不尝试 shell 解压 JAR。
+The tool requires the client to support `java/classFileContents`. When the current server is not JDTLS or does not declare the capability, a clear error is returned without attempting to extract JARs via shell.
 
-JDTLS client 初始化会声明 `classFileContentsSupport`，并处理以下启动配置：
+The JDTLS client declares `classFileContentsSupport` during initialization and handles the following startup configuration:
 
-- Lombok javaagent。
-- 基于项目 Java 文件数的 heap。
-- Workspace `-data`。
-- `JAVA_HOME_<version>` 选择。
+- Lombok javaagent.
+- Heap based on the project's Java file count.
+- Workspace `-data`.
+- `JAVA_HOME_<version>` selection.
 
-这些配置属于 client 启动行为，不改变工具参数。
+These configurations are client startup behavior and do not change the tool parameters.
 
-## 两条反编译路径
+## Two decompilation paths
 
 ### `jdt://`
 
-发送：
+Sends:
 
 ```text
 java/classFileContents { uri }
 ```
 
-`jdt://` 路径用于 JDTLS 已解析出的 class URI。
+The `jdt://` path is used for class URIs already resolved by JDTLS.
 
-### 文件 URI / class 路径
+### File URI / class path
 
-发送：
+Sends:
 
 ```text
 workspace/executeCommand
@@ -83,23 +87,23 @@ arguments: [uri]
 
 ## Error
 
-- 非 JDTLS server。
-- 无法加载 class file contents。
-- `java.decompile` 返回空值。
-- Workspace/client 初始化失败。
-- Abort 或 request timeout。
+- Non-JDTLS server.
+- Failed to load class file contents.
+- `java.decompile` returns an empty value.
+- Workspace/client initialization failure.
+- Abort or request timeout.
 
-所有错误返回 `isError: true`。
+All errors return `isError: true`.
 
-## 调用链
+## Call chain
 
 ```text
-lsp_workspace_symbols 或 lsp_goto_definition
-  -> 得到 jdt:// URI
+lsp_workspace_symbols or lsp_goto_definition
+  -> get jdt:// URI
   -> lsp_java_decompile
 ```
 
-## 相关测试
+## Related tests
 
 - [`tests/lsp-tools.test.ts`](../../tests/lsp-tools.test.ts)
 - [`tests/lsp-client.test.ts`](../../tests/lsp-client.test.ts)

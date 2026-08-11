@@ -1,34 +1,38 @@
+<p align="center">
+  🌐 <a href="write.md">English</a> · <a href="write.zh-CN.md">简体中文</a>
+</p>
+
 # `write`
 
-[← 工具索引](README.md) · [公共架构](../architecture.md)
+[← Tool index](README.md) · [Shared architecture](../architecture.md)
 
-## 作用
+## Purpose
 
-创建新文件，或用完整内容覆盖已有文件。
+Creates a new file, or overwrites an existing file with complete content.
 
-## 入口
+## Entry point
 
-- 注册：[`src/write-register.ts`](../../src/write-register.ts)
-- 执行：[`src/write-core.ts`](../../src/write-core.ts)
-- Schema：[`src/schemas/write.ts`](../../src/schemas/write.ts)
-- Prompt：[`prompts/write.md`](../../prompts/write.md)
+- Registration: [`src/write-register.ts`](../../src/write-register.ts)
+- Execution: [`src/write-core.ts`](../../src/write-core.ts)
+- Schema: [`src/schemas/write.ts`](../../src/schemas/write.ts)
+- Prompt: [`prompts/write.md`](../../prompts/write.md)
 
-## 参数
+## Parameters
 
-| 参数 | 必填 | 默认 | 说明 |
+| Parameter | Required | Default | Description |
 |------|------|------|------|
-| `path` | 是 | — | 新建或完整覆盖的文件 |
-| `content` | 是 | — | 完整文件内容 |
-| `workdir` | 否 | session cwd | 相对路径解析基准 |
+| `path` | yes | — | File to create or fully overwrite |
+| `content` | yes | — | Complete file content |
+| `workdir` | no | session cwd | Base for relative path resolution |
 
-## 执行链
+## Execution chain
 
 ```text
-参数校验
-  -> 解析 path
-  -> 文件变更队列
+validate parameters
+  -> resolve path
+  -> file change queue
      -> stat/read existing target
-     -> 检测编码/BOM
+     -> detect encoding/BOM
      -> encode content
      -> mkdir parent
      -> writeFile
@@ -36,59 +40,59 @@
   -> Created/Overwrote result
 ```
 
-## 新文件
+## New files
 
-- 父目录通过 recursive `mkdir` 创建。
-- 默认编码为 UTF-8。
-- `content` 以 BOM marker 开头时会生成相应 BOM。
-- `content` 中的换行按调用方原样写入。
+- The parent directory is created via recursive `mkdir`.
+- The default encoding is UTF-8.
+- A BOM is produced when `content` starts with a BOM marker.
+- Line breaks in `content` are written as-is from the caller.
 
-## 覆盖已有文件
+## Overwriting existing files
 
-已有目标必须经 `stat` 判断为普通文件。写入前读取原始字节并检测编码：
+An existing target must be judged a regular file via `stat`. Before writing, the original bytes are read and the encoding is detected:
 
-- 保留已有 encoding。
-- 保留已有 BOM。
-- 不自动保留已有换行风格；`content` 是完整文件的最终文本。
+- Preserve the existing encoding.
+- Preserve the existing BOM.
+- The existing line-ending style is not automatically preserved; `content` is the final text of the complete file.
 
-Legacy encoding 无法表示新内容时失败。
+Fails when a legacy encoding cannot represent the new content.
 
-`write` 使用 `stat` 判断目标类型，因此符号链接按其目标进行普通文件判断，并由 `writeFile` 跟随；公共安全边界见[架构说明](../architecture.md#路径与文件写入)。
+`write` uses `stat` to determine the target type, so symlinks are judged as regular files by their target and followed by `writeFile`; see the shared safety boundary in [architecture](../architecture.md#paths-and-file-writes).
 
-## 并发与 abort
+## Concurrency and abort
 
-现有文件检查、编码选择、父目录创建和写入都位于文件变更队列。
+The existing-file check, encoding selection, parent-directory creation, and write all live in the file change queue.
 
-写入开始前检查 AbortSignal。写入一旦开始就等待底层操作完成，因为文件系统写入无法被可靠回滚；完成后的 abort 不会隐藏已经发生的修改。
+The AbortSignal is checked before the write starts. Once a write has started, the underlying operation is awaited to completion, because filesystem writes cannot be reliably rolled back; an abort after completion does not hide modifications that already happened.
 
-## Permission 与 LSP
+## Permission and LSP
 
-- Permission 按目标路径匹配。
-- 权限提示不包含完整 `content`。
-- 成功后同步已打开的 LSP document。
-- LSP observer 失败不会覆盖实际文件结果。
+- Permission matches on the target path.
+- The permission prompt does not include the full `content`.
+- On success, open LSP documents are synced.
+- An LSP observer failure does not override the actual file result.
 
-## 渲染
+## Rendering
 
-Write 调用有独立内容预览：
+Write calls have a dedicated content preview:
 
-- 流式参数使用 10 行滚动窗口。
-- settled/YOLO 下默认显示前 7 个内容行和剩余行数。
-- 展开后可以查看完整调用内容。
+- Streaming parameters use a 10-line scrolling window.
+- Under settled/YOLO, the first 7 content lines and the remaining line count are shown by default.
+- The full call content can be viewed after expansion.
 
-结果正文只包含 `Created ...` 或 `Overwrote ...`。
+The result body contains only `Created ...` or `Overwrote ...`.
 
 ## Error
 
-- 缺少 `path` 或 `content`。
-- 目标存在但不是普通文件。
-- 读取或编码失败。
-- 父目录创建失败。
-- 文件写入失败。
+- Missing `path` or `content`.
+- Target exists but is not a regular file.
+- Read or encoding failure.
+- Parent-directory creation failure.
+- File write failure.
 
-所有错误转换为 `Error: ...` 和 `isError: true`。
+All errors are converted to `Error: ...` with `isError: true`.
 
-## 相关测试
+## Related tests
 
 - [`tests/write-behavior.test.ts`](../../tests/write-behavior.test.ts)
 - [`tests/edit-write-index.test.ts`](../../tests/edit-write-index.test.ts)

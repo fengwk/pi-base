@@ -1,8 +1,12 @@
-# 工具实现索引
+<p align="center">
+  🌐 <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-[文档首页](../README.md) · [公共架构](../architecture.md)
+# Tool Reference
 
-## 静态基础工具
+[Documentation home](../README.md) · [Shared architecture](../architecture.md)
+
+## Static base tools
 
 - [`read`](read.md)
 - [`grep`](grep.md)
@@ -12,18 +16,18 @@
 - [`write`](write.md)
 - [`apply_patch`](apply-patch.md)
 
-## LSP 工具
+## LSP tools
 
 - [`lsp_goto_definition`](lsp-goto-definition.md)
 - [`lsp_workspace_symbols`](lsp-workspace-symbols.md)
 - [`lsp_java_decompile`](lsp-java-decompile.md)
 
-## 动态工具
+## Dynamic tools
 
 - [`task`](task.md)
 - [Goal tools](goal-tools.md)
 - [MCP tools](mcp.md)
 
-## 公共机制
+## Shared mechanisms
 
-所有工具共享的 schema/prompt 分层、路径解析、错误标记、Permission、统一输出限制和渲染规则见[架构概览](../architecture.md)。本目录中的页面只记录各工具的参数、执行链和特有边界。
+The schema/prompt layering, path resolution, error marking, Permission, unified output limits, and rendering rules shared by all tools are described in the [architecture overview](../architecture.md). The pages in this directory only document each tool's parameters, execution chain, and tool-specific boundaries.

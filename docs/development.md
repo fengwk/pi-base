@@ -1,18 +1,22 @@
-# 开发者手册
+<p align="center">
+  🌐 <a href="development.md">English</a> · <a href="development.zh-CN.md">简体中文</a>
+</p>
 
-## 环境要求
+# Developer Guide
+
+## Environment requirements
 
 - Node.js `>=22.19.0`
 - npm
-- Pi 相关 peer dependencies 由仓库开发依赖提供
+- Pi-related peer dependencies are provided by the repository's dev dependencies
 
-安装依赖：
+Install dependencies:
 
 ```bash
 npm install
 ```
 
-验证命令：
+Verification commands:
 
 ```bash
 npm run typecheck
@@ -20,42 +24,42 @@ npm test
 npm run test:coverage
 ```
 
-## 仓库结构
+## Repository layout
 
 ```text
-index.ts                 Pi package 入口
-src/                     TypeScript 实现
-  schemas/               TypeBox 工具 schema
+index.ts                 Pi package entry point
+src/                     TypeScript implementation
+  schemas/               TypeBox tool schemas
   lsp/                   LSP discovery/client/tools
   mcp/                   MCP transport/hub/tools
-  subagent/              task 与子 session
-  goal/                  Goal 状态与控制工具
-  internal/              必要的 vendored helper
-prompts/                 注入模型的工具说明
-skills/                  随 package 提供的 skill
-scripts/                 通知脚本
-examples/                配置和 Agent 示例
-tests/                   Vitest 测试
-docs/                    开发与实现文档
+  subagent/              task and child sessions
+  goal/                  Goal state and control tools
+  internal/              necessary vendored helpers
+prompts/                 tool instructions injected into the model
+skills/                  skills shipped with the package
+scripts/                 notification scripts
+examples/                configuration and agent examples
+tests/                   Vitest tests
+docs/                    development and implementation docs
 ```
 
-## 修改现有工具
+## Modifying an existing tool
 
-修改工具时检查以下位置：
+When modifying a tool, check the following locations:
 
-1. `src/schemas/<tool>.ts` 的公共参数契约。
-2. `prompts/<tool>.md` 的模型说明。
-3. 注册模块中的 `prepareArguments`、renderer 和 execute wiring。
-4. 核心执行文件的 abort、timeout、路径和错误语义。
-5. Permission、LSP 同步、统一截断和 context compression 集成。
-6. 对应测试及 renderer 测试。
-7. `docs/tools/<tool>.md`。
+1. The public argument contract in `src/schemas/<tool>.ts`.
+2. The model instructions in `prompts/<tool>.md`.
+3. The `prepareArguments`, renderer, and execute wiring in the registration module.
+4. Abort, timeout, path, and error semantics in the core execution file.
+5. Permission, LSP sync, unified truncation, and context compression integration.
+6. The corresponding tests and renderer tests.
+7. `docs/tools/<tool>.md`.
 
-不要只改执行函数而遗漏 schema、prompt 或测试。
+Do not change only the execution function while missing the schema, prompt, or tests.
 
-## 新增静态工具
+## Adding a static tool
 
-静态工具分层参考：
+Reference layout for a static tool:
 
 ```text
 src/schemas/example.ts
@@ -66,32 +70,32 @@ tests/example.test.ts
 docs/tools/example.md
 ```
 
-最小实现步骤：
+Minimal implementation steps:
 
-1. 定义严格的 TypeBox schema。
-2. 在 register 层加载 description 和 prompt snippet。
-3. 在 `prepareArguments` 处理必要兼容映射。
-4. 分离调用渲染、执行和结果渲染。
-5. 使用 `withPiBaseErrorMarker` 包装错误结果。
-6. 在 `src/index-impl.ts` 注册工具。
-7. 将工具加入正确的 Agent tool projection。
-8. 增加正常、失败、abort、timeout 和边界测试。
+1. Define a strict TypeBox schema.
+2. Load the description and prompt snippet at the register layer.
+3. Handle necessary compatibility mappings in `prepareArguments`.
+4. Separate call rendering, execution, and result rendering.
+5. Wrap error results with `withPiBaseErrorMarker`.
+6. Register the tool in `src/index-impl.ts`.
+7. Add the tool to the correct agent tool projection.
+8. Add tests for success, failure, abort, timeout, and edge cases.
 
-## Schema 与执行校验
+## Schema and execution validation
 
-Schema 是模型侧契约，但 execute 仍需校验直接调用场景。测试可能绕过 Pi 的 schema validation 直接调用 `execute`，因此核心执行函数不能假设参数已经可靠。
+The schema is the model-side contract, but execute must still validate direct-call scenarios. Tests may call `execute` directly, bypassing Pi's schema validation, so core execution functions cannot assume arguments are already reliable.
 
-执行层校验：
+Validation at the execution layer:
 
-- 必填字符串拒绝缺失和空白值。
-- 数字使用统一 parser，并校验范围。
-- 相对路径通过 `resolveToolWorkdir` 和 `resolveToCwd`。
-- abort 在昂贵 I/O 前检查。
-- timeout 使用 [`src/timeout.ts`](../src/timeout.ts)。
+- Required strings reject missing and blank values.
+- Numbers use a unified parser and are range-checked.
+- Relative paths go through `resolveToolWorkdir` and `resolveToCwd`.
+- Abort is checked before expensive I/O.
+- Timeout uses [`src/timeout.ts`](../src/timeout.ts).
 
-## 错误结果
+## Error results
 
-工具执行的预期错误应返回：
+Expected errors from tool execution should return:
 
 ```ts
 {
@@ -100,84 +104,84 @@ Schema 是模型侧契约，但 execute 仍需校验直接调用场景。测试�
 }
 ```
 
-注册对象应使用 `withPiBaseErrorMarker`，使全局 `tool_result` hook 能稳定恢复 `isError`。
+Registration objects should use `withPiBaseErrorMarker` so the global `tool_result` hook can reliably recover `isError`.
 
-不要用异常承载普通用户错误；异常用于无法在核心层合理转换的意外失败。
+Do not use exceptions for ordinary user errors; exceptions are for unexpected failures that cannot be reasonably converted at the core layer.
 
 ## Renderer
 
-调用和结果 renderer 要分别考虑：
+Call and result renderers should consider separately:
 
-- 参数仍在流式生成。
-- 参数已经完成。
-- 工具正在执行。
-- 结果成功或失败。
-- 折叠与展开。
-- YOLO 下快速执行。
-- 终端显示宽度。
+- Arguments are still being streamed.
+- Arguments are complete.
+- The tool is executing.
+- The result succeeded or failed.
+- Collapsed and expanded states.
+- Fast execution under YOLO.
+- Terminal display width.
 
-公共 helper 位于 [`src/render.ts`](../src/render.ts)。文件修改工具还需要确保调用预览不改变真实写入内容。
+Public helpers live in [`src/render.ts`](../src/render.ts). File-modifying tools must also ensure the call preview does not change what is actually written.
 
-## 文件与编码
+## Files and encoding
 
-文本工具共享以下约束：
+Text tools share the following constraints:
 
-- 只处理普通文件。
-- 二进制文件应明确拒绝。
-- 使用 [`src/text-codec.ts`](../src/text-codec.ts) 检测 BOM、UTF-16 和旧编码。
-- `edit` / `apply_patch` 通过 [`src/line-endings.ts`](../src/line-endings.ts) 保留行尾。
-- legacy encoding 写回必须无损；无法表示时失败而不是替换字符。
-- 同一路径的读改写应进入文件变更队列。
+- Only regular files are processed.
+- Binary files must be explicitly rejected.
+- [`src/text-codec.ts`](../src/text-codec.ts) detects BOM, UTF-16, and legacy encodings.
+- `edit` / `apply_patch` preserve line endings via [`src/line-endings.ts`](../src/line-endings.ts).
+- Writing back legacy encodings must be lossless; fail rather than substituting characters when a value cannot be represented.
+- Read-modify-write cycles for the same path should go through the file change queue.
 
-## 子进程
+## Child processes
 
-`bash`、`find`、`grep` 和 LSP 都会启动子进程。
+`bash`, `find`, `grep`, and LSP all spawn child processes.
 
-新增子进程逻辑时必须处理：
+New child-process logic must handle:
 
-- 启动失败。
-- stdout/stderr。
-- 非零退出码。
-- AbortSignal。
-- timeout。
-- 进程树终止。
-- listener 和 timer cleanup。
+- Spawn failure.
+- stdout/stderr.
+- Non-zero exit codes.
+- AbortSignal.
+- Timeout.
+- Process tree termination.
+- Listener and timer cleanup.
 
-通用终止逻辑位于 [`src/process-termination.ts`](../src/process-termination.ts)。
+Generic termination logic lives in [`src/process-termination.ts`](../src/process-termination.ts).
 
-## 测试
+## Tests
 
-Vitest 只收集 `tests/**/*.test.ts`，默认单测试超时 10 秒。
+Vitest only collects `tests/**/*.test.ts`; the default per-test timeout is 10 seconds.
 
-覆盖率阈值：
+Coverage thresholds:
 
-- statements：90%
-- functions：90%
-- lines：90%
+- statements: 90%
+- functions: 90%
+- lines: 90%
 
-`src/internal/**` 不计入直接覆盖率，通过上层集成行为验证。
+`src/internal/**` does not count toward direct coverage; it is verified through higher-level integration behavior.
 
-测试约定：
+Test conventions:
 
-- 使用 [`tests/helpers.ts`](../tests/helpers.ts) 创建临时工作区和 mock Pi registry。
-- 测试意图写成简短注释。
-- 测试临时文件放在系统临时目录。
-- 不依赖开发者 HOME、固定 checkout 路径或全局配置。
-- 涉及平台分支时显式模拟或使用平台条件。
+- Use [`tests/helpers.ts`](../tests/helpers.ts) to create temporary workspaces and a mock Pi registry.
+- Write the test intent as a short comment.
+- Test temp files go in the system temp directory.
+- Do not depend on the developer's HOME, fixed checkout paths, or global configuration.
+- Explicitly mock platform branches or use platform conditions.
 
-## 文档同步
+## Documentation sync
 
-以下变化必须同步文档：
+The following changes must be reflected in the docs:
 
-| 变化 | 文档 |
-|------|------|
-| 工具参数或默认值 | 对应 `docs/tools/*.md` |
-| 配置字段或合并规则 | `docs/configuration.md` |
-| 生命周期或模块关系 | `docs/architecture.md` |
-| 用户安装和首用流程 | 根 `README.md` |
-| 第三方来源 | `THIRD_PARTY_NOTICES` 和 `LICENSES` |
+| Change | Documentation |
+|--------|---------------|
+| Tool arguments or defaults | The corresponding `docs/tools/*.md` |
+| Configuration fields or merge rules | `docs/configuration.md` |
+| Lifecycle or module relationships | `docs/architecture.md` |
+| User installation and first-use flow | The root `README.md` |
+| Third-party sources | `THIRD_PARTY_NOTICES` and `LICENSES` |
 
-## 发布前检查
+## Pre-release checklist
 
 ```bash
 npm run typecheck
@@ -187,10 +191,10 @@ npm pack --dry-run
 git diff --check
 ```
 
-此外检查：
+Also check:
 
-- 工作区无临时文件。
-- README 和 docs 中的本地链接有效。
-- JSON 示例可解析。
-- 第三方代码的来源和许可证记录在 `LICENSES` 和 `THIRD_PARTY_NOTICES`。
-- Git notes refs 为空；tracked files 不包含密钥、Token 或私人内部地址。
+- No temporary files in the workspace.
+- Local links in the README and docs are valid.
+- JSON examples parse.
+- Third-party code sources and licenses are recorded in `LICENSES` and `THIRD_PARTY_NOTICES`.
+- Git notes refs are empty; tracked files contain no secrets, tokens, or private internal addresses.

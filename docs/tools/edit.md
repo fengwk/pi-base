@@ -1,106 +1,110 @@
+<p align="center">
+  🌐 <a href="edit.md">English</a> · <a href="edit.zh-CN.md">简体中文</a>
+</p>
+
 # `edit`
 
-[← 工具索引](README.md) · [公共架构](../architecture.md)
+[← Tool index](README.md) · [Shared architecture](../architecture.md)
 
-## 作用
+## Purpose
 
-在已有文本文件中执行精确字符串替换。
+Performs exact string replacement in an existing text file.
 
-## 入口
+## Entry point
 
-- 注册与核心实现：[`src/edit-core.ts`](../../src/edit-core.ts)
-- Schema：[`src/schemas/edit.ts`](../../src/schemas/edit.ts)
-- Prompt：[`prompts/edit.md`](../../prompts/edit.md)
-- 行尾：[`src/line-endings.ts`](../../src/line-endings.ts)
-- 编码：[`src/text-codec.ts`](../../src/text-codec.ts)
+- Registration and core implementation: [`src/edit-core.ts`](../../src/edit-core.ts)
+- Schema: [`src/schemas/edit.ts`](../../src/schemas/edit.ts)
+- Prompt: [`prompts/edit.md`](../../prompts/edit.md)
+- Line endings: [`src/line-endings.ts`](../../src/line-endings.ts)
+- Encoding: [`src/text-codec.ts`](../../src/text-codec.ts)
 
-## 参数
+## Parameters
 
-| 参数 | 必填 | 默认 | 说明 |
+| Parameter | Required | Default | Description |
 |------|------|------|------|
-| `path` | 是 | — | 已有文本文件 |
-| `old_string` | 是 | — | 要替换的精确文本 |
-| `new_string` | 是 | — | 替换文本 |
-| `replace_all` | 否 | `false` | 替换全部精确匹配 |
-| `workdir` | 否 | session cwd | 相对路径解析基准 |
+| `path` | yes | — | Existing text file |
+| `old_string` | yes | — | Exact text to replace |
+| `new_string` | yes | — | Replacement text |
+| `replace_all` | no | `false` | Replace all exact matches |
+| `workdir` | no | session cwd | Base for relative path resolution |
 
-## 执行链
+## Execution chain
 
 ```text
-参数校验
-  -> old/new LF 规范化
-  -> 解析 path
-  -> 文件变更队列
+validate parameters
+  -> normalize old/new to LF
+  -> resolve path
+  -> file change queue
      -> stat + read
-     -> 文本解码
-     -> 查找精确匹配
-     -> 构造替换结果
-     -> 保留编码/BOM/EOL
+     -> decode text
+     -> find exact match
+     -> build replacement result
+     -> preserve encoding/BOM/EOL
      -> write
   -> LSP sync observer
   -> numbered diff
 ```
 
-## 匹配语义
+## Matching semantics
 
-- `old_string` 不能为空。
-- `old_string` 和 `new_string` 必须不同。
-- 默认要求 `old_string` 在文件中唯一。
-- 没有匹配时失败。
-- 多个匹配且 `replace_all=false` 时失败。
-- `replace_all=true` 时替换全部非重叠匹配；重叠匹配会拒绝。
+- `old_string` must not be empty.
+- `old_string` and `new_string` must differ.
+- By default, `old_string` must be unique in the file.
+- Fails when there is no match.
+- Fails when there are multiple matches and `replace_all=false`.
+- With `replace_all=true`, all non-overlapping matches are replaced; overlapping matches are rejected.
 
-匹配前只把换行规范化为 LF，不会 trim 空白、缩进或标点。`old_string` 的空白、缩进、标点和换行必须与目标文件内容一致。
+Only line endings are normalized to LF before matching; whitespace, indentation, and punctuation are not trimmed. The whitespace, indentation, punctuation, and line breaks in `old_string` must match the target file content exactly.
 
-## 编码与换行
+## Encoding and line endings
 
-现有文件通过 `decodeTextFile` 读取，并保存：
+Existing files are read via `decodeTextFile`, preserving:
 
-- 原编码
+- Original encoding
 - BOM
-- 每行行尾
-- 是否存在最终换行
+- Per-line line endings
+- Whether a final newline exists
 
-替换文本在 LF 视图中应用，再由 `serializeLineEndingDocument` 写回。混合行尾文件优先复用被替换区域的行尾。
+The replacement text is applied in an LF view and written back via `serializeLineEndingDocument`. For files with mixed line endings, the line endings of the replaced region are preferred for reuse.
 
-Legacy encoding 写回使用 round-trip 校验；新文本无法无损表示时失败。
+Legacy encodings use round-trip validation on write-back; writing fails when the new text cannot be represented losslessly.
 
-## 并发
+## Concurrency
 
-完整的 read-match-write 流程位于文件变更队列中。同一路径的并发修改会串行化，后一个 edit 在前一个提交后重新读取文件。
+The full read-match-write flow sits in the file change queue. Concurrent modifications to the same path are serialized; a later edit re-reads the file after the previous one commits.
 
 ## Diff
 
-成功结果生成带行号的 diff：
+Successful results produce a numbered diff:
 
-- 默认 4 行上下文。
-- 多个 hunk 之间按距离决定是否合并。
-- `details` 包含 diff、first changed line、绝对路径和替换数量。
+- Default 4 lines of context.
+- Whether hunks are merged is decided by their distance.
+- `details` includes the diff, first changed line, absolute path, and replacement count.
 
-调用 renderer 在参数流式生成时也会构造预览 diff，但预览不参与真实写入。
+When the renderer streams parameters, it also builds a preview diff, but the preview does not participate in the real write.
 
-## Permission 与 LSP
+## Permission and LSP
 
-- Permission 按 `path` 匹配。
-- 权限提示不包含完整 old/new 正文。
-- 成功写入后调用 `lspManager.syncFileIfOpen`。
-- Observer 失败不会把已经提交的文件修改改写成工具失败。
+- Permission matches on `path`.
+- The permission prompt does not include the full old/new bodies.
+- After a successful write, `lspManager.syncFileIfOpen` is called.
+- An observer failure does not turn an already-committed file modification into a tool failure.
 
 ## Error
 
-以下情况返回 `isError: true`：
+The following cases return `isError: true`:
 
-- 参数缺失。
-- 目标不是普通文件。
-- 二进制文件。
-- old/new 相同。
-- 找不到 old string。
-- 匹配不唯一。
-- replace-all 匹配重叠。
-- 编码无法无损写回。
-- 输出字节没有变化。
+- Missing parameters.
+- Target is not a regular file.
+- Binary file.
+- old/new are identical.
+- Old string not found.
+- Match is not unique.
+- Replace-all matches overlap.
+- Encoding cannot be written back losslessly.
+- Output bytes are unchanged.
 
-## 相关测试
+## Related tests
 
 - [`tests/edit-write-index.test.ts`](../../tests/edit-write-index.test.ts)
 - [`tests/edit-diff.test.ts`](../../tests/edit-diff.test.ts)

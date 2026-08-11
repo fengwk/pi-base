@@ -1,52 +1,56 @@
+<p align="center">
+  🌐 <a href="read.md">English</a> · <a href="read.zh-CN.md">简体中文</a>
+</p>
+
 # `read`
 
-[← 工具索引](README.md) · [公共架构](../architecture.md)
+[← Tool index](README.md) · [Shared architecture](../architecture.md)
 
-## 作用
+## Purpose
 
-读取文本文件、目录和支持的图片，并为文本返回可定位的行号视图。
+Reads text files, directories, and supported images, and returns a line-numbered view of text for positional reference.
 
-## 入口
+## Entry point
 
-- 注册：[`src/read-core.ts`](../../src/read-core.ts) `registerReadTool`
-- Schema：[`src/schemas/read.ts`](../../src/schemas/read.ts)
-- Prompt：[`prompts/read.md`](../../prompts/read.md)
-- 图片降级：[`src/image-fallback.ts`](../../src/image-fallback.ts)
+- Registration: [`src/read-core.ts`](../../src/read-core.ts) `registerReadTool`
+- Schema: [`src/schemas/read.ts`](../../src/schemas/read.ts)
+- Prompt: [`prompts/read.md`](../../prompts/read.md)
+- Image fallback: [`src/image-fallback.ts`](../../src/image-fallback.ts)
 
-## 参数
+## Parameters
 
-| 参数 | 必填 | 默认 | 说明 |
-|------|------|------|------|
-| `path` | 是 | — | 文件、目录或图片路径 |
-| `workdir` | 否 | session cwd | 相对路径解析基准 |
-| `offset` | 否 | `1` | 文本起始行，1-based |
-| `limit` | 否 | `200` | 最大文本行数，上限 2000 |
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `path` | yes | — | File, directory, or image path |
+| `workdir` | no | session cwd | Base for resolving relative paths |
+| `offset` | no | `1` | Starting text line, 1-based |
+| `limit` | no | `200` | Maximum text lines, up to 2000 |
 
-## 执行链
+## Execution chain
 
 ```text
-校验参数
-  -> 解析 workdir/path
+Validate parameters
+  -> Resolve workdir/path
   -> stat
-     -> directory: readdir + 排序
-     -> image: 模型能力判断 + 图片附件/skill 提示
-     -> regular file: 大小检查 + 读取 + 解码
-  -> 构造 header 和 numbered lines
-  -> 返回结果
+     -> directory: readdir + sort
+     -> image: model capability check + image attachment/skill prompt
+     -> regular file: size check + read + decode
+  -> Build header and numbered lines
+  -> Return result
 ```
 
-## 文本读取
+## Reading text
 
-文本分支在文件变更队列中重新执行 `stat` 和读取，避免与并发写入交错。
+The text branch re-runs `stat` and the read in the file-change queue to avoid interleaving with concurrent writes.
 
-解码由 [`src/text-codec.ts`](../../src/text-codec.ts) 完成，覆盖：
+Decoding is done by [`src/text-codec.ts`](../../src/text-codec.ts), covering:
 
 - UTF BOM
-- UTF-16 无 BOM 启发式
-- 旧编码检测
-- 二进制判断
+- UTF-16 heuristic without BOM
+- Legacy encoding detection
+- Binary detection
 
-文本结果格式：
+Text result format:
 
 ```text
 path: ...
@@ -57,25 +61,25 @@ lsp: supported|unsupported
 2|second line
 ```
 
-编号列宽按文件总行数计算。文件末尾换行不会额外生成一个编号空行。
+The number column width is computed from the file's total line count. A trailing newline at the end of the file does not generate an extra numbered blank line.
 
-## 限制
+## Limits
 
-- `limit` 最大 2000。
-- 文本候选文件超过 64 MiB 时在完整读取前拒绝。
-- 单行最多展示 2000 字符。
-- 非普通文件和二进制文件拒绝。
-- 显示层会转义回车和 NUL。
+- `limit` is capped at 2000.
+- Candidate text files over 64 MiB are rejected before a full read.
+- A single line displays at most 2000 characters.
+- Non-regular files and binary files are rejected.
+- The display layer escapes carriage returns and NUL.
 
-达到读取窗口末尾但文件仍有内容时，结果附带下一次 `offset` 提示。
+When the end of the read window is reached but the file still has content, the result includes a hint for the next `offset`.
 
-## 目录
+## Directories
 
-目录项按名称排序，目录名称追加 `/`。目录读取不递归。
+Directory entries are sorted by name, and directory names get a `/` suffix. Directory reads are not recursive.
 
-## 图片
+## Images
 
-直接支持扩展名：
+Directly supported extensions:
 
 - `.jpg`
 - `.jpeg`
@@ -84,25 +88,25 @@ lsp: supported|unsupported
 - `.webp`
 - `.bmp`
 
-模型支持图片时委托 Pi 的图片 read 能力并保留附件。模型不支持时返回文本提示，引导读取 `skills/image-understanding/SKILL.md`。
+When the model supports images, the tool delegates to Pi's image read capability and keeps the attachment. When the model does not support images, it returns a text hint directing to read `skills/image-understanding/SKILL.md`.
 
-## LSP 集成
+## LSP integration
 
-`read` 使用目标文件所在目录创建 LSP resolver，并在 header 中报告：
+`read` creates an LSP resolver from the target file's directory and reports in the header:
 
-- 当前后缀没有配置 LSP。
-- 已配置且 server 可用。
-- 已配置但 server 未安装。
+- The current extension has no LSP configured.
+- Configured and the server is available.
+- Configured but the server is not installed.
 
-它不会因为读取文件而自动打开 LSP document。
+It does not automatically open an LSP document because a file was read.
 
-## Error 与截断
+## Error and truncation
 
-所有异常转换为 `Error: ...` 和 `isError: true`。
+All exceptions are converted to `Error: ...` with `isError: true`.
 
-如果单行在 read 层被截断，结果写入 `details.upstreamTextTruncated`，使[公共结果处理链](../architecture.md#tool_result)知道完整文本已经无法从当前结果恢复。
+If a single line is truncated at the read layer, the result writes `details.upstreamTextTruncated` so the [public result handling chain](../architecture.md#tool_result) knows the full text can no longer be recovered from the current result.
 
-## 相关测试
+## Related tests
 
 - [`tests/read.test.ts`](../../tests/read.test.ts)
 - [`tests/image-fallback.test.ts`](../../tests/image-fallback.test.ts)

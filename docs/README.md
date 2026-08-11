@@ -1,37 +1,41 @@
-# pi-base 开发文档
+<p align="center">
+  🌐 <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-本目录包含 pi-base 的配置、架构、工具实现和开发文档。安装与功能入口见仓库根目录的 [README](../README.md)。
+# pi-base Documentation
 
-## 文档索引
+This directory contains pi-base configuration, architecture, tool implementation, and development documentation. For installation and feature entry points, see the [README](../README.md) at the repository root.
 
-- [架构概览](architecture.md)
-  - 扩展启动顺序
-  - 生命周期事件
-  - 工具公共执行链
-  - Agent、MCP、LSP、Goal 与 Subagent 的关系
-- [Markdown Agent](agents.md)
-  - Agent 文件格式
-  - Tool、skill 与 subagent allowlist
-  - 启动优先级和切换方式
-- [开发者手册](development.md)
-  - 本地开发
-  - 仓库结构
-  - 新增或修改工具
-  - 测试与发布检查
-- [配置参考](configuration.md)
-  - 配置路径
-  - 合并规则
-  - 全部顶层配置项
-- [配置示例](../examples/README.md)
+## Documentation index
+
+- [Architecture](architecture.md)
+  - Extension startup order
+  - Lifecycle events
+  - Shared tool execution chain
+  - Relationships between Agent, MCP, LSP, Goal, and Subagent
+- [Markdown Agents](agents.md)
+  - Agent file format
+  - Tool, skill, and subagent allowlists
+  - Startup priority and switching
+- [Developer guide](development.md)
+  - Local development
+  - Repository structure
+  - Adding or modifying tools
+  - Testing and release checks
+- [Configuration reference](configuration.md)
+  - Configuration paths
+  - Merge rules
+  - All top-level configuration options
+- [Configuration examples](../examples/README.md)
   - `pi-base.json`
   - Markdown Agent
-- [工具实现索引](tools/README.md)
-  - 基础文件工具
-  - LSP 工具
-  - Subagent、Goal 与 MCP 动态工具
+- [Tool implementation index](tools/README.md)
+  - Basic file tools
+  - LSP tools
+  - Subagent, Goal, and MCP dynamic tools
 
-## 维护原则
+## Maintenance principles
 
-- 实现真值以 schema、配置校验和测试为准；文档层的公共机制只在[架构概览](architecture.md)中解释。
-- [工具实现索引](tools/README.md)是工具文档的唯一完整清单；各工具页只描述本工具特有行为。
-- 修改公共参数、默认值、错误语义或生命周期时，应同步更新对应文档。
+- The schema, configuration validation, and tests are the source of truth for implementations; documentation-level public mechanisms are only explained in the [Architecture](architecture.md).
+- The [Tool implementation index](tools/README.md) is the only complete inventory of tool documentation; each tool page only describes behavior specific to that tool.
+- When changing public parameters, defaults, error semantics, or lifecycle, update the corresponding documentation accordingly.

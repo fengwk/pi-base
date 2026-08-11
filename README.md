@@ -1,80 +1,84 @@
+<p align="center">
+  🌐 <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 # pi-base
 
-`pi-base` 是 [Pi](https://github.com/earendil-works/pi) 的插件包，提供文件读写、代码搜索、命令执行、LSP、MCP、Agent、Subagent 和 Goal 能力。这套工具组合经过互联网研发生产环境的实际使用验证。
+`pi-base` is a plugin package for [Pi](https://github.com/earendil-works/pi) that provides file read/write, code search, command execution, LSP, MCP, Agent, Subagent, and Goal capabilities. This toolset has been validated in real-world internet development production environments.
 
-> **Less is More.** 追求简单、稳定的工具组合。
+> **Less is More.** Pursue a simple, stable set of tools.
 
-越来越多的人把大量规则和工具注入 Agent，认为这样会让 Agent 更聪明，实际体验却恰恰相反。Agent 很聪明，过度约束一个聪明人会让他变得懒惰，Agent 也是如此。我们需要让 Agent 理解 what 与 why，并只提供少量帮助它发现 how 的工具，而不是不断堆叠 how、how、how……
+More and more people inject large numbers of rules and tools into agents, believing it makes them smarter. In practice, the opposite is true. Agents are already smart; over-constraining a smart person makes them lazy, and the same applies to agents. We should let agents understand what and why, provide only a few tools that help them discover how, instead of stacking how, how, how...
 
-## 内置工具
+## Built-in tools
 
-`pi-base` 提供以下内置工具。
+`pi-base` provides the following built-in tools.
 
-| 工具 | 用途 |
+| Tool | Purpose |
 |------|------|
-| `read` | 读取文本、目录和支持的图片 |
-| `grep` | 在文件或目录中搜索内容 |
-| `find` | 按 glob 查找文件和目录 |
-| `bash` | 运行构建、测试、Git 和其他命令 |
-| `edit` | 精确替换已有文本 |
-| `write` | 创建新文件或重写整个文件 |
-| `apply_patch` | 结构化新增、更新、删除或移动多个文件 |
-| `lsp_goto_definition` | 查询符号定义 |
-| `lsp_workspace_symbols` | 搜索工作区符号 |
-| `lsp_java_decompile` | 反编译 JDTLS 工作区中的外部 Java class |
-| `task` | 创建或恢复 Subagent session |
-| `create_goal` | 创建持久 Goal |
-| `get_goal` | 读取 Goal 状态 |
-| `update_goal` | 将 Goal 标记为完成或阻塞 |
+| `read` | Read text, directories, and supported images |
+| `grep` | Search for content in files or directories |
+| `find` | Find files and directories by glob |
+| `bash` | Run builds, tests, Git, and other commands |
+| `edit` | Precisely replace existing text |
+| `write` | Create new files or rewrite entire files |
+| `apply_patch` | Structurally add, update, delete, or move multiple files |
+| `lsp_goto_definition` | Look up symbol definitions |
+| `lsp_workspace_symbols` | Search workspace symbols |
+| `lsp_java_decompile` | Decompile external Java classes in the JDTLS workspace |
+| `task` | Create or resume Subagent sessions |
+| `create_goal` | Create a persistent Goal |
+| `get_goal` | Read Goal status |
+| `update_goal` | Mark a Goal as complete or blocked |
 
-未在 Agent `tools` 中指定文件修改工具时，模型 ID 包含 `gpt-` 且不包含 `gpt-4` 或 `oss` 的模型使用 `apply_patch`，其他模型使用 `edit` 和 `write`；显式配置不扩大权限，同时配置 `apply_patch` 与 `edit` / `write` 时只启用 `apply_patch`，模型 ID 包含 `gpt-` 且不包含 `gpt-4` 或 `oss` 的模型同时配置 `edit` 和 `write` 时也使用 `apply_patch`。
+When no file modification tool is specified in an Agent's `tools`, models whose ID contains `gpt-` but not `gpt-4` or `oss` use `apply_patch`, and other models use `edit` and `write`; explicit configuration does not expand permissions: when `apply_patch` is configured alongside `edit` / `write`, only `apply_patch` is enabled, and models whose ID contains `gpt-` but not `gpt-4` or `oss` also use `apply_patch` when both `edit` and `write` are configured.
 
-参数和使用边界见[工具文档](docs/tools/README.md)。
+See the [tool documentation](docs/tools/README.md) for parameters and usage boundaries.
 
-## 安装
+## Installation
 
-需要已安装 [Pi](https://github.com/earendil-works/pi)。
+Requires [Pi](https://github.com/earendil-works/pi) to be installed.
 
 ```bash
 pi install git:github.com/fengwk/pi-base
 ```
 
-安装到当前项目：
+Install into the current project:
 
 ```bash
 pi install git:github.com/fengwk/pi-base -l
 ```
 
-## 可选配置
+## Optional configuration
 
-配置文件支持全局和项目两个作用域：
+The configuration file supports two scopes: global and project.
 
-| 作用域 | 路径 |
+| Scope | Path |
 |--------|------|
-| 全局 | `~/.pi/agent/pi-base.json` |
-| 当前项目 | `<repo>/.pi/pi-base.json` |
+| Global | `~/.pi/agent/pi-base.json` |
+| Current project | `<repo>/.pi/pi-base.json` |
 
-可直接复制的全局配置和 Agent 示例见 [`examples`](examples/)；全部字段、默认值和合并规则见[配置参考](docs/configuration.md)。修改配置后执行 `/reload`。
+Ready-to-copy global configuration and Agent examples are in [`examples`](examples/); see the [Configuration Reference](docs/configuration.md) for all fields, default values, and merge rules. Run `/reload` after modifying the configuration.
 
-## Agent 与扩展能力
+## Agents and extensions
 
-- 在 `~/.pi/agent/agents/**/*.md` 中定义 [Markdown Agent](docs/agents.md)，通过 `pi --agent <name>` 或 `/agent <name>` 使用。
-- 在 Agent 的 `subagents` 中声明可委派的 Agent，即可启用 [`task`](docs/tools/task.md)。
-- 配置 `mcp.servers` 后，可使用[本地或远程 MCP 工具](docs/tools/mcp.md)。
-- 使用 `/goal <objective>` 创建可持久化、可暂停和可恢复的 [Goal](docs/tools/goal-tools.md)。
-- 使用 `/mcp-status`、`/subagent` 和 `/goal status` 查看运行状态。
+- Define [Markdown Agents](docs/agents.md) in `~/.pi/agent/agents/**/*.md` and use them with `pi --agent <name>` or `/agent <name>`.
+- Declare delegable Agents in an Agent's `subagents` to enable [`task`](docs/tools/task.md).
+- After configuring `mcp.servers`, you can use [local or remote MCP tools](docs/tools/mcp.md).
+- Use `/goal <objective>` to create persistent, pausable, and resumable [Goals](docs/tools/goal-tools.md).
+- Use `/mcp-status`, `/subagent`, and `/goal status` to view runtime status.
 
-## 说明
+## Notes
 
-- [上下文压缩](examples/README.md#context-compression)默认关闭；它会用占位文本替换发送给模型的部分旧工具结果，仅在长时间、工具输出密集的 session 已产生明确上下文压力时开启。
-- 桌面通知支持 Linux 和 WSL；其他平台不启用通知。
-- 系统没有 `fd` 或 `rg` 时会尝试从其 GitHub Release 下载；设置 `PI_OFFLINE=1` 可禁用下载。
-- `permission` 用于降低误操作风险，不是安全沙箱。需要强隔离时请使用容器、受限账户或系统级沙箱。
+- [Context compression](examples/#context-compression) is disabled by default; it replaces some old tool results sent to the model with placeholder text, and should be enabled only when a long session with dense tool output has created clear context pressure.
+- Desktop notifications are supported on Linux and WSL; notifications are not enabled on other platforms.
+- When the system lacks `fd` or `rg`, it attempts to download them from their GitHub Releases; set `PI_OFFLINE=1` to disable the download.
+- `permission` reduces the risk of accidental operations; it is not a security sandbox. For strong isolation, use containers, restricted accounts, or system-level sandboxes.
 
-架构、开发、配置和工具实现文档见 [docs/](docs/)。
+See [docs/](docs/) for architecture, development, configuration, and tool implementation documentation.
 
-## 许可证
+## License
 
-除单独标注的第三方组件外，本项目采用 [MIT License](LICENSE)。
+This project is licensed under the [MIT License](LICENSE), except for third-party components that are separately attributed.
 
-第三方组件的来源、版权和适用许可证见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) 与 [LICENSES](LICENSES/)。
+See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) and [LICENSES](LICENSES/) for the sources, copyrights, and applicable licenses of third-party components.

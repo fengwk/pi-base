@@ -1,24 +1,28 @@
-# Markdown Agent
+<p align="center">
+  🌐 <a href="agents.md">English</a> · <a href="agents.zh-CN.md">简体中文</a>
+</p>
 
-[文档首页](README.md) · [架构概览](architecture.md) · [配置参考](configuration.md)
+# Markdown Agents
 
-`pi-base` 可以从 Markdown 文件加载具名 Agent，为不同任务固定 system prompt、模型、思考级别、工具、skills 和可委派的 Subagent。
+[Documentation home](README.md) · [Architecture](architecture.md) · [Configuration reference](configuration.md)
 
-Agent 示例见 [`examples/agents`](../examples/agents/)。
+`pi-base` can load named Agents from Markdown files, pinning the system prompt, model, thinking level, tools, skills, and delegable Subagents for different tasks.
 
-## 文件位置
+Agent examples are in [`examples/agents`](../examples/agents/).
 
-默认目录：
+## File locations
+
+Default directory:
 
 ```text
 ~/.pi/agent/agents/**/*.md
 ```
 
-目录会递归扫描 `.md` 文件。Agent catalog 在 session 启动以及执行 `/agent` 时重新加载。
+The directory is scanned recursively for `.md` files. The Agent catalog is reloaded at session startup and when `/agent` is executed.
 
-内置 `default` Agent 不来自该目录；它使用 `~/.pi/agent/SYSTEM.md` 和 Pi 的默认模型设置。自定义 Agent 不能使用保留名称 `default`。
+The built-in `default` Agent does not come from this directory; it uses `~/.pi/agent/SYSTEM.md` and Pi's default model settings. Custom Agents cannot use the reserved name `default`.
 
-## 最小示例
+## Minimal example
 
 ```markdown
 ---
@@ -33,68 +37,68 @@ tools:
 You are a read-only code reviewer.
 ```
 
-Frontmatter 之后的 Markdown 正文作为该 Agent 的自定义 prompt。正文为空时继续使用默认 system prompt。
+The Markdown body after the Frontmatter serves as the Agent's custom prompt. When the body is empty, the default system prompt continues to be used.
 
-## Frontmatter 字段
+## Frontmatter fields
 
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `name` | 否 | Agent 名；省略时使用文件名，不含 `.md` |
-| `description` | 否 | `/agent` 选择器和 Subagent 列表中的简介 |
-| `model` | 否 | `provider/model` 格式；找不到模型时保留当前 session 模型并警告 |
-| `thinkingLevel` | 否 | `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` |
-| `tools` | 否 | 当前 Agent 可使用的工具名数组 |
-| `skills` | 否 | 对模型可见的 skill 名数组 |
-| `subagents` | 否 | 允许通过 `task` 委派的 Agent 名数组 |
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | No | Agent name; when omitted, the file name without `.md` is used |
+| `description` | No | Summary shown in the `/agent` selector and the Subagent list |
+| `model` | No | `provider/model` format; when the model is not found, the current session model is kept and a warning is issued |
+| `thinkingLevel` | No | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
+| `tools` | No | Array of tool names available to the current Agent |
+| `skills` | No | Array of skill names visible to the model |
+| `subagents` | No | Array of Agent names allowed for delegation via `task` |
 
-未知字段会使整个 Agent 文件失效。字符串数组会去重；空字符串或非数组值会使文件失效。
+Unknown fields invalidate the entire Agent file. String arrays are deduplicated; empty strings or non-array values invalidate the file.
 
 ## Tool allowlist
 
-- 省略 `tools`：继承当前默认工具策略。
-- 显式数组：只保留当前已注册且匹配的工具。
-- 空数组：不提供普通工具。
-- 文件修改工具会结合当前模型做投影，但不会扩大显式 allowlist。
-- MCP 等动态工具可以预先写入 allowlist；初次连接成功后再进行可用性校验。
+- `tools` omitted: inherit the current default tool policy.
+- Explicit array: only tools that are currently registered and match are kept.
+- Empty array: no ordinary tools are provided.
+- File modification tools are projected against the current model, but the explicit allowlist is never expanded.
+- Dynamic tools such as MCP can be written into the allowlist in advance; availability is validated after the first connection succeeds.
 
-当前不可用的工具会产生警告，但名称不会从 allowlist 删除；工具后续注册或 MCP 重连成功后仍可激活。MCP 首次连接失败时，该工具在当前启动阶段标记为不可用并产生警告。
+Tools that are currently unavailable produce a warning, but their names are not removed from the allowlist; they can still be activated after the tool is later registered or an MCP reconnection succeeds. When the first MCP connection fails, the tool is marked unavailable for the current startup phase and a warning is produced.
 
 ## Skill allowlist
 
-- 省略 `skills`：使用当前可供模型调用的 skills。
-- 显式数组：只注入匹配名称的 skills。
-- 空数组：不注入 skills。
-- 标记为禁止模型调用的 skill 不会进入 system prompt。
-- `read` 不在当前工具集时，不向 system prompt 注入 skills。
+- `skills` omitted: use the skills currently available for the model to call.
+- Explicit array: only skills with matching names are injected.
+- Empty array: no skills are injected.
+- Skills marked as forbidden for model calls do not enter the system prompt.
+- When `read` is not in the current tool set, no skills are injected into the system prompt.
 
-Skills 通过 prompt 告诉模型何时加载对应 `SKILL.md`；它们不是 Pi tools。
+Skills tell the model via prompt when to load the corresponding `SKILL.md`; they are not Pi tools.
 
 ## Subagent allowlist
 
-`subagents` 中只能引用已加载的 Agent。未知名称会被忽略并产生 catalog warning。
+`subagents` can only reference already-loaded Agents. Unknown names are ignored and produce a catalog warning.
 
-`task` 只在以下条件同时满足时注入：
+`task` is injected only when all of the following conditions are met:
 
-1. 当前 Agent 的 `subagents` 非空。
-2. 当前 session depth 小于 `subagent.maxDepth`。
-3. `task` 工具在当前 session 可用。
+1. The current Agent's `subagents` is non-empty.
+2. The current session depth is less than `subagent.maxDepth`.
+3. The `task` tool is available in the current session.
 
-并发、恢复、`maxTurns` 和权限中继见 [`task`](tools/task.md)。
+For concurrency, resumption, `maxTurns`, and permission relay, see [`task`](tools/task.md).
 
-## 选择与切换
+## Selecting and switching
 
-Session 启动时的 Agent 选择优先级：
+Agent selection priority at session startup:
 
 ```text
-当前 session 已持久化 Agent
+Agent persisted in the current session
   > --agent
   > pi-base.json defaultAgent
   > built-in default
 ```
 
-第一项只在恢复或继承了 Agent state 的 session 中存在；全新 session 从 `--agent` 开始判断。
+The first entry only exists in sessions that resumed or inherited Agent state; a fresh session starts evaluating from `--agent`.
 
-选择与切换命令：
+Selection and switching commands:
 
 ```bash
 pi --agent reviewer
@@ -106,18 +110,18 @@ pi --agent reviewer
 /agent
 ```
 
-无参数 `/agent` 在交互式 UI 中打开选择器。恢复已有 session 时，持久化的 Agent 优先于 `--agent`；恢复过程保留该 session 当前的模型和 thinking level。
+`/agent` without arguments opens the selector in the interactive UI. When resuming an existing session, the persisted Agent takes precedence over `--agent`; the resumption preserves the session's current model and thinking level.
 
-## 诊断
+## Diagnostics
 
-- 重复 Agent 名：保留先加载的定义，忽略后续文件。
-- Frontmatter 无效：忽略该文件并显示 warning。
-- 未知 tool：保留 allowlist 名称并警告，允许后续动态注册。
-- 未知 skill：保持隐藏并警告。
-- 未知 subagent：从 allowlist 移除并警告。
-- 模型不存在或无法激活：保留当前 session 模型。
+- Duplicate Agent names: keep the first loaded definition and ignore subsequent files.
+- Invalid Frontmatter: ignore the file and show a warning.
+- Unknown tool: keep the allowlist name and warn, allowing later dynamic registration.
+- Unknown skill: stay hidden and warn.
+- Unknown subagent: remove from the allowlist and warn.
+- Model missing or cannot be activated: keep the current session model.
 
-## 相关实现与测试
+## Related implementation and tests
 
 - [`src/agent-support.ts`](../src/agent-support.ts)
 - [`tests/agent-support.test.ts`](../tests/agent-support.test.ts)
