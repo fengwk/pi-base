@@ -17,6 +17,11 @@ const BINARY_PROBE_CHUNK_BYTES = 64 * 1024;
 const GREP_MAX_LINE_LENGTH = 500;
 export type GrepFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
+function explainRegexParseError(message: string, literal: boolean): string {
+  if (literal || !/\bregex parse error\b/i.test(message)) return message;
+  return `${message}\n\nThe pattern was parsed as a regular expression, but its syntax is invalid. Use literal=true for exact text, or escape regex metacharacters.`;
+}
+
 function formatGrepPattern(value: unknown): string {
   if (value === undefined || value === null) return "<missing-pattern>";
   return JSON.stringify(String(value));
@@ -468,7 +473,8 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
       timeout.cleanup();
     }
   } catch (error) {
-    return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
+    const message = explainRegexParseError((error as Error).message, params?.literal === true);
+    return { content: [{ type: "text" as const, text: `Error: ${message}` }], isError: true };
   }
 }
 

@@ -20,21 +20,26 @@ describe("grep multiline error paths", () => {
     expect(getText(result)).toBe("No matches found");
   });
 
-  it("surfaces multiline ripgrep regex failures", async () => {
+  it("explains ripgrep regex failures for standard and multiline searches", async () => {
+    // Intent: an invalid regex is actionable only when the error also identifies
+    // the default regex semantics and the exact-text alternative.
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.txt", "alpha\nbeta\n");
     const registry = createToolRegistry();
     registerGrepTool(registry.pi as any);
 
-    const result = await registry.getTool("grep").execute(
-      "1",
-      { workdir: ".", pattern: "(", path: "src", multiline: true },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
+    for (const multiline of [false, true]) {
+      const result = await registry.getTool("grep").execute(
+        `regex-error-${multiline}`,
+        { workdir: ".", pattern: "(", path: "src", multiline },
+        undefined,
+        undefined,
+        { cwd: root },
+      );
 
-    expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("regex parse error");
+      expect(result.isError).toBe(true);
+      expect(getText(result)).toContain("regex parse error");
+      expect(getText(result)).toContain("Use literal=true for exact text, or escape regex metacharacters.");
+    }
   });
 });

@@ -278,6 +278,7 @@ describe("executeGrep native ripgrep path", () => {
     const failed = await executeGrep("grep-4", { workdir: ".", path: "example.txt", pattern: "alpha" }, undefined, undefined, { cwd: root });
     expect(failed.isError).toBe(true);
     expect(getText(failed)).toContain("synthetic rg failure");
+    expect(getText(failed)).not.toContain("literal=true");
   });
 
   it("reports a timeout when ripgrep does not finish before timeout_seconds", async () => {
