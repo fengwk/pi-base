@@ -187,8 +187,14 @@ describe("/subagent", () => {
       "tui.altScreen.pageDown": ["pageDown", "ctrl+alt+d"],
       "tui.altScreen.halfPageUp": ["ctrl+u"],
       "tui.altScreen.halfPageDown": ["ctrl+d"],
+      "tui.altScreen.lineUp": ["ctrl+up"],
+      "tui.altScreen.lineDown": ["ctrl+down"],
       "tui.altScreen.previousPrompt": ["ctrl+shift+up"],
       "tui.altScreen.nextPrompt": ["ctrl+shift+down"],
+      "tui.altScreen.search": ["ctrl+alt+f"],
+      "tui.altScreen.searchNext": ["enter", "ctrl+g"],
+      "tui.altScreen.searchPrevious": ["shift+enter", "ctrl+shift+g"],
+      "tui.altScreen.searchClose": ["escape"],
       "tui.altScreen.top": ["home", "ctrl+alt+shift+u"],
       "tui.altScreen.bottom": ["end", "ctrl+alt+shift+d"],
     };
@@ -215,8 +221,14 @@ describe("/subagent", () => {
           "tui.altScreen.pageDown": [],
           "tui.altScreen.halfPageUp": [],
           "tui.altScreen.halfPageDown": [],
+          "tui.altScreen.lineUp": [],
+          "tui.altScreen.lineDown": [],
           "tui.altScreen.previousPrompt": [],
           "tui.altScreen.nextPrompt": [],
+          "tui.altScreen.search": [],
+          "tui.altScreen.searchNext": [],
+          "tui.altScreen.searchPrevious": [],
+          "tui.altScreen.searchClose": [],
           "tui.altScreen.top": [],
           "tui.altScreen.bottom": [],
         });
@@ -279,6 +291,9 @@ describe("/subagent", () => {
       "tui.altScreen.pageDown": ["pageDown", "ctrl+alt+d"],
       "tui.altScreen.halfPageUp": ["ctrl+u", "ctrl+shift+up"],
       "tui.altScreen.halfPageDown": ["ctrl+d", "ctrl+shift+down"],
+      "tui.altScreen.lineUp": ["ctrl+up"],
+      "tui.altScreen.lineDown": ["ctrl+down"],
+      "tui.altScreen.search": ["ctrl+alt+f"],
       "tui.altScreen.top": ["home", "ctrl+home"],
       "tui.altScreen.bottom": ["end", "ctrl+end"],
     });
@@ -296,6 +311,12 @@ describe("/subagent", () => {
           expect(keybindings.getKeys("tui.altScreen.pageUp")).toEqual([]);
           expect(keybindings.getKeys("tui.altScreen.previousPrompt")).toEqual([]);
           expect(keybindings.getKeys("tui.altScreen.nextPrompt")).toEqual([]);
+          expect(keybindings.getKeys("tui.altScreen.lineUp")).toEqual([]);
+          expect(keybindings.getKeys("tui.altScreen.lineDown")).toEqual([]);
+          expect(keybindings.getKeys("tui.altScreen.search")).toEqual([]);
+          expect(keybindings.getKeys("tui.altScreen.searchNext")).toEqual([]);
+          expect(keybindings.getKeys("tui.altScreen.searchPrevious")).toEqual([]);
+          expect(keybindings.getKeys("tui.altScreen.searchClose")).toEqual([]);
           const initial = component.render(120).join("\n");
           expect(initial).not.toContain("inspect persisted state 0");
 
@@ -314,6 +335,12 @@ describe("/subagent", () => {
           const atBottom = component.render(120).join("\n");
           expect(atBottom).toContain("finished report");
 
+          terminal.sendInput("\x1b[1;5A");
+          const afterLineUp = component.render(120).join("\n");
+          expect(afterLineUp).not.toBe(atBottom);
+          terminal.sendInput("\x1b[1;5B");
+          expect(component.render(120).join("\n")).toBe(atBottom);
+
           terminal.sendInput("\x1b[1;6A");
           const afterConflictingHalfPageUp = component.render(120).join("\n");
           expect(afterConflictingHalfPageUp).not.toBe(atBottom);
@@ -326,6 +353,12 @@ describe("/subagent", () => {
         expect(keybindings.getKeys("tui.altScreen.pageUp")).toEqual(["pageUp", "ctrl+alt+u"]);
         expect(keybindings.getKeys("tui.altScreen.previousPrompt")).toEqual(["ctrl+shift+up"]);
         expect(keybindings.getKeys("tui.altScreen.nextPrompt")).toEqual(["ctrl+shift+down"]);
+        expect(keybindings.getKeys("tui.altScreen.lineUp")).toEqual(["ctrl+up"]);
+        expect(keybindings.getKeys("tui.altScreen.lineDown")).toEqual(["ctrl+down"]);
+        expect(keybindings.getKeys("tui.altScreen.search")).toEqual(["ctrl+alt+f"]);
+        expect(keybindings.getKeys("tui.altScreen.searchNext")).toEqual(["enter", "ctrl+g"]);
+        expect(keybindings.getKeys("tui.altScreen.searchPrevious")).toEqual(["shift+enter", "ctrl+shift+g"]);
+        expect(keybindings.getKeys("tui.altScreen.searchClose")).toEqual(["escape"]);
       };
 
       await command.handler("scroll-child", createContext(cwd, custom, []));

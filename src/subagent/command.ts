@@ -23,8 +23,14 @@ const FULLSCREEN_VIEWPORT_KEYBINDINGS = [
   "tui.altScreen.pageDown",
   "tui.altScreen.halfPageUp",
   "tui.altScreen.halfPageDown",
+  "tui.altScreen.lineUp",
+  "tui.altScreen.lineDown",
   "tui.altScreen.previousPrompt",
   "tui.altScreen.nextPrompt",
+  "tui.altScreen.search",
+  "tui.altScreen.searchNext",
+  "tui.altScreen.searchPrevious",
+  "tui.altScreen.searchClose",
   "tui.altScreen.top",
   "tui.altScreen.bottom",
 ] as const;
@@ -33,6 +39,8 @@ const EMPTY_VIEWPORT_KEYBINDINGS: SubagentViewportKeybindings = {
   pageDown: [],
   halfPageUp: [],
   halfPageDown: [],
+  lineUp: [],
+  lineDown: [],
   top: [],
   bottom: [],
 };
@@ -129,6 +137,8 @@ function captureFullscreenViewportBindings(keybindings: KeybindingsManager): Sub
     pageDown: keybindings.getKeys("tui.altScreen.pageDown"),
     halfPageUp: keybindings.getKeys("tui.altScreen.halfPageUp"),
     halfPageDown: keybindings.getKeys("tui.altScreen.halfPageDown"),
+    lineUp: keybindings.getKeys("tui.altScreen.lineUp"),
+    lineDown: keybindings.getKeys("tui.altScreen.lineDown"),
     top: keybindings.getKeys("tui.altScreen.top"),
     bottom: keybindings.getKeys("tui.altScreen.bottom"),
   };

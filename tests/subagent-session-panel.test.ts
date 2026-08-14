@@ -276,6 +276,8 @@ describe("SubagentSessionPanel", () => {
       pageDown: ["ctrl+pageDown"],
       halfPageUp: ["ctrl+u"],
       halfPageDown: ["ctrl+d"],
+      lineUp: ["ctrl+up"],
+      lineDown: ["ctrl+down"],
       top: ["ctrl+home"],
       bottom: ["ctrl+end"],
     });
@@ -295,7 +297,13 @@ describe("SubagentSessionPanel", () => {
     harness.panel.handleInput("\x1b[6;5~");
     expect(harness.panel.render(120).join("\n")).not.toContain("message 0");
     harness.panel.handleInput("\x1b[5;5~");
-    expect(harness.panel.render(120).join("\n")).toContain("message 0");
+    const atTopAfterPage = harness.panel.render(120).join("\n");
+    expect(atTopAfterPage).toContain("message 0");
+    harness.panel.handleInput("\x1b[1;5B");
+    const afterLineDown = harness.panel.render(120).join("\n");
+    expect(afterLineDown).not.toBe(atTopAfterPage);
+    harness.panel.handleInput("\x1b[1;5A");
+    expect(harness.panel.render(120).join("\n")).toBe(atTopAfterPage);
     harness.panel.handleInput("\x1b[1;5F");
     expect(harness.panel.render(120).join("\n")).toContain("message 7");
   });
@@ -310,6 +318,8 @@ describe("SubagentSessionPanel", () => {
         pageDown: [],
         halfPageUp: [],
         halfPageDown: [],
+        lineUp: [],
+        lineDown: [],
         top: ["ctrl+home"],
         bottom: ["ctrl+end"],
       },

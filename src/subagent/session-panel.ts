@@ -33,6 +33,8 @@ export interface SubagentViewportKeybindings {
   pageDown: readonly KeyId[];
   halfPageUp: readonly KeyId[];
   halfPageDown: readonly KeyId[];
+  lineUp: readonly KeyId[];
+  lineDown: readonly KeyId[];
   top: readonly KeyId[];
   bottom: readonly KeyId[];
 }
@@ -42,6 +44,8 @@ const EMPTY_VIEWPORT_KEYBINDINGS: SubagentViewportKeybindings = {
   pageDown: [],
   halfPageUp: [],
   halfPageDown: [],
+  lineUp: [],
+  lineDown: [],
   top: [],
   bottom: [],
 };
@@ -317,6 +321,14 @@ export class SubagentSessionPanel implements Component {
     }
     if (matchesAnyKey(data, this.viewportKeybindings.halfPageDown)) {
       this.moveScroll(Math.max(1, Math.floor(this.lastViewportHeight / 2)));
+      return;
+    }
+    if (matchesAnyKey(data, this.viewportKeybindings.lineUp)) {
+      this.moveScroll(-1);
+      return;
+    }
+    if (matchesAnyKey(data, this.viewportKeybindings.lineDown)) {
+      this.moveScroll(1);
       return;
     }
     if (matchesAnyKey(data, this.viewportKeybindings.top)) {
