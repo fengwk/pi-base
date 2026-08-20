@@ -145,12 +145,18 @@ describe("task tool", () => {
     expect(calls).toEqual(["refresh", "allowlist", "exists", "resume"]);
   });
 
-  it("advertises the configured default maxTurns", () => {
-    // Intent: the tool contract exposes the effective registration-workspace default while the
+  it("advertises the configured default maxTurns in the parameter schema", () => {
+    // Intent: structured parameter metadata owns the registration-workspace default while the
     // runtime resolver remains authoritative for each invocation's ctx.cwd.
     const tool = registerAndCapture(baseDeps({ getMaxTurns: () => 7 }));
-    expect(tool.description).toContain("The default is `7`");
-    expect(tool.parameters.properties.maxTurns.description).toContain("Default: 7");
+    expect(tool.parameters.properties.maxTurns.description).toContain("Defaults to 7");
+  });
+
+  it("describes batching all ready independent delegations in one assistant turn", () => {
+    const tool = registerAndCapture(baseDeps());
+    expect(tool.description).toContain("such as `X + Y + Z`");
+    expect(tool.description).toContain("when multiple independent tasks are otherwise ready");
+    expect(tool.description).toContain("together in a single assistant turn");
   });
 
   it("uses task maxTurns to override the configured budget", async () => {
@@ -402,7 +408,9 @@ describe("task tool", () => {
     const tool = registerAndCapture(baseDeps({ getMaxConcurrency: () => 2 }));
     const result = await tool.execute("1", { subagent_type: "worker", prompt: "go" }, undefined, undefined, ctx());
     expect(result.isError).toBe(true);
-    expect(text(result)).toContain("concurrency limit");
+    expect(text(result)).toBe(
+      "Error: Task was not started: direct subagent concurrency limit reached (2/2 running or starting). Retry this task in a later delegation batch.",
+    );
   });
 
   it("enforces maxConcurrency across parallel task calls in the same turn", async () => {
@@ -470,7 +478,9 @@ describe("task tool", () => {
     const tool = registerAndCapture(baseDeps({ getMaxConcurrency: () => 10, getMaxTotalConcurrency: () => 1 }));
     const result = await tool.execute("1", { subagent_type: "worker", prompt: "go" }, undefined, undefined, ctx("nested-parent", 2, "root-session"));
     expect(result.isError).toBe(true);
-    expect(text(result)).toContain("total concurrency limit");
+    expect(text(result)).toBe(
+      "Error: Task was not started: total subagent concurrency limit reached (1/1 running or starting across this delegation tree). Retry after other delegated work completes.",
+    );
   });
 
   it("enforces maxTotalConcurrency across parallel starts under the same root", async () => {
@@ -509,7 +519,9 @@ describe("task tool", () => {
     expect(r1.isError).not.toBe(true);
     expect(r2.isError).not.toBe(true);
     expect(r3.isError).toBe(true);
-    expect(text(r3)).toContain("total concurrency limit");
+    expect(text(r3)).toBe(
+      "Error: Task was not started: total subagent concurrency limit reached (2/2 running or starting across this delegation tree). Retry after other delegated work completes.",
+    );
   });
 
   it("refuses concurrent resumes before the first session finishes opening", async () => {

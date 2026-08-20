@@ -11,17 +11,17 @@ import { Type } from "typebox";
 export function createTaskSchema(defaultMaxTurns: number) {
   return Type.Object({
     subagent_type: Type.String({
-      description: "Which subagent to delegate to. Must be listed in the current agent's `subagents` allowlist.",
+      description: "Subagent type to run. Must be one of the names listed in the current system prompt's `<available_subagents>` section.",
     }),
     prompt: Type.String({
-      description: "The full task/instructions handed to the subagent.",
+      description: "Complete, self-contained instructions for a new task, or updated direction and context for a resumed task. Include the objective, relevant scope, constraints, expected deliverable, output format, and verification instructions when applicable.",
     }),
     maxTurns: Type.Optional(Type.Integer({
       minimum: 1,
-      description: `Optional positive interaction-turn budget for this invocation. Default: ${defaultMaxTurns}. If unfinished at the budget, the child returns a phase report; use a smaller budget to verify its path early or when frequent parent-child interaction is needed.`,
+      description: `Positive integer interaction-turn budget for this invocation. Defaults to ${defaultMaxTurns}. If the child is unfinished when the budget is reached, it returns a phase report; use a smaller value when early path verification or frequent parent-child interaction is needed.`,
     })),
     session_id: Type.Optional(Type.String({
-      description: "Resume a previous subagent session by its id (the `<task id=\"...\">` value returned from an earlier task call).",
+      description: "Identifier of a previous subagent session to resume, using the `<task id=\"...\">` value returned by an earlier task call.",
     })),
   });
 }

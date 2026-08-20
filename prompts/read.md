@@ -9,12 +9,6 @@ Usage:
 - When a file is central to the task, keep reading in chunks until you have covered the whole relevant file.
 - Use `read` on directories instead of `bash ls`.
 
-Parameters:
-- `path` (required)
-- `workdir` (optional, default: the agent's current working directory; if provided, resolve from that directory)
-- `offset` (optional, default: 1)
-- `limit` (optional, default: 200, max: 2000)
-
 Examples:
 - `read({ path: "src/example.ts", workdir: "packages/web" })`
 - `read({ path: "src/example.ts", workdir: "services/api", offset: 120, limit: 40 })`

@@ -12,11 +12,6 @@ Usage:
 - When commands are independent, prefer separate parallel tool calls. When one shell step depends on a previous step, chain them with `&&`; use `;` only when failure of earlier steps does not matter.
 - Use a temporary directory outside the repository for downloads, generated artifacts, temporary clones, and other non-target side effects unless the user explicitly wants files created in the project.
 
-Parameters:
-- `command` (required)
-- `workdir` (optional, default: the agent's current working directory; if provided, run in that directory; prefer it over `cd ... &&` in `command`)
-- `timeout_seconds` (optional, defaults to 120 = 2 minutes). For long-running commands, explicitly provide a larger value.
-
 Examples:
 - `bash({ command: "npm test", workdir: "packages/web" })`
 - `bash({ command: "mvn -q test", workdir: "services/java", timeout_seconds: 120 })`

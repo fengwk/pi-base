@@ -107,7 +107,10 @@ describe("task tool injection", () => {
     );
     const prompt = String(result?.systemPrompt ?? "");
     expect(prompt).toContain("You can delegate self-contained subtasks with the `task` tool.");
-    expect(prompt).toContain("The main agent remains responsible for task decomposition, decisions, integration, validation, and final judgment.");
+    expect(prompt).toContain("Maximize parallel delegation.");
+    expect(prompt).toContain("the delegating agent cannot continue until the batch completes");
+    expect(prompt).toContain("together in a single assistant turn");
+    expect(prompt).toContain("The delegating agent remains responsible for decomposition, decisions, integration, validation, review, convergence, and final judgment.");
     expect(prompt).toContain("After 2-3 well-directed attempts without meaningful progress, take over the work, switch approaches, or report the blocker.");
     expect(prompt).toContain("The default is `7`");
     expect(prompt).toContain("phase report");

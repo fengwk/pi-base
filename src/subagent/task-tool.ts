@@ -326,12 +326,12 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
         const directActive = subagentRegistry.runningChildCount(parentSessionId) + countPendingSessionReservations(parentSessionId);
         if (directActive >= max) {
           return errorResult(
-            `concurrency limit reached (${directActive}/${max} subagents running or starting). Wait for one to finish before delegating more.`,
+            `Task was not started: direct subagent concurrency limit reached (${directActive}/${max} running or starting). Retry this task in a later delegation batch.`,
           );
         }
         const totalActive = subagentRegistry.runningCountForRoot(rootSessionId) + countPendingRootReservations(rootSessionId);
         return errorResult(
-          `total concurrency limit reached (${totalActive}/${maxTotal} subagents running or starting in this delegation tree). Wait for one to finish before delegating more.`,
+          `Task was not started: total subagent concurrency limit reached (${totalActive}/${maxTotal} running or starting across this delegation tree). Retry after other delegated work completes.`,
         );
       }
       releaseSessionReservation = reservation;

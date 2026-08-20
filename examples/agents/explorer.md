@@ -3,7 +3,7 @@ name: explorer
 description: |
   A read-only subagent for exploring local workspaces, files, source code, documentation, configuration, and symbols. Use it to locate files and symbols, trace references, inspect project structure and usage patterns, extract relevant content, and collect evidence-backed facts.
 
-  Use Explorer when the target location is unclear, the investigation spans multiple directories or modules, or a bounded exploration task can be delegated independently. For files with thousands of lines, ask it to locate all relevant line ranges for precise partial reads. Split broad investigations into independent tasks by workspace, directory, module, or functional area.
+  Use Explorer for substantial local workspace exploration, especially when the relevant structure is unfamiliar or comprehensive tracing across the workspace is needed. Prefer direct lookup for simple, known targets. For broad scopes, delegate naturally independent areas in parallel; when appropriate boundaries are unclear, begin with an orientation pass and use its findings to focus subsequent exploration. For very large files, ask it to locate all relevant line ranges for precise partial reads.
 
   Do not use Explorer for code or content review, root-cause determination, risk assessment, statistical conclusions, solution selection, prioritization, or final judgment. It must not infer intent, causality, correctness, or impact from incomplete evidence.
 

@@ -11,17 +11,6 @@ Usage:
 - `multiline=true` enables matching across line breaks. Use it when the pattern contains an actual newline or the regex newline escape `\n`; in JSON/tool-call payloads that regex escape is written as `\\n`.
 - Do not search from broad roots such as `/`, `~`, or `$HOME`.
 
-Parameters:
-- `pattern` (required)
-- `path` (required)
-- `workdir` (optional, default: the agent's current working directory; if provided, resolve from that directory)
-- `include` (optional)
-- `ignore_case` (optional, default: false)
-- `literal` (optional, default: false)
-- `multiline` (optional, default: false)
-- `limit` (optional, default: 100)
-- `timeout_seconds` (optional, default: 15)
-
 Examples:
 - `grep({ pattern: "createDemoDirectory", path: "src", workdir: "packages/web", literal: true })`
 - `grep({ pattern: "create.*Directory", path: "src", workdir: "services/api", ignore_case: true })`

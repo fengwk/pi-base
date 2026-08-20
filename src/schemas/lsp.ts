@@ -4,14 +4,14 @@ export const lspGotoDefinitionSchema = Type.Object({
   path: Type.String({ description: "Existing source file path supported by an LSP server. This path is also used to infer the workspace root." }),
   workdir: Type.Optional(Type.String({ description: "Working directory for resolving relative paths. Defaults to the agent's current working directory. If provided, relative paths resolve from that directory." })),
   line: Type.Integer({ minimum: 1, description: "1-based line number for the target position." }),
-  character: Type.Optional(Type.Integer({ minimum: 0, description: "0-based character offset at the target position. Default: 0." })),
+  character: Type.Optional(Type.Integer({ minimum: 0, description: "0-based character offset at the target position. Defaults to 0." })),
 });
 
 export const lspWorkspaceSymbolsSchema = Type.Object({
   path: Type.String({ description: "Existing source file path used to resolve the workspace root." }),
   workdir: Type.Optional(Type.String({ description: "Working directory for resolving relative paths. Defaults to the agent's current working directory. If provided, relative paths resolve from that directory." })),
   query: Type.String({ description: "Symbol search query." }),
-  limit: Type.Optional(Type.Integer({ minimum: 0, description: "Maximum number of results to display locally. Default: 50." })),
+  limit: Type.Optional(Type.Integer({ minimum: 0, description: "Maximum number of results to display locally. Defaults to 50." })),
 });
 
 export const lspJavaDecompileSchema = Type.Object({

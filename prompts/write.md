@@ -6,11 +6,6 @@ Usage:
 - Provide complete content without placeholders such as `...` or omitted sections.
 - `write` returns a success message only. If you need to inspect the resulting file content, use `read` afterward.
 
-Parameters:
-- `path` (required)
-- `workdir` (optional, default: the agent's current working directory; if provided, resolve from that directory)
-- `content` (required)
-
 Examples:
 - `write({ path: "src/new-module.ts", content: "export const demo = 1;\n" })`
 - `write({ path: "docs/new-template.md", workdir: "packages/web", content: "# New template\n\nComplete file content.\n" })`
