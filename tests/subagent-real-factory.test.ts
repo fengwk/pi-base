@@ -57,9 +57,15 @@ function loadedExtensions(
 }
 
 function fakeSession(
-  messages: Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }> = [
+  messages: Array<{
+    role?: string;
+    provider?: string;
+    model?: string;
+    content?: Array<{ type?: string; text?: string }>;
+  }> = [
     { role: "assistant", content: [{ type: "toolCall" }, { type: "text", text: "final answer" }] },
   ],
+  model: { provider: string; id: string } = { provider: "provider", id: "model" },
 ) {
   const listeners = new Set<(event: AgentSessionEvent) => void>();
   return {
@@ -67,6 +73,7 @@ function fakeSession(
     prompt: vi.fn(async () => undefined),
     steer: vi.fn(async () => undefined),
     messages,
+    model,
     thinkingLevel: "high",
     subscribe: vi.fn((listener: (event: AgentSessionEvent) => void) => {
       listeners.add(listener);
@@ -353,7 +360,8 @@ describe("createRealSubagentFactory", () => {
 
   it("reopens matching legacy session files and refreshes the requested agent type on resume", async () => {
     // Intent: resume must support pre-hash storage layouts and append a new
-    // agent-state entry so the latest agent config wins.
+    // agent-state entry so the latest agent config wins. Before the first new assistant response,
+    // the live panel must show the selected resume model rather than the old transcript model.
     const { createRealSubagentFactory, subagentSessionDir } = await import("../src/subagent/runner.js");
     const cwd = "/work/repo";
     const hashedDir = subagentSessionDir(cwd);
@@ -364,9 +372,14 @@ describe("createRealSubagentFactory", () => {
       throw new Error(`ENOENT ${dir}`);
     });
 
-    const session = fakeSession([{ role: "assistant", content: [{ type: "text", text: "resumed report" }] }]);
-    const manager = fakeManager("resumed-1");
     const targetModel = { provider: "target-provider", id: "target-model" };
+    const session = fakeSession([{
+      role: "assistant",
+      provider: "old-provider",
+      model: "old-model",
+      content: [{ type: "text", text: "resumed report" }],
+    }], targetModel);
+    const manager = fakeManager("resumed-1");
     const ctx = fakeCtx(cwd, "parent-2");
     ctx.modelRegistry.find.mockReturnValue(targetModel);
     ctx.modelRegistry.hasConfiguredAuth.mockReturnValue(true);
@@ -391,6 +404,7 @@ describe("createRealSubagentFactory", () => {
       model: targetModel,
       thinkingLevel: "high",
     }));
+    expect(child.view?.getModel?.()).toEqual({ provider: "target-provider", modelId: "target-model" });
     expect(session.prompt).not.toHaveBeenCalled();
     expect(child.collect()).toEqual({ report: "resumed report", toolCount: 0 });
   });

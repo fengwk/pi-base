@@ -66,7 +66,7 @@ When `session_id` is passed:
 
 - A session that is already running cannot be resumed again.
 - Concurrent resumes of the same session are prevented via process-level reservations.
-- On resume, the passed `subagent_type` and the Agent config loaded at resume time are used.
+- The Agent catalog is reloaded before every invocation; resume uses the passed `subagent_type` and the latest Agent config on disk.
 
 ## Concurrency
 

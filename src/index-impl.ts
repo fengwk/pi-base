@@ -364,6 +364,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     },
   });
   registerSubagentTaskTool(pi, {
+    refreshAgentCatalog: agentHandle.refreshAgentCatalog,
     getActiveAgentSubagents: agentHandle.getActiveAgentSubagents,
     hasAgent: agentHandle.hasAgent,
     getMaxConcurrency: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxConcurrency,

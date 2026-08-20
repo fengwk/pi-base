@@ -18,7 +18,7 @@ Agent 示例见 [`examples/agents`](../examples/agents/)。
 ~/.pi/agent/agents/**/*.md
 ```
 
-目录会递归扫描 `.md` 文件。Agent catalog 在 session 启动以及执行 `/agent` 时重新加载。
+目录会递归扫描 `.md` 文件。Agent catalog 在 session 启动、执行 `/agent`，以及每次 `task` 调用前重新加载。
 
 内置 `default` Agent 不来自该目录；它使用 `~/.pi/agent/SYSTEM.md` 和 Pi 的默认模型设置。自定义 Agent 不能使用保留名称 `default`。
 

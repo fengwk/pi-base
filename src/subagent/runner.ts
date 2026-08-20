@@ -885,8 +885,8 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
           if (streamingModel) return streamingModel;
         }
         const selectedModel = session.model;
-        const fallback = selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.id } : null;
-        return readPersistedModel(session.messages as unknown as RuntimeMessage[], fallback);
+        if (selectedModel) return { provider: selectedModel.provider, modelId: selectedModel.id };
+        return readPersistedModel(session.messages as unknown as RuntimeMessage[], null);
       },
       getThinkingLevel: () => session.thinkingLevel,
       getMessages: () => session.messages as SubagentViewMessage[],

@@ -18,7 +18,7 @@ Default directory:
 ~/.pi/agent/agents/**/*.md
 ```
 
-The directory is scanned recursively for `.md` files. The Agent catalog is reloaded at session startup and when `/agent` is executed.
+The directory is scanned recursively for `.md` files. The Agent catalog is reloaded at session startup, whenever `/agent` runs, and before every `task` invocation.
 
 The built-in `default` Agent does not come from this directory; it uses `~/.pi/agent/SYSTEM.md` and Pi's default model settings. Custom Agents cannot use the reserved name `default`.
 

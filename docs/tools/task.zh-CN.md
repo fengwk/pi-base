@@ -66,7 +66,7 @@ Factory 位于 [`src/subagent/runner.ts`](../../src/subagent/runner.ts)：
 
 - 已运行中的 session 不能再次 resume。
 - 同一 session 的并发 resume 通过进程级 reservation 阻止。
-- 恢复时使用传入的 `subagent_type` 和恢复时加载的 Agent config。
+- 每次调用前重新加载 Agent catalog；恢复时使用传入的 `subagent_type` 和磁盘上最新的 Agent config。
 
 ## 并发
 

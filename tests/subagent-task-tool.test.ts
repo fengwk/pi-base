@@ -51,6 +51,7 @@ function fakeFactory(onSpawn?: (childDepth: number) => void): SubagentSessionFac
 }
 
 const baseDeps = (over: Partial<SubagentTaskToolDeps> = {}): SubagentTaskToolDeps => ({
+  refreshAgentCatalog: () => undefined,
   getActiveAgentSubagents: () => ["worker"],
   hasAgent: (name: string) => ["worker", "other"].includes(name),
   getMaxConcurrency: () => 2,
@@ -100,6 +101,48 @@ describe("task tool", () => {
     expect(result.isError).toBeFalsy();
     expect(text(result)).toContain('id="spawned"');
     expect(text(result)).toContain("state=\"completed\"");
+  });
+
+  it("refreshes the Agent catalog before validating and resuming a task", async () => {
+    // Intent: replacing an Agent file in a live root session must affect the next resume without
+    // requiring `/agent` or a root-session restart.
+    const calls: string[] = [];
+    const factory: SubagentSessionFactory = {
+      spawn: async () => { throw new Error("unused"); },
+      resume: async ({ sessionId }) => {
+        calls.push("resume");
+        return {
+          sessionId,
+          prompt: async () => undefined,
+          collect: () => ({ report: "ok", toolCount: 0 }),
+          abort: vi.fn(),
+          dispose: vi.fn(),
+        };
+      },
+    };
+    const tool = registerAndCapture(baseDeps({
+      refreshAgentCatalog: () => calls.push("refresh"),
+      getActiveAgentSubagents: () => {
+        calls.push("allowlist");
+        return ["worker"];
+      },
+      hasAgent: () => {
+        calls.push("exists");
+        return true;
+      },
+      factory,
+    }));
+
+    const result = await tool.execute(
+      "1",
+      { subagent_type: "worker", prompt: "continue", session_id: "saved" },
+      undefined,
+      undefined,
+      ctx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(calls).toEqual(["refresh", "allowlist", "exists", "resume"]);
   });
 
   it("advertises the configured default maxTurns", () => {

@@ -24,6 +24,8 @@ import {
 } from "../render.js";
 
 export interface SubagentTaskToolDeps {
+  /** Reloads Agent definitions so validation and runtime config use the current files on disk. */
+  refreshAgentCatalog: (ctx: ExtensionContext) => void;
   /** Agents the currently-active agent may delegate to (its `subagents` allowlist). */
   getActiveAgentSubagents: () => string[];
   /** Whether an agent name exists in the loaded catalog (after invalid subagent filtering). */
@@ -294,6 +296,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
         return errorResult((error as Error).message);
       }
 
+      deps.refreshAgentCatalog(ctx);
       const allowed = deps.getActiveAgentSubagents();
       const availableAgents = formatAvailableAgents(allowed);
       if (!deps.hasAgent(agentType)) {

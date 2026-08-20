@@ -86,6 +86,8 @@ export interface SubagentControls {
 }
 
 export interface AgentSupportHandle {
+  /** Reload Agent definitions from disk before task-time validation and runtime resolution. */
+  refreshAgentCatalog: (ctx: ExtensionContext) => void;
   /** Names the currently-active agent may delegate to (empty when it cannot delegate). */
   getActiveAgentSubagents: () => string[];
   getActiveAgentName: () => string;
@@ -564,6 +566,10 @@ export function registerAgentSupport(
   });
 
   return {
+    refreshAgentCatalog: (ctx: ExtensionContext) => {
+      const nextCatalog = refreshCatalog();
+      warnDiagnostics(ctx, nextCatalog.diagnostics);
+    },
     getActiveAgentSubagents: () => resolveActiveAgent()?.subagents ?? [],
     getActiveAgentName: () => activeAgentName,
     hasAgent: (name: string) => catalog.byName.has(name),

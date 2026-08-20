@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
 import piBaseExtension from "../index.js";
-import { AGENT_STATE_ENTRY } from "../src/agent-support.js";
+import { AGENT_STATE_ENTRY, registerAgentSupport } from "../src/agent-support.js";
 import { CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from "../src/goal/index.js";
 import { DEPTH_ENTRY, ROOT_SESSION_ENTRY, rootSessionEntryData } from "../src/subagent/depth.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
@@ -93,6 +93,44 @@ describe("agent support", () => {
 
       expect(registry.getNotifications().find((notification) =>
         notification.variant === "warning" && notification.message.includes("unknown subagents"))).toBeUndefined();
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
+  it("reloads Agent runtime config before task-time subagent creation", async () => {
+    // Intent: a live root session may replace a subagent definition between task calls; the next
+    // spawn or resume must resolve model/thinking from the current file rather than startup cache.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "worker.md",
+        "---\nname: worker\nmodel: deepseek/old-model\nthinkingLevel: high\n---\nOld worker.\n",
+      );
+      const registry = createToolRegistry();
+      const handle = registerAgentSupport(registry.pi as never, { baseToolGuide: "" });
+
+      expect(handle.resolveAgentRuntimeConfig("worker")).toEqual({
+        model: { provider: "deepseek", modelId: "old-model" },
+        thinkingLevel: "high",
+      });
+
+      await writeAgentFile(
+        agentDir,
+        "worker.md",
+        "---\nname: worker\nmodel: openai/new-model\nthinkingLevel: max\n---\nNew worker.\n",
+      );
+      handle.refreshAgentCatalog({ cwd: root } as never);
+
+      expect(handle.resolveAgentRuntimeConfig("worker")).toEqual({
+        model: { provider: "openai", modelId: "new-model" },
+        thinkingLevel: "max",
+      });
     } finally {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
