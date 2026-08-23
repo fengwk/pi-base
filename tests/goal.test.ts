@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { filterGoalContextMessages, registerGoalSupport, UPDATE_GOAL_TOOL_NAME } from "../src/goal/index.js";
 import { buildGoalBudgetLimitPrompt } from "../src/goal/prompts.js";
-import { GOAL_STATE_ENTRY_TYPE, tokenDeltaFromUsage, type GoalState } from "../src/goal/state.js";
+import { GOAL_STATE_ENTRY_TYPE, parseTokenBudget, tokenDeltaFromUsage, type GoalState } from "../src/goal/state.js";
 import { createToolRegistry } from "./helpers.js";
 
 function assistantMessage(
@@ -46,6 +46,18 @@ async function finishAgentRun(
 }
 
 describe("goal support", () => {
+  it("rejects command budgets that round below one token", () => {
+    // Intent: a positive decimal must not create an unrestorable zero-budget goal after rounding.
+    expect(parseTokenBudget("--tokens 0.4 Inspect the repository")).toMatchObject({
+      tokenBudget: null,
+      error: "Token budget must be at least 1 token.",
+    });
+    expect(parseTokenBudget("--tokens 0.6 Inspect the repository")).toEqual({
+      objective: "Inspect the repository",
+      tokenBudget: 1,
+    });
+  });
+
   it("exposes the current active lifecycle state through its handle", async () => {
     // Intent: external lifecycle consumers can observe whether goal mode will continue without
     // mutating or duplicating the goal state machine.

@@ -17,6 +17,8 @@
 
 配置按 cwd 缓存在进程内。修改后执行 `/reload`。
 
+项目 `pi-base.json` 被视为可信运行时配置，不受 Pi project trust 状态限制。它可以定义可执行的 LSP 和 MCP 命令，因此只应在可信仓库中使用项目配置。
+
 ## 校验
 
 配置必须是 JSON object。顶层只允许：

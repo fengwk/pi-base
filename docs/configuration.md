@@ -17,6 +17,8 @@ The `PI_BASE_GLOBAL_SETTINGS_PATH` environment variable overrides the global con
 
 Configuration is cached in-process per cwd. Run `/reload` after modifying it.
 
+Project `pi-base.json` is treated as trusted runtime configuration and is not gated by Pi's project-trust state. It can define executable LSP and MCP commands, so use project configuration only in repositories you trust.
+
 ## Validation
 
 Configuration must be a JSON object. Only the following top-level keys are allowed:

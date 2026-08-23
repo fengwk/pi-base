@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { registerWriteTool } from "../src/write.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
@@ -56,6 +56,33 @@ describe("write behavior", () => {
 
     expect(result.isError).not.toBe(true);
     expect(await readFile(join(root, "existing.txt"), "utf8")).toBe("new\ntext\n");
+  });
+
+  it("rejects an existing binary file without modifying it", async () => {
+    // Intent: write supports text only, so binary detection must fail before writeFile commits
+    // any bytes or notifies downstream observers.
+    const root = await createTempWorkspace();
+    const target = join(root, "image.png");
+    const original = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02, 0x03]);
+    await writeFile(target, original);
+    const writes: string[] = [];
+    const registry = createToolRegistry();
+    registerWriteTool(registry.pi as any, {
+      onSuccessfulWrite: (absolutePath) => writes.push(absolutePath),
+    });
+
+    const result = await registry.getTool("write").execute(
+      "write-binary",
+      { path: "image.png", content: "replacement text" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("appears to be a binary file");
+    expect(await readFile(target)).toEqual(original);
+    expect(writes).toEqual([]);
   });
 
   it("calls onSuccessfulWrite hook and reports overwrites", async () => {

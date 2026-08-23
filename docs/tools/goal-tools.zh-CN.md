@@ -110,7 +110,7 @@ reason: non-empty evidence/rationale
 /goal statusbar [on|off]
 ```
 
-Token budget 支持 `k` / `m` 后缀。
+Token budget 支持 `k` / `m` 后缀。数值按完整 token 四舍五入，结果必须至少为 1 token。
 
 ## 预算
 

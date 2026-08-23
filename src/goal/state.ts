@@ -81,6 +81,9 @@ export function parseTokenBudget(input: string): { objective: string; tokenBudge
   }
   const multiplier = suffix === "m" ? 1_000_000 : suffix === "k" ? 1_000 : 1;
   const tokenBudget = Math.round(value * multiplier);
+  if (!Number.isFinite(tokenBudget) || tokenBudget < 1) {
+    return { objective: input.trim(), tokenBudget: null, error: "Token budget must be at least 1 token." };
+  }
   const objective = `${input.slice(0, match.index)} ${input.slice((match.index ?? 0) + match[0].length)}`.trim();
   return { objective, tokenBudget };
 }

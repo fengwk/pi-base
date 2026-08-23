@@ -167,7 +167,7 @@ Path-based tools support:
 - `~/`, `$HOME/`, `${HOME}/`.
 - Compatible alias mapping from `filePath` to `path`.
 
-`edit`, `write`, and `apply_patch` use a file change queue to serialize the read-modify-write process for the same target. Text files uniformly go through encoding detection. The Update/Move of `edit` and `apply_patch` preserves the existing encoding, BOM, and line endings; `write` preserves the encoding and BOM when overwriting an existing file, while line breaks follow the passed `content`.
+`edit`, `write`, and `apply_patch` use a file change queue to serialize the read-modify-write process for the same target. Existing targets are decoded as text and binary files are rejected. The Update/Move of `edit` and `apply_patch` preserves the existing encoding, BOM, and line endings; `write` preserves the encoding and BOM when overwriting an existing file, while line breaks follow the passed `content`.
 
 `permission` is a lexical safeguard against accidental misuse, not a filesystem sandbox. When security isolation is required, containers, restricted accounts, or OS-level boundaries must be used.
 
@@ -202,6 +202,8 @@ The root session can obtain `create_goal`; once a Goal is active, `get_goal` and
 | Agent state | session entry |
 | Goal state | root session entry |
 | YOLO | Runtime cwd configuration snapshot |
+
+The process-level configuration cache, YOLO snapshots, and LSP client pool assume one independently active root session per Node.js process. A root session and its Subagent delegation tree are supported; multiple unrelated root sessions in one server/SDK process are not currently supported.
 
 ## Third-party boundaries
 

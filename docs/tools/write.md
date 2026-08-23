@@ -32,7 +32,8 @@ validate parameters
   -> resolve path
   -> file change queue
      -> stat/read existing target
-     -> detect encoding/BOM
+     -> decode text and reject binary files
+     -> preserve encoding/BOM
      -> encode content
      -> mkdir parent
      -> writeFile
@@ -49,8 +50,9 @@ validate parameters
 
 ## Overwriting existing files
 
-An existing target must be judged a regular file via `stat`. Before writing, the original bytes are read and the encoding is detected:
+An existing target must be judged a regular file via `stat`. Before writing, the original bytes are decoded as text:
 
+- Reject binary files without modifying them.
 - Preserve the existing encoding.
 - Preserve the existing BOM.
 - The existing line-ending style is not automatically preserved; `content` is the final text of the complete file.
@@ -86,6 +88,7 @@ The result body contains only `Created ...` or `Overwrote ...`.
 
 - Missing `path` or `content`.
 - Target exists but is not a regular file.
+- Target exists but is a binary file.
 - Read or encoding failure.
 - Parent-directory creation failure.
 - File write failure.

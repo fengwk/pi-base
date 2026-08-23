@@ -167,7 +167,7 @@ schema
 - `~/`、`$HOME/`、`${HOME}/`。
 - `filePath` 到 `path` 的兼容别名映射。
 
-`edit`、`write` 和 `apply_patch` 使用文件变更队列串行化同一目标的读改写过程。文本文件统一经过编码检测。`edit` 和 `apply_patch` 的 Update/Move 保留已有 encoding、BOM 和行尾；`write` 覆盖已有文件时保留 encoding 和 BOM，换行以传入的 `content` 为准。
+`edit`、`write` 和 `apply_patch` 使用文件变更队列串行化同一目标的读改写过程。已有目标统一按文本解码，并拒绝二进制文件。`edit` 和 `apply_patch` 的 Update/Move 保留已有 encoding、BOM 和行尾；`write` 覆盖已有文件时保留 encoding 和 BOM，换行以传入的 `content` 为准。
 
 `permission` 是词法防误操作机制，不是文件系统沙箱。需要安全隔离时必须使用容器、受限账户或操作系统级边界。
 
@@ -202,6 +202,8 @@ MCP 工具来自运行时 server 列表，不存在固定工具名。`McpSession
 | Agent state | session entry |
 | Goal state | root session entry |
 | YOLO | 运行时 cwd 配置快照 |
+
+进程级配置 cache、YOLO 快照和 LSP client pool 假设每个 Node.js 进程只有一个独立活跃的 root session。支持一个 root session 及其 Subagent delegation tree；目前不支持在同一 server/SDK 进程中同时运行多个彼此无关的 root session。
 
 ## 第三方边界
 

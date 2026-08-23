@@ -70,4 +70,4 @@ It runs a small CLI that sends images to the MiniMax Anthropic-compatible Messag
 
 ## Dependencies
 
-See `scripts/README.md`: requires `python3` (standard library) and `MINIMAX_API_KEY`; Pillow or ImageMagick are only needed for converting non-native image formats.
+See `scripts/README.md`: requires Python 3.10+ (standard library) and `MINIMAX_API_KEY`; Pillow or ImageMagick are only needed for converting non-native image formats.

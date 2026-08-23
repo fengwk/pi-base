@@ -11,7 +11,7 @@
 
 ## 依赖
 
-- `python3`（标准库）
+- Python 3.10+（标准库）
 - 转换非原生格式时需要：`Pillow`（优先）或 ImageMagick（`convert`/`magick`）
 
 ## 环境变量

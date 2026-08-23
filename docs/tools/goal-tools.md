@@ -110,7 +110,7 @@ The tool persists the status, but `reason` is only used as the audit note for th
 /goal statusbar [on|off]
 ```
 
-The token budget supports the `k` / `m` suffixes.
+The token budget supports the `k` / `m` suffixes. Values are rounded to whole tokens and must produce a budget of at least 1 token.
 
 ## Budget
 

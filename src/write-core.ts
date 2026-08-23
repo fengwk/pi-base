@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
-import { bomKindForEncoding, defaultTextEncoding, detectTextFileEncoding, encodeTextFile, textStartsWithBomMarker } from "./text-codec.js";
+import { bomKindForEncoding, decodeTextFile, defaultTextEncoding, encodeTextFile, textStartsWithBomMarker } from "./text-codec.js";
 
 export function formatWriteSuccess(rawPath: string, existed: boolean): string {
   const action = existed ? "Overwrote" : "Created";
@@ -101,9 +101,10 @@ export async function executeWrite(
         const currentStat = await throwIfAbortedAfter(stat(absolutePath), signal);
         if (!currentStat.isFile()) throw new Error(`${rawPath} is not a regular file. write supports regular text files only.`);
         const currentBytes = await throwIfAbortedAfter(readFile(absolutePath), signal);
-        const detected = detectTextFileEncoding(currentBytes);
-        outputEncoding = detected.encoding;
-        outputBom = detected.bom !== "none" ? detected.bom : (textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none");
+        const decoded = decodeTextFile(currentBytes);
+        if (decoded === null) throw new Error(`${rawPath} appears to be a binary file. write supports text files only.`);
+        outputEncoding = decoded.encoding;
+        outputBom = decoded.bom !== "none" ? decoded.bom : (textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none");
       } catch (error) {
         if (!isFileNotFoundError(error)) throw error;
         existed = false;
