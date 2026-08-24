@@ -297,6 +297,17 @@ describe("/subagent", () => {
       "tui.altScreen.top": ["home", "ctrl+home"],
       "tui.altScreen.bottom": ["end", "ctrl+end"],
     });
+    const originalFullscreenBindings = {
+      pageUp: [...keybindings.getKeys("tui.altScreen.pageUp")],
+      previousPrompt: [...keybindings.getKeys("tui.altScreen.previousPrompt")],
+      nextPrompt: [...keybindings.getKeys("tui.altScreen.nextPrompt")],
+      lineUp: [...keybindings.getKeys("tui.altScreen.lineUp")],
+      lineDown: [...keybindings.getKeys("tui.altScreen.lineDown")],
+      search: [...keybindings.getKeys("tui.altScreen.search")],
+      searchNext: [...keybindings.getKeys("tui.altScreen.searchNext")],
+      searchPrevious: [...keybindings.getKeys("tui.altScreen.searchPrevious")],
+      searchClose: [...keybindings.getKeys("tui.altScreen.searchClose")],
+    };
     const tui = new TuiAltScreen(terminal);
     process.env.PI_CODING_AGENT_DIR = agentDir;
     setKeybindings(keybindings);
@@ -350,15 +361,15 @@ describe("/subagent", () => {
           tui.hideOverlay();
           component.dispose?.();
         }
-        expect(keybindings.getKeys("tui.altScreen.pageUp")).toEqual(["pageUp", "ctrl+alt+u"]);
-        expect(keybindings.getKeys("tui.altScreen.previousPrompt")).toEqual(["ctrl+shift+up"]);
-        expect(keybindings.getKeys("tui.altScreen.nextPrompt")).toEqual(["ctrl+shift+down"]);
-        expect(keybindings.getKeys("tui.altScreen.lineUp")).toEqual(["ctrl+up"]);
-        expect(keybindings.getKeys("tui.altScreen.lineDown")).toEqual(["ctrl+down"]);
-        expect(keybindings.getKeys("tui.altScreen.search")).toEqual(["ctrl+alt+f"]);
-        expect(keybindings.getKeys("tui.altScreen.searchNext")).toEqual(["enter", "ctrl+g"]);
-        expect(keybindings.getKeys("tui.altScreen.searchPrevious")).toEqual(["shift+enter", "ctrl+shift+g"]);
-        expect(keybindings.getKeys("tui.altScreen.searchClose")).toEqual(["escape"]);
+        expect(keybindings.getKeys("tui.altScreen.pageUp")).toEqual(originalFullscreenBindings.pageUp);
+        expect(keybindings.getKeys("tui.altScreen.previousPrompt")).toEqual(originalFullscreenBindings.previousPrompt);
+        expect(keybindings.getKeys("tui.altScreen.nextPrompt")).toEqual(originalFullscreenBindings.nextPrompt);
+        expect(keybindings.getKeys("tui.altScreen.lineUp")).toEqual(originalFullscreenBindings.lineUp);
+        expect(keybindings.getKeys("tui.altScreen.lineDown")).toEqual(originalFullscreenBindings.lineDown);
+        expect(keybindings.getKeys("tui.altScreen.search")).toEqual(originalFullscreenBindings.search);
+        expect(keybindings.getKeys("tui.altScreen.searchNext")).toEqual(originalFullscreenBindings.searchNext);
+        expect(keybindings.getKeys("tui.altScreen.searchPrevious")).toEqual(originalFullscreenBindings.searchPrevious);
+        expect(keybindings.getKeys("tui.altScreen.searchClose")).toEqual(originalFullscreenBindings.searchClose);
       };
 
       await command.handler("scroll-child", createContext(cwd, custom, []));
