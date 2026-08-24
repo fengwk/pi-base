@@ -118,7 +118,18 @@ The tool returns:
 </task>
 ```
 
-Non-`completed` states set `isError: true`. `details.result` keeps the structured session id, state, and output.
+If a terminal assistant response ends with `error`, `aborted`, or an unrecovered output-length truncation after producing text, the parent receives both the error and a bounded partial report:
+
+```xml
+<task id="session-id" state="error">
+<task_error>...</task_error>
+<task_partial_result>
+...
+</task_partial_result>
+</task>
+```
+
+Tool-calling turns and tool output are excluded: they remain process evidence in the persisted transcript, not partial final output. The parent-facing partial report and `details.result.partialReport` are both capped at 4,000 characters; when truncated, the partial report ends with `... [truncated; see child session for full output]`. The full transcript remains in the persisted Subagent session. Non-`completed` states set `isError: true`.
 
 ## UI
 

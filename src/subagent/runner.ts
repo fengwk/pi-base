@@ -32,6 +32,8 @@ export interface RunResult {
   sessionId: string;
   state: "completed" | "error" | "cancelled";
   report?: string;
+  /** Bounded text from an interrupted terminal response that did not contain tool calls. */
+  partialReport?: string;
   error?: string;
 }
 
@@ -127,6 +129,8 @@ const MAX_TURNS_FINISH_PROMPT = readFileSync(
   "utf8",
 ).trim();
 const MAX_TURNS_REMINDER_INTERVAL = 5;
+const TASK_PARTIAL_REPORT_MAX_CHARS = 4_000;
+const TASK_PARTIAL_REPORT_TRUNCATION_NOTICE = "... [truncated; see child session for full output]";
 
 function formatDurationMs(value: number): string {
   if (value < 1000) return `${value}ms`;
@@ -229,6 +233,7 @@ function readPersistedStatus(messages: RuntimeMessage[]): string {
     if (message.stopReason === "pending") continue;
     if (message.stopReason === "error") return "error";
     if (message.stopReason === "aborted") return "cancelled";
+    if (message.stopReason === "length") return "error";
     break;
   }
   return "done";
@@ -475,19 +480,31 @@ export async function runSubagent(
 
   publishProgress({ kind: "status", text: `started ${args.agentType} session ${handle.sessionId}` });
   const activeToolArgs = new Map<string, string>();
-  let terminalAssistant: { stopReason: "error" | "aborted"; errorMessage?: string } | undefined;
+  let terminalAssistant: {
+    stopReason: "error" | "aborted" | "length";
+    errorMessage?: string;
+    partialReport?: string;
+  } | undefined;
   const recordTerminalAssistant = (event: unknown) => {
     if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message)) return;
     const message = event.message;
     if (message.role !== "assistant" || message.stopReason === "pending") return;
-    if (message.stopReason !== "error" && message.stopReason !== "aborted") {
+    if (
+      message.stopReason !== "error"
+      && message.stopReason !== "aborted"
+      && message.stopReason !== "length"
+    ) {
       terminalAssistant = undefined;
       return;
     }
     const errorMessage = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+    const partialReport = toolCallCountFromContent(message.content) === 0
+      ? boundedPartialReport(rawTextFromContent(message.content))
+      : "";
     terminalAssistant = {
       stopReason: message.stopReason,
       ...(errorMessage ? { errorMessage } : {}),
+      ...(partialReport ? { partialReport } : {}),
     };
   };
   const unsubscribeProgress = handle.subscribe?.((event) => {
@@ -536,20 +553,35 @@ export async function runSubagent(
         sessionId: handle.sessionId,
         state: "cancelled",
         error: failure,
+        ...(terminalAssistant?.partialReport ? { partialReport: terminalAssistant.partialReport } : {}),
       };
     }
     if (idleTimedOut) throw new Error("idle timeout watchdog triggered");
-    if (terminalAssistant?.stopReason === "error") {
-      const failure = terminalAssistant.errorMessage || "Subagent assistant message terminated with error.";
+    if (terminalAssistant?.stopReason === "error" || terminalAssistant?.stopReason === "length") {
+      const failure = terminalAssistant.errorMessage || (
+        terminalAssistant.stopReason === "length"
+          ? "Subagent assistant response was truncated before completion."
+          : "Subagent assistant message terminated with error."
+      );
       publishProgress({ kind: "status", text: `error: ${failure}` });
       finish(handle.sessionId, "error", safeToolCount(handle));
-      return { sessionId: handle.sessionId, state: "error", error: failure };
+      return {
+        sessionId: handle.sessionId,
+        state: "error",
+        error: failure,
+        ...(terminalAssistant.partialReport ? { partialReport: terminalAssistant.partialReport } : {}),
+      };
     }
     if (terminalAssistant?.stopReason === "aborted") {
       const failure = terminalAssistant.errorMessage || 'Subagent assistant message ended with stopReason "aborted".';
       publishProgress({ kind: "status", text: "cancelled" });
       finish(handle.sessionId, "cancelled", safeToolCount(handle));
-      return { sessionId: handle.sessionId, state: "cancelled", error: failure };
+      return {
+        sessionId: handle.sessionId,
+        state: "cancelled",
+        error: failure,
+        ...(terminalAssistant.partialReport ? { partialReport: terminalAssistant.partialReport } : {}),
+      };
     }
     const { report, toolCount } = handle.collect();
     publishProgress({ kind: "status", text: "completed" });
@@ -571,6 +603,7 @@ export async function runSubagent(
       sessionId: handle.sessionId,
       state: cancelled ? "cancelled" : "error",
       error: failure,
+      ...(terminalAssistant?.partialReport ? { partialReport: terminalAssistant.partialReport } : {}),
     };
   } finally {
     clearIdleTimer();
@@ -708,6 +741,13 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function boundedPartialReport(report: string): string {
+  const normalized = report.trim();
+  if (normalized.length <= TASK_PARTIAL_REPORT_MAX_CHARS) return normalized;
+  const prefixLength = TASK_PARTIAL_REPORT_MAX_CHARS - TASK_PARTIAL_REPORT_TRUNCATION_NOTICE.length;
+  return `${normalized.slice(0, prefixLength).trimEnd()}${TASK_PARTIAL_REPORT_TRUNCATION_NOTICE}`;
+}
+
 /** Format the tool result the delegating agent sees (report/error + session id for resume). */
 export function formatRunResult(result: RunResult): string {
   const id = escapeXml(result.sessionId);
@@ -717,7 +757,11 @@ export function formatRunResult(result: RunResult): string {
   }
   const state = escapeXml(result.state);
   const error = escapeXml(result.error ?? result.state);
-  return `<task id="${id}" state="${state}">\n<task_error>${error}</task_error>\n</task>`;
+  const partialReport = result.partialReport ? boundedPartialReport(result.partialReport) : "";
+  const partialBlock = partialReport
+    ? `\n<task_partial_result>\n${escapeXml(partialReport)}\n</task_partial_result>`
+    : "";
+  return `<task id="${id}" state="${state}">\n<task_error>${error}</task_error>${partialBlock}\n</task>`;
 }
 
 // ---------------------------------------------------------------------------

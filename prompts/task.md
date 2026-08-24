@@ -10,3 +10,4 @@ Usage:
 - When `session_id` is provided, the subagent resumes that session with its existing context. Provide the new direction, additional context, or updated objective based on its progress and current blocker. Do not merely repeat the previous prompt.
 - Resume a session only while its existing context remains useful. Start a new task when the objective or scope has materially changed.
 - The subagent returns its report to the main agent, not directly to the user. Review and integrate the result yourself. The returned envelope includes a resumable identifier in the form `<task id="...">`.
+- If a child's terminal response is interrupted after producing text, the error envelope may include a bounded `<task_partial_result>`. It excludes tool-calling turns and tool output. Treat it as incomplete, and use the session id to inspect or resume the full transcript when useful.

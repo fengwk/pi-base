@@ -118,7 +118,18 @@ Headless child 遇到 `ask` 时，将请求转发给 root UI 的 permission host
 </task>
 ```
 
-非 `completed` state 会设置 `isError: true`。`details.result` 保留结构化 session id、state 和输出。
+如果 terminal assistant response 已经生成文本，随后以 `error`、`aborted` 或未恢复的输出长度截断结束，Parent 会同时收到错误和有界的部分报告：
+
+```xml
+<task id="session-id" state="error">
+<task_error>...</task_error>
+<task_partial_result>
+...
+</task_partial_result>
+</task>
+```
+
+Tool-calling turn 和 tool output 不会进入该字段：它们属于过程证据，只保留在持久化 transcript 中。面向 Parent 的部分报告与 `details.result.partialReport` 都最多保留 4,000 个字符；发生截断时以 `... [truncated; see child session for full output]` 结尾。完整 transcript 仍保存在持久化 Subagent session 中。非 `completed` state 会设置 `isError: true`。
 
 ## UI
 

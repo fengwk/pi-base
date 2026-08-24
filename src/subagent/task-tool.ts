@@ -22,6 +22,7 @@ import {
   type CollapsedResultLinesResolver,
   type CollapsedResultMaxCharsResolver,
 } from "../render.js";
+import { unescapeXml } from "../xml.js";
 
 export interface SubagentTaskToolDeps {
   /** Reloads Agent definitions so validation and runtime config use the current files on disk. */
@@ -154,11 +155,33 @@ function extractRunResult(result: unknown): RunResult | undefined {
   if (details?.result) return details.result;
   const raw = textContent(result);
   const completed = raw.match(/^<task id="([^"]*)" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/);
-  if (completed) return { sessionId: completed[1] ?? "", state: "completed", report: completed[2] };
+  if (completed) {
+    return {
+      sessionId: unescapeXml(completed[1] ?? ""),
+      state: "completed",
+      report: unescapeXml(completed[2] ?? ""),
+    };
+  }
+  const failedWithPartial = raw.match(
+    /^<task id="([^"]*)" state="([^"]*)">\n<task_error>([\s\S]*?)<\/task_error>\n<task_partial_result>\n([\s\S]*?)\n<\/task_partial_result>\n<\/task>$/,
+  );
+  if (failedWithPartial) {
+    const state = failedWithPartial[2] === "cancelled" ? "cancelled" : "error";
+    return {
+      sessionId: unescapeXml(failedWithPartial[1] ?? ""),
+      state,
+      error: unescapeXml(failedWithPartial[3] ?? ""),
+      partialReport: unescapeXml(failedWithPartial[4] ?? ""),
+    };
+  }
   const failed = raw.match(/^<task id="([^"]*)" state="([^"]*)">\n<task_error>([\s\S]*?)<\/task_error>\n<\/task>$/);
   if (failed) {
     const state = failed[2] === "cancelled" ? "cancelled" : "error";
-    return { sessionId: failed[1] ?? "", state, error: failed[3] };
+    return {
+      sessionId: unescapeXml(failed[1] ?? ""),
+      state,
+      error: unescapeXml(failed[3] ?? ""),
+    };
   }
   return undefined;
 }
@@ -237,7 +260,9 @@ function renderFinalResult(
   const fallbackError = textContent(result) || state;
   const report = state === "completed"
     ? (parsed?.report ?? "(no textual report produced)")
-    : (parsed?.error ?? fallbackError);
+    : parsed?.partialReport
+      ? `Error: ${parsed.error ?? fallbackError}\n\nPartial result (incomplete):\n${parsed.partialReport}`
+      : (parsed?.error ?? fallbackError);
   const icon = state === "completed" ? paint(theme, "success", "✓") : paint(theme, "error", "✗");
   const sessionSuffix = sessionId ? paint(theme, "muted", ` (${sessionId})`) : "";
   const header = `${icon} ${title(theme, `task ${state}`)}${sessionSuffix}`;

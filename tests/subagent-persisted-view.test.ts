@@ -33,6 +33,7 @@ async function createPersistedSession(
   cwd: string,
   sessionId: string,
   sessionDir = subagentSessionDir(cwd),
+  stopReason: "stop" | "length" = "stop",
 ): Promise<void> {
   await mkdir(sessionDir, { recursive: true });
   const session = SessionManager.create(cwd, sessionDir, { id: sessionId });
@@ -42,7 +43,7 @@ async function createPersistedSession(
     provider: "provider",
     model: "model",
     usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
-    stopReason: "stop",
+    stopReason,
   } as never);
 }
 
@@ -110,5 +111,20 @@ describe("getPersistedSubagentView", () => {
     trackedFs.jsonlReads.length = 0;
     expect(getPersistedSubagentView(cwd, "exact-target")).toMatchObject({ sessionId: "exact-target" });
     expectOnlySessionRead("exact-target");
+  });
+
+  it("marks a persisted length-truncated terminal response as an error", async () => {
+    // Intent: the read-only viewer must agree with task result semantics after process restart.
+    const agentDir = await createTempRoot();
+    const cwd = await createTempRoot();
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    await createPersistedSession(cwd, "length-session", subagentSessionDir(cwd), "length");
+
+    const persisted = getPersistedSubagentView(cwd, "length-session");
+
+    expect(persisted).not.toBeUndefined();
+    expect(persisted).not.toBe("ambiguous");
+    if (!persisted || persisted === "ambiguous") return;
+    expect(persisted.source.status).toBe("error");
   });
 });

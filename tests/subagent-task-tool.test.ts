@@ -103,6 +103,43 @@ describe("task tool", () => {
     expect(text(result)).toContain("state=\"completed\"");
   });
 
+  it("returns interrupted assistant text together with the terminal error", async () => {
+    // Intent: provider failures after partial generation must give the parent actionable text and
+    // the failure reason while keeping the child session available for inspection or resume.
+    let listener: ((event: unknown) => void) | undefined;
+    const factory: SubagentSessionFactory = {
+      spawn: async () => ({
+        sessionId: "child-partial-error",
+        subscribe: (next) => {
+          listener = next;
+          return () => undefined;
+        },
+        prompt: async () => {
+          listener?.({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage: "provider moderation failed",
+              content: [{ type: "text", text: "usable partial findings" }],
+            },
+          });
+        },
+        collect: () => ({ report: "usable partial findings", toolCount: 0 }),
+        abort: vi.fn(),
+        dispose: vi.fn(),
+      }),
+      resume: async () => { throw new Error("unused"); },
+    };
+    const tool = registerAndCapture(baseDeps({ factory }));
+
+    const result = await tool.execute("1", { subagent_type: "worker", prompt: "go" }, undefined, undefined, ctx());
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("<task_error>provider moderation failed</task_error>");
+    expect(text(result)).toContain("<task_partial_result>\nusable partial findings\n</task_partial_result>");
+  });
+
   it("refreshes the Agent catalog before validating and resuming a task", async () => {
     // Intent: replacing an Agent file in a live root session must affect the next resume without
     // requiring `/agent` or a root-session restart.
@@ -340,6 +377,39 @@ describe("task tool", () => {
     expect(rendered).toContain("short failure");
     expect(rendered).not.toContain("ctrl+o to expand");
     expect(rendered).not.toContain("...");
+  });
+
+  it("renders partial failed output after the error from a raw task envelope", () => {
+    // Intent: restored tool results may lack in-memory details, so the textual envelope must retain
+    // enough structure to reconstruct both the failure and its incomplete output.
+    const tool = registerAndCapture(baseDeps());
+    const result = {
+      content: [{
+        type: "text",
+        text: [
+          '<task id="s&amp;partial" state="error">',
+          "<task_error>provider failed</task_error>",
+          "<task_partial_result>",
+          "draft &amp; findings",
+          "</task_partial_result>",
+          "</task>",
+        ].join("\n"),
+      }],
+      isError: true,
+    };
+
+    const rendered = render(
+      tool.renderResult(result, { isPartial: false, expanded: true }, {}, {
+        lastComponent: undefined,
+        cwd: "/tmp/work",
+        isError: true,
+      }),
+    );
+    expect(rendered).toContain("(s&partial)");
+    expect(rendered).toContain("Error: provider failed");
+    expect(rendered).toContain("Partial result (incomplete):");
+    expect(rendered).toContain("draft & findings");
+    expect(rendered).not.toContain("draft &amp; findings");
   });
 
   it("keeps child progress out of task partial updates while updating the registry", async () => {
