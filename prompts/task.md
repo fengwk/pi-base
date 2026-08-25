@@ -6,7 +6,7 @@ Usage:
 - A new `task` starts in a fresh session without access to the current conversation. Its `prompt` must be self-contained, specific, and actionable.
 - Include the objective, necessary context, relevant scope and boundaries, important constraints, completion criteria, expected deliverable, required output format, and verification instructions when applicable.
 - State whether the subagent should modify files, perform read-only research, execute commands, run tests, or verify results.
-- When work can be decomposed into independent parts such as `X + Y + Z`, or when multiple independent tasks are otherwise ready, emit all corresponding `task` calls together in a single assistant turn so they run concurrently.
+- When work can be split into independent tasks such as `X + Y + Z`, delegate each with a separate `task` call instead of assigning all work to one subagent. All calls must be emitted in the same assistant turn so the subagents run in parallel; otherwise, each turn waits for its subagents to finish before the next begins, forcing inefficient serial execution.
 - When `session_id` is provided, the subagent resumes that session with its existing context. Provide the new direction, additional context, or updated objective based on its progress and current blocker. Do not merely repeat the previous prompt.
 - Resume a session only while its existing context remains useful. Start a new task when the objective or scope has materially changed.
 - The subagent returns its report to the main agent, not directly to the user. Review and integrate the result yourself. The returned envelope includes a resumable identifier in the form `<task id="...">`.
