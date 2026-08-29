@@ -190,10 +190,13 @@ describe("task tool", () => {
   });
 
   it("describes batching all ready independent delegations in one assistant turn", () => {
+    // Intent: the task contract must require separate calls and same-turn batching so independent
+    // delegations actually execute in parallel instead of being serialized through one subagent.
     const tool = registerAndCapture(baseDeps());
     expect(tool.description).toContain("such as `X + Y + Z`");
-    expect(tool.description).toContain("when multiple independent tasks are otherwise ready");
-    expect(tool.description).toContain("together in a single assistant turn");
+    expect(tool.description).toContain("delegate each with a separate `task` call");
+    expect(tool.description).toContain("All calls must be emitted in the same assistant turn");
+    expect(tool.description).toContain("subagents run in parallel");
   });
 
   it("uses task maxTurns to override the configured budget", async () => {
