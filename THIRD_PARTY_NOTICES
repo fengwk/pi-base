@@ -19,11 +19,11 @@ Copyright 2025 OpenAI
 ## pi-coding-agent selected utilities
 
 `src/internal/pi-coding-agent-utils.ts` contains selected utilities derived
-from `@earendil-works/pi-coding-agent@0.84.1` and modified by pi-base
+from `@earendil-works/pi-coding-agent@0.85.0` and modified by pi-base
 contributors.
 
 Source:
-https://github.com/earendil-works/pi/tree/53fa77ccd8a279eb87e92294ef3687b03ff80112/packages/coding-agent
+https://github.com/earendil-works/pi/tree/107d79f11072bbc8a3a757ed7fd69596bee7d68c/packages/coding-agent
 
 License: MIT (`LICENSES/pi-coding-agent-MIT.txt`)
 

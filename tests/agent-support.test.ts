@@ -1722,6 +1722,47 @@ skills:
     }
   });
 
+  it("formats skills with bash when read is omitted and excludes them when neither tool is available", async () => {
+    // Intent: Pi 0.85.0 allows reading skills via bash when read is absent, while agents with
+    // neither read nor bash must omit available_skills entirely.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(agentDir, "bash-agent.md", `---\nname: bash-agent\ntools:\n  - bash\n---\n`);
+      await writeAgentFile(agentDir, "edit-agent.md", `---\nname: edit-agent\ntools:\n  - edit\n---\n`);
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      const specSkill = makeSkill("spec", "Spec workflow");
+      const fallback = `Pi fallback.${formatSkillsForPrompt([specSkill], "bash")}`;
+
+      await registry.runCommand("agent", "bash-agent", { cwd: root });
+      const bashResult = await registry.emit(
+        "before_agent_start",
+        { systemPrompt: fallback, systemPromptOptions: { cwd: root, selectedTools: ["bash"], skills: [specSkill] } },
+        { cwd: root },
+      );
+      expect(bashResult.systemPrompt).toContain("<available_skills>");
+      expect(bashResult.systemPrompt).toContain("Use bash to load a skill's file");
+
+      await registry.runCommand("agent", "edit-agent", { cwd: root });
+      const editResult = await registry.emit(
+        "before_agent_start",
+        { systemPrompt: fallback, systemPromptOptions: { cwd: root, selectedTools: ["edit"], skills: [specSkill] } },
+        { cwd: root },
+      );
+      expect(editResult.systemPrompt).not.toContain("<available_skills>");
+      expect(editResult.systemPrompt).not.toContain("Use bash to load a skill's file");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("does not recurse forever through symlinked agent directories", async () => {
     // Intent: agent directories may contain symlinks; a symlink cycle must not
     // make catalog loading recurse until the process crashes.

@@ -44,11 +44,14 @@ describe("shell environment", () => {
 });
 
 describe("managed fd/rg installation", () => {
-  it("rejects unsupported architectures instead of downloading x86_64 binaries", async () => {
-    // Intent: unknown Node architectures must fail closed rather than installing an incompatible binary.
+  it("selects musl Linux assets and rejects unsupported architectures", async () => {
+    // Intent: Linux downloads must run on both musl and glibc systems, while unknown Node
+    // architectures must fail closed rather than installing an incompatible binary.
     const { resolveManagedToolAssetName } = await import("../src/internal/pi-coding-agent-utils.js");
-    expect(resolveManagedToolAssetName("fd", "10.3.0", "linux", "x64")).toContain("x86_64");
-    expect(resolveManagedToolAssetName("rg", "14.1.1", "linux", "arm64")).toContain("aarch64");
+    expect(resolveManagedToolAssetName("fd", "10.3.0", "linux", "x64"))
+      .toBe("fd-v10.3.0-x86_64-unknown-linux-musl.tar.gz");
+    expect(resolveManagedToolAssetName("rg", "14.1.1", "linux", "arm64"))
+      .toBe("ripgrep-14.1.1-aarch64-unknown-linux-musl.tar.gz");
     expect(resolveManagedToolAssetName("fd", "10.3.0", "linux", "riscv64")).toBeNull();
     expect(resolveManagedToolAssetName("rg", "14.1.1", "freebsd", "x64")).toBeNull();
   });
@@ -182,7 +185,10 @@ describe("managed fd/rg installation", () => {
       },
     });
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ tag_name: "14.1.1" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, {
+        status: 302,
+        headers: { location: "https://github.com/BurntSushi/ripgrep/releases/tag/14.1.1" },
+      }))
       .mockResolvedValueOnce(new Response(brokenBody, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -190,6 +196,14 @@ describe("managed fd/rg installation", () => {
       const { ensureTool } = await import("../src/internal/pi-coding-agent-utils.js");
       await expect(ensureTool("rg", true)).resolves.toBeUndefined();
 
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        "https://github.com/BurntSushi/ripgrep/releases/latest",
+        expect.objectContaining({ redirect: "manual" }),
+      );
+      expect(String(fetchMock.mock.calls[1]?.[0]))
+        .toContain("https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/");
       expect(await readdir(join(agentDir, "bin"))).toEqual([]);
     } finally {
       vi.unstubAllGlobals();

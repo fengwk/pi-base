@@ -177,7 +177,7 @@ const TOOLS: Record<SupportedTool, ToolConfig> = {
         return `fd-v${version}-${archStr}-apple-darwin.tar.gz`;
       }
       if (plat === "linux") {
-        return `fd-v${version}-${archStr}-unknown-linux-gnu.tar.gz`;
+        return `fd-v${version}-${archStr}-unknown-linux-musl.tar.gz`;
       }
       if (plat === "win32") {
         return `fd-v${version}-${archStr}-pc-windows-msvc.zip`;
@@ -198,10 +198,7 @@ const TOOLS: Record<SupportedTool, ToolConfig> = {
         return `ripgrep-${version}-${archStr}-apple-darwin.tar.gz`;
       }
       if (plat === "linux") {
-        if (archStr === "aarch64") {
-          return `ripgrep-${version}-aarch64-unknown-linux-gnu.tar.gz`;
-        }
-        return `ripgrep-${version}-x86_64-unknown-linux-musl.tar.gz`;
+        return `ripgrep-${version}-${archStr}-unknown-linux-musl.tar.gz`;
       }
       if (plat === "win32") {
         return `ripgrep-${version}-${archStr}-pc-windows-msvc.zip`;
@@ -296,13 +293,25 @@ export function getToolPath(tool: SupportedTool): string | null {
 }
 
 async function getLatestVersion(repo: string): Promise<string> {
-  const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+  const response = await fetch(`https://github.com/${repo}/releases/latest`, {
     headers: { "User-Agent": "pi-base" },
+    redirect: "manual",
     signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
   });
-  if (!response.ok) throw new Error(`GitHub API error: ${response.status}`);
-  const data = (await response.json()) as { tag_name: string };
-  return data.tag_name.replace(/^v/, "");
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Discarding the body is best-effort.
+  }
+  const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : null;
+  if (!location) {
+    throw new Error(`Failed to resolve latest ${repo} release: HTTP ${response.status} without redirect`);
+  }
+  const tag = new URL(location, "https://github.com").pathname.split("/").pop();
+  if (!tag || !location.includes("/releases/tag/")) {
+    throw new Error(`Failed to resolve latest ${repo} release: unexpected redirect to ${location}`);
+  }
+  return decodeURIComponent(tag).replace(/^v/, "");
 }
 
 async function downloadFile(url: string, dest: string): Promise<void> {

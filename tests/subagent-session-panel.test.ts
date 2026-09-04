@@ -9,6 +9,7 @@ function createHarness(
   initialMessages: readonly SubagentViewMessage[] = [],
   sourceOverrides: Partial<SubagentViewSource> = {},
   viewportKeybindings?: SubagentViewportKeybindings,
+  rows = 12,
 ) {
   const listeners = new Set<(event: AgentSessionEvent) => void>();
   const requestRender = vi.fn();
@@ -40,7 +41,7 @@ function createHarness(
     ["expand", "app.tools.expand"],
   ]);
   const panel = new SubagentSessionPanel({
-    tui: { terminal: { rows: 12 }, requestRender } as never,
+    tui: { terminal: { rows }, requestRender } as never,
     theme: { fg: (_color: string, text: string) => text } as never,
     keybindings: {
       matches: (data: string, binding: string) => bindings.get(data) === binding,
@@ -77,7 +78,7 @@ function createHarness(
 describe("SubagentSessionPanel", () => {
   it("renders live assistant text and tool execution with the main Pi components", () => {
     // Intent: the overlay must consume the same message/tool event stream as the main chat renderer.
-    const harness = createHarness();
+    const harness = createHarness([], {}, undefined, 24);
     const assistant = {
       role: "assistant",
       content: [{ type: "text", text: "Inspecting files" }],

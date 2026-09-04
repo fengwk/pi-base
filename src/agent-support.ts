@@ -553,7 +553,7 @@ export function registerAgentSupport(
       },
       event.systemPrompt,
       allSkills,
-      activeAgent.skills !== undefined,
+      activeAgent.skills !== undefined || activeAgent.tools !== undefined,
     );
 
     const guide = [options.baseToolGuide, buildSubagentSection(activeAgent, selectedTools, event.systemPromptOptions.cwd ?? process.cwd())]
@@ -715,23 +715,35 @@ function resolveCustomPrompt(agent: AgentDefinition, fallbackCustomPrompt: strin
  *
  * When we reuse upstream's prebuilt prompt as the body, we first strip its own trailing cwd
  * metadata (`stripUpstreamEnvInfo`) so the final prompt has exactly one env section. An explicit
- * agent skills allowlist also replaces upstream's already-rendered skill section.
+ * agent skills or tool policy also replaces upstream's already-rendered skill section.
  */
+function resolveSkillFileReadTool(selectedTools: string[] | undefined): "read" | "bash" | undefined {
+  if (!selectedTools) return "read";
+  if (selectedTools.includes("read")) return "read";
+  if (selectedTools.includes("bash")) return "bash";
+  return undefined;
+}
+
 function buildAgentSystemPrompt(
   options: BuildSystemPromptOptions,
   fallbackSystemPrompt: string,
   fallbackSkills: Skill[],
-  replaceFallbackSkills: boolean,
+  rebuildFallbackSkills: boolean,
 ): string {
   const customPrompt = options.customPrompt?.trim();
   let body = customPrompt
     ? buildCustomPromptBody(customPrompt, options)
     : stripUpstreamEnvInfo(fallbackSystemPrompt);
-  if (!customPrompt && replaceFallbackSkills) {
-    const upstreamSkillsSection = formatSkillsForPrompt(fallbackSkills);
-    if (upstreamSkillsSection) body = body.replace(upstreamSkillsSection, "");
-    const canReadSkills = !options.selectedTools || options.selectedTools.includes("read");
-    if (canReadSkills) body += formatSkillsForPrompt(options.skills ?? []);
+  if (!customPrompt && rebuildFallbackSkills) {
+    for (const fileReadTool of ["read", "bash"] as const) {
+      const fallbackSkillsSection = formatSkillsForPrompt(fallbackSkills, fileReadTool);
+      if (fallbackSkillsSection && body.includes(fallbackSkillsSection)) {
+        body = body.replace(fallbackSkillsSection, "");
+        break;
+      }
+    }
+    const skillFileReadTool = resolveSkillFileReadTool(options.selectedTools);
+    if (skillFileReadTool) body += formatSkillsForPrompt(options.skills ?? [], skillFileReadTool);
   }
   if (!options.cwd) return body;
   return body + formatEnvBlock(options.cwd);
@@ -759,9 +771,9 @@ function buildCustomPromptBody(customPrompt: string, options: BuildSystemPromptO
     prompt += "</project_context>\n";
   }
 
-  const customPromptHasRead = !selectedTools || selectedTools.includes("read");
-  if (customPromptHasRead && skills.length > 0) {
-    prompt += formatSkillsForPrompt(skills);
+  const skillFileReadTool = resolveSkillFileReadTool(selectedTools);
+  if (skillFileReadTool && skills.length > 0) {
+    prompt += formatSkillsForPrompt(skills, skillFileReadTool);
   }
 
   return prompt;
