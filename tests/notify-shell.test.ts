@@ -27,8 +27,12 @@ describe("notify shell sender", () => {
     // Intent: the default sender is used when callers do not inject a notifier;
     // it must pass stable env vars to scripts/notify.sh without blocking Pi.
     const previousTmux = process.env.TMUX_PANE;
+    const previousNotifyWindowId = process.env.PI_NOTIFY_WINDOW_ID;
+    const previousWindowId = process.env.WINDOWID;
     const previousAlacritty = process.env.ALACRITTY_WINDOW_ID;
     process.env.TMUX_PANE = "%42";
+    process.env.PI_NOTIFY_WINDOW_ID = "";
+    process.env.WINDOWID = "39845899";
     process.env.ALACRITTY_WINDOW_ID = "window-7";
     spawnState.calls = [];
     spawnState.onCalls = [];
@@ -61,6 +65,7 @@ describe("notify shell sender", () => {
         PI_NOTIFY_SESSION_ID: "session-1",
         PI_NOTIFY_SESSION_TITLE: "Demo Session",
         PI_NOTIFY_TMUX_PANE: "%42",
+        PI_NOTIFY_WINDOW_ID: "39845899",
         PI_NOTIFY_ALACRITTY_WINDOW_ID: "window-7",
       });
       expect(spawnState.onCalls).toContain("error");
@@ -68,6 +73,10 @@ describe("notify shell sender", () => {
     } finally {
       if (previousTmux === undefined) delete process.env.TMUX_PANE;
       else process.env.TMUX_PANE = previousTmux;
+      if (previousNotifyWindowId === undefined) delete process.env.PI_NOTIFY_WINDOW_ID;
+      else process.env.PI_NOTIFY_WINDOW_ID = previousNotifyWindowId;
+      if (previousWindowId === undefined) delete process.env.WINDOWID;
+      else process.env.WINDOWID = previousWindowId;
       if (previousAlacritty === undefined) delete process.env.ALACRITTY_WINDOW_ID;
       else process.env.ALACRITTY_WINDOW_ID = previousAlacritty;
     }

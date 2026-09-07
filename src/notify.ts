@@ -165,6 +165,7 @@ function createShellNotificationSender(
         PI_NOTIFY_SESSION_ID: payload.sessionID,
         PI_NOTIFY_SESSION_TITLE: payload.sessionTitle,
         PI_NOTIFY_TMUX_PANE: process.env.TMUX_PANE ?? "",
+        PI_NOTIFY_WINDOW_ID: process.env.PI_NOTIFY_WINDOW_ID || process.env.WINDOWID || process.env.WINDOW_ID || "",
         PI_NOTIFY_ALACRITTY_WINDOW_ID: process.env.ALACRITTY_WINDOW_ID ?? "",
       },
     });

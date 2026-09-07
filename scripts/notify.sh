@@ -260,23 +260,18 @@ detect_display_backend() {
 }
 
 resolve_x11_window_target() {
-  # 优先使用通知源窗口 ID，其次从 tmux pane pid 反查 X11 窗口
-  local id="${PI_NOTIFY_WINDOW_ID:-}"
+  # 优先使用通知源窗口 ID；直接调用脚本时兼容常见终端环境变量。
+  local id="${PI_NOTIFY_WINDOW_ID:-${WINDOWID:-${WINDOW_ID:-${alacritty_window_id:-}}}}"
   if [[ -n "$id" ]]; then
     printf '%s' "$id"
     return
   fi
 
-  if command -v tmux >/dev/null 2>&1 && command -v xdotool >/dev/null 2>&1 && [[ -n "${TMUX:-}" ]]; then
-    local pane_pid
-    pane_pid="$(tmux display-message -p '#{pane_pid}' 2>/dev/null || true)"
-    if [[ -n "$pane_pid" ]]; then
-      while IFS= read -r wid; do
-        if [[ -n "$wid" ]]; then
-          id="$wid"
-          break
-        fi
-      done < <(xdotool search --pid "$pane_pid" 2>/dev/null || true)
+  if command -v tmux >/dev/null 2>&1 && [[ -n "${TMUX:-}" ]]; then
+    local tmux_window_id
+    tmux_window_id="$(tmux show-environment WINDOWID 2>/dev/null || true)"
+    if [[ "$tmux_window_id" == WINDOWID=* ]]; then
+      id="${tmux_window_id#WINDOWID=}"
     fi
   fi
 
