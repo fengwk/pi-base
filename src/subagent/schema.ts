@@ -16,7 +16,7 @@ export function createTaskSchema(defaultMaxTurns: number) {
     prompt: Type.String({
       description: "Complete, self-contained instructions for a new task, or updated direction and context for a resumed task. Include the objective, relevant scope, constraints, expected deliverable, output format, and verification instructions when applicable.",
     }),
-    maxTurns: Type.Optional(Type.Integer({
+    max_turns: Type.Optional(Type.Integer({
       minimum: 1,
       description: `Positive integer interaction-turn budget for this invocation. Defaults to ${defaultMaxTurns}. If the child is unfinished when the budget is reached, it returns a phase report; use a smaller value when early path verification or frequent parent-child interaction is needed.`,
     })),

@@ -68,7 +68,7 @@ describe("tool prompt loading", () => {
     const taskSchema = createTaskSchema(7);
     expect(descriptionOf(taskSchema.properties.subagent_type)).toContain("<available_subagents>");
     expect(descriptionOf(taskSchema.properties.prompt)).toContain("self-contained");
-    expect(descriptionOf(taskSchema.properties.maxTurns)).toContain("Defaults to 7");
+    expect(descriptionOf(taskSchema.properties.max_turns)).toContain("Defaults to 7");
     expect(descriptionOf(taskSchema.properties.session_id)).toContain("<task id=");
   });
 

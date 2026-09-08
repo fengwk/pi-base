@@ -25,10 +25,10 @@ The injection logic lives in [`src/agent-support.ts`](../../src/agent-support.ts
 |------|------|------|------|
 | `subagent_type` | yes | — | Agent name in the allowlist |
 | `prompt` | yes | — | Task instructions handed to the Subagent for execution |
-| `maxTurns` | no | configured value, default 50 | Soft-stop turn budget for this invocation |
+| `max_turns` | no | configured value, default 50 | Soft-stop turn budget for this invocation |
 | `session_id` | no | — | Resumes an existing Subagent session |
 
-The schema is built by [`src/subagent/schema.ts`](../../src/subagent/schema.ts) from the default `maxTurns` of the current workspace.
+The schema is built by [`src/subagent/schema.ts`](../../src/subagent/schema.ts) from the current workspace's configured default (`subagent.maxTurns`).
 
 ## Execution chain
 
@@ -87,9 +87,9 @@ childDepth = parentDepth + 1
 
 Once `maxDepth` is reached, the Agent no longer receives `task`.
 
-## maxTurns
+## max_turns
 
-`maxTurns` is a soft stop:
+`max_turns` is a soft stop:
 
 - When the budget is reached, a hint is sent to the child asking it to return a phase report if unfinished.
 - Tools that are currently executing are not forcibly terminated.

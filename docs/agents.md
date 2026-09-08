@@ -83,7 +83,7 @@ Skills tell the model via prompt when to load the corresponding `SKILL.md`; they
 2. The current session depth is less than `subagent.maxDepth`.
 3. The `task` tool is available in the current session.
 
-For concurrency, resumption, `maxTurns`, and permission relay, see [`task`](tools/task.md).
+For concurrency, resumption, `max_turns`, and permission relay, see [`task`](tools/task.md).
 
 ## Selecting and switching
 

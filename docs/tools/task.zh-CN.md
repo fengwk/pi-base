@@ -25,10 +25,10 @@
 |------|------|------|------|
 | `subagent_type` | 是 | — | allowlist 中的 Agent 名 |
 | `prompt` | 是 | — | 交给 Subagent 执行的任务说明 |
-| `maxTurns` | 否 | 配置值，默认 50 | 该调用的 soft-stop turn 预算 |
+| `max_turns` | 否 | 配置值，默认 50 | 该调用的 soft-stop turn 预算 |
 | `session_id` | 否 | — | 恢复已有 Subagent session |
 
-Schema 由 [`src/subagent/schema.ts`](../../src/subagent/schema.ts) 按当前 workspace 的默认 `maxTurns` 构建。
+Schema 由 [`src/subagent/schema.ts`](../../src/subagent/schema.ts) 按当前 workspace 的配置默认值（`subagent.maxTurns`）构建。
 
 ## 执行链
 
@@ -87,9 +87,9 @@ childDepth = parentDepth + 1
 
 达到 `maxDepth` 后，Agent 不再获得 `task`。
 
-## maxTurns
+## max_turns
 
-`maxTurns` 是 soft-stop：
+`max_turns` 是 soft-stop：
 
 - 达到预算后向 child 发送提示，要求未完成时返回阶段报告。
 - 不会强制终止正在执行的工具。

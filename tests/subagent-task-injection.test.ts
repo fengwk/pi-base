@@ -111,11 +111,12 @@ describe("task tool injection", () => {
     expect(prompt).toContain("the delegating agent cannot continue until the batch completes");
     expect(prompt).toContain("together in a single assistant turn");
     expect(prompt).toContain("The delegating agent remains responsible for decomposition, decisions, integration, validation, review, convergence, and final judgment.");
-    expect(prompt).toContain("if a subagent returns a phase report after reaching `maxTurns`");
+    expect(prompt).toContain("if a subagent returns a phase report after reaching `max_turns`");
     expect(prompt).toContain("use that report to decide whether further work is warranted");
     expect(prompt).toContain("the `<task id=\"...\">` value from that result as `session_id`");
     expect(prompt).toContain("resume the same subagent session");
     expect(prompt).toContain("After 2-3 well-directed attempts without meaningful progress, take over the work, switch approaches, or report the blocker.");
+    expect(prompt).toContain("`max_turns` is an optional interaction-turn budget");
     expect(prompt).toContain("The default is `7`");
     expect(prompt).toContain("phase report");
     expect(prompt).toContain("Set `subagent_type` to one of the names listed below.");

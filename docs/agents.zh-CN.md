@@ -83,7 +83,7 @@ Skills 通过 prompt 告诉模型何时加载对应 `SKILL.md`；它们不是 Pi
 2. 当前 session depth 小于 `subagent.maxDepth`。
 3. `task` 工具在当前 session 可用。
 
-并发、恢复、`maxTurns` 和权限中继见 [`task`](tools/task.zh-CN.md)。
+并发、恢复、`max_turns` 和权限中继见 [`task`](tools/task.zh-CN.md)。
 
 ## 选择与切换
 

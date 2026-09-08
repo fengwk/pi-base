@@ -182,11 +182,11 @@ describe("task tool", () => {
     expect(calls).toEqual(["refresh", "allowlist", "exists", "resume"]);
   });
 
-  it("advertises the configured default maxTurns in the parameter schema", () => {
+  it("advertises the configured default max_turns in the parameter schema", () => {
     // Intent: structured parameter metadata owns the registration-workspace default while the
     // runtime resolver remains authoritative for each invocation's ctx.cwd.
     const tool = registerAndCapture(baseDeps({ getMaxTurns: () => 7 }));
-    expect(tool.parameters.properties.maxTurns.description).toContain("Defaults to 7");
+    expect(tool.parameters.properties.max_turns.description).toContain("Defaults to 7");
   });
 
   it("describes batching all ready independent delegations in one assistant turn", () => {
@@ -199,7 +199,7 @@ describe("task tool", () => {
     expect(tool.description).toContain("subagents run in parallel");
   });
 
-  it("uses task maxTurns to override the configured budget", async () => {
+  it("uses task max_turns to override the configured budget", async () => {
     // Intent: omit the override to retain the config budget, then prove a smaller call budget
     // reaches the runner's phase-report steer path for the same child behavior.
     const steer = vi.fn(async () => undefined);
@@ -229,17 +229,17 @@ describe("task tool", () => {
     await tool.execute("configured", { subagent_type: "worker", prompt: "go" }, undefined, undefined, ctx());
     expect(steer).not.toHaveBeenCalled();
 
-    await tool.execute("override", { subagent_type: "worker", prompt: "go", maxTurns: 1 }, undefined, undefined, ctx());
+    await tool.execute("override", { subagent_type: "worker", prompt: "go", max_turns: 1 }, undefined, undefined, ctx());
     expect(steer).toHaveBeenCalledWith(expect.stringContaining("phase report"));
   });
 
-  it("rejects a non-positive task maxTurns override", async () => {
+  it("rejects a non-positive task max_turns override", async () => {
     // Intent: direct execution in tests bypasses TypeBox validation, so the tool also protects
     // the runner from an invalid budget supplied by a programmatic caller.
     const tool = registerAndCapture(baseDeps());
-    const result = await tool.execute("1", { subagent_type: "worker", prompt: "go", maxTurns: 0 }, undefined, undefined, ctx());
+    const result = await tool.execute("1", { subagent_type: "worker", prompt: "go", max_turns: 0 }, undefined, undefined, ctx());
     expect(result.isError).toBe(true);
-    expect(text(result)).toContain("maxTurns");
+    expect(text(result)).toContain("max_turns");
   });
 
   it("renders only the task command and prompt while running regardless of expansion", () => {
@@ -247,7 +247,7 @@ describe("task tool", () => {
     const tool = registerAndCapture(baseDeps());
     const call = render(
       tool.renderCall(
-        { subagent_type: "worker", prompt: "line 1\nline 2", maxTurns: 3 },
+        { subagent_type: "worker", prompt: "line 1\nline 2", max_turns: 3 },
         {},
         { lastComponent: undefined },
       ),

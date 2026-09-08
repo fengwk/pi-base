@@ -42,7 +42,7 @@ Copy-Item examples/agents/*.md "$HOME/.pi/agent/agents/"
 | `subagent.maxConcurrency` | `4` | 每个 parent 同时运行最多 4 个直接 child |
 | `subagent.maxTotalConcurrency` | `8` | 同一 root delegation tree 同时运行最多 8 个 Subagent |
 | `subagent.idleTimeoutMs` | `120000` | Subagent 连续 120 秒没有 session 活动时终止 |
-| `subagent.maxTurns` | `50` | 单次 `task` 未指定 `maxTurns` 时使用 50 turn soft-stop 预算 |
+| `subagent.maxTurns` | `50` | 单次 `task` 未指定 `max_turns` 时使用 50 turn soft-stop 预算 |
 
 ## Agent 模型
 

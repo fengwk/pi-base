@@ -74,9 +74,9 @@ function formatAvailableAgents(agentNames: string[]): string {
   return agentNames.length > 0 ? agentNames.join(" / ") : "no available agents";
 }
 
-function formatTaskCommand(params: { subagent_type?: unknown; maxTurns?: unknown; session_id?: unknown }): string {
+function formatTaskCommand(params: { subagent_type?: unknown; max_turns?: unknown; session_id?: unknown }): string {
   const agentType = readString(params.subagent_type) || "<missing-subagent_type>";
-  const maxTurns = params.maxTurns;
+  const maxTurns = params.max_turns;
   const sessionId = readString(params.session_id);
   const parts = ["task", agentType];
   if (typeof maxTurns === "number" && Number.isInteger(maxTurns) && maxTurns > 0) parts.push(`--max-turns ${maxTurns}`);
@@ -316,7 +316,7 @@ export function registerSubagentTaskTool(pi: Pick<ExtensionAPI, "registerTool">,
       if (!prompt) return errorResult("`prompt` is required.");
       let requestedMaxTurns: number | undefined;
       try {
-        requestedMaxTurns = readOptionalPositiveInteger(params?.maxTurns, "maxTurns");
+        requestedMaxTurns = readOptionalPositiveInteger(params?.max_turns, "max_turns");
       } catch (error) {
         return errorResult((error as Error).message);
       }
