@@ -48,7 +48,7 @@ Frontmatter 之后的 Markdown 正文作为该 Agent 的自定义 prompt。正�
 | `model` | 否 | `provider/model` 格式；找不到模型时保留当前 session 模型并警告 |
 | `thinkingLevel` | 否 | `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` |
 | `tools` | 否 | 当前 Agent 可使用的工具名数组 |
-| `skills` | 否 | 对模型可见的 skill 名数组 |
+| `skills` | 否 | 对模型可见的 skill 名或含 `*` 的通配模式数组 |
 | `subagents` | 否 | 允许通过 `task` 委派的 Agent 名数组 |
 
 未知字段会使整个 Agent 文件失效。字符串数组会去重；空字符串或非数组值会使文件失效。
@@ -66,7 +66,7 @@ Frontmatter 之后的 Markdown 正文作为该 Agent 的自定义 prompt。正�
 ## Skill allowlist
 
 - 省略 `skills`：使用当前可供模型调用的 skills。
-- 显式数组：只注入匹配名称的 skills。
+- 显式数组：只注入完整名称与精确条目或 `*` 通配模式匹配的 skills。`*` 匹配零个或多个字符，例如 `music-dev-*` 会匹配 `music-dev-ddb`；其他模式字符均按字面量处理。
 - 空数组：不注入 skills。
 - 标记为禁止模型调用的 skill 不会进入 system prompt。
 - `read` 不在当前工具集时，不向 system prompt 注入 skills。
@@ -117,7 +117,7 @@ pi --agent reviewer
 - 重复 Agent 名：保留先加载的定义，忽略后续文件。
 - Frontmatter 无效：忽略该文件并显示 warning。
 - 未知 tool：保留 allowlist 名称并警告，允许后续动态注册。
-- 未知 skill：保持隐藏并警告。
+- 未知 skill，或未匹配任何可用 skill 的通配模式：保持隐藏并警告。
 - 未知 subagent：从 allowlist 移除并警告。
 - 模型不存在或无法激活：保留当前 session 模型。
 

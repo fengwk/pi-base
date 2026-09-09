@@ -1545,6 +1545,71 @@ skills:
     }
   });
 
+  it("supports * patterns in skill allowlists", async () => {
+    // Intent: a skill pattern must expose every matching skill without treating the pattern itself
+    // as unavailable, while unmatched patterns still produce the existing configuration warning.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "skill-patterns.md",
+        `---
+name: skill-patterns
+skills:
+  - music-dev-*
+  - dev
+  - missing-*
+---
+`,
+      );
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "skill-patterns", { cwd: root });
+
+      const devSkill = makeSkill("dev", "Development workflow");
+      const musicDevSkill = makeSkill("music-dev", "Music development overview");
+      const ddbSkill = makeSkill("music-dev-ddb", "DDB workflow");
+      const nydusSkill = makeSkill("music-dev-nydus", "Nydus workflow");
+      const otherSkill = makeSkill("other", "Other workflow");
+      const result = await registry.emit(
+        "before_agent_start",
+        {
+          systemPrompt: "Incoming prompt should be ignored.",
+          systemPromptOptions: {
+            cwd: root,
+            customPrompt: "Default system prompt.",
+            selectedTools: ["read"],
+            skills: [devSkill, musicDevSkill, ddbSkill, nydusSkill, otherSkill],
+          },
+        },
+        { cwd: root },
+      );
+
+      expect(result.systemPrompt).toContain("<name>dev</name>");
+      expect(result.systemPrompt).toContain("<name>music-dev-ddb</name>");
+      expect(result.systemPrompt).toContain("<name>music-dev-nydus</name>");
+      expect(result.systemPrompt).not.toContain("<name>music-dev</name>");
+      expect(result.systemPrompt).not.toContain("<name>other</name>");
+      expect(registry.getNotifications()).toContainEqual({
+        message: expect.stringContaining("skills that are not currently available: missing-*"),
+        variant: "warning",
+      });
+      expect(registry.getNotifications()).not.toContainEqual({
+        message: expect.stringContaining("music-dev-*"),
+        variant: "warning",
+      });
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("escapes crafted project instructions and cwd XML without re-escaping an upstream instruction block", async () => {
     // Intent: context files and env metadata are untrusted prompt data. Closing-tag payloads must
     // stay text, while an already-rendered upstream project block must pass through exactly once.

@@ -48,7 +48,7 @@ The Markdown body after the Frontmatter serves as the Agent's custom prompt. Whe
 | `model` | No | `provider/model` format; when the model is not found, the current session model is kept and a warning is issued |
 | `thinkingLevel` | No | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
 | `tools` | No | Array of tool names available to the current Agent |
-| `skills` | No | Array of skill names visible to the model |
+| `skills` | No | Array of skill names or `*` wildcard patterns visible to the model |
 | `subagents` | No | Array of Agent names allowed for delegation via `task` |
 
 Unknown fields invalidate the entire Agent file. String arrays are deduplicated; empty strings or non-array values invalidate the file.
@@ -66,7 +66,7 @@ Tools that are currently unavailable produce a warning, but their names are not 
 ## Skill allowlist
 
 - `skills` omitted: use the skills currently available for the model to call.
-- Explicit array: only skills with matching names are injected.
+- Explicit array: only skills whose full names match an exact entry or a `*` wildcard pattern are injected. `*` matches zero or more characters; for example, `music-dev-*` includes skills such as `music-dev-ddb`. All other pattern characters are literal.
 - Empty array: no skills are injected.
 - Skills marked as forbidden for model calls do not enter the system prompt.
 - When `read` is not in the current tool set, no skills are injected into the system prompt.
@@ -117,7 +117,7 @@ pi --agent reviewer
 - Duplicate Agent names: keep the first loaded definition and ignore subsequent files.
 - Invalid Frontmatter: ignore the file and show a warning.
 - Unknown tool: keep the allowlist name and warn, allowing later dynamic registration.
-- Unknown skill: stay hidden and warn.
+- Unknown skill or skill pattern matching no available skill: stay hidden and warn.
 - Unknown subagent: remove from the allowlist and warn.
 - Model missing or cannot be activated: keep the current session model.
 

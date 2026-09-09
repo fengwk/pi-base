@@ -193,7 +193,9 @@ export function registerAgentSupport(
     const configuredNames = agent[field];
     if (configuredNames === undefined) return;
     const known = new Set(knownNames);
-    const unknown = configuredNames.filter((name) => !known.has(name));
+    const unknown = configuredNames.filter((name) => field === "skills"
+      ? !knownNames.some((knownName) => matchesSkillPattern(name, knownName))
+      : !known.has(name));
     if (unknown.length === 0) return;
     const warningKey = `${agent.filePath}:${field}:${unknown.join("\u0000")}`;
     if (emittedAllowlistWarnings.has(warningKey)) return;
@@ -694,8 +696,17 @@ function filterKnownTools(toolNames: string[] | undefined, allToolNames: string[
 
 function filterVisibleSkills(skills: Skill[], allowedSkillNames: string[] | undefined): Skill[] {
   if (allowedSkillNames === undefined) return skills;
-  const allowed = new Set(allowedSkillNames);
-  return skills.filter((skill) => allowed.has(skill.name));
+  return skills.filter((skill) => allowedSkillNames.some((pattern) => matchesSkillPattern(pattern, skill.name)));
+}
+
+/** `*` matches zero or more characters; all other pattern characters are literal. */
+function matchesSkillPattern(pattern: string, skillName: string): boolean {
+  if (!pattern.includes("*")) return pattern === skillName;
+  return new RegExp(`^${escapeSkillPatternRegex(pattern)}$`).test(skillName);
+}
+
+function escapeSkillPatternRegex(pattern: string): string {
+  return pattern.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*");
 }
 
 /** Matches Pi `formatSkillsForPrompt`: skills marked disable-model-invocation stay CLI-only. */
