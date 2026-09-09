@@ -43,7 +43,7 @@ The Markdown body after the Frontmatter serves as the Agent's custom prompt. Whe
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | No | Agent name; when omitted, the file name without `.md` is used |
+| `name` | Yes | Agent name; files without a non-empty name are ignored with a warning |
 | `description` | No | Summary shown in the `/agent` selector and the Subagent list |
 | `model` | No | `provider/model` format; when the model is not found, the current session model is kept and a warning is issued |
 | `thinkingLevel` | No | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, extname, join } from "node:path";
+import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { formatSkillsForPrompt, getAgentDir, parseFrontmatter, type BuildSystemPromptOptions, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
 import { reportRuntimeError, reportRuntimeWarning } from "./runtime-diagnostics.js";
@@ -882,8 +882,7 @@ function loadAgentFile(filePath: string): AgentDefinition {
   const content = readFileSync(filePath, "utf8");
   const { frontmatter, body } = parseFrontmatter<AgentFrontmatter>(content);
   assertKnownAgentFrontmatterFields(frontmatter, filePath);
-  const fallbackName = basename(filePath, extname(filePath));
-  const name = normalizeName(frontmatter.name, fallbackName, filePath);
+  const name = normalizeName(frontmatter.name, filePath);
   const description = normalizeDescription(frontmatter.description, filePath);
   const model = normalizeModel(frontmatter.model, filePath);
   const thinkingLevel = normalizeThinkingLevel(frontmatter.thinkingLevel, filePath);
@@ -916,8 +915,11 @@ function assertKnownAgentFrontmatterFields(frontmatter: AgentFrontmatter, filePa
   throw new Error(`agent file ${filePath} has unknown frontmatter ${fieldLabel}: ${unknownFields.join(", ")}`);
 }
 
-function normalizeName(value: unknown, fallbackName: string, filePath: string): string {
-  const name = value === undefined ? fallbackName : asTrimmedString(value);
+function normalizeName(value: unknown, filePath: string): string {
+  if (value === undefined) {
+    throw new Error(`agent file ${filePath} is missing required frontmatter field "name"`);
+  }
+  const name = asTrimmedString(value);
   if (!name) {
     throw new Error(`agent file ${filePath} has an empty name`);
   }

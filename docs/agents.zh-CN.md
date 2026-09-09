@@ -43,7 +43,7 @@ Frontmatter 之后的 Markdown 正文作为该 Agent 的自定义 prompt。正�
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `name` | 否 | Agent 名；省略时使用文件名，不含 `.md` |
+| `name` | 是 | Agent 名；缺少非空名称的文件会被忽略并输出警告 |
 | `description` | 否 | `/agent` 选择器和 Subagent 列表中的简介 |
 | `model` | 否 | `provider/model` 格式；找不到模型时保留当前 session 模型并警告 |
 | `thinkingLevel` | 否 | `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` |

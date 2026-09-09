@@ -551,6 +551,39 @@ Broken agent.
     }
   });
 
+  it("warns about markdown files without a frontmatter name and ignores them", async () => {
+    // Intent: unrelated Markdown discovered by the recursive scan must not silently become an Agent.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(agentDir, ".pytest_cache/README.md", "# pytest cache directory #\n");
+
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+
+      expect(warn).not.toHaveBeenCalled();
+      expect(registry.getNotifications()).toContainEqual({
+        message: expect.stringContaining('missing required frontmatter field "name"'),
+        variant: "warning",
+      });
+
+      await registry.runCommand("agent", "README", { cwd: root });
+      expect(registry.getNotifications().at(-1)?.message).toContain('Unknown agent "README"');
+    } finally {
+      warn.mockRestore();
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("rejects unknown frontmatter fields instead of letting tool-policy typos inherit all tools", async () => {
     // Intent: an invalid `toools` key must not be treated like an omitted `tools` policy, because
     // omission intentionally inherits every eligible tool while the typo intends an empty policy.
