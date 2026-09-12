@@ -33,6 +33,25 @@ const MAX_TEXT_FILE_BYTES = 64 * 1024 * 1024;
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
 type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
+/**
+ * MiniMax-M3 has been observed to emit `read({})` while trying to inspect a
+ * workspace, then repeat the empty call after validation errors. Interpret only
+ * an exact empty object as the current directory; partially populated calls
+ * remain invalid rather than guessing a missing path.
+ */
+function prepareReadArguments(args: unknown): unknown {
+  const mappedArgs = mapFilePathToPath(args);
+  if (
+    mappedArgs !== null
+    && typeof mappedArgs === "object"
+    && !Array.isArray(mappedArgs)
+    && Object.keys(mappedArgs).length === 0
+  ) {
+    return { path: "." };
+  }
+  return mappedArgs;
+}
+
 function parsePositiveInteger(value: unknown, name: string, defaultValue: number): number {
   if (value === undefined) return defaultValue;
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
@@ -142,10 +161,17 @@ export function registerReadTool(
     promptSnippet: loadToolPromptSnippet("read"),
     parameters: readSchema,
     prepareArguments(args: unknown) {
-      return mapFilePathToPath(args);
+      return prepareReadArguments(args);
     },
     renderCall(args: any, theme: any, context: any) {
-      const mappedArgs = mapFilePathToPath(args);
+      // An empty object is also the initial streaming state before any arguments arrive.
+      // Apply the fallback only after streaming ends or execution starts.
+      const isStreamingArgs = context?.argsComplete === false
+        && !context?.executionStarted
+        && context?.isPartial !== false;
+      const mappedArgs = isStreamingArgs
+        ? mapFilePathToPath(args)
+        : prepareReadArguments(args);
       return renderStreamingCallText(formatReadCall(mappedArgs, theme, context?.cwd), theme, context);
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {

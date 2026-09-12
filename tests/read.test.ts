@@ -229,6 +229,25 @@ describe("read tool", () => {
     expect(text).toContain("utils/");
   });
 
+  it("treats only an empty argument object as a current-directory read", async () => {
+    // Intent: regress the MiniMax-M3 empty-read quirk while keeping partially malformed calls invalid.
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "visible.txt", "alpha\n");
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any);
+    const tool = registry.getTool("read");
+
+    const prepared = tool.prepareArguments({});
+    expect(prepared).toEqual({ path: "." });
+    expect(tool.prepareArguments({ limit: 1 })).toEqual({ limit: 1 });
+    expect(tool.parameters.required).toContain("path");
+
+    const result = await tool.execute("empty-read", prepared, undefined, undefined, { cwd: root });
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("kind: directory");
+    expect(getText(result)).toContain("visible.txt");
+  });
+
   it("preserves non-ASCII spaces inside file names", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/hello　world.ts", "alpha\n");

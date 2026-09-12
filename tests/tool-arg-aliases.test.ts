@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { mapFilePathToPath } from "../src/tool-arg-aliases.js";
 
 describe("mapFilePathToPath", () => {
-  it("rewrites filePath to path when path is absent", () => {
-    const result = mapFilePathToPath({ filePath: "/tmp/foo.txt", offset: "10", limit: "20" });
+  it.each(["file", "filePath", "file_path"])("rewrites %s to path when path is absent", (alias) => {
+    // Intent: tolerate only the observed path-key spellings without weakening the canonical schema.
+    const result = mapFilePathToPath({ [alias]: "/tmp/foo.txt", offset: "10", limit: "20" });
     expect(result).toEqual({ path: "/tmp/foo.txt", offset: "10", limit: "20" });
   });
 
@@ -19,10 +20,16 @@ describe("mapFilePathToPath", () => {
     expect(result).toBe(args);
   });
 
-  it("returns args unchanged when neither filePath nor path is present", () => {
-    const args = { pattern: "TODO", path: "/tmp/foo.txt" };
+  it("returns args unchanged when no path key or alias is present", () => {
+    const args = { pattern: "TODO" };
     const result = mapFilePathToPath(args);
     expect(result).toBe(args);
+  });
+
+  it("returns args unchanged when multiple aliases are present", () => {
+    // Intent: conflicting compatibility aliases must not silently choose a target path.
+    const args = { file: "/tmp/one.txt", filePath: "/tmp/two.txt" };
+    expect(mapFilePathToPath(args)).toBe(args);
   });
 
   it("returns args unchanged for non-object inputs", () => {

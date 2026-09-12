@@ -430,6 +430,27 @@ describe("tool renderers", () => {
         expect(rendered.trim().length, testCase.name).toBeGreaterThan(0);
       }
 
+      // Intent: `{}` is both the initial stream state and the MiniMax-M3 quirk;
+      // rendering "." only for a final call avoids claiming a path before arguments arrive.
+      const emptyReadStreaming = render(registry.getTool("read").renderCall(
+        {},
+        {} as any,
+        streamingContext as any,
+      ));
+      expect(emptyReadStreaming).not.toContain("Read .");
+      const emptyReadComplete = render(registry.getTool("read").renderCall(
+        {},
+        {} as any,
+        { ...streamingContext, argsComplete: true, isPartial: false } as any,
+      ));
+      expect(emptyReadComplete).toContain("Read .");
+      const emptyReadExecuting = render(registry.getTool("read").renderCall(
+        {},
+        {} as any,
+        { ...streamingContext, executionStarted: true } as any,
+      ));
+      expect(emptyReadExecuting).toContain("Read .");
+
       const writeRendered = render(registry.getTool("write").renderCall(
         { path: "src/example.ts", content: Array.from({ length: 14 }, (_, index) => `line-${index + 1}`).join("\n") },
         {} as any,
