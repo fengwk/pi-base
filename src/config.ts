@@ -62,6 +62,8 @@ export interface SubagentConfig {
   maxTotalConcurrency?: number;
   /** Abort a delegated subagent after this many milliseconds without any session activity. Omit or set 0 to disable. */
   idleTimeoutMs?: number;
+  /** Model-call retry limit for delegated sessions. Omit to inherit Pi's retry.maxRetries; set 0 to disable retries. */
+  modelMaxRetries?: number;
   /** Default soft-stop budget for delegated subagents. A task call may override it; an unfinished child is asked for a phase report at the budget and every five later tool-driving turns. Error/aborted messages do not count. Defaults to 50. */
   maxTurns?: number;
 }
@@ -414,12 +416,13 @@ function sanitizeSubagentConfig(value: unknown): SubagentConfig {
     throw new Error("subagent must be a JSON object.");
   }
   const input = value as Record<string, unknown>;
-  assertNoUnknownKeys(input, "subagent", ["maxDepth", "maxConcurrency", "maxTotalConcurrency", "idleTimeoutMs", "maxTurns"]);
+  assertNoUnknownKeys(input, "subagent", ["maxDepth", "maxConcurrency", "maxTotalConcurrency", "idleTimeoutMs", "modelMaxRetries", "maxTurns"]);
   const output: SubagentConfig = {};
   if (input.maxDepth !== undefined) output.maxDepth = sanitizePositiveInteger(input.maxDepth, "subagent.maxDepth");
   if (input.maxConcurrency !== undefined) output.maxConcurrency = sanitizePositiveInteger(input.maxConcurrency, "subagent.maxConcurrency");
   if (input.maxTotalConcurrency !== undefined) output.maxTotalConcurrency = sanitizePositiveInteger(input.maxTotalConcurrency, "subagent.maxTotalConcurrency");
   if (input.idleTimeoutMs !== undefined) output.idleTimeoutMs = sanitizeNonNegativeInteger(input.idleTimeoutMs, "subagent.idleTimeoutMs");
+  if (input.modelMaxRetries !== undefined) output.modelMaxRetries = sanitizeNonNegativeInteger(input.modelMaxRetries, "subagent.modelMaxRetries");
   if (input.maxTurns !== undefined) output.maxTurns = sanitizePositiveInteger(input.maxTurns, "subagent.maxTurns");
   return output;
 }
@@ -787,6 +790,9 @@ function mergeSubagent(base: SubagentConfig | undefined, override: SubagentConfi
       : {}),
     ...(base?.idleTimeoutMs !== undefined || override?.idleTimeoutMs !== undefined
       ? { idleTimeoutMs: override?.idleTimeoutMs ?? base?.idleTimeoutMs }
+      : {}),
+    ...(base?.modelMaxRetries !== undefined || override?.modelMaxRetries !== undefined
+      ? { modelMaxRetries: override?.modelMaxRetries ?? base?.modelMaxRetries }
       : {}),
     ...(base?.maxTurns !== undefined || override?.maxTurns !== undefined ? { maxTurns: override?.maxTurns ?? base?.maxTurns } : {}),
   };

@@ -245,6 +245,7 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
     "maxConcurrency": 10,
     "maxTotalConcurrency": 20,
     "idleTimeoutMs": 300000,
+    "modelMaxRetries": 2,
     "maxTurns": 50
   }
 }
@@ -256,6 +257,7 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 | `maxConcurrency` | `10` | 单父 session 的并发 child 上限 |
 | `maxTotalConcurrency` | 未启用 | 整棵 delegation tree 并发上限 |
 | `idleTimeoutMs` | 未启用 | 无 session 活动时的 timeout |
+| `modelMaxRetries` | 继承 Pi `retry.maxRetries` | 每个 delegated session 的模型调用自动重试上限；设为 `0` 可禁用 |
 | `maxTurns` | `50` | 默认 soft-stop turn 预算 |
 
 ## `contextCompression`

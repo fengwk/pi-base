@@ -245,6 +245,7 @@ Supported transports:
     "maxConcurrency": 10,
     "maxTotalConcurrency": 20,
     "idleTimeoutMs": 300000,
+    "modelMaxRetries": 2,
     "maxTurns": 50
   }
 }
@@ -256,6 +257,7 @@ Supported transports:
 | `maxConcurrency` | `10` | Concurrency limit for children of a single parent session |
 | `maxTotalConcurrency` | Not enabled | Concurrency limit for the whole delegation tree |
 | `idleTimeoutMs` | Not enabled | Timeout when there is no session activity |
+| `modelMaxRetries` | Inherit Pi `retry.maxRetries` | Automatic model-call retries for each delegated session; `0` disables them |
 | `maxTurns` | `50` | Default soft-stop turn budget |
 
 ## `contextCompression`

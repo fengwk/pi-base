@@ -15,6 +15,8 @@ const mocked = vi.hoisted(() => ({
   getAgentDir: vi.fn(() => "/agent-home"),
   sessionManagerCreate: vi.fn(),
   sessionManagerOpen: vi.fn(),
+  settingsManagerCreate: vi.fn(),
+  settingsManagerApplyOverrides: vi.fn(),
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -31,6 +33,9 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   SessionManager: {
     create: mocked.sessionManagerCreate,
     open: mocked.sessionManagerOpen,
+  },
+  SettingsManager: {
+    create: mocked.settingsManagerCreate,
   },
 }));
 
@@ -114,6 +119,9 @@ beforeEach(() => {
   mocked.getAgentDir.mockClear();
   mocked.sessionManagerCreate.mockReset();
   mocked.sessionManagerOpen.mockReset();
+  mocked.settingsManagerCreate.mockReset();
+  mocked.settingsManagerApplyOverrides.mockReset();
+  mocked.settingsManagerCreate.mockReturnValue({ applyOverrides: mocked.settingsManagerApplyOverrides });
 });
 
 afterEach(() => {
@@ -341,6 +349,44 @@ describe("createRealSubagentFactory", () => {
     }));
     expect(session.bindExtensions).toHaveBeenCalledWith({});
     expect(session.prompt).not.toHaveBeenCalled();
+  });
+
+  it("applies a child-only model retry override through an isolated settings manager", async () => {
+    // Intent: delegated sessions must cap AgentSession retries without mutating the main session's
+    // settings or replacing unrelated global/project settings such as the HTTP idle timeout.
+    const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
+    const session = fakeSession();
+    const settingsManager = { applyOverrides: mocked.settingsManagerApplyOverrides };
+    mocked.settingsManagerCreate.mockReturnValue(settingsManager);
+    mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
+    mocked.sessionManagerCreate.mockReturnValue(fakeManager("retry-child"));
+
+    const factory = createRealSubagentFactory({
+      resolveModelMaxRetries: (cwd) => cwd === "/work/repo" ? 2 : undefined,
+    });
+    await factory.spawn({ ctx: fakeCtx(), agentType: "worker", childDepth: 2 });
+
+    expect(mocked.settingsManagerCreate).toHaveBeenCalledWith("/work/repo", "/agent-home");
+    expect(mocked.settingsManagerApplyOverrides).toHaveBeenCalledWith({ retry: { maxRetries: 2 } });
+    expect(mocked.createAgentSession).toHaveBeenCalledWith(expect.objectContaining({ settingsManager }));
+  });
+
+  it("inherits Pi retry settings when no child retry override is configured", async () => {
+    // Intent: an omitted pi-base setting must preserve createAgentSession's native settings loading
+    // instead of injecting an empty or divergent settings manager.
+    const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
+    const session = fakeSession();
+    mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
+    mocked.sessionManagerCreate.mockReturnValue(fakeManager("inherited-retry-child"));
+
+    await createRealSubagentFactory().spawn({
+      ctx: fakeCtx(),
+      agentType: "worker",
+      childDepth: 2,
+    });
+
+    expect(mocked.settingsManagerCreate).not.toHaveBeenCalled();
+    expect(mocked.createAgentSession.mock.calls[0]?.[0]).not.toHaveProperty("settingsManager");
   });
 
   it("disposes a child session when extension binding fails", async () => {

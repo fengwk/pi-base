@@ -12,6 +12,7 @@ export interface ResolvedSubagentConfig {
   maxConcurrency: number;
   maxTotalConcurrency?: number;
   idleTimeoutMs?: number;
+  modelMaxRetries?: number;
   maxTurns: number;
 }
 
@@ -24,12 +25,14 @@ export function resolveSubagentConfig(loaded: LoadedPiBaseSettings): ResolvedSub
   const config = loaded.settings.subagent;
   const maxTotalConcurrency = normalizeOptionalPositiveInteger(config?.maxTotalConcurrency);
   const idleTimeoutMs = normalizeOptionalTimeout(config?.idleTimeoutMs);
+  const modelMaxRetries = normalizeOptionalNonNegativeInteger(config?.modelMaxRetries);
   const maxTurns = normalizePositiveInteger(config?.maxTurns, DEFAULT_MAX_TURNS);
   return {
     maxDepth: normalizePositiveInteger(config?.maxDepth, DEFAULT_MAX_DEPTH),
     maxConcurrency: normalizePositiveInteger(config?.maxConcurrency, DEFAULT_MAX_CONCURRENCY),
     ...(maxTotalConcurrency !== undefined ? { maxTotalConcurrency } : {}),
     ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
+    ...(modelMaxRetries !== undefined ? { modelMaxRetries } : {}),
     maxTurns,
   };
 }
@@ -41,6 +44,11 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
 
 function normalizeOptionalPositiveInteger(value: number | undefined): number | undefined {
   if (value === undefined || !Number.isInteger(value) || value < 1) return undefined;
+  return value;
+}
+
+function normalizeOptionalNonNegativeInteger(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isInteger(value) || value < 0) return undefined;
   return value;
 }
 

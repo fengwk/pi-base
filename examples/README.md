@@ -42,6 +42,7 @@ These files together form a ready-to-load global configuration. If a file with t
 | `subagent.maxConcurrency` | `4` | Each parent runs at most 4 direct children concurrently |
 | `subagent.maxTotalConcurrency` | `8` | At most 8 Subagents run concurrently in the same root delegation tree |
 | `subagent.idleTimeoutMs` | `120000` | Terminates a Subagent after 120 seconds without session activity |
+| `subagent.modelMaxRetries` | `2` | Retries a delegated session's model call at most twice while leaving the main Agent's retry limit unchanged |
 | `subagent.maxTurns` | `50` | Uses a 50-turn soft-stop budget when a `task` call does not specify `max_turns` |
 
 ## Agent models

@@ -29,6 +29,7 @@
     "maxConcurrency": 4,
     "maxTotalConcurrency": 8,
     "idleTimeoutMs": 120000,
+    "modelMaxRetries": 2,
     "maxTurns": 50
   }
 }

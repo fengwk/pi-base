@@ -9,6 +9,7 @@ import {
   migrateSessionEntries,
   parseSessionEntries,
   SessionManager,
+  SettingsManager,
   type AgentSession,
   type CreateAgentSessionOptions,
   type SessionEntry,
@@ -946,6 +947,7 @@ function createLiveViewSource(session: AgentSession, cwd: string): { source: Sub
 
 export interface RealSubagentFactoryOptions {
   resolveAgentRuntimeConfig?: (agentType: string) => AgentRuntimeConfig | undefined;
+  resolveModelMaxRetries?: (cwd: string) => number | undefined;
 }
 
 type ResolvedAgentRuntime = {
@@ -1027,12 +1029,16 @@ export function createRealSubagentFactory(options: RealSubagentFactoryOptions = 
     // pi 0.82+ createAgentSession takes modelRuntime (not modelRegistry). ModelRegistry
     // wraps a private runtime; reuse it when present so subagents share parent auth.
     const parentModelRuntime = (ctx.modelRegistry as unknown as { runtime?: CreateAgentSessionOptions["modelRuntime"] } | undefined)?.runtime;
+    const modelMaxRetries = options.resolveModelMaxRetries?.(ctx.cwd);
+    const settingsManager = modelMaxRetries === undefined ? undefined : SettingsManager.create(ctx.cwd, getAgentDir());
+    settingsManager?.applyOverrides({ retry: { maxRetries: modelMaxRetries } });
     const { session, extensionsResult } = await createAgentSession({
       cwd: ctx.cwd,
       sessionManager: sm,
       model: runtime.model,
       thinkingLevel: runtime.thinkingLevel,
       ...(parentModelRuntime ? { modelRuntime: parentModelRuntime } : {}),
+      ...(settingsManager ? { settingsManager } : {}),
     });
     const liveView = createLiveViewSource(session, ctx.cwd);
     let disposed = false;

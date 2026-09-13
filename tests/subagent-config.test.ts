@@ -38,8 +38,17 @@ describe("subagent config", () => {
   it("reads explicit project overrides", async () => {
     // Intent: operator-provided limits must win over defaults.
     const root = await createTempWorkspace();
-    await writeProjectConfig(root, { subagent: { maxDepth: 4, maxConcurrency: 3, maxTotalConcurrency: 12, idleTimeoutMs: 45000, maxTurns: 6 } });
-    expect(resolveSubagentConfig(loadPiBaseSettings(root))).toEqual({ maxDepth: 4, maxConcurrency: 3, maxTotalConcurrency: 12, idleTimeoutMs: 45000, maxTurns: 6 });
+    await writeProjectConfig(root, {
+      subagent: { maxDepth: 4, maxConcurrency: 3, maxTotalConcurrency: 12, idleTimeoutMs: 45000, modelMaxRetries: 2, maxTurns: 6 },
+    });
+    expect(resolveSubagentConfig(loadPiBaseSettings(root))).toEqual({
+      maxDepth: 4,
+      maxConcurrency: 3,
+      maxTotalConcurrency: 12,
+      idleTimeoutMs: 45000,
+      modelMaxRetries: 2,
+      maxTurns: 6,
+    });
   });
 
   it("fills only the missing field with its default", async () => {
@@ -73,6 +82,27 @@ describe("subagent config", () => {
     }
   });
 
+  it("preserves modelMaxRetries=0 so delegated model retries can be disabled", async () => {
+    // Intent: unlike a disabled idle timeout, zero retries is an effective child-session override.
+    const root = await createTempWorkspace();
+    await writeProjectConfig(root, { subagent: { modelMaxRetries: 0 } });
+    const original = process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+    const isolatedGlobal = join(root, "isolated-global-pi-base.json");
+    try {
+      await writeFile(isolatedGlobal, JSON.stringify({}), "utf8");
+      process.env.PI_BASE_GLOBAL_SETTINGS_PATH = isolatedGlobal;
+      expect(resolveSubagentConfig(loadPiBaseSettings(root))).toEqual({
+        maxDepth: DEFAULT_MAX_DEPTH,
+        maxConcurrency: DEFAULT_MAX_CONCURRENCY,
+        modelMaxRetries: 0,
+        maxTurns: DEFAULT_MAX_TURNS,
+      });
+    } finally {
+      if (original === undefined) delete process.env.PI_BASE_GLOBAL_SETTINGS_PATH;
+      else process.env.PI_BASE_GLOBAL_SETTINGS_PATH = original;
+    }
+  });
+
   it("rejects non-positive maxDepth at load time", async () => {
     // Intent: an invalid depth would silently disable/allow delegation; fail loudly instead.
     const root = await createTempWorkspace();
@@ -89,10 +119,13 @@ describe("subagent config", () => {
     expect(() => loadPiBaseSettings(root)).toThrowError(/subagent\.maxTotalConcurrency must be a positive integer/);
   });
 
-  it("rejects negative idleTimeoutMs and non-positive maxTurns at load time", async () => {
+  it("rejects negative idleTimeoutMs/modelMaxRetries and non-positive maxTurns at load time", async () => {
     const root = await createTempWorkspace();
     await writeProjectConfig(root, { subagent: { idleTimeoutMs: -1 } });
     expect(() => loadPiBaseSettings(root)).toThrowError(/subagent\.idleTimeoutMs must be a non-negative integer/);
+
+    await writeProjectConfig(root, { subagent: { modelMaxRetries: -1 } });
+    expect(() => loadPiBaseSettings(root)).toThrowError(/subagent\.modelMaxRetries must be a non-negative integer/);
 
     await writeProjectConfig(root, { subagent: { maxTurns: 0 } });
     expect(() => loadPiBaseSettings(root)).toThrowError(/subagent\.maxTurns must be a positive integer/);
