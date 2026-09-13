@@ -50,6 +50,7 @@ describe("bash tool and index", () => {
     expect(getText(result)).toBe("ok");
     expect(seenParams).toEqual({ command: "npm test", timeout: 30 });
   });
+
   it("applies the default bash timeout when timeout_seconds is omitted", async () => {
     const registry = createToolRegistry();
     let seenParams: any;
@@ -102,6 +103,33 @@ describe("bash tool and index", () => {
     const result = await registry.getTool("bash").execute("1", { command: "pwd", workdir: "." }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).not.toBe(true);
     expect(getText(result)).toContain(process.cwd());
+  });
+
+  it("executes through the default builtin bash tool in an explicit workdir", async () => {
+    const sessionCwd = await createTempWorkspace();
+    const requestedCwd = join(sessionCwd, "requested-workdir");
+    await mkdir(requestedCwd);
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any);
+    try {
+      const result = await registry.getTool("bash").execute(
+        "1",
+        { command: "pwd", workdir: requestedCwd },
+        undefined,
+        undefined,
+        {
+          cwd: sessionCwd,
+          sessionManager: {
+            getSessionId: () => "session-id",
+            getSessionFile: () => undefined,
+          },
+        },
+      );
+      expect(result.isError).not.toBe(true);
+      expect(getText(result)).toContain(requestedCwd);
+    } finally {
+      await rm(sessionCwd, { recursive: true, force: true });
+    }
   });
 
   it("truncates huge bash output and saves the full output to a temp file", async () => {

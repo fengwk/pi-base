@@ -86,7 +86,12 @@ export function registerBashRendererTool(
         const timeoutSeconds = parseTimeoutSeconds(params.timeout_seconds, "timeout_seconds", BASH_DEFAULT_TIMEOUT_SECONDS);
         // pi 0.82+ injects PI_* session env from ctx.sessionManager; unit/partial
         // contexts without a session must omit ctx so spawn does not throw.
-        const bashCtx = ctx?.sessionManager ? ctx : undefined;
+        const bashCtx = ctx?.sessionManager
+          ? Object.defineProperties({}, {
+              ...Object.getOwnPropertyDescriptors(ctx),
+              cwd: { configurable: true, enumerable: true, value: cwd },
+            })
+          : undefined;
         return await builtIn.tool.execute(
           toolCallId,
           {
