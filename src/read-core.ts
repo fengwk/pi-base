@@ -39,7 +39,7 @@ type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any,
  * an exact empty object as the current directory; partially populated calls
  * remain invalid rather than guessing a missing path.
  */
-function prepareReadArguments(args: unknown): unknown {
+export function prepareReadArguments(args: unknown): unknown {
   const mappedArgs = mapFilePathToPath(args);
   if (
     mappedArgs !== null

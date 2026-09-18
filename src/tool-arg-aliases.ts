@@ -3,9 +3,9 @@
  *
  * Some upstream models occasionally pass `file`, `filePath`, or `file_path`
  * instead of `path` for path-bearing tools. Rather than surfacing a validation error
- * (which the model often misreads and keeps repeating), `prepareArguments`
- * hooks can call these helpers to silently rewrite the argument keys before
- * the TypeBox schema validation runs.
+ * (which the model often misreads and keeps repeating), finalized-message
+ * canonicalization and `prepareArguments` use these helpers to silently rewrite
+ * the argument keys before TypeBox schema validation runs.
  *
  * These aliases are intentionally not advertised in the tool's `description`
  * or `promptSnippet` — they only kick in when the model gets the name wrong.

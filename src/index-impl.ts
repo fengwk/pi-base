@@ -15,6 +15,7 @@ import { registerLspTools, type LspResolverFactory } from "./lsp/tools.js";
 import { LspDiscoveryResolver } from "./lsp/discovery.js";
 import { applyUnifiedOutputTruncation } from "./tool-output.js";
 import { mapFilePathToPath } from "./tool-arg-aliases.js";
+import { canonicalizeAssistantToolCalls } from "./tool-call-canonicalization.js";
 import { findSchema } from "./schemas/find.js";
 import { inferToolResultIsError } from "./tool-result.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -210,6 +211,12 @@ export function registerFindTool(
 
 export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensionOptions = {}): void {
   const loadSettings = loadRuntimePiBaseSettings;
+  pi.on("message_end", (event) => {
+    const message = canonicalizeAssistantToolCalls(event.message);
+    // Returning a replacement lets Pi keep agent state, session persistence, and execution
+    // on the same canonical tool-call arguments.
+    return message === event.message ? undefined : { message };
+  });
   registerCompactionModel(pi, (cwd) => {
     const { compactionModel, compactionThinkingLevel } = loadSettings(cwd).settings;
     return { compactionModel, compactionThinkingLevel };
