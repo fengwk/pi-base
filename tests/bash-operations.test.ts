@@ -1,3 +1,4 @@
+import { constants as osConstants } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGracefulBashOperations } from "../src/bash-operations.js";
 
@@ -38,6 +39,20 @@ describe("createGracefulBashOperations", () => {
     expect(result.exitCode).toBe(0);
     expect(output).toContain("stdout");
     expect(output).toContain("stderr");
+  });
+
+  it.skipIf(process.platform === "win32")("reports signal terminations as 128 + signal number", async () => {
+    // Intent: Pi 0.86 treats a null exit code as a generic failed command, so a signal-terminated
+    // shell must report `128 + signal number` to preserve which signal ended the command instead of
+    // collapsing it into that generic failure.
+    const operations = createGracefulBashOperations({ shellPath: "/bin/sh" });
+
+    const result = await operations.exec("kill -TERM $$", process.cwd(), {
+      onData: () => undefined,
+      timeout: 5,
+    });
+
+    expect(result.exitCode).toBe(128 + osConstants.signals.SIGTERM);
   });
 
   it("rejects with a timeout marker when the shell exceeds the requested timeout", async () => {

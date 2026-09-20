@@ -46,6 +46,21 @@ async function writeAgentFile(agentDir: string, relativePath: string, content: s
   await writeFile(absolutePath, content, "utf8");
 }
 
+/**
+ * Mirrors Pi 0.86's structured system prompt rendering: the preamble stays untagged while every
+ * other top-level section is wrapped in a tag of its own name and sections are joined by a blank
+ * line. Tests feed this shape to pi-base because the renderer itself is not part of Pi's public API.
+ */
+function renderPi086SystemPrompt(preamble: string, sections: Record<string, string>): string {
+  const renderedSections = Object.entries(sections).map(([name, content]) => `<${name}>\n${content}\n</${name}>`);
+  return [preamble, ...renderedSections].join("\n\n");
+}
+
+/** Pi 0.86 trims the skill block before wrapping it in the structured `<skills>` section. */
+function pi086SkillsSection(skills: Skill[]): string {
+  return formatSkillsForPrompt(skills, "read").trim();
+}
+
 async function writePiBaseConfig(root: string, settings: unknown): Promise<void> {
   await mkdir(join(root, ".pi"), { recursive: true });
   await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify(settings), "utf8");
@@ -1770,6 +1785,161 @@ skills:
       expect((result.systemPrompt.match(/Current working directory:/g) ?? [])).toHaveLength(1);
       expect(result.systemPrompt).toContain(`  Current working directory: ${spacedCwd}`);
       expect(result.systemPrompt).not.toContain("**Your tool usage:**");
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("filters skills in Pi 0.86 structured prompts without stale sections or duplicated env metadata", async () => {
+    // Intent: Pi 0.86 wraps prompt sections as `<skills>`/`<cwd>` tags joined by blank lines, so the
+    // legacy raw skill match and trailing cwd strip both miss. pi-base must drop the complete
+    // structured sections, keep unrelated custom sections, and still emit exactly one `<env>`.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "skill-filter.md",
+        `---
+name: skill-filter
+skills:
+  - spec
+---
+`,
+      );
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "skill-filter", { cwd: root });
+
+      const specSkill = makeSkill("spec", "Spec workflow");
+      const otherSkill = makeSkill("other", "Other workflow");
+      const structuredPrompt = renderPi086SystemPrompt("Pi default preamble.", {
+        tools: "- read: Read a file\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.",
+        rules: "- Be concise in your responses",
+        skills: pi086SkillsSection([specSkill, otherSkill]),
+        cwd: root.replace(/\\/g, "/"),
+        // Pi renders extension-provided sections after cwd, so the cwd section is not the tail.
+        project_rules: "Keep custom sections.",
+      });
+
+      const result = await registry.emit(
+        "before_agent_start",
+        {
+          systemPrompt: structuredPrompt,
+          systemPromptOptions: { cwd: root, selectedTools: ["read"], skills: [specSkill, otherSkill] },
+        },
+        { cwd: root },
+      );
+
+      expect(result.systemPrompt).toContain("Pi default preamble.");
+      expect((result.systemPrompt.match(/<name>spec<\/name>/g) ?? [])).toHaveLength(1);
+      expect(result.systemPrompt).not.toContain("<name>other</name>");
+      expect((result.systemPrompt.match(/The following skills provide specialized instructions/g) ?? [])).toHaveLength(1);
+      expect(result.systemPrompt).not.toContain("<skills>");
+      expect(result.systemPrompt).not.toContain("</skills>");
+      expect(result.systemPrompt).not.toContain("<cwd>");
+      expect(result.systemPrompt).not.toContain("</cwd>");
+      expect(result.systemPrompt).toContain("<project_rules>\nKeep custom sections.\n</project_rules>");
+      // Removing the two structured sections must not leave the custom section attached or
+      // separated by extra blank lines.
+      expect(result.systemPrompt).toContain("</rules>\n\n<project_rules>");
+      expect((result.systemPrompt.match(/<env>/g) ?? [])).toHaveLength(1);
+      expect((result.systemPrompt.match(/Current working directory:/g) ?? [])).toHaveLength(1);
+      expect(result.systemPrompt).toContain(`  Current working directory: ${root.replace(/\\/g, "/")}`);
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("removes Pi 0.86 structured skills for an explicit empty allowlist", async () => {
+    // Intent: `skills: []` must erase Pi's structured skill section, which is wrapped and trimmed
+    // rather than embedded as raw `formatSkillsForPrompt` text.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(agentDir, "no-skills.md", `---\nname: no-skills\nskills: []\n---\n`);
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "no-skills", { cwd: root });
+
+      const specSkill = makeSkill("spec", "Spec workflow");
+      const structuredPrompt = renderPi086SystemPrompt("Pi default preamble.", {
+        skills: pi086SkillsSection([specSkill]),
+        cwd: root.replace(/\\/g, "/"),
+      });
+
+      const result = await registry.emit(
+        "before_agent_start",
+        {
+          systemPrompt: structuredPrompt,
+          systemPromptOptions: { cwd: root, selectedTools: ["read"], skills: [specSkill] },
+        },
+        { cwd: root },
+      );
+
+      expect(result.systemPrompt).toContain("Pi default preamble.");
+      expect(result.systemPrompt).not.toContain("<skills>");
+      expect(result.systemPrompt).not.toContain("<available_skills>");
+      expect(result.systemPrompt).not.toContain("<name>spec</name>");
+      expect(result.systemPrompt).not.toContain("<cwd>");
+      expect(result.systemPrompt).not.toContain("</cwd>");
+      expect((result.systemPrompt.match(/<env>/g) ?? [])).toHaveLength(1);
+      expect(result.systemPrompt).toContain(`  Current working directory: ${root.replace(/\\/g, "/")}`);
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("keeps Pi 0.86 structured skills when the agent inherits them", async () => {
+    // Intent: an agent without a skills policy must inherit Pi's structured skill section, while the
+    // structured cwd section is still replaced by pi-base's single `<env>` block.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(agentDir, "inherit-skills.md", `---\nname: inherit-skills\n---\n`);
+      const registry = createToolRegistry();
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "inherit-skills", { cwd: root });
+
+      const specSkill = makeSkill("spec", "Spec workflow");
+      const structuredPrompt = renderPi086SystemPrompt("Pi default preamble.", {
+        skills: pi086SkillsSection([specSkill]),
+        cwd: root.replace(/\\/g, "/"),
+      });
+
+      const result = await registry.emit(
+        "before_agent_start",
+        {
+          systemPrompt: structuredPrompt,
+          systemPromptOptions: { cwd: root, selectedTools: ["read"], skills: [specSkill] },
+        },
+        { cwd: root },
+      );
+
+      expect(result.systemPrompt).toContain("<skills>");
+      expect(result.systemPrompt).toContain("<name>spec</name>");
+      expect(result.systemPrompt).not.toContain("<cwd>");
+      expect(result.systemPrompt).not.toContain("</cwd>");
+      expect((result.systemPrompt.match(/<env>/g) ?? [])).toHaveLength(1);
+      expect(result.systemPrompt).toContain(`  Current working directory: ${root.replace(/\\/g, "/")}`);
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

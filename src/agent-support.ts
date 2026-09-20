@@ -719,14 +719,38 @@ function resolveCustomPrompt(agent: AgentDefinition, fallbackCustomPrompt: strin
 }
 
 /**
+ * Top-level structured prompt sections pi-base knows how to remove. Restricting the name to a
+ * closed union (instead of accepting arbitrary text) keeps the section regex injection-free.
+ */
+type PiStructuredSectionName = "cwd" | "skills";
+
+/**
+ * Pi 0.86 splits the system prompt into top-level structured sections rendered as
+ * `<name>\n<content>\n</name>` and joined by a blank line. Remove one named section together with
+ * its adjacent blank-line separator, leaving the surrounding sections and any following custom
+ * section untouched. The anchors require a standalone section (start of prompt or a separator
+ * before it, separator or end of prompt after it) so an incidental tag inside instructions is
+ * never treated as a section boundary.
+ */
+function stripStructuredSection(prompt: string, name: PiStructuredSectionName): string {
+  const match = new RegExp(`(?:^|\\n\\n)<${name}>\\n[\\s\\S]*?\\n</${name}>(?=\\n\\n|$)`).exec(prompt);
+  if (!match) return prompt;
+  const before = prompt.slice(0, match.index);
+  const after = prompt.slice(match.index + match[0].length);
+  // The regex ate the leading separator, so a section that used to be first would otherwise
+  // leave a blank line behind.
+  return before + (before ? after : after.replace(/^\n\n/, ""));
+}
+
+/**
  * pi-base owns the final system prompt structure: the body comes from either a custom prompt
  * (built locally, mirroring upstream's custom-prompt branch) or upstream's prebuilt prompt
  * (used as a body source). The trailing `<env>` block is always emitted by pi-base via
  * `formatEnvBlock` so the model sees one consistent envelope regardless of body source.
  *
- * When we reuse upstream's prebuilt prompt as the body, we first strip its own trailing cwd
- * metadata (`stripUpstreamEnvInfo`) so the final prompt has exactly one env section. An explicit
- * agent skills or tool policy also replaces upstream's already-rendered skill section.
+ * When we reuse upstream's prebuilt prompt as the body, we first strip its own cwd metadata
+ * (`stripUpstreamEnvInfo`) so the final prompt has exactly one env section. An explicit agent
+ * skills or tool policy also replaces upstream's already-rendered skill section.
  */
 function resolveSkillFileReadTool(selectedTools: string[] | undefined): "read" | "bash" | undefined {
   if (!selectedTools) return "read";
@@ -746,18 +770,30 @@ function buildAgentSystemPrompt(
     ? buildCustomPromptBody(customPrompt, options)
     : stripUpstreamEnvInfo(fallbackSystemPrompt);
   if (!customPrompt && rebuildFallbackSkills) {
-    for (const fileReadTool of ["read", "bash"] as const) {
-      const fallbackSkillsSection = formatSkillsForPrompt(fallbackSkills, fileReadTool);
-      if (fallbackSkillsSection && body.includes(fallbackSkillsSection)) {
-        body = body.replace(fallbackSkillsSection, "");
-        break;
-      }
-    }
+    body = removeSkillsSection(body, fallbackSkills);
     const skillFileReadTool = resolveSkillFileReadTool(options.selectedTools);
     if (skillFileReadTool) body += formatSkillsForPrompt(options.skills ?? [], skillFileReadTool);
   }
   if (!options.cwd) return body;
   return body + formatEnvBlock(options.cwd);
+}
+
+/**
+ * Removes upstream's rendered skill section so the agent's own skill policy can replace it.
+ * Pi 0.86 renders skills as a structured `<skills>` section whose content is trimmed before
+ * wrapping, so the old exact match against raw `formatSkillsForPrompt` output no longer applies;
+ * prompts from older Pi versions embedded that raw text and keep using the exact-match fallback.
+ */
+function removeSkillsSection(body: string, fallbackSkills: Skill[]): string {
+  const withoutStructuredSkills = stripStructuredSection(body, "skills");
+  if (withoutStructuredSkills !== body) return withoutStructuredSkills;
+  for (const fileReadTool of ["read", "bash"] as const) {
+    const fallbackSkillsSection = formatSkillsForPrompt(fallbackSkills, fileReadTool);
+    if (fallbackSkillsSection && body.includes(fallbackSkillsSection)) {
+      return body.replace(fallbackSkillsSection, "");
+    }
+  }
+  return body;
 }
 
 function buildCustomPromptBody(customPrompt: string, options: BuildSystemPromptOptions): string {
@@ -815,12 +851,17 @@ function formatEnvBlock(cwd: string): string {
 }
 
 /**
- * Current upstream `buildSystemPrompt` appends `Current working directory` as its trailing line.
- * Older compatible versions also prefixed it with `Current date`. Strip either form so
- * `formatEnvBlock` can emit exactly one consistent `<env>` envelope at the end of the final
- * prompt. This is the only place we touch upstream's output structure.
+ * pi-base replaces upstream's own cwd metadata with its `<env>` block. Pi 0.86 renders it as a
+ * structured `<cwd>` section; older versions appended `Current working directory` (optionally
+ * prefixed by `Current date`) as trailing lines. Strip either form so `formatEnvBlock` can emit
+ * exactly one consistent `<env>` envelope for the final prompt. This is the only place we touch
+ * upstream's output structure.
  */
 function stripUpstreamEnvInfo(prompt: string): string {
+  return stripTrailingEnvInfo(stripStructuredSection(prompt, "cwd"));
+}
+
+function stripTrailingEnvInfo(prompt: string): string {
   return prompt.replace(/(?:\r?\nCurrent date: [^\r\n]+)?\r?\nCurrent working directory: [^\r\n]+$/, "");
 }
 
