@@ -18,7 +18,6 @@ ICON_FILE="$ASSET_DIR/logo.png"
 SOUND_FILE="$ASSET_DIR/notify.wav"
 WINDOWS_NOTIFY_SCRIPT="$SCRIPT_DIR/notify_windows.ps1"
 PULSE_WAKEUP_SLEEP_SEC="${PI_NOTIFY_PULSE_WAKEUP_SLEEP_SEC:-0.12}"
-GNOME_WAYLAND_ATTENTION_SETTLE_SEC="${PI_NOTIFY_GNOME_WAYLAND_ATTENTION_SETTLE_SEC:-0.2}"
 
 kind="${PI_NOTIFY_KIND:-generic}"
 project="${PI_NOTIFY_PROJECT:-}"
@@ -29,7 +28,6 @@ current_desktop="${PI_NOTIFY_CURRENT_DESKTOP:-${XDG_CURRENT_DESKTOP:-}}"
 desktop_session="${PI_NOTIFY_DESKTOP_SESSION:-${DESKTOP_SESSION:-}}"
 tmux_pane="${PI_NOTIFY_TMUX_PANE:-${TMUX_PANE:-}}"
 alacritty_window_id="${PI_NOTIFY_ALACRITTY_WINDOW_ID:-${ALACRITTY_WINDOW_ID:-}}"
-terminal_tty="${PI_NOTIFY_TERMINAL_TTY:-}"
 wt_session="${WT_SESSION:-}"
 
 build_title() {
@@ -248,6 +246,10 @@ resolve_tmux_client_tty() {
 
 detect_display_backend() {
   # 检测图形后端，便于后续扩展 Wayland 跳转实现
+  if [[ "$session_type" == "x11" ]]; then
+    printf '%s' "x11"
+    return
+  fi
   if [[ "$session_type" == "wayland" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     printf '%s' "wayland"
     return
@@ -279,72 +281,139 @@ resolve_x11_window_target() {
 }
 
 is_gnome_desktop() {
-  # Wayland + GNOME 走 attention 跳回链路，需要显式识别 GNOME 桌面
+  # 仅 GNOME Wayland 使用按窗口标题定位的扩展接口。
   local desktop="${current_desktop:-$desktop_session}"
   desktop="${desktop,,}"
   [[ "$desktop" == *gnome* ]]
 }
 
-resolve_tmux_pane_tty() {
-  # 解析通知来源 pane 的 tty，供 tmux 切回后触发终端 attention 使用
-  local tty=""
+is_gnome_wayland() {
+  [[ "$session_type" == "wayland" || ( -z "$session_type" && -n "${WAYLAND_DISPLAY:-}" ) ]] && is_gnome_desktop
+}
 
-  if ! command -v tmux >/dev/null 2>&1; then
-    printf '%s' ""
-    return
-  fi
+gnome_pane_context() {
+  # list-panes -a includes linked windows once per session. Never choose one arbitrarily.
+  local rows pane session window
+  local count=0
+  [[ "$tmux_pane" == %* ]] || return 1
+  rows="$(tmux list-panes -a -F '#{pane_id}|#{session_id}|#{window_id}')" || return 1
+  while IFS='|' read -r pane session window; do
+    if [[ "$pane" == "$tmux_pane" ]]; then
+      GNOME_SESSION="$session"
+      GNOME_WINDOW="$window"
+      ((count += 1))
+    fi
+  done <<< "$rows"
+  [[ "$count" -eq 1 && "$GNOME_SESSION" == \$* && "$GNOME_WINDOW" == @* ]]
+}
 
-  if [[ -n "$tmux_pane" ]]; then
-    while IFS=' ' read -r pane pane_tty; do
+gnome_client_context() {
+  local rows tty pid session pane
+  local active_count=0 session_count=0 server_count=0
+  local active_tty="" active_pid="" session_tty="" session_pid=""
+  local server_tty="" server_pid=""
+  rows="$(tmux list-clients -F '#{client_tty}|#{client_pid}|#{session_id}|#{pane_id}')" || return 1
+  while IFS='|' read -r tty pid session pane; do
+    [[ "$tty" == /dev/* && "$pid" =~ ^[0-9]+$ ]] || continue
+    ((server_count += 1))
+    server_tty="$tty"
+    server_pid="$pid"
+    if [[ "$session" == "$GNOME_SESSION" ]]; then
+      ((session_count += 1))
+      session_tty="$tty"
+      session_pid="$pid"
       if [[ "$pane" == "$tmux_pane" ]]; then
-        tty="$pane_tty"
-        break
+        ((active_count += 1))
+        active_tty="$tty"
+        active_pid="$pid"
       fi
-    done < <(tmux list-panes -a -F '#{pane_id} #{pane_tty}' 2>/dev/null || true)
-  fi
-
-  if [[ -z "$tty" && -n "${TMUX:-}" ]]; then
-    tty="$(tmux display-message -p '#{pane_tty}' 2>/dev/null || true)"
-  fi
-
-  printf '%s' "$tty"
-}
-
-resolve_attention_tty() {
-  # 解析用于发送 urgency 控制序列的 tty。
-  # 优先 tmux pane tty；若不在 tmux，则退回插件侧解析到的终端 tty。
-  local tty=""
-
-  tty="$(resolve_tmux_pane_tty)"
-  if [[ -n "$tty" ]]; then
-    printf '%s' "$tty"
-    return
-  fi
-
-  printf '%s' "$terminal_tty"
-}
-
-can_use_gnome_wayland_attention_jump() {
-  # GNOME/Wayland 下不能通用地直接抢焦点；改为 tmux 切回 + 终端 attention
-  local attention_tty="$1"
-
-  [[ "$session_type" == "wayland" || -n "${WAYLAND_DISPLAY:-}" ]] || return 1
-  is_gnome_desktop || return 1
-  [[ -n "$alacritty_window_id" ]] || return 1
-  [[ -n "$attention_tty" && -w "$attention_tty" ]] || return 1
-
-  return 0
-}
-
-request_terminal_attention() {
-  # 通过 Alacritty 支持的 urgency 控制序列请求窗口 attention
-  local pane_tty="$1"
-
-  if [[ -z "$pane_tty" || ! -w "$pane_tty" ]]; then
+    fi
+  done <<< "$rows"
+  if [[ "$active_count" -eq 1 ]]; then
+    GNOME_CLIENT_TTY="$active_tty"
+    GNOME_CLIENT_PID="$active_pid"
+  elif [[ "$active_count" -eq 0 && "$session_count" -eq 1 ]]; then
+    GNOME_CLIENT_TTY="$session_tty"
+    GNOME_CLIENT_PID="$session_pid"
+  elif [[ "$session_count" -eq 0 && "$server_count" -eq 1 ]]; then
+    # The task session is detached, but only one attached terminal can be switched to it.
+    GNOME_CLIENT_TTY="$server_tty"
+    GNOME_CLIENT_PID="$server_pid"
+  else
     return 1
   fi
+}
 
-  printf '\033[?1042h\a' > "$pane_tty"
+resolve_gnome_context() {
+  GNOME_SESSION="" GNOME_WINDOW="" GNOME_CLIENT_TTY="" GNOME_CLIENT_PID="" GNOME_SERVER_PID=""
+  command -v tmux >/dev/null 2>&1 || return 1
+  gnome_pane_context || return 1
+  GNOME_SERVER_PID="$(tmux display-message -p '#{pid}')" || return 1
+  [[ "$GNOME_SERVER_PID" =~ ^[0-9]+$ ]] || return 1
+  gnome_client_context
+}
+
+gnome_client_is_current() {
+  local rows tty pid session pane count=0
+  local server
+  server="$(tmux display-message -p '#{pid}')" || return 1
+  [[ "$server" == "$GNOME_SERVER_PID" ]] || return 1
+  rows="$(tmux list-clients -F '#{client_tty}|#{client_pid}|#{session_id}|#{pane_id}')" || return 1
+  while IFS='|' read -r tty pid session pane; do
+    if [[ "$tty" == "$GNOME_CLIENT_TTY" && "$pid" == "$GNOME_CLIENT_PID" ]]; then
+      ((count += 1))
+    fi
+  done <<< "$rows"
+  [[ "$count" -eq 1 ]]
+}
+
+activate_gnome_window() {
+  local suffix="[pi-tmux:${GNOME_SERVER_PID}:${GNOME_CLIENT_PID}]"
+  local output attempt
+  command -v gdbus >/dev/null 2>&1 || return 1
+  for attempt in 1 2 3; do
+    gnome_client_is_current || return 1
+    output="$(gdbus call --session --timeout 2 \
+      --dest org.gnome.Shell \
+      --object-path /de/lucaswerkmeister/ActivateWindowByTitle \
+      --method de.lucaswerkmeister.ActivateWindowByTitle.activateBySuffix \
+      -- "$suffix")" || output=""
+    if [[ "$output" == "(true,)" ]]; then
+      return 0
+    fi
+    if [[ "$attempt" -lt 3 ]]; then
+      sleep 0.15
+    fi
+  done
+  return 1
+}
+
+perform_gnome_jump() {
+  local original_session="$GNOME_SESSION"
+  gnome_client_is_current || return 1
+  gnome_pane_context || return 1
+  [[ "$GNOME_SESSION" == "$original_session" ]] || return 1
+  # Re-resolved IDs, not mutable window/pane indices or session names.
+  tmux switch-client -c "$GNOME_CLIENT_TTY" -t "$GNOME_SESSION" || return 1
+  tmux select-window -t "${GNOME_SESSION}:${GNOME_WINDOW}" || return 1
+  tmux select-pane -t "${GNOME_SESSION}:${GNOME_WINDOW}.${tmux_pane}" || return 1
+  activate_gnome_window
+}
+
+send_gnome_notification() {
+  local icon="$1" title="$2" body="$3" action=""
+  if ! resolve_gnome_context; then
+    printf '%s\n' 'Pi notify: no unique GNOME tmux client/pane; notification has no focus action' >&2
+    notify-send -i "$icon" -t 10000 "$title" "$body"
+    return
+  fi
+  action="$(notify-send -i "$icon" -t 10000 -A "default=切回并聚焦" "$title" "$body")" || return 1
+  if [[ "$action" == "default" ]]; then
+    if ! perform_gnome_jump; then
+      printf '%s\n' 'Pi notify: tmux target or GNOME title activation failed (extension/title may be unavailable)' >&2
+      return 1
+    fi
+  fi
 }
 
 jump_x11_window() {
@@ -380,15 +449,10 @@ jump_x11_window() {
   return "$ok"
 }
 
-jump_wayland_window() {
-  # 预留 Wayland 跳转入口，后续可按 sway/hypr 增加实现
-  :
-}
-
 # ------------------------- Jump: Action Dispatch -------------------------
 
 perform_jump_action() {
-  # Jump 动作统一入口：tmux + x11（可同时执行） -> wayland
+  # Legacy Windows/X11 jump; GNOME uses its own strict target path.
   local tmux_target="$1"
   local tmux_client_tty="$2"
   local backend="$3"
@@ -407,155 +471,13 @@ perform_jump_action() {
     fi
   fi
 
-  if [[ "$jumped" -ne 0 && "$backend" == "wayland" ]]; then
-    jump_wayland_window
-  fi
-
   return "$jumped"
-}
-
-perform_gnome_wayland_attention_jump() {
-  # GNOME/Wayland 下：点击 Pi 通知后先切 tmux，再请求窗口 attention
-  local tmux_target="$1"
-  local tmux_client_tty="$2"
-  local attention_tty="$3"
-
-  if [[ -n "$tmux_target" ]] && command -v tmux >/dev/null 2>&1; then
-    if ! jump_tmux_target "$tmux_target" "$tmux_client_tty"; then
-      return 1
-    fi
-  fi
-
-  # 允许 GNOME/Alacritty 在点击通知后恢复焦点；若目标窗口本就处于前台，
-  # 随后的 urgency 请求通常会被忽略，从而避免多余的第二条通知。
-  sleep "$GNOME_WAYLAND_ATTENTION_SETTLE_SEC"
-  request_terminal_attention "$attention_tty"
-}
-
-send_gnome_wayland_jump_notification() {
-  # GNOME/Wayland 下保留 Pi 原始消息，点击后再执行 tmux 切回 + attention 跳转
-  local icon="$1"
-  local title="$2"
-  local body="$3"
-  local action=""
-
-  if command -v gdbus >/dev/null 2>&1 && command -v dbus-monitor >/dev/null 2>&1; then
-    action="$(send_gnome_wayland_jump_notification_dbus "$icon" "$title" "$body")"
-  else
-    action="$(notify-send -i "$icon" -t 10000 -A "default=切回并聚焦" "$title" "$body" 2>/dev/null || true)"
-  fi
-
-  if [[ "$action" == "default" ]]; then
-    perform_gnome_wayland_attention_jump "$JUMP_TMUX_TARGET" "$JUMP_TMUX_CLIENT_TTY" "$JUMP_ATTENTION_TTY"
-  fi
-}
-
-parse_notification_id() {
-  local output="$1"
-
-  if [[ "$output" =~ uint32[[:space:]]+([0-9]+) ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-    return 0
-  fi
-
-  return 1
-}
-
-wait_for_notification_action_dbus() {
-  local notification_id="$1"
-  local signal_name=""
-  local signal_id=""
-  local action_name=""
-  local line=""
-
-  while IFS= read -r line; do
-
-    case "$line" in
-      *"member=ActionInvoked"*)
-        signal_name="ActionInvoked"
-        signal_id=""
-        action_name=""
-        continue
-        ;;
-      *"member=NotificationClosed"*)
-        signal_name="NotificationClosed"
-        signal_id=""
-        action_name=""
-        continue
-        ;;
-    esac
-
-    if [[ "$signal_name" == "ActionInvoked" ]]; then
-      if [[ -z "$signal_id" && "$line" =~ ^[[:space:]]*uint32[[:space:]]+([0-9]+)$ ]]; then
-        signal_id="${BASH_REMATCH[1]}"
-        continue
-      fi
-
-      if [[ "$signal_id" == "$notification_id" && "$line" == *'string "'*'"' ]]; then
-        action_name="${line#*string \"}"
-        action_name="${action_name%\"*}"
-        printf '%s' "$action_name"
-        return 0
-      fi
-      continue
-    fi
-
-    if [[ "$signal_name" == "NotificationClosed" ]]; then
-      if [[ -z "$signal_id" && "$line" =~ ^[[:space:]]*uint32[[:space:]]+([0-9]+)$ ]]; then
-        signal_id="${BASH_REMATCH[1]}"
-        if [[ "$signal_id" == "$notification_id" ]]; then
-          return 0
-        fi
-      fi
-    fi
-  done
-
-  return 0
-}
-
-send_gnome_wayland_jump_notification_dbus() {
-  local icon="$1"
-  local title="$2"
-  local body="$3"
-  local output=""
-  local notification_id=""
-  local action=""
-
-  coproc DBUS_MONITOR_PROC { dbus-monitor --session "type='signal',interface='org.freedesktop.Notifications'" 2>/dev/null; }
-
-  output="$(gdbus call --session \
-    --dest org.freedesktop.Notifications \
-    --object-path /org/freedesktop/Notifications \
-    --method org.freedesktop.Notifications.Notify \
-    'Pi' \
-    0 \
-    "$icon" \
-    "$title" \
-    "$body" \
-    "['default', '切回并聚焦']" \
-    '{}' \
-    10000 2>/dev/null || true)"
-
-  notification_id="$(parse_notification_id "$output" || true)"
-  if [[ -z "$notification_id" ]]; then
-    kill "$DBUS_MONITOR_PROC_PID" >/dev/null 2>&1 || true
-    wait "$DBUS_MONITOR_PROC_PID" 2>/dev/null || true
-    return 0
-  fi
-
-  action="$(wait_for_notification_action_dbus "$notification_id" <&"${DBUS_MONITOR_PROC[0]}")"
-
-  kill "$DBUS_MONITOR_PROC_PID" >/dev/null 2>&1 || true
-  wait "$DBUS_MONITOR_PROC_PID" 2>/dev/null || true
-
-  printf '%s' "$action"
 }
 
 resolve_jump_context() {
   # 统一收集 Jump 所需上下文
   JUMP_TMUX_TARGET="$(resolve_tmux_target)"
   JUMP_TMUX_CLIENT_TTY="$(resolve_tmux_client_tty "$JUMP_TMUX_TARGET")"
-  JUMP_ATTENTION_TTY="$(resolve_attention_tty)"
   JUMP_BACKEND="$(detect_display_backend)"
   JUMP_X11_WINDOW_ID="$(resolve_x11_window_target)"
 }
@@ -601,7 +523,7 @@ play_with_backend() {
 
 send_linux_notification() {
   # Linux 通知分两类：
-  # - GNOME/Wayland：先展示 Pi 通知，点击后切 tmux 并触发 attention 跳回
+  # - GNOME/Wayland：only a unique tmux client gets a direct title activation action
   # - 其他环境：保留带动作按钮的 Jump 交互
   local icon="$1"
   local title="$2"
@@ -609,12 +531,11 @@ send_linux_notification() {
   local action=""
 
   if command -v notify-send >/dev/null 2>&1; then
-    resolve_jump_context
-
-    if can_use_gnome_wayland_attention_jump "$JUMP_ATTENTION_TTY"; then
-      send_gnome_wayland_jump_notification "$icon" "$title" "$body"
-      return 0
+    if is_gnome_wayland; then
+      send_gnome_notification "$icon" "$title" "$body"
+      return
     fi
+    resolve_jump_context
 
     action="$(notify-send -i "$icon" -t 10000 -A "jump=Jump" -A "cancel=Cancel" "$title" "$body" 2>/dev/null || true)"
     if [[ "$action" == "jump" ]]; then
@@ -696,4 +617,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

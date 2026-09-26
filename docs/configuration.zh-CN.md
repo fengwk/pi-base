@@ -177,6 +177,19 @@ Permission 用于防误操作，不是安全沙箱。
 
 桌面通知支持 Linux desktop 和 WSL；其他平台不启用通知。
 
+GNOME Wayland 下点击通知聚焦 tmux 终端，需要安装并启用上游 [Activate Window By Title](https://extensions.gnome.org/extension/5021/activate-window-by-title/)（UUID：`activate-window-by-title@lucaswerkmeister.de`），确认所安装版本支持当前 GNOME Shell（上游 v15 声明支持 45–51；安装前以扩展页面为准），并确保 `gdbus`、`notify-send` 和 `tmux` 可用。在**宿主 tmux** 设置：
+
+```tmux
+set -g set-titles on
+set -g set-titles-string '#S:#I:#W [pi-tmux:#{pid}:#{client_pid}]'
+```
+
+终端还须将 tmux 设置的标题原样显示在 GNOME 窗口标题**末尾**。通知从 `TMUX_PANE` 的稳定 pane ID 追踪来源；仅当 pane 属于唯一 session、且能确定唯一附着 client 时展示“切回并聚焦”。优先选当前正在查看该 pane 的唯一 client，否则选该 session 中的唯一 client；**来源 session 无 client** 时才允许选整个 tmux server 中唯一的合格 client，切回来源 session。多个 client 同时查看同一 pane、来源 session 有多个 client 且无唯一 active-pane 匹配、pane 被链接到多个 session、来源 session 已脱离但 server 有多个 client、无可用 client 或非 tmux GNOME 均只发送普通通知，不猜测目标。点击后再次核验 server PID、client tty 和 client PID、pane 所在 session；目标已删除或转移则跳转失败。窗口标题后缀查找最多 3 次、每次 D-Bus 调用超时 2 秒；`(true,)` 仅表示扩展找到了匹配窗口并调用激活，不保证实际焦点已可观测。终端不更新标题、扩展不可用或调用失败时不会回退到通用类名、X11 或 BEL attention；脚本会向 stderr 报错。
+
+可在 Alacritty 中显式运行 `python3 scripts/test-gnome-focus.py --run` 做桌面冒烟验证：它打开两个临时窗口，使用独立 tmux server，检查真实终端焦点事件和来源 pane 选中状态，结束后关闭测试窗口。该测试不代替实体通知点击，也不控制显示器布局；仍须将目标终端完全显示在另一屏幕上验证。
+
+回滚时从宿主 tmux 配置移除上述两行，**还须在正在运行的 tmux server 中显式恢复事先保存的 `set-titles` 和 `set-titles-string` 原值**（例如使用 `tmux set -g`）；仅重新加载没有这两行的配置不会清除运行时选项。按需禁用扩展；不影响普通通知。WSL / X11 使用各自原有跳转方式。
+
 ## `yolo`
 
 Boolean，默认 `false`。启用后跳过 Permission guard。

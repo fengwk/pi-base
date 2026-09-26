@@ -177,6 +177,19 @@ Permission guards against accidental operations; it is not a security sandbox.
 
 Desktop notifications are supported on Linux desktop and WSL; notifications are not enabled on other platforms.
 
+To focus a tmux terminal on GNOME Wayland, install and enable the upstream [Activate Window By Title](https://extensions.gnome.org/extension/5021/activate-window-by-title/) extension (UUID `activate-window-by-title@lucaswerkmeister.de`). Check compatibility with your GNOME Shell release (upstream v15 declares Shell 45–51; consult the extension page for current support). `gdbus`, `notify-send`, and `tmux` must be available. In the **host tmux** configuration set:
+
+```tmux
+set -g set-titles on
+set -g set-titles-string '#S:#I:#W [pi-tmux:#{pid}:#{client_pid}]'
+```
+
+The terminal must preserve this tmux title **at the end** of its GNOME window title. The source is tracked by stable `TMUX_PANE` ID. A focus action appears only when the pane belongs to exactly one session and a unique attached client can be identified: first the only client viewing that pane, otherwise the only client in the source session. If the source session has **no clients**, the sole eligible client across the tmux server can be switched back to it. Multiple clients viewing the same pane, multiple clients in the source session (without a unique active-pane match), linked sessions, or multiple server clients with a detached source session produce a plain notification without a focus action. The same applies to no client or non-tmux GNOME. On click the script rechecks server PID, client tty + PID, and source pane membership; deleted or moved targets fail closed. It retries the title lookup up to three times with a 2-second D-Bus timeout per call. `(true,)` confirms the extension matched a title and invoked activation, **not** observed focus. A missing extension or stale terminal title fails with an error on stderr; there is no generic class, X11 or BEL attention fallback.
+
+For an opt-in desktop smoke test, run `python3 scripts/test-gnome-focus.py --run` from Alacritty. It opens two temporary windows with an isolated tmux server, checks actual terminal focus reports and source-pane selection, then closes those windows. It does not test physical notification clicks or control monitor placement; test those separately with the target terminal fully visible on the other display.
+
+To roll back, remove these lines from the host tmux configuration **and explicitly restore the saved previous `set-titles` and `set-titles-string` values in the running tmux server** (for example, via `tmux set -g`); merely reloading a configuration without these lines does not clear runtime options. Optionally disable the extension. Plain notifications remain available. WSL and X11 retain their existing jump paths.
+
 ## `yolo`
 
 Boolean, default `false`. When enabled, the permission guard is skipped.
