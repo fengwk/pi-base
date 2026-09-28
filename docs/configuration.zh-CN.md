@@ -184,9 +184,13 @@ set -g set-titles on
 set -g set-titles-string '#S:#I:#W [pi-tmux:#{pid}:#{client_pid}]'
 ```
 
-终端还须将 tmux 设置的标题原样显示在 GNOME 窗口标题**末尾**。通知从 `TMUX_PANE` 的稳定 pane ID 追踪来源；仅当 pane 属于唯一 session、且能确定唯一附着 client 时展示“切回并聚焦”。优先选当前正在查看该 pane 的唯一 client，否则选该 session 中的唯一 client；**来源 session 无 client** 时才允许选整个 tmux server 中唯一的合格 client，切回来源 session。多个 client 同时查看同一 pane、来源 session 有多个 client 且无唯一 active-pane 匹配、pane 被链接到多个 session、来源 session 已脱离但 server 有多个 client、无可用 client 或非 tmux GNOME 均只发送普通通知，不猜测目标。点击后再次核验 server PID、client tty 和 client PID、pane 所在 session；目标已删除或转移则跳转失败。窗口标题后缀查找最多 3 次、每次 D-Bus 调用超时 2 秒；`(true,)` 仅表示扩展找到了匹配窗口并调用激活，不保证实际焦点已可观测。终端不更新标题、扩展不可用或调用失败时不会回退到通用类名、X11 或 BEL attention；脚本会向 stderr 报错。
+终端还须将 tmux 设置的标题原样显示在 GNOME 窗口标题**末尾**。通知从 `TMUX_PANE` 的稳定 pane ID 追踪来源，该 pane 必须唯一属于一个 session（被链接到多个 session 时直接拒绝）。创建通知时脚本只记录快照：tmux server PID、来源 session，以及一份冻结且有序的附着 client 候选列表——先是在查看该 pane 的 client，其次是来源 session 中的 client，最后是同一 server 的其他 client，同优先级按数字 PID 升序打破平局。此阶段不激活、不切换任何对象。
 
-可在 Alacritty 中显式运行 `python3 scripts/test-gnome-focus.py --run` 做桌面冒烟验证：它打开两个临时窗口，使用独立 tmux server，检查真实终端焦点事件和来源 pane 选中状态，结束后关闭测试窗口。该测试不代替实体通知点击，也不控制显示器布局；仍须将目标终端完全显示在另一屏幕上验证。
+点击后脚本先重新核验 tmux server 与来源 pane/session，再按顺序遍历冻结的候选列表：只考虑仍然存在且 tty、PID 均一致的 client；创建通知之后才附着的 client 永不会加入，已消失的候选则跳过并顺延到下一个捕获的候选。每个候选之前都会重新核验 server 与来源：已消失的候选跳过，而 server/来源变化则直接中止本次点击，绝不基于过期身份激活任何窗口。对每个候选，脚本通过扩展精确查找 `[pi-tmux:<server>:<client>]` 标题后缀，`(true,)` 表示存在携带该精确标题的本地窗口——这是“请求激活”，**不是**已观测到的焦点。SSH client 与本地共用同一 tmux server，但没有对应本地窗口，会返回 `(false,)`，因此被跳过且不会改动它的 session。只有在命中之后，脚本才重新核验来源与所选 client，仅切换该 client，按稳定 ID 选择捕获的 session/window/pane，并在再次核验 server、来源与 client 之后请求激活该窗口一次。由于 tmux session 共享 window/pane 选择，切换所选 client 可能改变同一 session 中其他 client 的显示内容，即使脚本从未对它们执行 `switch-client`。各失败阶段会分别输出简洁的 stderr 诊断——来源/来源 client 过期、无本地窗口匹配、D-Bus/扩展错误（含 gdbus 原始报错）、tmux 切换/选择失败——不会把所有错误都归结为“找不到标题”。D-Bus/扩展报错会立即中止，不会继续遍历剩余候选；标题稍有延迟时最多做 3 轮有界重试；存在多个本地匹配时按优先级与数字 PID 取第一个。
+
+只要 server 至少有一个附着 client（包括仅有 SSH client）就会提供“切回并聚焦”动作：点击前无法枚举本地窗口——扩展只提供激活接口，`org.gnome.Shell.Introspect.GetWindows` 返回 `AccessDenied`，因此没有只读预检。这类点击可能以上述错误失败。非 tmux GNOME 或 server 没有任何 client 时只发送普通通知。`(true,)` 仅表示扩展找到了匹配窗口并调用激活，不保证实际焦点已可观测。终端不更新标题、扩展不可用或调用失败时不会回退到通用类名、X11 或 BEL attention；脚本会向 stderr 报错。
+
+可在 Alacritty 中显式运行 `python3 scripts/test-gnome-focus.py --run` 做桌面冒烟验证：它在独立 tmux server 上打开三个临时窗口，其中两个共享同一 session 以覆盖候选优先级与数字 PID 选择，检查真实终端焦点事件和来源 pane 选中状态，结束后关闭测试窗口。该测试不代替实体通知点击，也不控制显示器布局；仍须将目标终端完全显示在另一屏幕上验证。
 
 回滚时从宿主 tmux 配置移除上述两行，**还须在正在运行的 tmux server 中显式恢复事先保存的 `set-titles` 和 `set-titles-string` 原值**（例如使用 `tmux set -g`）；仅重新加载没有这两行的配置不会清除运行时选项。按需禁用扩展；不影响普通通知。WSL / X11 使用各自原有跳转方式。
 

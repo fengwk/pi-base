@@ -291,126 +291,265 @@ is_gnome_wayland() {
   [[ "$session_type" == "wayland" || ( -z "$session_type" && -n "${WAYLAND_DISPLAY:-}" ) ]] && is_gnome_desktop
 }
 
-gnome_pane_context() {
-  # list-panes -a includes linked windows once per session. Never choose one arbitrarily.
+gnome_resolve_pane() {
+  # Resolve the captured source pane to exactly one session/window. list-panes -a lists a
+  # linked window once per session, so more than one row means an ambiguous target.
+  # Returns 2 when the tmux query itself fails, 1 when the pane is not uniquely present.
   local rows pane session window
   local count=0
-  [[ "$tmux_pane" == %* ]] || return 1
-  rows="$(tmux list-panes -a -F '#{pane_id}|#{session_id}|#{window_id}')" || return 1
+  GNOME_PANE_SESSION="" GNOME_PANE_WINDOW=""
+  rows="$(tmux list-panes -a -F '#{pane_id}|#{session_id}|#{window_id}')" || return 2
   while IFS='|' read -r pane session window; do
-    if [[ "$pane" == "$tmux_pane" ]]; then
-      GNOME_SESSION="$session"
-      GNOME_WINDOW="$window"
+    if [[ "$pane" == "$GNOME_PANE" ]]; then
+      GNOME_PANE_SESSION="$session"
+      GNOME_PANE_WINDOW="$window"
       ((count += 1))
     fi
   done <<< "$rows"
-  [[ "$count" -eq 1 && "$GNOME_SESSION" == \$* && "$GNOME_WINDOW" == @* ]]
+  [[ "$count" -eq 1 && "$GNOME_PANE_SESSION" == \$* && "$GNOME_PANE_WINDOW" == @* ]]
 }
 
-gnome_client_context() {
-  local rows tty pid session pane
-  local active_count=0 session_count=0 server_count=0
-  local active_tty="" active_pid="" session_tty="" session_pid=""
-  local server_tty="" server_pid=""
+gnome_client_candidates() {
+  # Ordered click candidates as "tty|pid": clients currently viewing the source pane,
+  # then clients of the source session, then any other client on the same server. Numeric
+  # PID ascending breaks ties so enumeration order never changes the outcome. Malformed
+  # rows are rejected so a bogus tty/PID is never switched or activated.
+  local rows tty pid session pane priority
+  local collected=""
   rows="$(tmux list-clients -F '#{client_tty}|#{client_pid}|#{session_id}|#{pane_id}')" || return 1
   while IFS='|' read -r tty pid session pane; do
     [[ "$tty" == /dev/* && "$pid" =~ ^[0-9]+$ ]] || continue
-    ((server_count += 1))
-    server_tty="$tty"
-    server_pid="$pid"
-    if [[ "$session" == "$GNOME_SESSION" ]]; then
-      ((session_count += 1))
-      session_tty="$tty"
-      session_pid="$pid"
-      if [[ "$pane" == "$tmux_pane" ]]; then
-        ((active_count += 1))
-        active_tty="$tty"
-        active_pid="$pid"
-      fi
+    if [[ "$pane" == "$GNOME_PANE" ]]; then
+      priority=0
+    elif [[ "$session" == "$GNOME_SESSION" ]]; then
+      priority=1
+    else
+      priority=2
     fi
+    collected+="${priority}|${pid}|${tty}"$'\n'
   done <<< "$rows"
-  if [[ "$active_count" -eq 1 ]]; then
-    GNOME_CLIENT_TTY="$active_tty"
-    GNOME_CLIENT_PID="$active_pid"
-  elif [[ "$active_count" -eq 0 && "$session_count" -eq 1 ]]; then
-    GNOME_CLIENT_TTY="$session_tty"
-    GNOME_CLIENT_PID="$session_pid"
-  elif [[ "$session_count" -eq 0 && "$server_count" -eq 1 ]]; then
-    # The task session is detached, but only one attached terminal can be switched to it.
-    GNOME_CLIENT_TTY="$server_tty"
-    GNOME_CLIENT_PID="$server_pid"
-  else
-    return 1
-  fi
+  [[ -n "$collected" ]] || return 0
+  while IFS='|' read -r _ pid tty; do
+    printf '%s|%s\n' "$tty" "$pid"
+  done < <(printf '%s' "$collected" | sort -t'|' -k1,1n -k2,2n)
 }
 
 resolve_gnome_context() {
-  GNOME_SESSION="" GNOME_WINDOW="" GNOME_CLIENT_TTY="" GNOME_CLIENT_PID="" GNOME_SERVER_PID=""
+  # Creation-time snapshot only: server identity, source pane/session and the frozen,
+  # ordered client candidate list. Nothing is activated and no client is switched here.
+  GNOME_PANE="" GNOME_PANE_SESSION="" GNOME_PANE_WINDOW="" GNOME_SESSION="" GNOME_SERVER_PID="" GNOME_CANDIDATES=""
   command -v tmux >/dev/null 2>&1 || return 1
-  gnome_pane_context || return 1
+  [[ "$tmux_pane" == %* ]] || return 1
+  GNOME_PANE="$tmux_pane"
+  gnome_resolve_pane || return 1
+  GNOME_SESSION="$GNOME_PANE_SESSION"
   GNOME_SERVER_PID="$(tmux display-message -p '#{pid}')" || return 1
   [[ "$GNOME_SERVER_PID" =~ ^[0-9]+$ ]] || return 1
-  gnome_client_context
+  GNOME_CANDIDATES="$(gnome_client_candidates)" || return 1
+  # Without any attached client there is nothing to switch to, so offer no action.
+  [[ -n "$GNOME_CANDIDATES" ]]
 }
 
-gnome_client_is_current() {
-  local rows tty pid session pane count=0
-  local server
-  server="$(tmux display-message -p '#{pid}')" || return 1
-  [[ "$server" == "$GNOME_SERVER_PID" ]] || return 1
-  rows="$(tmux list-clients -F '#{client_tty}|#{client_pid}|#{session_id}|#{pane_id}')" || return 1
-  while IFS='|' read -r tty pid session pane; do
-    if [[ "$tty" == "$GNOME_CLIENT_TTY" && "$pid" == "$GNOME_CLIENT_PID" ]]; then
-      ((count += 1))
-    fi
-  done <<< "$rows"
-  [[ "$count" -eq 1 ]]
+gnome_fail() {
+  # Emit one stage-specific diagnostic. Callers that already reported a stage must not be
+  # summarized by the notification wrapper as "no local window matched".
+  GNOME_DIAGNOSTIC=1
+  printf 'Pi notify: %s\n' "$1" >&2
 }
 
-activate_gnome_window() {
-  local suffix="[pi-tmux:${GNOME_SERVER_PID}:${GNOME_CLIENT_PID}]"
-  local output attempt
-  command -v gdbus >/dev/null 2>&1 || return 1
-  for attempt in 1 2 3; do
-    gnome_client_is_current || return 1
-    output="$(gdbus call --session --timeout 2 \
-      --dest org.gnome.Shell \
-      --object-path /de/lucaswerkmeister/ActivateWindowByTitle \
-      --method de.lucaswerkmeister.ActivateWindowByTitle.activateBySuffix \
-      -- "$suffix")" || output=""
-    if [[ "$output" == "(true,)" ]]; then
+gnome_revalidate_source() {
+  # 0 only while the captured server runs and the captured pane is still uniquely part of
+  # the captured session. GNOME_CLICK_WINDOW carries the current window ID so the tmux
+  # switch never targets a stale window. Failure records the stale stage on stderr.
+  local server resolved=0
+  GNOME_CLICK_WINDOW=""
+  if ! server="$(tmux display-message -p '#{pid}' 2>/dev/null)"; then
+    gnome_fail "GNOME focus aborted: tmux server query failed"
+    return 1
+  fi
+  if [[ -z "$GNOME_SERVER_PID" || "$server" != "$GNOME_SERVER_PID" ]]; then
+    gnome_fail "GNOME focus aborted: tmux server changed since the notification"
+    return 1
+  fi
+  gnome_resolve_pane || resolved=$?
+  if [[ "$resolved" -eq 2 ]]; then
+    gnome_fail "GNOME focus aborted: tmux pane query failed"
+    return 1
+  fi
+  if [[ "$resolved" -ne 0 || "$GNOME_PANE_SESSION" != "$GNOME_SESSION" ]]; then
+    gnome_fail "GNOME focus aborted: source pane/session changed since the notification"
+    return 1
+  fi
+  GNOME_CLICK_WINDOW="$GNOME_PANE_WINDOW"
+}
+
+gnome_activate_suffix() {
+  # Request exact-title activation through the extension and report its reply:
+  # 0 = the extension matched a local window carrying this exact title and was asked to
+  #     activate it (a request, never observed focus),
+  # 1 = no local window carries the title ((false,), e.g. an SSH client),
+  # 2 = D-Bus/extension error or unexpected reply; GNOME_DBUS_ERROR holds the detail.
+  local suffix="$1" output rc
+  GNOME_DBUS_ERROR=""
+  if ! command -v gdbus >/dev/null 2>&1; then
+    GNOME_DBUS_ERROR="gdbus is not available"
+    return 2
+  fi
+  if output="$(gdbus call --session --timeout 2 \
+    --dest org.gnome.Shell \
+    --object-path /de/lucaswerkmeister/ActivateWindowByTitle \
+    --method de.lucaswerkmeister.ActivateWindowByTitle.activateBySuffix \
+    -- "$suffix" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    GNOME_DBUS_ERROR="gdbus exit ${rc}: ${output//$'\n'/ }"
+    return 2
+  fi
+  case "$output" in
+    "(true,)") return 0 ;;
+    "(false,)") return 1 ;;
+    *) GNOME_DBUS_ERROR="unexpected reply: ${output}"; return 2 ;;
+  esac
+}
+
+gnome_client_still_current() {
+  # The caller validates the server. Return 2 for query failure, 1 for a missing client.
+  local want_tty="$1" want_pid="$2" rows tty pid
+  rows="$(tmux list-clients -F '#{client_tty}|#{client_pid}' 2>/dev/null)" || return 2
+  while IFS='|' read -r tty pid; do
+    if [[ "$tty" == "$want_tty" && "$pid" == "$want_pid" ]]; then
       return 0
     fi
-    if [[ "$attempt" -lt 3 ]]; then
-      sleep 0.15
-    fi
+  done <<< "$rows"
+  return 1
+}
+
+gnome_choose_candidate() {
+  # Walk the frozen candidates in priority order. Every candidate is re-validated just
+  # before its activation: a vanished client is skipped (and never retried), while a
+  # changed server/source or a query/D-Bus error aborts the whole click. Sets
+  # GNOME_CHOSEN="tty|pid" and returns 0 on the first exact title that the extension
+  # matches; otherwise reports the stage and returns 1.
+  GNOME_CHOSEN=""
+  local pass tty pid rc suffix probed=0
+  for pass in 1 2 3; do
+    while IFS='|' read -r tty pid; do
+      [[ -n "$tty" ]] || continue
+      # The source/server must still be valid before touching the next candidate.
+      gnome_revalidate_source || return 1
+      # A candidate that disappeared is skipped, not activated against a stale identity.
+      if gnome_client_still_current "$tty" "$pid"; then
+        :
+      else
+        rc=$?
+        if [[ "$rc" -eq 2 ]]; then
+          gnome_fail "GNOME focus aborted: tmux client query failed"
+          return 1
+        fi
+        continue
+      fi
+      ((probed += 1))
+      suffix="[pi-tmux:${GNOME_SERVER_PID}:${pid}]"
+      if gnome_activate_suffix "$suffix"; then
+        GNOME_CHOSEN="$tty|$pid"
+        return 0
+      else
+        rc=$?
+      fi
+      if [[ "$rc" -eq 2 ]]; then
+        gnome_fail "GNOME focus aborted: D-Bus activation error: ${GNOME_DBUS_ERROR}"
+        return 1
+      fi
+    done <<< "$GNOME_CANDIDATES"
+    # Bounded retry so a title that propagates slightly late is still picked up.
+    [[ "$pass" -eq 3 ]] || sleep 0.15
   done
+  if [[ "$probed" -eq 0 ]]; then
+    gnome_fail "GNOME focus aborted: all captured tmux clients disappeared before activation"
+  else
+    gnome_fail "GNOME focus failed: no local window matched any captured tmux client title"
+  fi
   return 1
 }
 
 perform_gnome_jump() {
-  local original_session="$GNOME_SESSION"
-  gnome_client_is_current || return 1
-  gnome_pane_context || return 1
-  [[ "$GNOME_SESSION" == "$original_session" ]] || return 1
-  # Re-resolved IDs, not mutable window/pane indices or session names.
-  tmux switch-client -c "$GNOME_CLIENT_TTY" -t "$GNOME_SESSION" || return 1
-  tmux select-window -t "${GNOME_SESSION}:${GNOME_WINDOW}" || return 1
-  tmux select-pane -t "${GNOME_SESSION}:${GNOME_WINDOW}.${tmux_pane}" || return 1
-  activate_gnome_window
+  # Click path. No tmux side effect happens until the extension matches a local window for
+  # one candidate, and only that frozen candidate is switched; unmatched clients are
+  # untouched. A successful reply is a requested activation, not observed focus.
+  local tty pid suffix attempt rc
+  GNOME_DIAGNOSTIC=0 GNOME_CHOSEN=""
+  gnome_revalidate_source || return 1
+  gnome_choose_candidate || return 1
+  tty="${GNOME_CHOSEN%%|*}"
+  pid="${GNOME_CHOSEN##*|}"
+  if [[ "$tty" != /dev/* || ! "$pid" =~ ^[0-9]+$ ]]; then
+    gnome_fail "GNOME focus aborted: invalid selected client"
+    return 1
+  fi
+
+  # Re-check the source and the chosen client after the activation round trip.
+  gnome_revalidate_source || return 1
+  if ! gnome_client_still_current "$tty" "$pid"; then
+    gnome_fail "GNOME focus aborted: selected client disappeared before switching"
+    return 1
+  fi
+
+  if ! tmux switch-client -c "$tty" -t "$GNOME_SESSION"; then
+    gnome_fail "GNOME focus failed: tmux switch-client failed"
+    return 1
+  fi
+  if ! tmux select-window -t "${GNOME_SESSION}:${GNOME_CLICK_WINDOW}"; then
+    gnome_fail "GNOME focus failed: tmux select-window failed"
+    return 1
+  fi
+  if ! tmux select-pane -t "${GNOME_SESSION}:${GNOME_CLICK_WINDOW}.${GNOME_PANE}"; then
+    gnome_fail "GNOME focus failed: tmux select-pane failed"
+    return 1
+  fi
+
+  # Ask the extension to activate the window again after the tmux switch. The reply only
+  # confirms a matching window was asked to activate; it is not observed focus.
+  suffix="[pi-tmux:${GNOME_SERVER_PID}:${pid}]"
+  for attempt in 1 2 3; do
+    gnome_revalidate_source || return 1
+    if ! gnome_client_still_current "$tty" "$pid"; then
+      gnome_fail "GNOME focus aborted: selected client disappeared before activation"
+      return 1
+    fi
+    if gnome_activate_suffix "$suffix"; then
+      return 0
+    else
+      rc=$?
+    fi
+    if [[ "$rc" -eq 2 ]]; then
+      gnome_fail "GNOME focus aborted: D-Bus activation error: ${GNOME_DBUS_ERROR}"
+      return 1
+    fi
+    [[ "$attempt" -eq 3 ]] || sleep 0.15
+  done
+  gnome_fail "GNOME focus failed: the selected window stopped matching its title"
+  return 1
 }
 
 send_gnome_notification() {
   local icon="$1" title="$2" body="$3" action=""
   if ! resolve_gnome_context; then
-    printf '%s\n' 'Pi notify: no unique GNOME tmux client/pane; notification has no focus action' >&2
+    printf '%s\n' 'Pi notify: no GNOME tmux focus target; notification has no focus action' >&2
     notify-send -i "$icon" -t 10000 "$title" "$body"
     return
   fi
+  # A local window cannot be proven before the click, so an SSH-only server may offer an
+  # action that fails at click time; that failure is reported instead of a false success.
   action="$(notify-send -i "$icon" -t 10000 -A "default=切回并聚焦" "$title" "$body")" || return 1
   if [[ "$action" == "default" ]]; then
     if ! perform_gnome_jump; then
-      printf '%s\n' 'Pi notify: tmux target or GNOME title activation failed (extension/title may be unavailable)' >&2
+      # The failing stage is already on stderr; never restate every error as a title miss.
+      if [[ "${GNOME_DIAGNOSTIC:-0}" -eq 0 ]]; then
+        printf '%s\n' 'Pi notify: GNOME focus failed' >&2
+      fi
       return 1
     fi
   fi
@@ -523,7 +662,7 @@ play_with_backend() {
 
 send_linux_notification() {
   # Linux 通知分两类：
-  # - GNOME/Wayland：only a unique tmux client gets a direct title activation action
+  # - GNOME/Wayland：按候选优先级匹配本地窗口，再切换 tmux 目标
   # - 其他环境：保留带动作按钮的 Jump 交互
   local icon="$1"
   local title="$2"
