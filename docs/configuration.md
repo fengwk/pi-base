@@ -17,7 +17,7 @@ The `PI_BASE_GLOBAL_SETTINGS_PATH` environment variable overrides the global con
 
 Configuration is cached in-process per cwd. Run `/reload` after modifying it.
 
-Project `pi-base.json` is treated as trusted runtime configuration and is not gated by Pi's project-trust state. It can define executable LSP and MCP commands, so use project configuration only in repositories you trust.
+Project `pi-base.json` is treated as trusted runtime configuration and is not gated by Pi's project-trust state. It can define executable LSP commands, so use project configuration only in repositories you trust. (MCP servers are configured separately in `.pi/mcp.json` or `~/.pi/agent/mcp.json` under Pi's native project-trust model).
 
 ## Validation
 
@@ -28,7 +28,6 @@ Configuration must be a JSON object. Only the following top-level keys are allow
 - `render`
 - `notify`
 - `yolo`
-- `mcp`
 - `compactionModel`
 - `compactionThinkingLevel`
 - `contextCompression`
@@ -48,12 +47,13 @@ Project configuration and global configuration are merged field by field:
 | `render` | Defaults and per-tool mappings are merged |
 | `notify` | Shallow merge; project fields override global fields |
 | `yolo` | Project value overrides |
-| `mcp.servers` | Merged by server key; same-key project entries override |
 | `compactionModel` | Project value overrides |
 | `compactionThinkingLevel` | Project value overrides |
 | `contextCompression` | Scalars override item by item; arrays are replaced as a whole |
 | `subagent` | Each field overrides item by item |
 | `defaultAgent` | Project value overrides |
+
+> **Note**: MCP is no longer configured in `pi-base.json`. Pi 0.99.1 native MCP uses `~/.pi/agent/mcp.json` or `.pi/mcp.json` with standard `mcpServers` format. See the [MCP Migration Guide](mcp-migration.md) for migrating existing configs.
 
 ## `lsp`
 
@@ -200,58 +200,36 @@ Boolean, default `false`. When enabled, the permission guard is skipped.
 
 `/yolo` only toggles the runtime state in the current process; it does not write back to the JSON.
 
-## `mcp`
+## `mcp` (Native MCP in Pi 0.99.1)
 
-### Local servers
+MCP is configured separately in `~/.pi/agent/mcp.json`, or `.pi/mcp.json` for a
+trusted project. Project entries replace same-name global entries. It is not a
+`pi-base.json` field. Use explicit `direct` exposure:
 
 ```json
 {
-  "mcp": {
-    "startupTimeoutMs": 60000,
-    "callTimeoutMs": 60000,
-    "servers": {
-      "local": {
-        "type": "local",
-        "command": ["my-mcp", "serve"],
-        "cwd": "~/work/project",
-        "env": {
-          "API_KEY": "${API_KEY}"
-        },
-        "toolPrefix": "local"
-      }
+  "mcpServers": {
+    "local-server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "exposure": "direct"
+    },
+    "remote-server": {
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DOCS_TOKEN}"
+      },
+      "timeout": 60,
+      "exposure": "direct"
     }
   }
 }
 ```
 
-### Remote servers
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "docs": {
-        "type": "remote",
-        "transport": "streamable-http",
-        "url": "https://example.com/mcp",
-        "headers": {
-          "Authorization": "${DOCS_TOKEN}"
-        }
-      }
-    }
-  }
-}
-```
-
-Supported transports:
-
-- `streamable-http`
-- `sse`
-- `websocket`
-
-`env` and `headers` only allow whole-value references to `$VAR` or `${VAR}`; string interpolation is not supported. The WebSocket transport does not support custom headers.
-
-`toolPrefix` defaults to the server key; an empty string keeps the remote tool's original name.
+`command` and `args` configure stdio; `url` configures streamable HTTP.
+`timeout` is in seconds. Keep literal credentials out of checked-in files.
+See [Native MCP tools](tools/mcp.md) for Agent policy and session behavior, and
+the [migration guide](mcp-migration.md) for the one-time CLI and safety rules.
 
 ## `subagent`
 

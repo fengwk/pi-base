@@ -93,10 +93,6 @@ export interface AgentSupportHandle {
   getActiveAgentName: () => string;
   hasAgent: (name: string) => boolean;
   resolveAgentRuntimeConfig: (name: string) => AgentRuntimeConfig | undefined;
-  /** Whether the active agent's tool policy allows this tool name when it becomes available later. */
-  canActivateTool: (toolName: string) => boolean;
-  /** Reports tool allowlist entries that are unavailable at the current lifecycle point. */
-  warnUnavailableTools: (ctx: ExtensionContext) => void;
 }
 
 export function registerAgentSupport(
@@ -208,8 +204,19 @@ export function registerAgentSupport(
   };
 
   const allRegisteredToolNames = (): string[] => pi.getAllTools()
-    .filter((tool) => options.isToolActivatable?.(tool) ?? true)
+    .filter((tool) => tool.exposure !== "hidden" && (options.isToolActivatable?.(tool) ?? true))
     .map((tool) => tool.name);
+
+  // Declare ordinary tools and retain allowed codemode/deferred tools already loaded by native
+  // tool_search. Registration alone must not auto-declare them, and hidden tools never survive.
+  const declarableToolNames = (names: string[]): string[] => {
+    const active = new Set(pi.getActiveTools());
+    const declarable = new Set(pi.getAllTools()
+      .filter((tool) => tool.exposure !== "hidden"
+        && (tool.exposure === undefined || tool.exposure === "direct" || tool.exposure === "model-only" || active.has(tool.name)))
+      .map((tool) => tool.name));
+    return names.filter((name) => declarable.has(name));
+  };
 
   const updateStatus = (ctx: ExtensionContext, agentName: string): void => {
     if (!ctx.hasUI) return;
@@ -228,7 +235,7 @@ export function registerAgentSupport(
     return catalog.byName.get(name);
   };
   const resolveActiveAgent = (): AgentDefinition | undefined => resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
-  const projectAgentTools = (agent: AgentDefinition, modelId: string | undefined): string[] => {
+  const projectAgentTools = (agent: AgentDefinition, modelId: string | undefined, forExecution = false): string[] => {
     const allToolNames = allRegisteredToolNames();
     const runtimeOwnedToolNames = new Set(options.runtimeOwnedToolNames ?? []);
     // Implicit agents inherit normal tools and receive runtime-owned tools through the dedicated
@@ -237,24 +244,17 @@ export function registerAgentSupport(
       ? allToolNames.filter((name) => !runtimeOwnedToolNames.has(name))
       : allToolNames;
     const validTools = filterKnownTools(agent.tools, eligibleToolNames);
-    const projected = projectFileMutationTools(validTools, modelId, agent.tools === undefined ? "implicit" : "explicit");
+    // Implicit model routing is presentation, not an allowlist: manually selected native tools
+    // remain authorized. Explicit policies still authorize only their projected capability.
+    const projected = forExecution && agent.tools === undefined
+      ? validTools
+      : projectFileMutationTools(validTools, modelId, agent.tools === undefined ? "implicit" : "explicit");
     const injected = filterKnownTools(
       [...(options.getInjectedToolNames?.(agent.tools !== undefined) ?? [])],
       allToolNames,
     );
     return Array.from(new Set([...projected, ...injected]));
   };
-  const canActivateToolForActiveAgent = (toolName: string): boolean => {
-    const agent = resolveActiveAgent();
-    if (!agent) return false;
-    return projectAgentTools(agent, activeModelId).includes(toolName);
-  };
-  const warnUnavailableTools = (ctx: ExtensionContext): void => {
-    const agent = resolveActiveAgent();
-    if (!agent) return;
-    warnUnknownAllowlistEntries(ctx, agent, "tools", allRegisteredToolNames());
-  };
-
   const applyAgent = async (
     requestedName: string,
     ctx: ExtensionContext,
@@ -339,7 +339,7 @@ export function registerAgentSupport(
     }
 
     try {
-      pi.setActiveTools(applyTaskInjection(projectAgentTools(agent, modelId), agent, ctx));
+      pi.setActiveTools(declarableToolNames(applyTaskInjection(projectAgentTools(agent, modelId), agent, ctx)));
     } catch (error) {
       const activationMessage = error instanceof Error ? error.message : String(error);
       const rollbackFailures: string[] = [];
@@ -471,7 +471,10 @@ export function registerAgentSupport(
       }
 
       const applied = await safeApplyAgent(agentName, ctx, { persist: true, notify: true, applyModelThinking: true });
-      if (applied) warnUnavailableTools(ctx);
+      if (applied) {
+        const agent = resolveActiveAgent();
+        if (agent) warnUnknownAllowlistEntries(ctx, agent, "tools", allRegisteredToolNames());
+      }
     },
   });
 
@@ -529,10 +532,36 @@ export function registerAgentSupport(
       pi.setActiveTools(projectFileMutationTools(pi.getActiveTools(), activeModelId, "implicit"));
       return;
     }
-    pi.setActiveTools(applyTaskInjection(projectAgentTools(agent, activeModelId), agent, ctx));
+    pi.setActiveTools(declarableToolNames(applyTaskInjection(projectAgentTools(agent, activeModelId), agent, ctx)));
+  });
+
+  // MCP's native startup waiter runs before this extension's before_agent_start. Re-read the
+  // registry there and each turn, including discoveries that finished after the startup timeout.
+  // Never rebuild implicit agents: their direct loadout belongs to the user/runtime.
+  const synchronizeExplicitTools = (ctx: ExtensionContext): void => {
+    const agent = resolveActiveAgent();
+    if (!agent || agent.tools === undefined) return;
+    const tools = declarableToolNames(applyTaskInjection(projectAgentTools(agent, activeModelId), agent, ctx));
+    const active = pi.getActiveTools();
+    if (tools.length !== active.length || tools.some((name, index) => name !== active[index])) {
+      pi.setActiveTools(tools);
+    }
+  };
+  pi.on("turn_start", (_event, ctx) => synchronizeExplicitTools(ctx));
+
+  pi.on("tool_call", (event, ctx) => {
+    const agent = resolveActiveAgent();
+    const tool = pi.getAllTools().find((item) => item.name === event.toolName);
+    // This is agent policy, not a permission prompt: YOLO and parentToolCallId cannot bypass it.
+    if (agent && tool && !(event.parentToolCallId && tool.exposure === "model-only")
+      && applyTaskInjection(projectAgentTools(agent, activeModelId, true), agent, ctx).includes(event.toolName)) {
+      return;
+    }
+    return { block: true, reason: `Agent "${activeAgentName}" is not allowed to call tool "${event.toolName}".` };
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    synchronizeExplicitTools(ctx);
     const activeAgent = resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
     if (!activeAgent) {
       const baseToolGuide = options.baseToolGuide.trim();
@@ -541,7 +570,9 @@ export function registerAgentSupport(
       };
     }
 
-    const selectedTools = event.systemPromptOptions.selectedTools ?? pi.getActiveTools();
+    const selectedTools = activeAgent.tools === undefined
+      ? event.systemPromptOptions.selectedTools ?? pi.getActiveTools()
+      : pi.getActiveTools();
     const allSkills = event.systemPromptOptions.skills ?? [];
     warnUnknownAllowlistEntries(ctx, activeAgent, "skills", allSkills.map((skill) => skill.name));
     const visibleSkills = skillsRenderableInPrompt(filterVisibleSkills(allSkills, activeAgent.skills));
@@ -583,8 +614,6 @@ export function registerAgentSupport(
         ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
       };
     },
-    canActivateTool: (toolName: string) => canActivateToolForActiveAgent(toolName),
-    warnUnavailableTools,
   };
 }
 

@@ -37,7 +37,7 @@
 
 ## 安装
 
-需要已安装 [Pi](https://github.com/earendil-works/pi)。
+需要已安装 [Pi](https://github.com/earendil-works/pi) `>=0.99.1`（原生 MCP 支持要求）。
 
 ```bash
 pi install git:github.com/fengwk/pi-base
@@ -64,9 +64,9 @@ pi install git:github.com/fengwk/pi-base -l
 
 - 在 `~/.pi/agent/agents/**/*.md` 中定义 [Markdown Agent](docs/agents.zh-CN.md)，通过 `pi --agent <name>` 或 `/agent <name>` 使用。
 - 在 Agent 的 `subagents` 中声明可委派的 Agent，即可启用 [`task`](docs/tools/task.zh-CN.md)。
-- 配置 `mcp.servers` 后，可使用[本地或远程 MCP 工具](docs/tools/mcp.zh-CN.md)。
+- 在 `~/.pi/agent/mcp.json` 或 `.pi/mcp.json` 中配置 MCP servers 后，可使用[原生 MCP 工具](docs/tools/mcp.zh-CN.md)（采用官方 `mcp__server__tool` 命名与 `/mcp` 管理；参见 [MCP 迁移指南](docs/mcp-migration.zh-CN.md)）。
 - 使用 `/goal <objective>` 创建可持久化、可暂停和可恢复的 [Goal](docs/tools/goal-tools.zh-CN.md)。
-- 使用 `/mcp-status`、`/subagent` 和 `/goal status` 查看运行状态。
+- 使用 `/mcp`、`/subagent` 和 `/goal status` 查看运行状态。
 
 ## 说明
 

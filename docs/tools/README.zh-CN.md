@@ -26,7 +26,7 @@
 
 - [`task`](task.zh-CN.md)
 - [Goal tools](goal-tools.zh-CN.md)
-- [MCP tools](mcp.zh-CN.md)
+- [原生 MCP 工具](mcp.zh-CN.md)
 
 ## 公共机制
 

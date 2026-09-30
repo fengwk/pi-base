@@ -8,7 +8,9 @@
 
 - Node.js `>=22.19.0`
 - npm
-- Pi-related peer dependencies are provided by the repository's dev dependencies
+- Pi-related peer dependencies are provided by the repository's dev dependencies (requires Pi `>=0.99.1` for native MCP support)
+
+The supported Pi dependency baseline is `0.99.1` for `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, and `@earendil-works/pi-tui`; use the matching `@earendil-works/pi-server` for server/SDK tests. Native MCP and its protocol dependencies are supplied by Pi rather than a separate pi-base MCP runtime. Keep peer and development versions aligned when integrating the runtime migration.
 
 Install dependencies:
 

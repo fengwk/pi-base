@@ -56,12 +56,14 @@ Unknown fields invalidate the entire Agent file. String arrays are deduplicated;
 ## Tool allowlist
 
 - `tools` omitted: inherit the current default tool policy.
-- Explicit array: only tools that are currently registered and match are kept.
-- Empty array: no ordinary tools are provided.
+- Explicit array: an **ordinary-tool execution allowlist**, enforced by the pi-base Markdown Agent guard, not a generic official SDK `tools` guarantee.
+- Empty array (`tools: []`): no ordinary tools are authorized. Runtime hooks may still inject `task` or Goal tools under their own conditions.
 - File modification tools are projected against the current model, but the explicit allowlist is never expanded.
-- Dynamic tools such as MCP can be written into the allowlist in advance; availability is validated after the first connection succeeds.
+- Direct MCP tools use their actual official names, normally `mcp__<server>__<tool>`.
+- Exposure is not authorization. If wrappers such as `codemode` or `tool_search` are separately enabled, authorize both the wrapper and the MCP tools it invokes; the execution guard still applies.
+- Dynamic MCP names may be allowlisted before registration. `session_start` avoids warnings merely for not-yet-ready tools; `before_agent_start` and `turn_start` synchronize selection, and the execution entry checks authorization.
 
-Tools that are currently unavailable produce a warning, but their names are not removed from the allowlist; they can still be activated after the tool is later registered or an MCP reconnection succeeds. When the first MCP connection fails, the tool is marked unavailable for the current startup phase and a warning is produced.
+See [Native MCP tools](tools/mcp.md) for configuration, naming, and child-session behavior.
 
 ## Skill allowlist
 

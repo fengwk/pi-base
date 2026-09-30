@@ -56,12 +56,14 @@ Frontmatter 之后的 Markdown 正文作为该 Agent 的自定义 prompt。正�
 ## Tool allowlist
 
 - 省略 `tools`：继承当前默认工具策略。
-- 显式数组：只保留当前已注册且匹配的工具。
-- 空数组：不提供普通工具。
+- 显式数组：**普通工具执行白名单**，由 pi-base Markdown Agent guard 执行，不是官方 SDK `tools` 选项的通用保证。
+- 空数组（`tools: []`）：不授权普通工具；runtime hook 仍可在各自条件满足时注入 `task` 或 Goal 工具。
 - 文件修改工具会结合当前模型做投影，但不会扩大显式 allowlist。
-- MCP 等动态工具可以预先写入 allowlist；初次连接成功后再进行可用性校验。
+- Direct MCP 工具使用实际官方名称，通常为 `mcp__<server>__<tool>`。
+- 暴露不等于授权。若另行启用 `codemode` 或 `tool_search` 等封装工具，需同时授权封装工具及其调用的 MCP 工具；执行 guard 仍然生效。
+- 可以在注册完成前将动态 MCP 名称写入 allowlist。`session_start` 不会仅因工具尚未就绪而警告；`before_agent_start` 和 `turn_start` 同步工具选择，执行入口检查授权。
 
-当前不可用的工具会产生警告，但名称不会从 allowlist 删除；工具后续注册或 MCP 重连成功后仍可激活。MCP 首次连接失败时，该工具在当前启动阶段标记为不可用并产生警告。
+配置、命名及子 session 行为见[原生 MCP 工具](tools/mcp.zh-CN.md)。
 
 ## Skill allowlist
 

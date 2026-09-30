@@ -28,7 +28,6 @@ import { registerResumeAllCommand } from "./resume-all.js";
 import { createTimeoutSignal, parseTimeoutSeconds } from "./timeout.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
-import { registerMcpSupport, type RegisterMcpSupportOptions } from "./mcp/index.js";
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
 import { registerAgentSupport } from "./agent-support.js";
 import { TASK_TOOL_NAME } from "./subagent/constants.js";
@@ -54,7 +53,6 @@ import {
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
 export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type CompactionModelConfig, type CompactionThinkingLevel, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
-export type { LocalMcpServerConfig, McpConfig, McpRemoteTransport, McpServerConfig, McpSnapshot, McpToolSnapshot, RemoteMcpServerConfig } from "./mcp/types.js";
 export { type GoalState, type GoalStatus } from "./goal/index.js";
 
 const BASE_TOOL_NAMES = [
@@ -73,16 +71,21 @@ const BASE_TOOL_GUIDE = readFileSync(new URL("../prompts/base.md", import.meta.u
 
 type RegisteredToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];
 
-function isBuiltinTool(tool: RegisteredToolInfo): boolean {
-  return tool.sourceInfo?.source === "builtin";
+// Pi 0.99.1's basic host tools only; native MCP/codemode/discovery extensions
+// also use the builtin source and must remain available.
+const REPLACED_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "read", "bash", "powershell", "edit", "write", "grep", "find", "ls",
+]);
+
+function isReplacedBuiltinTool(tool: RegisteredToolInfo): boolean {
+  return tool.sourceInfo?.source === "builtin" && REPLACED_BUILTIN_TOOL_NAMES.has(tool.name);
 }
 
-function resolveBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): ReadonlySet<string> {
-  return new Set(pi.getAllTools().filter(isBuiltinTool).map((tool) => tool.name));
+function resolveReplacedBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): ReadonlySet<string> {
+  return new Set(pi.getAllTools().filter(isReplacedBuiltinTool).map((tool) => tool.name));
 }
 
 export interface PiBaseExtensionOptions {
-  mcp?: RegisterMcpSupportOptions;
   notify?: Omit<RegisterNotifySupportOptions, "isGoalActive">;
 }
 
@@ -254,11 +257,11 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       return;
     }
 
-    // pi-base replaces Pi's built-in tool set. Keep extension/SDK/MCP tools, but
-    // remove final registry entries that still come from the built-in source.
+    // Remove only basic host tools replaced/retired by pi-base. Preserve native
+    // MCP, codemode, discovery, and other builtin extensions.
     // `task` is an extension tool and is handled separately: agent-support
     // re-injects it only for agents that may delegate.
-    const builtinToolNames = resolveBuiltinToolNames(pi);
+    const builtinToolNames = resolveReplacedBuiltinToolNames(pi);
     const withoutBuiltins = activeTools.filter((name) => !builtinToolNames.has(name));
     const withoutTask = withoutBuiltins.filter((name) => name !== TASK_TOOL_NAME);
     const preservedTools = withoutBuiltins.includes(TASK_TOOL_NAME)
@@ -326,7 +329,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     getMaxTurns: (cwd: string) => resolveSubagentConfig(loadSettings(cwd)).maxTurns,
     readDepth,
   };
-  const inactiveDynamicToolNames = new Set<string>();
   pi.registerFlag("agent", {
     type: "string",
     description: "Start in a specific pi-base agent by name (e.g. --agent reviewer). Ignored if the resumed session already has an agent.",
@@ -340,8 +342,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
     getConfiguredDefaultAgentName: (cwd: string) => loadSettings(cwd).settings.defaultAgent,
-    isToolActivatable: (tool) =>
-      !isBuiltinTool(tool) && !inactiveDynamicToolNames.has(tool.name),
+    isToolActivatable: (tool) => !isReplacedBuiltinTool(tool),
     runtimeOwnedToolNames: GOAL_TOOL_NAMES,
     getInjectedToolNames: (hasExplicitToolPolicy) =>
       goalToolsAvailableInSession
@@ -356,19 +357,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     loadSettings,
     ...options.notify,
     isGoalActive: () => goalHandle?.active === true,
-  });
-  registerMcpSupport(pi, {
-    ...options.mcp,
-    loadSettings,
-    getCollapsedResultLines,
-    getCollapsedResultMaxChars,
-    canActivateTool: (toolName: string) =>
-      agentHandle.canActivateTool(toolName) && (options.mcp?.canActivateTool?.(toolName) ?? true),
-    onToolAvailabilityChange: (toolName: string, available: boolean) => {
-      if (available) inactiveDynamicToolNames.delete(toolName);
-      else inactiveDynamicToolNames.add(toolName);
-      options.mcp?.onToolAvailabilityChange?.(toolName, available);
-    },
   });
   registerSubagentTaskTool(pi, {
     refreshAgentCatalog: agentHandle.refreshAgentCatalog,
@@ -399,13 +387,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
   registerResumeAllCommand(pi);
   registerSubagentCommand(pi);
-  // Agent selection runs before MCP startup. Validate its tool allowlist only after MCP's
-  // initial connection/discovery attempt settles, avoiding false warnings during normal startup
-  // while still surfacing names that remain unavailable.
-  pi.on("session_start", (_event, ctx) => {
-    agentHandle.warnUnavailableTools(ctx);
-  });
-
   // Every root owns the process-local diagnostic relay for its child tree. A UI-owning root also
   // hosts subagent permission prompts and the live tree widget.
   let registeredHost: SubagentPermissionHost | null = null;

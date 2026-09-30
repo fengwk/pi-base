@@ -37,7 +37,7 @@ See the [tool documentation](docs/tools/README.md) for parameters and usage boun
 
 ## Installation
 
-Requires [Pi](https://github.com/earendil-works/pi) to be installed.
+Requires [Pi](https://github.com/earendil-works/pi) `>=0.99.1` to be installed (required for native MCP support).
 
 ```bash
 pi install git:github.com/fengwk/pi-base
@@ -64,9 +64,9 @@ Ready-to-copy global configuration and Agent examples are in [`examples`](exampl
 
 - Define [Markdown Agents](docs/agents.md) in `~/.pi/agent/agents/**/*.md` and use them with `pi --agent <name>` or `/agent <name>`.
 - Declare delegable Agents in an Agent's `subagents` to enable [`task`](docs/tools/task.md).
-- After configuring `mcp.servers`, you can use [local or remote MCP tools](docs/tools/mcp.md).
+- Configure MCP servers in `~/.pi/agent/mcp.json` or `.pi/mcp.json` to use [native MCP tools](docs/tools/mcp.md) (named `mcp__server__tool`, managed via `/mcp` or `pi mcp`; see the [MCP Migration Guide](docs/mcp-migration.md)).
 - Use `/goal <objective>` to create persistent, pausable, and resumable [Goals](docs/tools/goal-tools.md).
-- Use `/mcp-status`, `/subagent`, and `/goal status` to view runtime status.
+- Use `/mcp`, `/subagent`, and `/goal status` to view runtime status.
 
 ## Notes
 

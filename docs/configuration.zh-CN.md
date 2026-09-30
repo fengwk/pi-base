@@ -17,7 +17,7 @@
 
 配置按 cwd 缓存在进程内。修改后执行 `/reload`。
 
-项目 `pi-base.json` 被视为可信运行时配置，不受 Pi project trust 状态限制。它可以定义可执行的 LSP 和 MCP 命令，因此只应在可信仓库中使用项目配置。
+项目 `pi-base.json` 被视为可信运行时配置，不受 Pi project trust 状态限制。它可以定义可执行的 LSP 命令，因此只应在可信仓库中使用项目配置。（MCP server 改在 `.pi/mcp.json` 或 `~/.pi/agent/mcp.json` 中配置，遵循 Pi 原生可信项目安全模型）。
 
 ## 校验
 
@@ -28,7 +28,6 @@
 - `render`
 - `notify`
 - `yolo`
-- `mcp`
 - `compactionModel`
 - `compactionThinkingLevel`
 - `contextCompression`
@@ -48,12 +47,13 @@
 | `render` | 合并默认值和逐工具映射 |
 | `notify` | 浅合并，项目字段覆盖全局字段 |
 | `yolo` | 项目值覆盖 |
-| `mcp.servers` | 按 server key 合并，同 key 项目覆盖 |
 | `compactionModel` | 项目值覆盖 |
 | `compactionThinkingLevel` | 项目值覆盖 |
 | `contextCompression` | 标量逐项覆盖，数组整体替换 |
 | `subagent` | 各字段逐项覆盖 |
 | `defaultAgent` | 项目值覆盖 |
+
+> **注意**：MCP 已不再在 `pi-base.json` 中配置。Pi 0.99.1 原生 MCP 使用 `~/.pi/agent/mcp.json` 或 `.pi/mcp.json`（标准 `mcpServers` 格式）。已有配置迁移见 [MCP 迁移指南](mcp-migration.zh-CN.md)。
 
 ## `lsp`
 
@@ -200,58 +200,36 @@ Boolean，默认 `false`。启用后跳过 Permission guard。
 
 `/yolo` 只切换当前进程内的运行时状态，不写回 JSON。
 
-## `mcp`
+## `mcp`（Pi 0.99.1 原生 MCP）
 
-### 本地 server
+MCP 单独配置在 `~/.pi/agent/mcp.json` 中，可信项目也可使用 `.pi/mcp.json`。
+项目条目会替换同名全局条目。它不再是 `pi-base.json` 字段，
+应使用显式 `direct` 暴露：
 
 ```json
 {
-  "mcp": {
-    "startupTimeoutMs": 60000,
-    "callTimeoutMs": 60000,
-    "servers": {
-      "local": {
-        "type": "local",
-        "command": ["my-mcp", "serve"],
-        "cwd": "~/work/project",
-        "env": {
-          "API_KEY": "${API_KEY}"
-        },
-        "toolPrefix": "local"
-      }
+  "mcpServers": {
+    "local-server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "exposure": "direct"
+    },
+    "remote-server": {
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DOCS_TOKEN}"
+      },
+      "timeout": 60,
+      "exposure": "direct"
     }
   }
 }
 ```
 
-### 远程 server
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "docs": {
-        "type": "remote",
-        "transport": "streamable-http",
-        "url": "https://example.com/mcp",
-        "headers": {
-          "Authorization": "${DOCS_TOKEN}"
-        }
-      }
-    }
-  }
-}
-```
-
-支持 transport：
-
-- `streamable-http`
-- `sse`
-- `websocket`
-
-`env` 和 `headers` 只允许整个值引用 `$VAR` 或 `${VAR}`，不支持字符串内插。WebSocket transport 不支持自定义 headers。
-
-`toolPrefix` 默认使用 server key；空字符串保留远端原始工具名。
+`command` 和 `args` 配置 stdio，`url` 配置 streamable HTTP。
+`timeout` 单位为秒。不要将明文凭证提交到配置文件中。
+Agent 策略和 session 行为见[原生 MCP 工具](tools/mcp.zh-CN.md)，
+一次性迁移 CLI 与安全规则见[迁移指南](mcp-migration.zh-CN.md)。
 
 ## `subagent`
 

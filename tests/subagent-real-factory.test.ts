@@ -17,6 +17,10 @@ const mocked = vi.hoisted(() => ({
   sessionManagerOpen: vi.fn(),
   settingsManagerCreate: vi.fn(),
   settingsManagerApplyOverrides: vi.fn(),
+  settingsManagerSetProjectTrusted: vi.fn(),
+  loaderReload: vi.fn(async () => undefined),
+  loaderOptions: vi.fn(),
+  mcpFactory: vi.fn(),
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -29,6 +33,11 @@ vi.mock("node:fs", async (importOriginal) => {
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession: mocked.createAgentSession,
+  createMcpExtension: () => mocked.mcpFactory,
+  DefaultResourceLoader: class {
+    constructor(options: unknown) { mocked.loaderOptions(options); }
+    reload = mocked.loaderReload;
+  },
   getAgentDir: mocked.getAgentDir,
   SessionManager: {
     create: mocked.sessionManagerCreate,
@@ -76,7 +85,7 @@ function fakeSession(
   return {
     bindExtensions: vi.fn(async () => undefined),
     prompt: vi.fn(async () => undefined),
-    steer: vi.fn(async () => undefined),
+    steer: vi.fn(async () => "queued" as const),
     messages,
     model,
     thinkingLevel: "high",
@@ -100,6 +109,7 @@ function fakeCtx(
 ) {
   return {
     cwd,
+    isProjectTrusted: () => false,
     model: { provider: "provider", id: "model" },
     modelRegistry: {
       find: vi.fn(),
@@ -121,7 +131,13 @@ beforeEach(() => {
   mocked.sessionManagerOpen.mockReset();
   mocked.settingsManagerCreate.mockReset();
   mocked.settingsManagerApplyOverrides.mockReset();
-  mocked.settingsManagerCreate.mockReturnValue({ applyOverrides: mocked.settingsManagerApplyOverrides });
+  mocked.settingsManagerSetProjectTrusted.mockReset();
+  mocked.loaderOptions.mockClear();
+  mocked.loaderReload.mockClear();
+  mocked.settingsManagerCreate.mockReturnValue({
+    applyOverrides: mocked.settingsManagerApplyOverrides,
+    setProjectTrusted: mocked.settingsManagerSetProjectTrusted,
+  });
 });
 
 afterEach(() => {
@@ -152,8 +168,16 @@ describe("createRealSubagentFactory", () => {
     expect(session.bindExtensions).toHaveBeenCalledWith({});
     expect(session.prompt).not.toHaveBeenCalled();
     await child.prompt("go");
+    expect(mocked.loaderOptions).toHaveBeenCalledWith({
+      cwd: "/work/repo",
+      agentDir: "/agent-home",
+      settingsManager: mocked.settingsManagerCreate.mock.results[0].value,
+      extensionFactories: [{ name: "mcp", factory: mocked.mcpFactory, builtin: true, replaceable: true }],
+    });
+    expect(mocked.loaderReload.mock.invocationCallOrder[0]).toBeLessThan(mocked.createAgentSession.mock.invocationCallOrder[0]);
+    expect(mocked.settingsManagerSetProjectTrusted).toHaveBeenCalledWith(false);
     expect(session.prompt).toHaveBeenCalledWith("go");
-    await child.steer?.("finish now");
+    await expect(child.steer?.("finish now")).resolves.toBeUndefined();
     expect(session.steer).toHaveBeenCalledWith("finish now");
     expect(child.collect()).toEqual({ report: "final answer", toolCount: 1 });
     expect(child.view?.getThinkingLevel?.()).toBe("high");
@@ -356,7 +380,10 @@ describe("createRealSubagentFactory", () => {
     // settings or replacing unrelated global/project settings such as the HTTP idle timeout.
     const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
     const session = fakeSession();
-    const settingsManager = { applyOverrides: mocked.settingsManagerApplyOverrides };
+    const settingsManager = {
+      applyOverrides: mocked.settingsManagerApplyOverrides,
+      setProjectTrusted: mocked.settingsManagerSetProjectTrusted,
+    };
     mocked.settingsManagerCreate.mockReturnValue(settingsManager);
     mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
     mocked.sessionManagerCreate.mockReturnValue(fakeManager("retry-child"));
@@ -372,8 +399,7 @@ describe("createRealSubagentFactory", () => {
   });
 
   it("inherits Pi retry settings when no child retry override is configured", async () => {
-    // Intent: an omitted pi-base setting must preserve createAgentSession's native settings loading
-    // instead of injecting an empty or divergent settings manager.
+    // Intent: loader and session share native settings without an empty retry override.
     const { createRealSubagentFactory } = await import("../src/subagent/runner.js");
     const session = fakeSession();
     mocked.createAgentSession.mockResolvedValue({ session, extensionsResult: loadedExtensions() });
@@ -385,8 +411,10 @@ describe("createRealSubagentFactory", () => {
       childDepth: 2,
     });
 
-    expect(mocked.settingsManagerCreate).not.toHaveBeenCalled();
-    expect(mocked.createAgentSession.mock.calls[0]?.[0]).not.toHaveProperty("settingsManager");
+    expect(mocked.settingsManagerCreate).toHaveBeenCalledWith("/work/repo", "/agent-home");
+    expect(mocked.settingsManagerApplyOverrides).not.toHaveBeenCalled();
+    expect(mocked.createAgentSession.mock.calls[0]?.[0].settingsManager)
+      .toBe(mocked.loaderOptions.mock.calls[0]?.[0].settingsManager);
   });
 
   it("disposes a child session when extension binding fails", async () => {

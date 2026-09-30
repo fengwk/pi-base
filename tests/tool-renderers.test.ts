@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import piBaseExtension from "../index.js";
-import { createMcpToolDefinition } from "../src/mcp/adapter.js";
 import { createTempWorkspace, createToolRegistry } from "./helpers.js";
 
 function render(component: any): string {
@@ -68,16 +67,6 @@ describe("tool renderers", () => {
       piBaseExtension(registry.pi as any);
       const longText = `错误🙂-${"界".repeat(30)}`;
       const resultText = Array.from({ length: 24 }, (_, index) => `line-${index}-${longText}`).join("\n");
-      const mcpDefinition = createMcpToolDefinition({
-        serverKey: "demo",
-        serverConfig: {} as any,
-        tool: {
-          name: "echo",
-          description: "Echo input",
-          inputSchema: { type: "object", properties: { payload: { type: "string" } } },
-        },
-        callTool: async () => ({ content: [] }),
-      });
       const cases = [
         { name: "read", args: { path: `src/${longText}.ts`, offset: 1, limit: 20 } },
         { name: "grep", args: { pattern: longText, path: "src", include: "**/*.ts" } },
@@ -90,7 +79,6 @@ describe("tool renderers", () => {
         { name: "lsp_workspace_symbols", args: { path: "src/demo.ts", query: longText, limit: 20 } },
         { name: "lsp_java_decompile", args: { path: "src/App.java", target: `jdt://${longText}` } },
         { name: "task", args: { subagent_type: "explorer", prompt: resultText } },
-        { name: mcpDefinition.name, args: { payload: resultText }, definition: mcpDefinition },
       ];
       const tui = { requestRender: () => undefined } as any;
       const assertWidthBound = (name: string, component: ToolExecutionComponent) => {
@@ -110,7 +98,7 @@ describe("tool renderers", () => {
           `render-${testCase.name}`,
           testCase.args,
           { showImages: false },
-          testCase.definition ?? registry.getTool(testCase.name),
+          registry.getTool(testCase.name),
           tui,
           root,
         );

@@ -12,7 +12,7 @@
   - 扩展启动顺序
   - 生命周期事件
   - 工具公共执行链
-  - Agent、MCP、LSP、Goal 与 Subagent 的关系
+  - Agent、原生 MCP、LSP、Goal 与 Subagent 的关系
 - [Markdown Agent](agents.zh-CN.md)
   - Agent 文件格式
   - Tool、skill 与 subagent allowlist
@@ -26,13 +26,16 @@
   - 配置路径
   - 合并规则
   - 全部顶层配置项
+- [MCP 迁移指南](mcp-migration.zh-CN.md)
+  - 从 pi-base 自定义 MCP 迁移到 Pi 0.99.1 原生 MCP
+  - `migrate-mcp.mjs` 迁移脚本用法与配置映射
 - [配置示例](../examples/README.zh-CN.md)
   - `pi-base.json`
   - Markdown Agent
 - [工具实现索引](tools/README.zh-CN.md)
   - 基础文件工具
   - LSP 工具
-  - Subagent、Goal 与 MCP 动态工具
+  - Subagent、Goal 与原生 MCP 工具
 
 ## 维护原则
 

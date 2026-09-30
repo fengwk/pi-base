@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import piBaseExtension, { type PiBaseNotifyPayload } from "../index.js";
@@ -12,6 +12,125 @@ function render(component: any): string {
 }
 
 describe("index lifecycle behavior", () => {
+  it("uses host peers and pins only the used Pi development packages to 0.99.1", async () => {
+    // Intent: package installation must not supply a second runtime copy of host APIs
+    // or keep the removed custom MCP SDK/server dependency in the root manifest.
+    const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+    const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
+    for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
+      expect(manifest.peerDependencies[name]).toBe("*");
+      expect(manifest.devDependencies[name]).toBe("0.99.1");
+      expect(manifest.dependencies).not.toHaveProperty(name);
+      expect(lock.packages[`node_modules/${name}`].version).toBe("0.99.1");
+    }
+    expect(manifest.peerDependencies.typebox).toBe("*");
+    expect(manifest.devDependencies.typebox).toBeDefined();
+    expect(manifest.dependencies).not.toHaveProperty("typebox");
+    for (const name of ["@modelcontextprotocol/sdk", "@earendil-works/pi-server"]) {
+      expect(manifest.dependencies).not.toHaveProperty(name);
+      expect(manifest.devDependencies).not.toHaveProperty(name);
+      expect(manifest.peerDependencies).not.toHaveProperty(name);
+    }
+    expect(lock.packages[""].dependencies).toEqual(manifest.dependencies);
+    expect(lock.packages[""].devDependencies).toEqual(manifest.devDependencies);
+    expect(lock.packages[""].peerDependencies).toEqual(manifest.peerDependencies);
+  });
+
+  it("removes only basic host tools while preserving native builtin extensions on startup and reload", async () => {
+    // Intent: source=builtin covers more than the eight basic tools in Pi 0.99.1.
+    const root = await createTempWorkspace();
+    const registry = createToolRegistry({ cwd: root });
+    piBaseExtension(registry.pi as any);
+    const basicTools = ["read", "bash", "edit", "write", "grep", "find", "ls", "powershell"];
+    const nativeTools = ["mcp__demo__echo", "codemode", "tool_search", "list_mcp_resources", "future_builtin"];
+    for (const name of [...basicTools, ...nativeTools]) {
+      registry.pi.registerTool({
+        name,
+        sourceInfo: { source: "builtin" },
+        execute: async () => ({ content: [] }),
+      });
+    }
+    registry.pi.registerTool({
+      name: "local_tool",
+      sourceInfo: { source: "local" },
+      execute: async () => ({ content: [] }),
+    });
+    const preserved = [...nativeTools, "local_tool"];
+    for (const reason of ["startup", "reload"]) {
+      registry.pi.setActiveTools([...basicTools, ...preserved, "task"]);
+      await registry.emit("session_start", { reason }, { cwd: root });
+      expect(registry.getActiveTools()).toEqual(preserved);
+    }
+    expect(() => registry.getCommand("mcp-status")).toThrow("Command not registered");
+    expect(registry.getMessageRenderer("pi-base-mcp-status")).toBeUndefined();
+    expect(registry.getStatuses().has("02-pi-base-mcp")).toBe(false);
+    await registry.emit("session_shutdown", { reason: "quit" }, { cwd: root });
+  });
+
+  it.each(["implicit", "explicit"])("allows native builtin tools in %s agent policies without reactivating retired host tools", async (policy) => {
+    // Intent: agent policy uses the same finite builtin filter as session startup.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await mkdir(join(agentDir, "agents"), { recursive: true });
+      const toolPolicy = policy === "explicit"
+        ? "tools: [read, bash, ls, powershell, mcp__demo__echo, codemode, tool_search, future_builtin]\n"
+        : "";
+      await writeFile(join(agentDir, "agents", "native.md"), `---\nname: native\n${toolPolicy}---\nNative tools.\n`, "utf8");
+      const registry = createToolRegistry({ cwd: root });
+      for (const name of ["ls", "powershell", "mcp__demo__echo", "codemode", "tool_search", "future_builtin"]) {
+        registry.pi.registerTool({
+          name,
+          sourceInfo: { source: "builtin" },
+          execute: async () => ({ content: [] }),
+        });
+      }
+      piBaseExtension(registry.pi as any);
+      await registry.runCommand("agent", "native", { cwd: root });
+      expect(registry.getActiveTools()).toEqual(expect.arrayContaining([
+        "read", "bash", "mcp__demo__echo", "codemode", "tool_search", "future_builtin",
+      ]));
+      expect(registry.getActiveTools()).not.toContain("ls");
+      expect(registry.getActiveTools()).not.toContain("powershell");
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
+  it("does not warn about late native MCP tools at session startup", async () => {
+    // Intent: official MCP discovery is asynchronous; session_start cannot prove
+    // a configured direct tool is unavailable. Warning lifecycle belongs to agent support.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await mkdir(join(agentDir, "agents"), { recursive: true });
+      await writeFile(join(agentDir, "agents", "native.md"), "---\nname: native\ntools:\n  - mcp__demo__late\n---\nNative tools.\n", "utf8");
+      await mkdir(join(root, ".pi"), { recursive: true });
+      await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ defaultAgent: "native" }), "utf8");
+      const registry = createToolRegistry({ cwd: root });
+      piBaseExtension(registry.pi as any);
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+      expect(registry.getEntries()).toContainEqual(expect.objectContaining({ data: { name: "native" } }));
+      expect(registry.getNotifications().filter(({ message }) => message.includes("mcp__demo__late"))).toEqual([]);
+      registry.pi.registerTool({
+        name: "mcp__demo__late",
+        sourceInfo: { source: "builtin" },
+        execute: async () => ({ content: [] }),
+      });
+      await registry.runCommand("agent", "native", { cwd: root });
+      expect(registry.getActiveTools()).toContain("mcp__demo__late");
+      await registry.emit("session_shutdown", { reason: "quit" }, { cwd: root });
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
   it("settles goal state before deciding whether to send completion notifications", async () => {
     // Intent: an active goal is about to auto-continue and must stay silent, while the same
     // lifecycle sends the ordinary completion notification once that goal is paused.

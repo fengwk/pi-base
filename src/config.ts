@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { LspDiscoveryConfig, LspServerEntry, LspWorkspaceDataConfig, LspWorkspaceDataMode } from "./lsp/discovery.js";
-import type { LocalMcpServerConfig, McpConfig, McpServerConfig, RemoteMcpServerConfig } from "./mcp/types.js";
 import { expandHomePath, isHomeShortcutPath } from "./path-utils.js";
 
 export type PermissionAction = "allow" | "ask" | "deny";
@@ -74,7 +73,6 @@ export interface PiBaseSettings {
   render?: RenderConfig;
   notify?: NotifyConfig;
   yolo?: YoloMode;
-  mcp?: McpConfig;
   /** Optional provider/model used to generate Pi compaction summaries. */
   compactionModel?: CompactionModelConfig;
   /** Optional thinking level used only for the configured compaction model. */
@@ -121,16 +119,6 @@ function requireStringArray(value: unknown, path: string): string[] {
 function requireNonEmptyStringArray(value: unknown, path: string): string[] {
   const output = requireStringArray(value, path);
   if (output.length === 0) throw new Error(`${path} must contain at least one entry.`);
-  return output;
-}
-
-function requireStringRecord(value: unknown, path: string): Record<string, string> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object keyed by string.`);
-  const output: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof entry !== "string") throw new Error(`${path}.${key} must be a string.`);
-    output[key] = entry;
-  }
   return output;
 }
 
@@ -487,118 +475,12 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
   }
   return output;
 }
-function sanitizeMcpLocalServerConfig(value: unknown, path: string): LocalMcpServerConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
-  const input = value as Record<string, unknown>;
-  assertNoUnknownKeys(input, path, [
-    "type",
-    "command",
-    "env",
-    "cwd",
-    "enabled",
-    "toolPrefix",
-    "startupTimeoutMs",
-    "callTimeoutMs",
-  ]);
-  if (input.type !== "local") throw new Error(`${path}.type must be "local".`);
-  const output: LocalMcpServerConfig = {
-    type: "local",
-    command: requireNonEmptyStringArray(input.command, `${path}.command`),
-  };
-  if (input.env !== undefined) output.env = requireStringRecord(input.env, `${path}.env`);
-  if (input.cwd !== undefined) {
-    if (typeof input.cwd !== "string") throw new Error(`${path}.cwd must be a string.`);
-    output.cwd = input.cwd;
-  }
-  if (input.enabled !== undefined) output.enabled = sanitizeOptionalBoolean(input.enabled, `${path}.enabled`);
-  if (input.toolPrefix !== undefined) {
-    if (typeof input.toolPrefix !== "string") throw new Error(`${path}.toolPrefix must be a string.`);
-    output.toolPrefix = input.toolPrefix;
-  }
-  if (input.startupTimeoutMs !== undefined) {
-    output.startupTimeoutMs = sanitizePositiveInteger(input.startupTimeoutMs, `${path}.startupTimeoutMs`);
-  }
-  if (input.callTimeoutMs !== undefined) {
-    output.callTimeoutMs = sanitizePositiveInteger(input.callTimeoutMs, `${path}.callTimeoutMs`);
-  }
-  return output;
-}
-
-function sanitizeMcpRemoteServerConfig(value: unknown, path: string): RemoteMcpServerConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
-  const input = value as Record<string, unknown>;
-  assertNoUnknownKeys(input, path, [
-    "type",
-    "transport",
-    "url",
-    "headers",
-    "enabled",
-    "toolPrefix",
-    "startupTimeoutMs",
-    "callTimeoutMs",
-  ]);
-  if (input.type !== "remote") throw new Error(`${path}.type must be "remote".`);
-  if (typeof input.url !== "string") throw new Error(`${path}.url must be a string.`);
-  if (typeof input.transport !== "string" || (input.transport !== "websocket" && input.transport !== "sse" && input.transport !== "streamable-http")) {
-    throw new Error(`${path}.transport must be one of websocket, sse, or streamable-http.`);
-  }
-  try {
-    new URL(input.url);
-  } catch {
-    throw new Error(`${path}.url must be a valid URL.`);
-  }
-  const output: RemoteMcpServerConfig = {
-    type: "remote",
-    transport: input.transport,
-    url: input.url,
-  };
-  if (input.headers !== undefined) output.headers = requireStringRecord(input.headers, `${path}.headers`);
-  if (input.enabled !== undefined) output.enabled = sanitizeOptionalBoolean(input.enabled, `${path}.enabled`);
-  if (input.toolPrefix !== undefined) {
-    if (typeof input.toolPrefix !== "string") throw new Error(`${path}.toolPrefix must be a string.`);
-    output.toolPrefix = input.toolPrefix;
-  }
-  if (input.startupTimeoutMs !== undefined) {
-    output.startupTimeoutMs = sanitizePositiveInteger(input.startupTimeoutMs, `${path}.startupTimeoutMs`);
-  }
-  if (input.callTimeoutMs !== undefined) {
-    output.callTimeoutMs = sanitizePositiveInteger(input.callTimeoutMs, `${path}.callTimeoutMs`);
-  }
-  return output;
-}
-
-function sanitizeMcpServerConfig(value: unknown, path: string): McpServerConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object.`);
-  const type = (value as Record<string, unknown>).type;
-  if (type === "local") return sanitizeMcpLocalServerConfig(value, path);
-  if (type === "remote") return sanitizeMcpRemoteServerConfig(value, path);
-  throw new Error(`${path}.type must be either "local" or "remote".`);
-}
-
-function sanitizeMcpConfig(value: unknown): McpConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("mcp must be an object.");
-  const input = value as Record<string, unknown>;
-  assertNoUnknownKeys(input, "mcp", ["servers", "startupTimeoutMs", "callTimeoutMs"]);
-  if (input.servers !== undefined && (typeof input.servers !== "object" || input.servers === null || Array.isArray(input.servers))) {
-    throw new Error("mcp.servers must be an object keyed by server name.");
-  }
-  const servers: Record<string, McpServerConfig> = {};
-  for (const [serverKey, config] of Object.entries((input.servers ?? {}) as Record<string, unknown>)) {
-    if (!serverKey.trim()) throw new Error("mcp.servers contains an empty server name.");
-    servers[serverKey] = sanitizeMcpServerConfig(config, `mcp.servers.${serverKey}`);
-  }
-  const output: McpConfig = { servers };
-  if (input.startupTimeoutMs !== undefined) {
-    output.startupTimeoutMs = sanitizePositiveInteger(input.startupTimeoutMs, "mcp.startupTimeoutMs");
-  }
-  if (input.callTimeoutMs !== undefined) {
-    output.callTimeoutMs = sanitizePositiveInteger(input.callTimeoutMs, "mcp.callTimeoutMs");
-  }
-  return output;
-}
 function sanitizeSettings(value: unknown): PiBaseSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("settings must be a JSON object.");
   const input = value as Record<string, unknown>;
+  if (Object.hasOwn(input, "mcp")) {
+    throw new Error('settings.mcp is no longer supported. Migrate to Pi\'s native mcp.json (global agent directory or project .pi/mcp.json), using "mcpServers" and exposure: "direct". Remove "mcp" from pi-base.json; legacy transports and tool aliases are not supported.');
+  }
   assertNoUnknownKeys(
     input,
     "settings",
@@ -608,7 +490,6 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
       "render",
       "notify",
       "yolo",
-      "mcp",
       "compactionModel",
       "compactionThinkingLevel",
       "contextCompression",
@@ -623,7 +504,6 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
     render: input.render === undefined ? undefined : sanitizeRenderConfig(input.render),
     notify: input.notify === undefined ? undefined : sanitizeNotifyConfig(input.notify),
     yolo: input.yolo === undefined ? undefined : sanitizeYoloMode(input.yolo),
-    mcp: input.mcp === undefined ? undefined : sanitizeMcpConfig(input.mcp),
     compactionModel: input.compactionModel === undefined ? undefined : sanitizeCompactionModel(input.compactionModel),
     compactionThinkingLevel: input.compactionThinkingLevel === undefined
       ? undefined
@@ -671,24 +551,6 @@ function normalizeDirectoryPath(value: string, path: string): string {
   return expanded;
 }
 
-function normalizeMcpConfigPaths(config: McpConfig | undefined): McpConfig | undefined {
-  if (!config?.servers) return config;
-  return {
-    ...config,
-    servers: Object.fromEntries(Object.entries(config.servers).map(([id, entry]) => {
-      if (entry.type !== "local") return [id, entry];
-      const [command0, ...rest] = entry.command;
-      const normalizedCommand = command0
-        ? [normalizeCommandExecutable(command0, `mcp.servers.${id}`), ...rest]
-        : entry.command;
-      return [id, {
-        ...entry,
-        command: normalizedCommand,
-        ...(entry.cwd !== undefined ? { cwd: normalizeDirectoryPath(entry.cwd, `mcp.servers.${id}.cwd`) } : {}),
-      } satisfies LocalMcpServerConfig];
-    })),
-  };
-}
 function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
   return {
     ...(settings.lsp ? { lsp: normalizeLspConfigPaths(settings.lsp) } : {}),
@@ -696,7 +558,6 @@ function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
     ...(settings.render ? { render: settings.render } : {}),
     ...(settings.notify ? { notify: settings.notify } : {}),
     ...(settings.yolo !== undefined ? { yolo: settings.yolo } : {}),
-    ...(settings.mcp ? { mcp: normalizeMcpConfigPaths(settings.mcp) } : {}),
     ...(settings.compactionModel ? { compactionModel: settings.compactionModel } : {}),
     ...(settings.compactionThinkingLevel ? { compactionThinkingLevel: settings.compactionThinkingLevel } : {}),
     ...(settings.contextCompression ? { contextCompression: settings.contextCompression } : {}),
@@ -768,18 +629,6 @@ function mergeCompactionThinkingLevel(
 ): CompactionThinkingLevel | undefined {
   return override ?? base;
 }
-function mergeMcp(base: McpConfig | undefined, override: McpConfig | undefined): McpConfig | undefined {
-  if (!base && !override) return undefined;
-  const servers = { ...(base?.servers ?? {}), ...(override?.servers ?? {}) };
-  const startupTimeoutMs = override?.startupTimeoutMs ?? base?.startupTimeoutMs;
-  const callTimeoutMs = override?.callTimeoutMs ?? base?.callTimeoutMs;
-  if (Object.keys(servers).length === 0 && startupTimeoutMs === undefined && callTimeoutMs === undefined) return undefined;
-  const output: McpConfig = { servers };
-  if (startupTimeoutMs !== undefined) output.startupTimeoutMs = startupTimeoutMs;
-  if (callTimeoutMs !== undefined) output.callTimeoutMs = callTimeoutMs;
-  return output;
-}
-
 function mergeSubagent(base: SubagentConfig | undefined, override: SubagentConfig | undefined): SubagentConfig | undefined {
   if (!base && !override) return undefined;
   const output: SubagentConfig = {
@@ -852,7 +701,6 @@ export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSet
       render: mergeRender(globalSettings.render, projectSettings.render),
       notify: mergeNotify(globalSettings.notify, projectSettings.notify),
       yolo: mergeYolo(globalSettings.yolo, projectSettings.yolo),
-      mcp: mergeMcp(globalSettings.mcp, projectSettings.mcp),
       compactionModel: mergeCompactionModel(globalSettings.compactionModel, projectSettings.compactionModel),
       compactionThinkingLevel: mergeCompactionThinkingLevel(
         globalSettings.compactionThinkingLevel,

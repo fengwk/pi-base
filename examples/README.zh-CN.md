@@ -66,10 +66,11 @@ Agent 示例使用以下模型：
 |------|----------|
 | `lsp` | 已安装对应 LSP server，并确认可执行文件路径、文件后缀和项目根标记 |
 | `notify` | 运行环境是 Linux desktop 或 WSL，并需要权限或运行结束通知 |
-| `mcp` | 已确定本地 server 命令或远程 server URL，以及所需环境变量 |
 | `contextCompression` | 长时间、工具调用密集的 session 已产生明确的上下文压力，并且可以接受旧工具输出被占位文本替换 |
 | `compactionModel` / `compactionThinkingLevel` | 已配置用于 context compaction 的 provider 和 model |
 | `yolo` | 明确需要跳过 Permission guard；该配置会关闭操作确认 |
+
+> **注意**：MCP 改在 `~/.pi/agent/mcp.json` 或 `.pi/mcp.json` 中使用 Pi 0.99.1 原生 MCP 进行配置，不再写入 `pi-base.json`。详见下文[原生 MCP](#原生-mcp)。
 
 ### LSP
 
@@ -155,11 +156,40 @@ Linux desktop 或 WSL 可以添加：
 
 其他平台不启用桌面通知。
 
-### MCP
+### 原生 MCP
 
-本地 MCP server 需要配置 `type: "local"`、`command`，以及可选的 `cwd`、`env` 和 `toolPrefix`。远程 MCP server 需要配置 `type: "remote"`、`transport` 和 `url`。凭证通过完整值 `$VAR` 或 `${VAR}` 引用环境变量，不支持在字符串中插值，也不应直接写入配置文件。
+MCP server 配置在 `~/.pi/agent/mcp.json`（全局）或 `<repo>/.pi/mcp.json`（项目级，仅受信任项目）中，不再配置于 `pi-base.json`。
 
-本地和远程示例见 [MCP 配置参考](../docs/configuration.zh-CN.md#mcp)。
+`~/.pi/agent/mcp.json` 示例：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "cwd": "~/work/project",
+      "env": {
+        "PROJECT_ROOT": "${PROJECT_ROOT}"
+      },
+      "timeout": 60,
+      "exposure": "direct"
+    },
+    "docs": {
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DOCS_TOKEN}"
+      },
+      "timeout": 90,
+      "exposure": "direct"
+    }
+  }
+}
+```
+
+- 工具统一采用官方规范命名 `mcp__<server>__<tool>`。
+- 可在会话内使用 `/mcp` 交互式管理，或使用 Shell CLI（`pi mcp list`、`pi mcp add` 等）。
+- 详见[原生 MCP 工具文档](../docs/tools/mcp.zh-CN.md)与 [MCP 迁移指南](../docs/mcp-migration.zh-CN.md)。
 
 ### Context compression
 

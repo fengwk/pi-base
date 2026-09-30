@@ -66,10 +66,11 @@ The following fields are not included in the ready-to-copy [`pi-base.json`](pi-b
 |------|----------|
 | `lsp` | The corresponding LSP server is installed, and the executable path, file extensions, and root markers are confirmed |
 | `notify` | The environment is a Linux desktop or WSL, and permission or run-completion notifications are needed |
-| `mcp` | The local server command or remote server URL, and the required environment variables, are determined |
 | `contextCompression` | A long session with dense tool calls has created clear context pressure, and replacing old tool output with placeholder text is acceptable |
 | `compactionModel` / `compactionThinkingLevel` | A provider and model are configured for context compaction |
 | `yolo` | Explicitly need to skip the Permission guard; this configuration disables operation confirmation |
+
+> **Note**: MCP is configured separately in `~/.pi/agent/mcp.json` or `.pi/mcp.json` using Pi 0.99.1 native MCP, rather than in `pi-base.json`. See [Native MCP](#native-mcp) below.
 
 ### LSP
 
@@ -155,11 +156,40 @@ On a Linux desktop or WSL, you can add:
 
 Desktop notifications are not enabled on other platforms.
 
-### MCP
+### Native MCP
 
-A local MCP server requires `type: "local"`, `command`, and optionally `cwd`, `env`, and `toolPrefix`. A remote MCP server requires `type: "remote"`, `transport`, and `url`. Credentials reference environment variables with full values `$VAR` or `${VAR}`; interpolation inside strings is not supported, and credentials should not be written directly into the configuration file.
+MCP servers are configured in `~/.pi/agent/mcp.json` (global) or `<repo>/.pi/mcp.json` (project-level, trusted only) rather than `pi-base.json`.
 
-See the [MCP Configuration Reference](../docs/configuration.md#mcp) for local and remote examples.
+Example `~/.pi/agent/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "cwd": "~/work/project",
+      "env": {
+        "PROJECT_ROOT": "${PROJECT_ROOT}"
+      },
+      "timeout": 60,
+      "exposure": "direct"
+    },
+    "docs": {
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DOCS_TOKEN}"
+      },
+      "timeout": 90,
+      "exposure": "direct"
+    }
+  }
+}
+```
+
+- Tools use canonical official names `mcp__<server>__<tool>`.
+- Manage servers interactively with `/mcp` or via CLI (`pi mcp list`, `pi mcp add`, etc.).
+- See the [Native MCP Tool Reference](../docs/tools/mcp.md) and [MCP Migration Guide](../docs/mcp-migration.md).
 
 ### Context compression
 

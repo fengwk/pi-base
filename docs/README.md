@@ -12,7 +12,7 @@ This directory contains pi-base configuration, architecture, tool implementation
   - Extension startup order
   - Lifecycle events
   - Shared tool execution chain
-  - Relationships between Agent, MCP, LSP, Goal, and Subagent
+  - Relationships between Agent, native MCP, LSP, Goal, and Subagent
 - [Markdown Agents](agents.md)
   - Agent file format
   - Tool, skill, and subagent allowlists
@@ -26,13 +26,16 @@ This directory contains pi-base configuration, architecture, tool implementation
   - Configuration paths
   - Merge rules
   - All top-level configuration options
+- [MCP Migration Guide](mcp-migration.md)
+  - Migration from pi-base custom MCP to Pi 0.99.1 native MCP
+  - `migrate-mcp.mjs` script usage and configuration mapping
 - [Configuration examples](../examples/README.md)
   - `pi-base.json`
   - Markdown Agent
 - [Tool implementation index](tools/README.md)
   - Basic file tools
   - LSP tools
-  - Subagent, Goal, and MCP dynamic tools
+  - Subagent, Goal, and native MCP tools
 
 ## Maintenance principles
 

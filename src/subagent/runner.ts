@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import {
   buildSessionContext,
   createAgentSession,
+  createMcpExtension,
+  DefaultResourceLoader,
   getAgentDir,
   migrateSessionEntries,
   parseSessionEntries,
@@ -1030,15 +1032,28 @@ export function createRealSubagentFactory(options: RealSubagentFactoryOptions = 
     // wraps a private runtime; reuse it when present so subagents share parent auth.
     const parentModelRuntime = (ctx.modelRegistry as unknown as { runtime?: CreateAgentSessionOptions["modelRuntime"] } | undefined)?.runtime;
     const modelMaxRetries = options.resolveModelMaxRetries?.(ctx.cwd);
-    const settingsManager = modelMaxRetries === undefined ? undefined : SettingsManager.create(ctx.cwd, getAgentDir());
-    settingsManager?.applyOverrides({ retry: { maxRetries: modelMaxRetries } });
+    const agentDir = getAgentDir();
+    const settingsManager = SettingsManager.create(ctx.cwd, agentDir);
+    settingsManager.setProjectTrusted(ctx.isProjectTrusted());
+    if (modelMaxRetries !== undefined) settingsManager.applyOverrides({ retry: { maxRetries: modelMaxRetries } });
+    // SDK sessions do not install CLI builtins. Preserve configured extension discovery,
+    // but explicitly supply only native MCP (not codemode or tool_search).
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: ctx.cwd,
+      agentDir,
+      settingsManager,
+      extensionFactories: [{ name: "mcp", factory: createMcpExtension(), builtin: true, replaceable: true }],
+    });
+    await resourceLoader.reload();
     const { session, extensionsResult } = await createAgentSession({
       cwd: ctx.cwd,
+      agentDir,
+      resourceLoader,
       sessionManager: sm,
       model: runtime.model,
       thinkingLevel: runtime.thinkingLevel,
       ...(parentModelRuntime ? { modelRuntime: parentModelRuntime } : {}),
-      ...(settingsManager ? { settingsManager } : {}),
+      settingsManager,
     });
     const liveView = createLiveViewSource(session, ctx.cwd);
     let disposed = false;
@@ -1068,7 +1083,7 @@ export function createRealSubagentFactory(options: RealSubagentFactoryOptions = 
       collect: () => collectFromMessages(session.messages as unknown as RuntimeMessage[]),
       subscribe: (listener: (event: unknown) => void) => liveView.source.subscribe(listener),
       view: liveView.source,
-      steer: (text: string) => session.steer(text),
+      steer: async (text: string) => { await session.steer(text); },
       abort: () => session.abort(),
       dispose,
     };
