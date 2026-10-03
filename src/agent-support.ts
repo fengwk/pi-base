@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { formatSkillsForPrompt, getAgentDir, parseFrontmatter, type BuildSystemPromptOptions, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, parseFrontmatter, type ExtensionAPI, type ExtensionContext, type Skill } from "@earendil-works/pi-coding-agent";
 import { reportRuntimeError, reportRuntimeWarning } from "./runtime-diagnostics.js";
 import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
 import { projectFileMutationTools } from "./model-tool-routing.js";
@@ -563,39 +563,28 @@ export function registerAgentSupport(
   pi.on("before_agent_start", async (event, ctx) => {
     synchronizeExplicitTools(ctx);
     const activeAgent = resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
-    if (!activeAgent) {
-      const baseToolGuide = options.baseToolGuide.trim();
-      return {
-        systemPrompt: baseToolGuide ? `${event.systemPrompt}\n\n${baseToolGuide}` : event.systemPrompt,
-      };
+    const promptOptions = event.systemPromptOptions;
+    if (activeAgent) {
+      if (activeAgent.tools !== undefined) promptOptions.selectedTools = [...pi.getActiveTools()];
+      warnUnknownAllowlistEntries(ctx, activeAgent, "skills", promptOptions.skills.map((skill) => skill.name));
+      promptOptions.skills = skillsRenderableInPrompt(filterVisibleSkills(promptOptions.skills, activeAgent.skills));
+      promptOptions.customPrompt = activeAgent.prompt ?? promptOptions.customPrompt;
     }
 
-    const selectedTools = activeAgent.tools === undefined
-      ? event.systemPromptOptions.selectedTools ?? pi.getActiveTools()
-      : pi.getActiveTools();
-    const allSkills = event.systemPromptOptions.skills ?? [];
-    warnUnknownAllowlistEntries(ctx, activeAgent, "skills", allSkills.map((skill) => skill.name));
-    const visibleSkills = skillsRenderableInPrompt(filterVisibleSkills(allSkills, activeAgent.skills));
-    const customPrompt = resolveCustomPrompt(activeAgent, event.systemPromptOptions.customPrompt);
-    const systemPrompt = buildAgentSystemPrompt(
-      {
-        ...event.systemPromptOptions,
-        customPrompt,
-        selectedTools,
-        skills: visibleSkills,
-      },
-      event.systemPrompt,
-      allSkills,
-      activeAgent.skills !== undefined || activeAgent.tools !== undefined,
-    );
-
-    const guide = [options.baseToolGuide, buildSubagentSection(activeAgent, selectedTools, event.systemPromptOptions.cwd ?? process.cwd())]
-      .map((section) => section.trim())
-      .filter(Boolean)
-      .join("\n\n");
-    return {
-      systemPrompt: guide ? `${systemPrompt}\n\n${guide}` : systemPrompt,
-    };
+    // Mutate the shared Pi 1.0 options, not the rendered prompt. Returning systemPrompt would
+    // force an opaque replacement and hide sections contributed by other extensions.
+    promptOptions.sections.pi_base_tools = options.baseToolGuide.trim();
+    promptOptions.sections.pi_base_subagents = activeAgent
+      ? buildSubagentSection(activeAgent, promptOptions.selectedTools, promptOptions.cwd).trim()
+      : "";
+    promptOptions.sections.env = formatCurrentDate();
+    promptOptions.sections.cwd = escapeXml(promptOptions.cwd.replace(/\\/g, "/"));
+    // Upstream owns the XML envelopes but interpolates these raw inputs without escaping.
+    promptOptions.contextFiles = promptOptions.contextFiles.map(({ path, content }) => ({
+      path: escapeXml(path),
+      content: escapeXml(content),
+    }));
+    // An existing forceSystemPrompt is an explicit upstream override: leave it untouched.
   });
 
   return {
@@ -743,155 +732,14 @@ function skillsRenderableInPrompt(skills: Skill[]): Skill[] {
   return skills.filter((skill) => !skill.disableModelInvocation);
 }
 
-function resolveCustomPrompt(agent: AgentDefinition, fallbackCustomPrompt: string | undefined): string | undefined {
-  return agent.prompt ?? fallbackCustomPrompt;
-}
-
-/**
- * Top-level structured prompt sections pi-base knows how to remove. Restricting the name to a
- * closed union (instead of accepting arbitrary text) keeps the section regex injection-free.
- */
-type PiStructuredSectionName = "cwd" | "skills";
-
-/**
- * Pi 0.86 splits the system prompt into top-level structured sections rendered as
- * `<name>\n<content>\n</name>` and joined by a blank line. Remove one named section together with
- * its adjacent blank-line separator, leaving the surrounding sections and any following custom
- * section untouched. The anchors require a standalone section (start of prompt or a separator
- * before it, separator or end of prompt after it) so an incidental tag inside instructions is
- * never treated as a section boundary.
- */
-function stripStructuredSection(prompt: string, name: PiStructuredSectionName): string {
-  const match = new RegExp(`(?:^|\\n\\n)<${name}>\\n[\\s\\S]*?\\n</${name}>(?=\\n\\n|$)`).exec(prompt);
-  if (!match) return prompt;
-  const before = prompt.slice(0, match.index);
-  const after = prompt.slice(match.index + match[0].length);
-  // The regex ate the leading separator, so a section that used to be first would otherwise
-  // leave a blank line behind.
-  return before + (before ? after : after.replace(/^\n\n/, ""));
-}
-
-/**
- * pi-base owns the final system prompt structure: the body comes from either a custom prompt
- * (built locally, mirroring upstream's custom-prompt branch) or upstream's prebuilt prompt
- * (used as a body source). The trailing `<env>` block is always emitted by pi-base via
- * `formatEnvBlock` so the model sees one consistent envelope regardless of body source.
- *
- * When we reuse upstream's prebuilt prompt as the body, we first strip its own cwd metadata
- * (`stripUpstreamEnvInfo`) so the final prompt has exactly one env section. An explicit agent
- * skills or tool policy also replaces upstream's already-rendered skill section.
- */
-function resolveSkillFileReadTool(selectedTools: string[] | undefined): "read" | "bash" | undefined {
-  if (!selectedTools) return "read";
-  if (selectedTools.includes("read")) return "read";
-  if (selectedTools.includes("bash")) return "bash";
-  return undefined;
-}
-
-function buildAgentSystemPrompt(
-  options: BuildSystemPromptOptions,
-  fallbackSystemPrompt: string,
-  fallbackSkills: Skill[],
-  rebuildFallbackSkills: boolean,
-): string {
-  const customPrompt = options.customPrompt?.trim();
-  let body = customPrompt
-    ? buildCustomPromptBody(customPrompt, options)
-    : stripUpstreamEnvInfo(fallbackSystemPrompt);
-  if (!customPrompt && rebuildFallbackSkills) {
-    body = removeSkillsSection(body, fallbackSkills);
-    const skillFileReadTool = resolveSkillFileReadTool(options.selectedTools);
-    if (skillFileReadTool) body += formatSkillsForPrompt(options.skills ?? [], skillFileReadTool);
-  }
-  if (!options.cwd) return body;
-  return body + formatEnvBlock(options.cwd);
-}
-
-/**
- * Removes upstream's rendered skill section so the agent's own skill policy can replace it.
- * Pi 0.86 renders skills as a structured `<skills>` section whose content is trimmed before
- * wrapping, so the old exact match against raw `formatSkillsForPrompt` output no longer applies;
- * prompts from older Pi versions embedded that raw text and keep using the exact-match fallback.
- */
-function removeSkillsSection(body: string, fallbackSkills: Skill[]): string {
-  const withoutStructuredSkills = stripStructuredSection(body, "skills");
-  if (withoutStructuredSkills !== body) return withoutStructuredSkills;
-  for (const fileReadTool of ["read", "bash"] as const) {
-    const fallbackSkillsSection = formatSkillsForPrompt(fallbackSkills, fileReadTool);
-    if (fallbackSkillsSection && body.includes(fallbackSkillsSection)) {
-      return body.replace(fallbackSkillsSection, "");
-    }
-  }
-  return body;
-}
-
-function buildCustomPromptBody(customPrompt: string, options: BuildSystemPromptOptions): string {
-  const appendSection = options.appendSystemPrompt ? `\n\n${options.appendSystemPrompt}` : "";
-  const contextFiles = options.contextFiles ?? [];
-  const selectedTools = options.selectedTools;
-  const skills = options.skills ?? [];
-
-  let prompt = customPrompt;
-  if (appendSection) {
-    prompt += appendSection;
-  }
-
-  if (contextFiles.length > 0) {
-    // Mirror upstream buildSystemPrompt's <project_context> envelope so all prompt sections
-    // (skills, env, subagents, project context) share the same XML shape.
-    prompt += "\n\n<project_context>\n\n";
-    prompt += "Project-specific instructions and guidelines:\n\n";
-    for (const { path: filePath, content } of contextFiles) {
-      prompt += `<project_instructions path="${escapeXml(filePath)}">\n${escapeXml(content)}\n</project_instructions>\n\n`;
-    }
-    prompt += "</project_context>\n";
-  }
-
-  const skillFileReadTool = resolveSkillFileReadTool(selectedTools);
-  if (skillFileReadTool && skills.length > 0) {
-    prompt += formatSkillsForPrompt(skills, skillFileReadTool);
-  }
-
-  return prompt;
-}
-
-/**
- * Environment metadata block (date + cwd) appended to every system prompt. Matches opencode's
- * `<env>` XML envelope so the model can parse it the same way it parses `<available_skills>`
- * and the new `<available_subagents>` block. The two leading empty entries ensure a blank line
- * separates `<env>` from whatever precedes it (skills, custom prompt, etc.) regardless of
- * whether the body ends with a trailing newline.
- */
-function formatEnvBlock(cwd: string): string {
+/** Date is independent of Pi's native cwd section. */
+function formatCurrentDate(): string {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   const date = `${year}-${month}-${day}`;
-  const normalizedCwd = cwd.replace(/\\/g, "/");
-  return [
-    "",
-    "",
-    "<env>",
-    `  Current date: ${date}`,
-    `  Current working directory: ${escapeXml(normalizedCwd)}`,
-    "</env>",
-  ].join("\n");
-}
-
-/**
- * pi-base replaces upstream's own cwd metadata with its `<env>` block. Pi 0.86 renders it as a
- * structured `<cwd>` section; older versions appended `Current working directory` (optionally
- * prefixed by `Current date`) as trailing lines. Strip either form so `formatEnvBlock` can emit
- * exactly one consistent `<env>` envelope for the final prompt. This is the only place we touch
- * upstream's output structure.
- */
-function stripUpstreamEnvInfo(prompt: string): string {
-  return stripTrailingEnvInfo(stripStructuredSection(prompt, "cwd"));
-}
-
-function stripTrailingEnvInfo(prompt: string): string {
-  return prompt.replace(/(?:\r?\nCurrent date: [^\r\n]+)?\r?\nCurrent working directory: [^\r\n]+$/, "");
+  return `Current date: ${date}`;
 }
 
 function loadAgentCatalog(): AgentCatalog {

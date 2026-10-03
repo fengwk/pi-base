@@ -1,7 +1,17 @@
-import { getAgentDir, initTheme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, initTheme, type BeforeAgentStartEvent, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Pi 1.0 does not re-export its renderer from the package root. Resolve the installed SDK
+// module so tests use the real builder/normalizer rather than duplicating prompt semantics.
+export const { buildSystemPrompt, buildSystemPromptSections, normalizeBuildSystemPromptOptions } = await import(
+  new URL("./core/system-prompt.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
+) as {
+  buildSystemPrompt: (options: BuildSystemPromptOptions) => string;
+  buildSystemPromptSections: (options: BuildSystemPromptOptions) => Record<string, string>;
+  normalizeBuildSystemPromptOptions: (options: BuildSystemPromptOptions) => BeforeAgentStartEvent["systemPromptOptions"];
+};
 
 initTheme("dark", false);
 type MockUiOverrides = Partial<{
@@ -426,22 +436,32 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       const handlers = events.get(name) ?? [];
       const eventContext = buildContext(ctx);
       if (name === "before_agent_start") {
-        let currentEvent = { ...event };
+        const currentOptions = normalizeBuildSystemPromptOptions({
+          cwd: eventContext.cwd,
+          ...event.systemPromptOptions,
+        });
+        const renderCurrentSystemPrompt = () => buildSystemPrompt(currentOptions);
+        eventContext.getSystemPrompt = renderCurrentSystemPrompt;
         const messages: any[] = [];
-        let systemPromptModified = false;
         for (const handler of handlers) {
-          const result = await handler(currentEvent, eventContext);
+          const result = await handler({
+            type: name,
+            prompt: event.prompt,
+            images: event.images,
+            get systemPrompt() { return renderCurrentSystemPrompt(); },
+            systemPromptOptions: currentOptions,
+          }, eventContext);
           if (!result) continue;
-          if (result.message !== undefined) messages.push(result.message);
+          if (result.message) messages.push(result.message);
           if (result.systemPrompt !== undefined) {
-            currentEvent = { ...currentEvent, systemPrompt: result.systemPrompt };
-            systemPromptModified = true;
+            currentOptions.forceSystemPrompt = result.systemPrompt;
           }
         }
-        if (messages.length === 0 && !systemPromptModified) return undefined;
         return {
-          ...(messages.length > 0 ? { messages } : {}),
-          ...(systemPromptModified ? { systemPrompt: currentEvent.systemPrompt } : {}),
+          messages,
+          systemPromptOptions: currentOptions,
+          systemPrompt: renderCurrentSystemPrompt(),
+          buildSystemPrompt: renderCurrentSystemPrompt,
         };
       }
       if (name === "context") {
