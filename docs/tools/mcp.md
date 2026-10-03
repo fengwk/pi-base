@@ -8,11 +8,11 @@
 
 ## Configuration
 
-Pi 0.99.1 native MCP is the sole MCP implementation. Configure servers in
+Pi 1.0 native MCP is the sole MCP implementation. Configure servers in
 `~/.pi/agent/mcp.json`, not `pi-base.json`. Trusted projects may use `.pi/mcp.json`;
 project entries replace global entries of the same name.
 
-Use explicit `direct` exposure for pi-base root sessions and subagents:
+Use explicit `direct` exposure for pi-base root sessions and subagents; this is independent of whether `codemode` is registered or active:
 
 ```json
 {
@@ -46,6 +46,24 @@ registered name, not a guessed legacy alias.
 when exposure is omitted; choosing it is a separate opt-in for this integration,
 not the migration default. Exposure controls presentation, not execution permission.
 
+## Native discovery settings
+
+Pi 1.0 `codemode` has `defaultActive=false`. To enable it and disable tool search,
+merge this example into native `~/.pi/agent/settings.json` or trusted-project
+`.pi/settings.json`, not `pi-base.json`:
+
+```json
+{
+  "defaultTools": ["+codemode"],
+  "extensions": ["-builtin:tool-search"]
+}
+```
+
+Extension loading and tool activation are separate controls. pi-base honors the
+native settings rather than forcing tools active or overriding `defaultTools`.
+Keep `exposure: "direct"` in `mcp.json` when direct MCP declarations are desired,
+even if `codemode` is enabled.
+
 ## Call chain and Agent policy
 
 ```text
@@ -71,12 +89,18 @@ Pi native MCP registration
 
 ## Subagents and further reading
 
-pi-base SDK child sessions load MCP only (`createMcpExtension()`), not all built-in
-extensions or `codemode`/`tool_search`. Configure their MCP tools as `direct` and
-authorize names in the child Agent's own allowlist. Each session owns and disposes
-its connections; there is no shared parent/child MCP hub.
+pi-base SDK child sessions provide `createMcpExtension()`, `createCodemodeExtension()`,
+and `createToolSearchExtension()` to the native resource loader as built-in,
+replaceable factories named `mcp`, `codemode`, and `tool-search`. Loading follows
+global and trusted-project `settings.json` extension enable/disable settings.
+Registration does not force activation: native `defaultTools` and the child
+Agent's own tool policy determine the loadout, not a copy of the parent's active
+tools. Configure direct MCP declarations with `exposure: "direct"` and authorize
+names in the child Agent's own allowlist. Each session owns and disposes its
+connections; there is no shared parent/child MCP hub.
 
 See the [official Pi MCP documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/mcp.md)
 for OAuth, optional exposure modes, and generic SDK setup. The
-[migration guide](../mcp-migration.md) is the sole detailed reference for the
-offline migration CLI, alias maps, backups, and safety limits.
+[migration guide](../mcp-migration.md) records the historical Pi 0.99.1 native MCP
+introduction and is the sole detailed reference for the offline migration CLI,
+alias maps, backups, and safety limits; use this page for current Pi 1.0 child-session behavior.

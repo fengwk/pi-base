@@ -37,7 +37,7 @@
 
 ## 安装
 
-需要已安装 [Pi](https://github.com/earendil-works/pi) `>=0.99.1`（原生 MCP 支持要求）。
+需要已安装 [Pi](https://github.com/earendil-works/pi) `>=1.0.0`。
 
 ```bash
 pi install git:github.com/fengwk/pi-base

@@ -38,7 +38,7 @@ Pi
    - `apply_patch`
    - 三个 LSP 工具
 5. 注册 Markdown Agent 和 `--agent` flag。
-6. 注册 Goal、Notify 和 Subagent（MCP 工具由 Pi 0.99.1 内置 MCP 扩展通过 ~/.pi/agent/mcp.json 原生提供）。
+6. 注册 Goal、Notify 和 Subagent（MCP 工具由 Pi 1.0 内置 MCP 扩展通过 `~/.pi/agent/mcp.json` 原生提供）。
 7. 注册 Permission guard、`/yolo`、`/resume-all`、`/subagent`。
 8. 注册 context compression、provider request 和统一 `tool_result` 钩子。
 
@@ -84,13 +84,16 @@ Subagent session 携带自己的 depth、root session id 和 Agent state，不�
 
 ### `before_agent_start`
 
-Agent 模块根据当前 Agent：
+Agent 模块根据当前 Agent 原地修改 Pi 1.0 共享的 `event.systemPromptOptions`，不返回 `systemPrompt` 做不透明的整体替换：
 
-- 选择 system prompt。
-- 应用 tool allowlist。
-- 注入可见 skills。
+- 选择 `customPrompt`。
+- 应用 tool allowlist，并为显式 allowlist 更新 `selectedTools`。
+- 按既有 skill 策略过滤可见 skills。
 - 在满足 depth 和 allowlist 条件时注入 `task`。
-- 添加 `<available_subagents>` 和 `<env>`。
+- 将工具指南和 `<available_subagents>` 写入 `sections.pi_base_tools` 和 `sections.pi_base_subagents`。
+- 独立的 `<env>` 仅包含 `Current date: YYYY-MM-DD`；cwd 保留在原生 `<cwd>` section 中。cwd 及 context file 的路径和正文均进行 XML escape。
+
+本 hook 前后其他原生或扩展贡献的 sections 仍参与 Pi 最终 prompt 组装。已有 `forceSystemPrompt` 作为上游显式覆盖保留。
 
 ### `turn_start`
 
@@ -187,10 +190,10 @@ schema
 
 ### MCP
 
-Pi 0.99.1 原生 MCP 为唯一 MCP 实现，通过全局 `~/.pi/agent/mcp.json` 或项目级 `<project>/.pi/mcp.json`（可信项目）进行配置。
+Pi 1.0 原生 MCP 为唯一 MCP 实现，通过全局 `~/.pi/agent/mcp.json` 或项目级 `<project>/.pi/mcp.json`（可信项目）进行配置。
 
-pi-base 使用显式 `direct` 暴露。根与子 session 独立持有连接，
-SDK 子 session 仅加载 MCP，不加载全量内置扩展。
+pi-base 推荐显式 `direct` 暴露，与 `codemode` 注册独立。根与子 session 独立持有连接。
+SDK 子 session 将公开的 `createMcpExtension()`、`createCodemodeExtension()` 和 `createToolSearchExtension()` factory 以 `builtin: true`、`replaceable: true` 条目提供给原生 resource loader，名称分别为 `mcp`、`codemode` 和 `tool-search`。Loader 遵循全局及可信项目 `settings.json` 的扩展启禁配置；pi-base 不强制激活这些工具，也不覆盖 `defaultTools`。`codemode` 的 `defaultActive=false`，见[原生 settings 示例](tools/mcp.zh-CN.md#原生发现配置)。
 Markdown Agent 工具选择在 `before_agent_start` / `turn_start` 同步，
 执行入口检查授权。`tools: []` 仅清空普通工具 allowlist，
 已有 `task` 与 Goal runtime 注入 hook 仍按各自条件生效。
@@ -199,6 +202,10 @@ Markdown Agent 工具选择在 `before_agent_start` / `turn_start` 同步，
 ### Subagent
 
 `task` 只在当前 Agent 声明非空 `subagents` 且 depth 未达到上限时注入。
+
+子 session 按自身 settings 和注册状态解析原生工具，不复制父 session 的 active-tool 列表。子 Agent 的显式 allowlist 仍然生效；省略 `tools` 时保留当前默认策略。
+
+历史工具卡片的 tool definition 已不可用时，使用 SDK 默认的可展开 renderer。
 
 ### Goal
 

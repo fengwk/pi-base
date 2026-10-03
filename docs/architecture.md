@@ -38,7 +38,7 @@ Pi
    - `apply_patch`
    - three LSP tools
 5. Register the Markdown Agents and the `--agent` flag.
-6. Register Goal, Notify, and Subagent (MCP tools are provided natively by Pi 0.99.1 via `~/.pi/agent/mcp.json`).
+6. Register Goal, Notify, and Subagent (MCP tools are provided natively by Pi 1.0 via `~/.pi/agent/mcp.json`).
 7. Register the Permission guard, `/yolo`, `/resume-all`, and `/subagent`.
 8. Register context compression, provider request, and the unified `tool_result` hooks.
 
@@ -84,13 +84,16 @@ Subagent sessions carry their own depth, root session id, and Agent state, and d
 
 ### before_agent_start
 
-The Agent module, based on the current Agent:
+The Agent module mutates Pi 1.0's shared `event.systemPromptOptions` in place, based on the current Agent; it does not return `systemPrompt` as an opaque replacement:
 
-- Selects the system prompt.
-- Applies the tool allowlist.
-- Injects visible skills.
+- Selects `customPrompt`.
+- Applies the tool allowlist and updates `selectedTools` for explicit allowlists.
+- Filters visible skills using the existing skill policy.
 - Injects `task` when the depth and allowlist conditions are met.
-- Adds `<available_subagents>` and `<env>`.
+- Writes the tool guide and `<available_subagents>` into `sections.pi_base_tools` and `sections.pi_base_subagents`.
+- Uses a separate `<env>` containing only `Current date: YYYY-MM-DD`; cwd stays in the native `<cwd>` section. The cwd and context-file paths/content are XML-escaped.
+
+Other native and extension sections contributed before or after this hook remain available to Pi's final prompt assembly. An existing `forceSystemPrompt` is preserved as an explicit upstream override.
 
 ### turn_start
 
@@ -188,10 +191,11 @@ Explicit configuration does not expand permissions. When both `apply_patch` and 
 
 ### MCP
 
-Pi 0.99.1 native MCP is the sole MCP implementation, configured via `~/.pi/agent/mcp.json` (global) or `<project>/.pi/mcp.json` (trusted project).
+Pi 1.0 native MCP is the sole MCP implementation, configured via `~/.pi/agent/mcp.json` (global) or `<project>/.pi/mcp.json` (trusted project).
 
-pi-base uses explicit `direct` exposure. Root and child sessions own independent
-connections; SDK children load MCP only, not all built-ins. Markdown Agent tool
+pi-base recommends explicit `direct` exposure, independent of `codemode` registration. Root and child sessions own independent
+connections. SDK children supply the public `createMcpExtension()`, `createCodemodeExtension()`, and `createToolSearchExtension()` factories to the native resource loader as `builtin: true`, `replaceable: true` entries named `mcp`, `codemode`, and `tool-search`. The loader honors global and trusted-project `settings.json` extension enable/disable settings; pi-base does not force these tools active or override `defaultTools`. `codemode` has `defaultActive=false`; see the [native settings example](tools/mcp.md#native-discovery-settings).
+Markdown Agent tool
 selection is synchronized at `before_agent_start` / `turn_start`, with authorization
 checked at execution entry. `tools: []` leaves the ordinary allowlist empty; existing
 `task` and Goal runtime injection hooks retain their own conditions.
@@ -200,6 +204,10 @@ See [Native MCP tools](tools/mcp.md) for names, configuration, and the call chai
 ### Subagent
 
 `task` is injected only when the current Agent declares a non-empty `subagents` and the depth has not reached the limit.
+
+Child sessions resolve native tools from their own settings and registrations, not a copied parent active-tool list. The child Agent's explicit allowlist still applies; omitted `tools` preserves the current default policy.
+
+Historical tool cards whose tool definition is no longer available use the SDK's default expandable renderer.
 
 ### Goal
 

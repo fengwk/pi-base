@@ -53,7 +53,7 @@ Project configuration and global configuration are merged field by field:
 | `subagent` | Each field overrides item by item |
 | `defaultAgent` | Project value overrides |
 
-> **Note**: MCP is no longer configured in `pi-base.json`. Pi 0.99.1 native MCP uses `~/.pi/agent/mcp.json` or `.pi/mcp.json` with standard `mcpServers` format. See the [MCP Migration Guide](mcp-migration.md) for migrating existing configs.
+> **Note**: MCP is no longer configured in `pi-base.json`. Pi 1.0 native MCP uses `~/.pi/agent/mcp.json` or `.pi/mcp.json` with standard `mcpServers` format. See the [MCP Migration Guide](mcp-migration.md) for migrating existing configs.
 
 ## `lsp`
 
@@ -200,7 +200,7 @@ Boolean, default `false`. When enabled, the permission guard is skipped.
 
 `/yolo` only toggles the runtime state in the current process; it does not write back to the JSON.
 
-## `mcp` (Native MCP in Pi 0.99.1)
+## `mcp` (Native MCP in Pi 1.0)
 
 MCP is configured separately in `~/.pi/agent/mcp.json`, or `.pi/mcp.json` for a
 trusted project. Project entries replace same-name global entries. It is not a
@@ -228,6 +228,11 @@ trusted project. Project entries replace same-name global entries. It is not a
 
 `command` and `args` configure stdio; `url` configures streamable HTTP.
 `timeout` is in seconds. Keep literal credentials out of checked-in files.
+`exposure: "direct"` is independent of `codemode` registration or activation.
+Native discovery extensions and `defaultTools` are configured in Pi's
+`settings.json`, not as new `pi-base.json` fields; see the
+[Pi 1.0 settings example](tools/mcp.md#native-discovery-settings) to enable
+`codemode` and disable tool search.
 See [Native MCP tools](tools/mcp.md) for Agent policy and session behavior, and
 the [migration guide](mcp-migration.md) for the one-time CLI and safety rules.
 
