@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 import {
   buildSessionContext,
   createAgentSession,
+  createCodemodeExtension,
   createMcpExtension,
+  createToolSearchExtension,
   DefaultResourceLoader,
   getAgentDir,
   migrateSessionEntries,
@@ -1036,13 +1038,17 @@ export function createRealSubagentFactory(options: RealSubagentFactoryOptions = 
     const settingsManager = SettingsManager.create(ctx.cwd, agentDir);
     settingsManager.setProjectTrusted(ctx.isProjectTrusted());
     if (modelMaxRetries !== undefined) settingsManager.applyOverrides({ retry: { maxRetries: modelMaxRetries } });
-    // SDK sessions do not install CLI builtins. Preserve configured extension discovery,
-    // but explicitly supply only native MCP (not codemode or tool_search).
+    // SDK sessions do not install CLI builtins. Let the native loader apply configured
+    // builtin enable/disable settings to the same discovery extensions as the CLI.
     const resourceLoader = new DefaultResourceLoader({
       cwd: ctx.cwd,
       agentDir,
       settingsManager,
-      extensionFactories: [{ name: "mcp", factory: createMcpExtension(), builtin: true, replaceable: true }],
+      extensionFactories: [
+        { name: "mcp", factory: createMcpExtension(), builtin: true, replaceable: true },
+        { name: "codemode", factory: createCodemodeExtension(), builtin: true, replaceable: true },
+        { name: "tool-search", factory: createToolSearchExtension(), builtin: true, replaceable: true },
+      ],
     });
     await resourceLoader.reload();
     const { session, extensionsResult } = await createAgentSession({

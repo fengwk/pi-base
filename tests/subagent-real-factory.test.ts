@@ -21,6 +21,8 @@ const mocked = vi.hoisted(() => ({
   loaderReload: vi.fn(async () => undefined),
   loaderOptions: vi.fn(),
   mcpFactory: vi.fn(),
+  codemodeFactory: vi.fn(),
+  toolSearchFactory: vi.fn(),
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -34,6 +36,8 @@ vi.mock("node:fs", async (importOriginal) => {
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   createAgentSession: mocked.createAgentSession,
   createMcpExtension: () => mocked.mcpFactory,
+  createCodemodeExtension: () => mocked.codemodeFactory,
+  createToolSearchExtension: () => mocked.toolSearchFactory,
   DefaultResourceLoader: class {
     constructor(options: unknown) { mocked.loaderOptions(options); }
     reload = mocked.loaderReload;
@@ -172,7 +176,11 @@ describe("createRealSubagentFactory", () => {
       cwd: "/work/repo",
       agentDir: "/agent-home",
       settingsManager: mocked.settingsManagerCreate.mock.results[0].value,
-      extensionFactories: [{ name: "mcp", factory: mocked.mcpFactory, builtin: true, replaceable: true }],
+      extensionFactories: [
+        { name: "mcp", factory: mocked.mcpFactory, builtin: true, replaceable: true },
+        { name: "codemode", factory: mocked.codemodeFactory, builtin: true, replaceable: true },
+        { name: "tool-search", factory: mocked.toolSearchFactory, builtin: true, replaceable: true },
+      ],
     });
     expect(mocked.loaderReload.mock.invocationCallOrder[0]).toBeLessThan(mocked.createAgentSession.mock.invocationCallOrder[0]);
     expect(mocked.settingsManagerSetProjectTrusted).toHaveBeenCalledWith(false);
