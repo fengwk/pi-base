@@ -31,7 +31,7 @@ it("accepts the complete real JITI task/MCP delegation in an isolated Node proce
   // too, and require the summary emitted only after every fixture assertion and cleanup.
   expect(output.stderr).toBe("");
   expect(JSON.parse(output.stdout.trim())).toEqual({
-    status: "passed", sdkVersion: "0.99.1", report: "Echo report: delegated-echo",
+    status: "passed", sdkVersion: "1.0.0", report: "Echo report: delegated-echo",
     childTool: "mcp__fixture__echo", independentConnections: 2, serversExited: 2,
   });
 }, 40_000);

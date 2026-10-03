@@ -91,9 +91,11 @@ The Agent module mutates Pi 1.0's shared `event.systemPromptOptions` in place, b
 - Filters visible skills using the existing skill policy.
 - Injects `task` when the depth and allowlist conditions are met.
 - Writes the tool guide and `<available_subagents>` into `sections.pi_base_tools` and `sections.pi_base_subagents`.
-- Uses a separate `<env>` containing only `Current date: YYYY-MM-DD`; cwd stays in the native `<cwd>` section. The cwd and context-file paths/content are XML-escaped.
+- Uses a separate `<env>` containing only `Current date: YYYY-MM-DD`; cwd stays in the native `<cwd>` section with normalized, XML-escaped metadata.
 
 Other native and extension sections contributed before or after this hook remain available to Pi's final prompt assembly. An existing `forceSystemPrompt` is preserved as an explicit upstream override.
+
+`contextFiles` remain raw shared inputs so later extensions can inspect and modify them without double escaping. Pi 1.0 renders project context verbatim inside its XML envelopes; this is not an XML-sanitization boundary. pi-base follows that native contract rather than pre-encoding inputs or patching the SDK.
 
 ### turn_start
 

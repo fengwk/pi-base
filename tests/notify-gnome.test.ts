@@ -89,7 +89,8 @@ if(cmd==='notify-send') {
     writeFileSync(path, mock);
     chmodSync(path, 0o755);
   }
-  const result = spawnSync("bash", ["-c", 'source "$1"; play_linux_sound() { :; }; main', "bash", script], {
+  // Backend scenarios must not depend on the host kernel being Linux or WSL.
+  const result = spawnSync("bash", ["-c", 'source "$1"; is_wsl() { [[ -n "${WSL_DISTRO_NAME:-}" ]]; }; play_linux_sound() { :; }; main', "bash", script], {
     encoding: "utf8",
     env: {
       ...process.env,

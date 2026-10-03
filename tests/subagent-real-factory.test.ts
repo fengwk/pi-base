@@ -177,9 +177,9 @@ describe("createRealSubagentFactory", () => {
       agentDir: "/agent-home",
       settingsManager: mocked.settingsManagerCreate.mock.results[0].value,
       extensionFactories: [
-        { name: "mcp", factory: mocked.mcpFactory, builtin: true, replaceable: true },
         { name: "codemode", factory: mocked.codemodeFactory, builtin: true, replaceable: true },
         { name: "tool-search", factory: mocked.toolSearchFactory, builtin: true, replaceable: true },
+        { name: "mcp", factory: mocked.mcpFactory, builtin: true, replaceable: true },
       ],
     });
     expect(mocked.loaderReload.mock.invocationCallOrder[0]).toBeLessThan(mocked.createAgentSession.mock.invocationCallOrder[0]);

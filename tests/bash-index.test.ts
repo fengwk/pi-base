@@ -423,11 +423,13 @@ describe("bash tool and index", () => {
     ]);
 
     const injected = await registry.emit("before_agent_start", {
-      systemPrompt: "base system prompt",
-      systemPromptOptions: { selectedTools: registry.getActiveTools() },
+      systemPromptOptions: { customPrompt: "base system prompt", selectedTools: registry.getActiveTools() },
     });
 
-    expect(injected.systemPrompt).toBe("base system prompt");
+    expect(injected.systemPromptOptions.customPrompt).toBe("base system prompt");
+    expect(injected.systemPromptOptions.sections.pi_base_tools).toBe("");
+    expect(injected.systemPromptOptions.forceSystemPrompt).toBeUndefined();
+    expect(injected.systemPrompt).toMatch(/^base system prompt\n\n<cwd>/);
     expect(injected.systemPrompt).not.toContain("**Your tool usage:**");
     expect(injected.systemPrompt).not.toContain("<available_subagents>");
   });

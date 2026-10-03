@@ -579,11 +579,7 @@ export function registerAgentSupport(
       : "";
     promptOptions.sections.env = formatCurrentDate();
     promptOptions.sections.cwd = escapeXml(promptOptions.cwd.replace(/\\/g, "/"));
-    // Upstream owns the XML envelopes but interpolates these raw inputs without escaping.
-    promptOptions.contextFiles = promptOptions.contextFiles.map(({ path, content }) => ({
-      path: escapeXml(path),
-      content: escapeXml(content),
-    }));
+    // Keep contextFiles raw so later extensions can still inspect and modify native inputs.
     // An existing forceSystemPrompt is an explicit upstream override: leave it untouched.
   });
 

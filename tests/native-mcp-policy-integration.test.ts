@@ -82,7 +82,7 @@ afterEach(async () => {
 });
 
 async function setup(options: { initialAgent?: string; permissionDeny?: boolean } = {}) {
-  expect(VERSION).toBe("0.99.1");
+  expect(VERSION).toBe("1.0.0");
   root = await mkdtemp(join(tmpdir(), "pi-native-mcp-policy-"));
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DefaultResourceLoader, ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, type AssistantMessage, type TranscriptContext } from "@earendil-works/pi-ai";
 import {
   createRealSubagentFactory, PI_BASE_MODULE_INSTANCE_MARKER, PI_BASE_MODULE_INSTANCE_TOKEN,
   type SubagentSession,
@@ -61,6 +61,7 @@ describe("subagent native builtin configuration", () => {
     vi.stubEnv("NATIVE_MCP_HOOK_LOG", join(root, "hooks.jsonl"));
     await writeFile(join(agentDir, "settings.json"), JSON.stringify({
       extensions: [hooks, ...disabled.map((name) => `-builtin:${name}`)],
+      defaultTools: ["+codemode"],
       retry: { enabled: false }, compaction: { enabled: false },
     }));
     await writeFile(join(agentDir, "mcp.json"), JSON.stringify({
@@ -86,15 +87,21 @@ describe("subagent native builtin configuration", () => {
       authPath: join(agentDir, "auth.json"), modelsPath: null, modelsStorePath: join(agentDir, "models-store.json"),
       refreshOnCreate: true, allowModelNetwork: false,
     });
+    const requests: TranscriptContext[] = [];
     runtime.registerProvider("fixture", {
       api: "openai-completions", apiKey: "local-test-only", baseUrl: "http://invalid.local",
       models: [{ id: "fake", name: "Fake", reasoning: false, input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 1000 }],
       streamSimple(model, context) {
+        requests.push(structuredClone(context));
         const call = mcp && context.messages.at(-1)?.role === "user";
+        const viaCodemode = call && JSON.stringify(context.messages.at(-1)).includes("probe-codemode");
         const message: AssistantMessage = {
           role: "assistant", api: model.api, provider: model.provider, model: model.id,
-          content: call ? [{ type: "toolCall", id: "direct-call", name: toolName, arguments: { text: "native-direct" } }]
+          content: call ? [{ type: "toolCall", id: viaCodemode ? "codemode-call" : "direct-call",
+            name: viaCodemode ? "codemode" : toolName,
+            arguments: viaCodemode ? { code: `return await tools.${toolName}({ text: "native-codemode" });` }
+              : { text: "native-direct" } }]
             : [{ type: "text", text: "done" }],
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
@@ -115,12 +122,19 @@ describe("subagent native builtin configuration", () => {
       agentType: "worker", childDepth: 1,
     });
     await child.prompt("probe");
+    const declared = requests[0].messages.flatMap((message) => message.role === "system" ? message.toolsAdded ?? [] : []);
+    expect(declared.some((tool) => tool.name === "codemode")).toBe(codemode);
+    expect(declared.some((tool) => tool.name === toolName)).toBe(mcp);
+    expect(declared.some((tool) => tool.name === "tool_search")).toBe(false);
     expect(child.view!.getToolDefinition("codemode") !== undefined).toBe(codemode);
     expect(child.view!.getToolDefinition("tool_search") !== undefined).toBe(search);
     expect(child.view!.getToolDefinition(toolName) !== undefined).toBe(mcp);
     for (const [name, enabled] of [["codemode", codemode], ["tool-search", search], ["mcp", mcp]] as const) {
       expect(paths.includes(`builtin:${name}`)).toBe(enabled);
     }
+    expect(paths.filter((path) => path.startsWith("builtin:"))).toEqual(
+      ["codemode", "tool-search", "mcp"].filter((name) => !disabled.includes(name)).map((name) => `builtin:${name}`),
+    );
     if (mcp) {
       expect(child.view!.getMessages().find((message) => message.role === "toolResult")).toMatchObject({
         toolName, isError: false, content: [{ type: "text", text: "native-direct" }],
@@ -129,5 +143,16 @@ describe("subagent native builtin configuration", () => {
       await expect(readFile(join(root, "server.jsonl"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     }
     expect(child.collect()).toEqual({ report: "done", toolCount: mcp ? 1 : 0 });
+    if (mcp && codemode) {
+      // Registration alone is insufficient: execute the enabled sandbox against direct MCP.
+      await child.prompt("probe-codemode");
+      const result = child.view!.getMessages().filter((message) => message.role === "toolResult").at(-1);
+      expect(result).toMatchObject({ toolName: "codemode", isError: false });
+      expect(JSON.stringify(result?.content)).toContain("native-codemode");
+      const records = (await readFile(join(root, "server.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(records.filter((record) => record.type === "call").map((record) => record.text))
+        .toEqual(["native-direct", "native-codemode"]);
+      expect(child.collect()).toEqual({ report: "done", toolCount: 2 });
+    }
   });
 });

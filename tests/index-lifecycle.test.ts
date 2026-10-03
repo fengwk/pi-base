@@ -12,16 +12,16 @@ function render(component: any): string {
 }
 
 describe("index lifecycle behavior", () => {
-  it("uses host peers and pins only the used Pi development packages to 0.99.1", async () => {
+  it("requires Pi 1.0 host peers and pins only the used Pi development packages", async () => {
     // Intent: package installation must not supply a second runtime copy of host APIs
     // or keep the removed custom MCP SDK/server dependency in the root manifest.
     const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
     const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
     for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
-      expect(manifest.peerDependencies[name]).toBe("*");
-      expect(manifest.devDependencies[name]).toBe("0.99.1");
+      expect(manifest.peerDependencies[name]).toBe("^1.0.0");
+      expect(manifest.devDependencies[name]).toBe("1.0.0");
       expect(manifest.dependencies).not.toHaveProperty(name);
-      expect(lock.packages[`node_modules/${name}`].version).toBe("0.99.1");
+      expect(lock.packages[`node_modules/${name}`].version).toBe("1.0.0");
     }
     expect(manifest.peerDependencies.typebox).toBe("*");
     expect(manifest.devDependencies.typebox).toBeDefined();
@@ -37,7 +37,7 @@ describe("index lifecycle behavior", () => {
   });
 
   it("removes only basic host tools while preserving native builtin extensions on startup and reload", async () => {
-    // Intent: source=builtin covers more than the eight basic tools in Pi 0.99.1.
+    // Intent: source=builtin also covers native extension tools, not just basic tools.
     const root = await createTempWorkspace();
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
