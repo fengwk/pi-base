@@ -135,8 +135,8 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     pi.sendMessage<GoalControlDetails>(
       {
         customType: GOAL_CONTROL_MESSAGE_TYPE,
-        // sendMessage({ triggerTurn: true }) starts Agent.run directly and deliberately bypasses
-        // before_agent_start, so this message must carry the full continuation contract itself.
+        // This starting message carries the full guidance; before_agent_start skips re-injecting
+        // a control message for the current goal.
         content: buildGoalControlPrompt(kind, state),
         display: true,
         details: { kind, goal: state },
@@ -476,10 +476,18 @@ export function registerGoalSupport(pi: ExtensionAPI, options: GoalSupportOption
     clearOverflowRecovery();
   });
 
-  pi.on("before_agent_start", () => {
+  pi.on("before_agent_start", (event) => {
     if (!goal || goal.status !== "active") return undefined;
-    // User-triggered runs pass through before_agent_start, unlike idle triggerTurn runs. Use the
-    // same visible custom-message mechanism in both paths so model guidance is never invisible.
+    // Custom starts also reach this hook. Only a valid control message for the current goal
+    // already supplies guidance; user, unrelated, and stale starts still need it.
+    if (
+      event.messageType === "custom"
+      && event.message.customType === GOAL_CONTROL_MESSAGE_TYPE
+      && isGoalControlDetails(event.message.details)
+      && event.message.details.goal.id === goal.id
+    ) {
+      return undefined;
+    }
     return {
       message: {
         customType: GOAL_CONTROL_MESSAGE_TYPE,
