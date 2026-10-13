@@ -589,7 +589,7 @@ describe("goal support", () => {
       systemPrompt: "base prompt",
       systemPromptOptions: {},
     });
-    expect(goalSet).toBeUndefined();
+    expect(goalSet.messages).toEqual([]);
 
     const continuation = await registry.emit("before_agent_start", {
       type: "before_agent_start",
@@ -603,7 +603,7 @@ describe("goal support", () => {
       systemPrompt: "base prompt",
       systemPromptOptions: {},
     });
-    expect(continuation).toBeUndefined();
+    expect(continuation.messages).toEqual([]);
   });
 
   it("still injects guidance for unrelated, stale, and malformed custom starts", async () => {
@@ -656,7 +656,7 @@ describe("goal support", () => {
       systemPromptOptions: {},
     });
 
-    expect(result).toBeUndefined();
+    expect(result.messages).toEqual([]);
   });
 
   it("returns goal guidance before the structured get_goal payload", async () => {

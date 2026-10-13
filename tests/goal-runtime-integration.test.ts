@@ -10,6 +10,7 @@ import {
   createAssistantMessageEventStream, getSystemMessageText, type AssistantMessage, type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import piBaseExtension from "../index.js";
+import { AGENT_STATE_ENTRY } from "../src/agent-support.js";
 import { GOAL_STATE_ENTRY_TYPE } from "../src/goal/state.js";
 import { reloadRuntimePiBaseSettings } from "../src/runtime-settings.js";
 
@@ -86,12 +87,14 @@ async function setup(options: {
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");
   await mkdir(cwd);
-  await mkdir(agentDir);
+  await mkdir(join(agentDir, "agents"), { recursive: true });
   vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
   vi.stubEnv("PI_BASE_GLOBAL_SETTINGS_PATH", join(agentDir, "pi-base.json"));
   await writeFile(join(agentDir, "pi-base.json"), JSON.stringify({
     yolo: true, notify: { agentEnd: false, permissionAsked: false },
   }));
+  await writeFile(join(agentDir, "agents", "goal-fixture.md"),
+    "---\nname: goal-fixture\n---\nGoal fixture system instruction.\n");
 
   const requests: TranscriptContext[] = [];
   const starts: StartRecord[] = [];
@@ -165,6 +168,7 @@ async function setup(options: {
   expect(resourceLoader.getExtensions().errors).toEqual([]);
 
   const manager = SessionManager.inMemory(cwd);
+  manager.appendCustomEntry(AGENT_STATE_ENTRY, { name: "goal-fixture" });
   if (options.seedActiveGoal) {
     manager.appendCustomEntry(GOAL_STATE_ENTRY_TYPE, {
       goal: {
@@ -215,7 +219,7 @@ describe("goal runtime compatibility with Pi 1.2.0 starting messages", () => {
     // The agent system prompt guide survives the update_goal tool call within the same run.
     expect(systemText(requests[1])).toBe(systemText(requests[2]));
     expect(systemText(requests[2])).toContain(cwd);
-    expect(systemText(requests[2])).toContain("<pi_base_tools>");
+    expect(systemText(requests[2])).toContain("Goal fixture system instruction.");
 
     expect(completedGoalStatus()).toBe("complete");
     expect(errors).toEqual([]);

@@ -436,6 +436,9 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
       const handlers = events.get(name) ?? [];
       const eventContext = buildContext(ctx);
       if (name === "before_agent_start") {
+        const trigger = event.messageType === "custom"
+          ? { messageType: "custom", message: event.message }
+          : { messageType: "user", prompt: event.prompt, images: event.images };
         const currentOptions = normalizeBuildSystemPromptOptions({
           cwd: eventContext.cwd,
           ...event.systemPromptOptions,
@@ -446,8 +449,7 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
         for (const handler of handlers) {
           const result = await handler({
             type: name,
-            prompt: event.prompt,
-            images: event.images,
+            ...trigger,
             get systemPrompt() { return renderCurrentSystemPrompt(); },
             systemPromptOptions: currentOptions,
           }, eventContext);
