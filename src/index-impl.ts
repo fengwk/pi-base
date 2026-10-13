@@ -71,7 +71,7 @@ const BASE_TOOL_GUIDE = readFileSync(new URL("../prompts/base.md", import.meta.u
 
 type RegisteredToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];
 
-// Pi 0.99.1's basic host tools only; native MCP/codemode/discovery extensions
+// Pi's basic host tools only; native MCP/codemode/discovery extensions
 // also use the builtin source and must remain available.
 const REPLACED_BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read", "bash", "powershell", "edit", "write", "grep", "find", "ls",

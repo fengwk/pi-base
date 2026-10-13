@@ -8,7 +8,7 @@
 
 ## 配置
 
-Pi 0.99.1 原生 MCP 是唯一 MCP 实现。Server 配置写入
+Pi 原生 MCP 是唯一 MCP 实现。Server 配置写入
 `~/.pi/agent/mcp.json`，不再写入 `pi-base.json`。可信项目也可使用 `.pi/mcp.json`；
 项目条目会替换同名全局条目。
 

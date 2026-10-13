@@ -8,7 +8,7 @@
 
 ## Configuration
 
-Pi 0.99.1 native MCP is the sole MCP implementation. Configure servers in
+Pi native MCP is the sole MCP implementation. Configure servers in
 `~/.pi/agent/mcp.json`, not `pi-base.json`. Trusted projects may use `.pi/mcp.json`;
 project entries replace global entries of the same name.
 

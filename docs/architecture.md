@@ -38,7 +38,7 @@ Pi
    - `apply_patch`
    - three LSP tools
 5. Register the Markdown Agents and the `--agent` flag.
-6. Register Goal, Notify, and Subagent (MCP tools are provided natively by Pi 0.99.1 via `~/.pi/agent/mcp.json`).
+6. Register Goal, Notify, and Subagent (MCP tools are provided natively by Pi via `~/.pi/agent/mcp.json`).
 7. Register the Permission guard, `/yolo`, `/resume-all`, and `/subagent`.
 8. Register context compression, provider request, and the unified `tool_result` hooks.
 
@@ -188,7 +188,7 @@ Explicit configuration does not expand permissions. When both `apply_patch` and 
 
 ### MCP
 
-Pi 0.99.1 native MCP is the sole MCP implementation, configured via `~/.pi/agent/mcp.json` (global) or `<project>/.pi/mcp.json` (trusted project).
+Pi native MCP is the sole MCP implementation, configured via `~/.pi/agent/mcp.json` (global) or `<project>/.pi/mcp.json` (trusted project).
 
 pi-base uses explicit `direct` exposure. Root and child sessions own independent
 connections; SDK children load MCP only, not all built-ins. Markdown Agent tool
@@ -203,7 +203,7 @@ See [Native MCP tools](tools/mcp.md) for names, configuration, and the call chai
 
 ### Goal
 
-The root session can obtain `create_goal`; once a Goal is active, `get_goal` and `update_goal` are injected according to the Agent tool policy. Goal tools are not injected into Subagents.
+The root session can obtain `create_goal`; once a Goal is active, `get_goal` and `update_goal` are injected according to the Agent tool policy. Goal tools are not injected into Subagents. An active Goal's continuation guidance is added at `before_agent_start`; since Pi 1.2.0 `triggerTurn` runs also pass through `before_agent_start`, so the addition is skipped only when the run's starting message is pi-base's own current-goal control message.
 
 ## Process-level and session-level state
 

@@ -27,7 +27,7 @@ This directory contains pi-base configuration, architecture, tool implementation
   - Merge rules
   - All top-level configuration options
 - [MCP Migration Guide](mcp-migration.md)
-  - Migration from pi-base custom MCP to Pi 0.99.1 native MCP
+  - Migration from pi-base custom MCP to Pi native MCP
   - `migrate-mcp.mjs` script usage and configuration mapping
 - [Configuration examples](../examples/README.md)
   - `pi-base.json`

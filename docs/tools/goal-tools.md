@@ -140,6 +140,8 @@ After `agent_settled`, an active Goal is checked:
 
 After `Esc` pauses, `/goal resume` is required to continue. Reload changes an active Goal to paused; `/goal resume` must then be run to continue.
 
+In Pi 1.2.0, `triggerTurn` runs also pass through `before_agent_start`, which is where user-triggered runs receive the continuation guidance (and where the Agent system prompt is set up). To avoid duplicate guidance, the continuation is skipped only when the run's starting message is pi-base's own valid control message for the current goal; user-triggered runs and runs started from unrelated custom messages still receive it.
+
 ## Context filtering
 
 Before a provider request, the following are filtered:
@@ -154,4 +156,5 @@ Only the currently valid Goal guidance is kept.
 
 - [`tests/goal.test.ts`](../../tests/goal.test.ts)
 - [`tests/goal-state.test.ts`](../../tests/goal-state.test.ts)
+- [`tests/goal-runtime-integration.test.ts`](../../tests/goal-runtime-integration.test.ts)
 - [`tests/index-lifecycle.test.ts`](../../tests/index-lifecycle.test.ts)

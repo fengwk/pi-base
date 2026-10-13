@@ -8,9 +8,9 @@
 
 - Node.js `>=22.19.0`
 - npm
-- Pi-related peer dependencies are provided by the repository's dev dependencies (requires Pi `>=0.99.1` for native MCP support)
+- Pi-related peer dependencies are provided by the repository's dev dependencies (requires Pi `>=1.2.0`)
 
-The supported Pi dependency baseline is `0.99.1` for `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, and `@earendil-works/pi-tui`; use the matching `@earendil-works/pi-server` for server/SDK tests. Native MCP and its protocol dependencies are supplied by Pi rather than a separate pi-base MCP runtime. Keep peer and development versions aligned when integrating the runtime migration.
+The supported Pi dependency baseline is `1.2.0` for `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, and `@earendil-works/pi-tui`. Native MCP and its protocol dependencies are supplied by Pi rather than a separate pi-base MCP runtime; the native MCP integration tests run against the real `AgentSession`/`createMcpExtension`, including a delegation test through the official JITI loader in an isolated Node process. Keep peer and development versions aligned when integrating the runtime migration.
 
 Install dependencies:
 
@@ -33,7 +33,6 @@ index.ts                 Pi package entry point
 src/                     TypeScript implementation
   schemas/               TypeBox tool schemas
   lsp/                   LSP discovery/client/tools
-  mcp/                   MCP transport/hub/tools
   subagent/              task and child sessions
   goal/                  Goal state and control tools
   internal/              necessary vendored helpers

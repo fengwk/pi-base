@@ -38,7 +38,7 @@ Pi
    - `apply_patch`
    - 三个 LSP 工具
 5. 注册 Markdown Agent 和 `--agent` flag。
-6. 注册 Goal、Notify 和 Subagent（MCP 工具由 Pi 0.99.1 内置 MCP 扩展通过 ~/.pi/agent/mcp.json 原生提供）。
+6. 注册 Goal、Notify 和 Subagent（MCP 工具由 Pi 内置 MCP 扩展通过 ~/.pi/agent/mcp.json 原生提供）。
 7. 注册 Permission guard、`/yolo`、`/resume-all`、`/subagent`。
 8. 注册 context compression、provider request 和统一 `tool_result` 钩子。
 
@@ -187,7 +187,7 @@ schema
 
 ### MCP
 
-Pi 0.99.1 原生 MCP 为唯一 MCP 实现，通过全局 `~/.pi/agent/mcp.json` 或项目级 `<project>/.pi/mcp.json`（可信项目）进行配置。
+Pi 原生 MCP 为唯一 MCP 实现，通过全局 `~/.pi/agent/mcp.json` 或项目级 `<project>/.pi/mcp.json`（可信项目）进行配置。
 
 pi-base 使用显式 `direct` 暴露。根与子 session 独立持有连接，
 SDK 子 session 仅加载 MCP，不加载全量内置扩展。
@@ -202,7 +202,7 @@ Markdown Agent 工具选择在 `before_agent_start` / `turn_start` 同步，
 
 ### Goal
 
-根 session 可获得 `create_goal`；Goal active 后按 Agent 工具策略注入 `get_goal` 和 `update_goal`。Goal 工具不注入 Subagent。
+根 session 可获得 `create_goal`；Goal active 后按 Agent 工具策略注入 `get_goal` 和 `update_goal`。Goal 工具不注入 Subagent。Active Goal 的 continuation guidance 在 `before_agent_start` 注入；Pi 1.2.0 起 `triggerTurn` run 也会经过 `before_agent_start`，因此仅当该 run 的起始消息是 pi-base 针对当前 Goal 自身的 control message 时才跳过注入。
 
 ## 进程级与 Session 级状态
 
