@@ -97,7 +97,7 @@ process.once("SIGTERM", interrupt);
 process.once("SIGINT", interrupt);
 
 async function run() {
-  assert.equal(VERSION, "0.99.1");
+  assert.equal(VERSION, "1.2.0");
   root = await mkdtemp(join(tmpdir(), "pi-native-mcp-delegation-"));
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");

@@ -50,7 +50,7 @@ afterEach(async () => {
 });
 
 async function setup(projectTrusted = false, projectConfig = false) {
-  expect(VERSION).toBe("0.99.1");
+  expect(VERSION).toBe("1.2.0");
   root = await mkdtemp(join(tmpdir(), "pi-native-mcp-"));
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");
