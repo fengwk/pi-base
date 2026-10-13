@@ -53,7 +53,7 @@ Project configuration and global configuration are merged field by field:
 | `subagent` | Each field overrides item by item |
 | `defaultAgent` | Project value overrides |
 
-> **Note**: MCP is no longer configured in `pi-base.json`. Pi 1.0 native MCP uses `~/.pi/agent/mcp.json` or `.pi/mcp.json` with standard `mcpServers` format. See the [MCP Migration Guide](mcp-migration.md) for migrating existing configs.
+> **Note**: MCP is no longer configured in `pi-base.json`. Pi native MCP uses `~/.pi/agent/mcp.json` or `.pi/mcp.json` with standard `mcpServers` format. See the [MCP Migration Guide](mcp-migration.md) for migrating existing configs.
 
 ## `lsp`
 
@@ -200,7 +200,7 @@ Boolean, default `false`. When enabled, the permission guard is skipped.
 
 `/yolo` only toggles the runtime state in the current process; it does not write back to the JSON.
 
-## `mcp` (Native MCP in Pi 1.0)
+## `mcp` (Native MCP)
 
 MCP is configured separately in `~/.pi/agent/mcp.json`, or `.pi/mcp.json` for a
 trusted project. Project entries replace same-name global entries. It is not a

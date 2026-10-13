@@ -38,7 +38,7 @@ Pi
    - `apply_patch`
    - three LSP tools
 5. Register the Markdown Agents and the `--agent` flag.
-6. Register Goal, Notify, and Subagent (MCP tools are provided natively by Pi 1.0 via `~/.pi/agent/mcp.json`).
+6. Register Goal, Notify, and Subagent (MCP tools are provided natively by Pi via `~/.pi/agent/mcp.json`).
 7. Register the Permission guard, `/yolo`, `/resume-all`, and `/subagent`.
 8. Register context compression, provider request, and the unified `tool_result` hooks.
 
@@ -193,7 +193,7 @@ Explicit configuration does not expand permissions. When both `apply_patch` and 
 
 ### MCP
 
-Pi 1.0 native MCP is the sole MCP implementation, configured via `~/.pi/agent/mcp.json` (global) or `<project>/.pi/mcp.json` (trusted project).
+Pi native MCP is the sole MCP implementation, configured via `~/.pi/agent/mcp.json` (global) or `<project>/.pi/mcp.json` (trusted project).
 
 pi-base recommends explicit `direct` exposure, independent of `codemode` registration. Root and child sessions own independent
 connections. SDK children supply the public `createMcpExtension()`, `createCodemodeExtension()`, and `createToolSearchExtension()` factories to the native resource loader as `builtin: true`, `replaceable: true` entries named `mcp`, `codemode`, and `tool-search`. The loader honors global and trusted-project `settings.json` extension enable/disable settings; pi-base does not force these tools active or override `defaultTools`. `codemode` has `defaultActive=false`; see the [native settings example](tools/mcp.md#native-discovery-settings).
@@ -214,6 +214,8 @@ Historical tool cards whose tool definition is no longer available use the SDK's
 ### Goal
 
 The root session can obtain `create_goal`; once a Goal is active, `get_goal` and `update_goal` are injected according to the Agent tool policy. Goal tools are not injected into Subagents.
+
+Pi 1.2.0 runs both user prompts and idle custom `triggerTurn` starts through `before_agent_start`. Agent system-prompt setup applies to both. Goal guidance is not added again when the starting message is pi-base's own valid control message for the current goal; user and unrelated custom starts still receive it.
 
 ## Process-level and session-level state
 

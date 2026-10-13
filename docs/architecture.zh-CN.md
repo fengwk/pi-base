@@ -38,7 +38,7 @@ Pi
    - `apply_patch`
    - 三个 LSP 工具
 5. 注册 Markdown Agent 和 `--agent` flag。
-6. 注册 Goal、Notify 和 Subagent（MCP 工具由 Pi 1.0 内置 MCP 扩展通过 `~/.pi/agent/mcp.json` 原生提供）。
+6. 注册 Goal、Notify 和 Subagent（MCP 工具由 Pi 内置 MCP 扩展通过 `~/.pi/agent/mcp.json` 原生提供）。
 7. 注册 Permission guard、`/yolo`、`/resume-all`、`/subagent`。
 8. 注册 context compression、provider request 和统一 `tool_result` 钩子。
 
@@ -192,7 +192,7 @@ schema
 
 ### MCP
 
-Pi 1.0 原生 MCP 为唯一 MCP 实现，通过全局 `~/.pi/agent/mcp.json` 或项目级 `<project>/.pi/mcp.json`（可信项目）进行配置。
+Pi 原生 MCP 为唯一 MCP 实现，通过全局 `~/.pi/agent/mcp.json` 或项目级 `<project>/.pi/mcp.json`（可信项目）进行配置。
 
 pi-base 推荐显式 `direct` 暴露，与 `codemode` 注册独立。根与子 session 独立持有连接。
 SDK 子 session 将公开的 `createMcpExtension()`、`createCodemodeExtension()` 和 `createToolSearchExtension()` factory 以 `builtin: true`、`replaceable: true` 条目提供给原生 resource loader，名称分别为 `mcp`、`codemode` 和 `tool-search`。Loader 遵循全局及可信项目 `settings.json` 的扩展启禁配置；pi-base 不强制激活这些工具，也不覆盖 `defaultTools`。`codemode` 的 `defaultActive=false`，见[原生 settings 示例](tools/mcp.zh-CN.md#原生发现配置)。
@@ -212,6 +212,8 @@ Markdown Agent 工具选择在 `before_agent_start` / `turn_start` 同步，
 ### Goal
 
 根 session 可获得 `create_goal`；Goal active 后按 Agent 工具策略注入 `get_goal` 和 `update_goal`。Goal 工具不注入 Subagent。
+
+Pi 1.2.0 中，用户提示和空闲时自定义消息的 `triggerTurn` 启动都会经过 `before_agent_start`，两者都执行 Agent system prompt 设置。起始消息已是 pi-base 针对当前 Goal 的有效控制消息时，不再重复添加目标指导；用户提示和无关自定义消息启动仍会收到指导。
 
 ## 进程级与 Session 级状态
 

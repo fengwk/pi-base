@@ -37,7 +37,7 @@
 
 ## 安装
 
-需要已安装 [Pi](https://github.com/earendil-works/pi) `>=1.0.0`。
+需要已安装 [Pi](https://github.com/earendil-works/pi) `>=1.2.0`（受支持的基线）。
 
 ```bash
 pi install git:github.com/fengwk/pi-base

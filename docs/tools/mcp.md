@@ -8,7 +8,7 @@
 
 ## Configuration
 
-Pi 1.0 native MCP is the sole MCP implementation. Configure servers in
+Pi native MCP is the sole MCP implementation. Configure servers in
 `~/.pi/agent/mcp.json`, not `pi-base.json`. Trusted projects may use `.pi/mcp.json`;
 project entries replace global entries of the same name.
 
@@ -48,7 +48,7 @@ not the migration default. Exposure controls presentation, not execution permiss
 
 ## Native discovery settings
 
-Pi 1.0 `codemode` has `defaultActive=false`. To enable it and disable tool search,
+Pi `codemode` has `defaultActive=false`. To enable it and disable tool search,
 merge this example into native `~/.pi/agent/settings.json` or trusted-project
 `.pi/settings.json`, not `pi-base.json`:
 
@@ -103,4 +103,4 @@ See the [official Pi MCP documentation](https://github.com/earendil-works/pi/blo
 for OAuth, optional exposure modes, and generic SDK setup. The
 [migration guide](../mcp-migration.md) records the historical Pi 0.99.1 native MCP
 introduction and is the sole detailed reference for the offline migration CLI,
-alias maps, backups, and safety limits; use this page for current Pi 1.0 child-session behavior.
+alias maps, backups, and safety limits; use this page for current child-session behavior.

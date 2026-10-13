@@ -8,9 +8,9 @@
 
 - Node.js `>=22.19.0`
 - npm
-- Pi 相关 peer dependencies 由仓库开发依赖提供（要求 Pi `>=1.0.0`）
+- Pi 相关 peer dependencies 由仓库开发依赖提供（要求 Pi `>=1.2.0`）
 
-支持的 Pi 依赖基线为 `1.0.0`：`@earendil-works/pi-coding-agent`、`@earendil-works/pi-ai` 和 `@earendil-works/pi-tui` 的 peer dependencies 使用 `^1.0.0`，开发依赖固定为 `1.0.0`。本项目不依赖 `@earendil-works/pi-server`。原生 MCP 及协议依赖由 Pi 提供，不再维护独立的 pi-base MCP 运行时。
+支持的 Pi 依赖基线为 `1.2.0`：`@earendil-works/pi-coding-agent`、`@earendil-works/pi-ai` 和 `@earendil-works/pi-tui` 的 peer dependencies 使用 `^1.2.0`，开发依赖固定为 `1.2.0`。原生 MCP 及协议依赖由 Pi 提供，不再维护独立的 pi-base MCP 运行时。集成测试运行真实的 `AgentSession`/`createMcpExtension`，并在隔离的 Node 进程中通过官方 JITI loader 执行 delegation 测试；本项目不依赖 `@earendil-works/pi-server`。
 
 安装依赖：
 

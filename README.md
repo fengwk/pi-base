@@ -37,7 +37,7 @@ See the [tool documentation](docs/tools/README.md) for parameters and usage boun
 
 ## Installation
 
-Requires [Pi](https://github.com/earendil-works/pi) `>=1.0.0` to be installed.
+Requires [Pi](https://github.com/earendil-works/pi) `>=1.2.0` to be installed (the supported baseline).
 
 ```bash
 pi install git:github.com/fengwk/pi-base

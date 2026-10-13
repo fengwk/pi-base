@@ -27,7 +27,7 @@
   - 合并规则
   - 全部顶层配置项
 - [MCP 迁移指南](mcp-migration.zh-CN.md)
-  - 从 pi-base 自定义 MCP 迁移到 Pi 0.99.1 原生 MCP
+  - 从 pi-base 自定义 MCP 迁移到 Pi 原生 MCP
   - `migrate-mcp.mjs` 迁移脚本用法与配置映射
 - [配置示例](../examples/README.zh-CN.md)
   - `pi-base.json`

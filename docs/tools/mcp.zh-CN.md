@@ -8,7 +8,7 @@
 
 ## 配置
 
-Pi 1.0 原生 MCP 是唯一 MCP 实现。Server 配置写入
+Pi 原生 MCP 是唯一 MCP 实现。Server 配置写入
 `~/.pi/agent/mcp.json`，不再写入 `pi-base.json`。可信项目也可使用 `.pi/mcp.json`；
 项目条目会替换同名全局条目。
 
@@ -47,7 +47,7 @@ pi-base 根 session 和子代理应使用显式 `direct` 暴露；这与 `codemo
 
 ## 原生发现配置
 
-Pi 1.0 的 `codemode` 为 `defaultActive=false`。若需启用它并禁用 tool search，
+Pi 的 `codemode` 为 `defaultActive=false`。若需启用它并禁用 tool search，
 将以下示例合并到原生 `~/.pi/agent/settings.json` 或可信项目的
 `.pi/settings.json`，而不是 `pi-base.json`：
 
@@ -101,4 +101,4 @@ OAuth、其他可选暴露模式和通用 SDK 配置参见
 [Pi 官方 MCP 文档](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/mcp.md)。
 [迁移指南](../mcp-migration.zh-CN.md)记录 Pi 0.99.1 引入原生 MCP 的历史，
 也是离线迁移 CLI、别名映射、备份及安全限制的唯一详细说明；
-当前 Pi 1.0 子 session 行为以本页为准。
+当前子 session 行为以本页为准。
