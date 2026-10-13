@@ -35,19 +35,22 @@ interface Harness {
 }
 
 afterEach(async () => {
-  if (session) {
-    await session.abort();
-    try {
-      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-    } finally {
-      session.dispose();
+  try {
+    if (session) {
+      try {
+        await session.abort();
+        await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      } finally {
+        session.dispose();
+      }
     }
+  } finally {
+    session = undefined;
+    reloadRuntimePiBaseSettings();
+    vi.unstubAllEnvs();
+    if (root) await rm(root, { recursive: true, force: true });
+    root = undefined;
   }
-  session = undefined;
-  reloadRuntimePiBaseSettings();
-  vi.unstubAllEnvs();
-  if (root) await rm(root, { recursive: true, force: true });
-  root = undefined;
 });
 
 function customKinds(history: readonly unknown[]): Array<string | undefined> {
@@ -130,9 +133,9 @@ async function setup(options: {
     }],
     streamSimple(model, context) {
       requests.push(structuredClone(context));
-      // Deterministic completion prevents an endless goal continuation loop. The count fallback is
-      // a safety valve so a regression fails on assertions instead of hanging the worker.
-      const complete = options.completeAt(requests.length) || requests.length >= 6;
+      // A terminal fixture error bounds unexpected requests even if goal completion regresses.
+      const exhausted = requests.length >= 6;
+      const complete = !exhausted && options.completeAt(requests.length);
       const message: AssistantMessage = {
         role: "assistant", api: model.api, provider: model.provider, model: model.id,
         content: complete
@@ -141,7 +144,8 @@ async function setup(options: {
             arguments: { status: "complete", reason: "Local fixture verified the deterministic check." },
           }]
           : [{ type: "text", text: "done" }],
-        stopReason: complete ? "toolUse" : "stop", timestamp: Date.now(),
+        stopReason: exhausted ? "error" : complete ? "toolUse" : "stop", timestamp: Date.now(),
+        ...(exhausted ? { errorMessage: "Goal fixture request limit exceeded." } : {}),
         usage: {
           input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -149,7 +153,8 @@ async function setup(options: {
       };
       const stream = createAssistantMessageEventStream();
       stream.push({ type: "start", partial: message });
-      stream.push({ type: "done", reason: complete ? "toolUse" : "stop", message });
+      if (exhausted) stream.push({ type: "error", reason: "error", error: message });
+      else stream.push({ type: "done", reason: complete ? "toolUse" : "stop", message });
       return stream;
     },
   });
