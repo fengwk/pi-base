@@ -8,7 +8,7 @@ import {
   createAgentSession, createMcpExtension, DefaultResourceLoader, ModelRuntime,
   SessionManager, SettingsManager, VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, getSystemMessageText } from "@earendil-works/pi-ai";
 
 // Run outside Vitest's coverage process: only official loader/JITI executes pi-base here.
 // No inline pi-base factory, loader-result edits, or module-marker impersonation.
@@ -218,7 +218,9 @@ async function run() {
   assert.deepEqual(childTools[0].parameters.required, ["text"]);
   assert.deepEqual(childTools[0].parameters.properties, { text: { type: "string" } });
   assert.ok(childRequest.context.messages.some((message) =>
-    message.role === "system" && JSON.stringify(message.content).includes("Worker delegation policy.")));
+    message.role === "system" && getSystemMessageText(message).includes("Worker delegation policy.")));
+  assert.ok(childRequest.context.messages.some((message) =>
+    message.role === "system" && message.sections?.preamble === "Worker delegation policy."));
 
   const childFiles = await readdir(join(agentDir, "subagent-sessions"), { recursive: true });
   const childFile = childFiles.find((file) => file.endsWith(`${childId}.jsonl`));

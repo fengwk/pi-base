@@ -55,7 +55,7 @@ Unknown fields invalidate the entire Agent file. String arrays are deduplicated;
 
 ## Tool allowlist
 
-- `tools` omitted: inherit the current default tool policy.
+- `tools` omitted: inherit the current default tool policy, preserving native `settings.json` / `defaultTools` choices rather than force-activating registered tools.
 - Explicit array: an **ordinary-tool execution allowlist**, enforced by the pi-base Markdown Agent guard, not a generic official SDK `tools` guarantee.
 - Empty array (`tools: []`): no ordinary tools are authorized. Runtime hooks may still inject `task` or Goal tools under their own conditions.
 - File modification tools are projected against the current model, but the explicit allowlist is never expanded.

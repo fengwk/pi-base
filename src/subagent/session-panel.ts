@@ -5,6 +5,7 @@ import {
   UserMessageComponent,
   type AgentSessionEvent,
   type Theme,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
   Container,
@@ -17,6 +18,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import type { SubagentNode } from "./registry.js";
 import type {
   SubagentActiveTool,
@@ -27,6 +29,18 @@ import type {
 } from "./runner.js";
 
 const PANEL_MARGIN_ROWS = 2;
+
+function historicalToolDefinition(name: string): ToolDefinition {
+  // A definition selects the SDK's expandable default renderer, without replacing its
+  // args/result/error/image handling. Historical tools must never be executed here.
+  return {
+    name,
+    label: name,
+    description: "",
+    parameters: Type.Object({}),
+    execute: async () => { throw new Error("Historical tool definitions are render-only"); },
+  };
+}
 
 export interface SubagentViewportKeybindings {
   pageUp: readonly KeyId[];
@@ -134,7 +148,7 @@ export class SubagentSessionPanel implements Component {
       toolCallId,
       args,
       { showImages: true },
-      this.source.getToolDefinition(toolName),
+      this.source.getToolDefinition(toolName) ?? historicalToolDefinition(toolName),
       this.tui,
       this.source.cwd,
     );

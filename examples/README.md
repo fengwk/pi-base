@@ -70,7 +70,7 @@ The following fields are not included in the ready-to-copy [`pi-base.json`](pi-b
 | `compactionModel` / `compactionThinkingLevel` | A provider and model are configured for context compaction |
 | `yolo` | Explicitly need to skip the Permission guard; this configuration disables operation confirmation |
 
-> **Note**: MCP is configured separately in `~/.pi/agent/mcp.json` or `.pi/mcp.json` using Pi 0.99.1 native MCP, rather than in `pi-base.json`. See [Native MCP](#native-mcp) below.
+> **Note**: MCP is configured separately in `~/.pi/agent/mcp.json` or `.pi/mcp.json` using Pi 1.0 native MCP, rather than in `pi-base.json`. See [Native MCP](#native-mcp) below.
 
 ### LSP
 
@@ -189,6 +189,7 @@ Example `~/.pi/agent/mcp.json`:
 
 - Tools use canonical official names `mcp__<server>__<tool>`.
 - Manage servers interactively with `/mcp` or via CLI (`pi mcp list`, `pi mcp add`, etc.).
+- `exposure: "direct"` is independent of `codemode` registration. To enable Pi 1.0 `codemode` and disable tool search, use the [native `settings.json` example](../docs/tools/mcp.md#native-discovery-settings); these are not `pi-base.json` fields.
 - See the [Native MCP Tool Reference](../docs/tools/mcp.md) and [MCP Migration Guide](../docs/mcp-migration.md).
 
 ### Context compression

@@ -70,7 +70,7 @@ Agent 示例使用以下模型：
 | `compactionModel` / `compactionThinkingLevel` | 已配置用于 context compaction 的 provider 和 model |
 | `yolo` | 明确需要跳过 Permission guard；该配置会关闭操作确认 |
 
-> **注意**：MCP 改在 `~/.pi/agent/mcp.json` 或 `.pi/mcp.json` 中使用 Pi 0.99.1 原生 MCP 进行配置，不再写入 `pi-base.json`。详见下文[原生 MCP](#原生-mcp)。
+> **注意**：MCP 改在 `~/.pi/agent/mcp.json` 或 `.pi/mcp.json` 中使用 Pi 1.0 原生 MCP 进行配置，不再写入 `pi-base.json`。详见下文[原生 MCP](#原生-mcp)。
 
 ### LSP
 
@@ -189,6 +189,7 @@ MCP server 配置在 `~/.pi/agent/mcp.json`（全局）或 `<repo>/.pi/mcp.json`
 
 - 工具统一采用官方规范命名 `mcp__<server>__<tool>`。
 - 可在会话内使用 `/mcp` 交互式管理，或使用 Shell CLI（`pi mcp list`、`pi mcp add` 等）。
+- `exposure: "direct"` 与 `codemode` 注册独立。启用 Pi 1.0 `codemode` 并禁用 tool search 见[原生 `settings.json` 示例](../docs/tools/mcp.zh-CN.md#原生发现配置)；这些不是 `pi-base.json` 字段。
 - 详见[原生 MCP 工具文档](../docs/tools/mcp.zh-CN.md)与 [MCP 迁移指南](../docs/mcp-migration.zh-CN.md)。
 
 ### Context compression
