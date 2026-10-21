@@ -17,7 +17,7 @@
 
 配置按 cwd 缓存在进程内。修改后执行 `/reload`。
 
-项目 `pi-base.json` 被视为可信运行时配置，不受 Pi project trust 状态限制。它可以定义可执行的 LSP 和 MCP 命令，因此只应在可信仓库中使用项目配置。
+项目 `pi-base.json` 被视为可信运行时配置，不受 Pi project trust 状态限制。它可以定义可执行的 LSP 命令，因此只应在可信仓库中使用项目配置。（MCP server 改在 `.pi/mcp.json` 或 `~/.pi/agent/mcp.json` 中配置，遵循 Pi 原生可信项目安全模型）。
 
 ## 校验
 
@@ -28,7 +28,6 @@
 - `render`
 - `notify`
 - `yolo`
-- `mcp`
 - `compactionModel`
 - `compactionThinkingLevel`
 - `contextCompression`
@@ -48,12 +47,13 @@
 | `render` | 合并默认值和逐工具映射 |
 | `notify` | 浅合并，项目字段覆盖全局字段 |
 | `yolo` | 项目值覆盖 |
-| `mcp.servers` | 按 server key 合并，同 key 项目覆盖 |
 | `compactionModel` | 项目值覆盖 |
 | `compactionThinkingLevel` | 项目值覆盖 |
 | `contextCompression` | 标量逐项覆盖，数组整体替换 |
 | `subagent` | 各字段逐项覆盖 |
 | `defaultAgent` | 项目值覆盖 |
+
+> **注意**：MCP 已不再在 `pi-base.json` 中配置。Pi 原生 MCP 使用 `~/.pi/agent/mcp.json` 或 `.pi/mcp.json`（标准 `mcpServers` 格式）。已有配置迁移见 [MCP 迁移指南](mcp-migration.zh-CN.md)。
 
 ## `lsp`
 
@@ -177,64 +177,63 @@ Permission 用于防误操作，不是安全沙箱。
 
 桌面通知支持 Linux desktop 和 WSL；其他平台不启用通知。
 
+GNOME Wayland 下点击通知聚焦 tmux 终端，需要安装并启用上游 [Activate Window By Title](https://extensions.gnome.org/extension/5021/activate-window-by-title/)（UUID：`activate-window-by-title@lucaswerkmeister.de`），确认所安装版本支持当前 GNOME Shell（上游 v15 声明支持 45–51；安装前以扩展页面为准），并确保 `gdbus`、`notify-send` 和 `tmux` 可用。在**宿主 tmux** 设置：
+
+```tmux
+set -g set-titles on
+set -g set-titles-string '#S:#I:#W [pi-tmux:#{pid}:#{client_pid}]'
+```
+
+终端还须将 tmux 设置的标题原样显示在 GNOME 窗口标题**末尾**。通知从 `TMUX_PANE` 的稳定 pane ID 追踪来源，该 pane 必须唯一属于一个 session（被链接到多个 session 时直接拒绝）。创建通知时脚本只记录快照：tmux server PID、来源 session，以及一份冻结且有序的附着 client 候选列表——先是在查看该 pane 的 client，其次是来源 session 中的 client，最后是同一 server 的其他 client，同优先级按数字 PID 升序打破平局。此阶段不激活、不切换任何对象。
+
+点击后脚本先重新核验 tmux server 与来源 pane/session，再按顺序遍历冻结的候选列表：只考虑仍然存在且 tty、PID 均一致的 client；创建通知之后才附着的 client 永不会加入，已消失的候选则跳过并顺延到下一个捕获的候选。每个候选之前都会重新核验 server 与来源：已消失的候选跳过，而 server/来源变化则直接中止本次点击，绝不基于过期身份激活任何窗口。对每个候选，脚本通过扩展精确查找 `[pi-tmux:<server>:<client>]` 标题后缀，`(true,)` 表示存在携带该精确标题的本地窗口——这是“请求激活”，**不是**已观测到的焦点。SSH client 与本地共用同一 tmux server，但没有对应本地窗口，会返回 `(false,)`，因此被跳过且不会改动它的 session。只有在命中之后，脚本才重新核验来源与所选 client，仅切换该 client，按稳定 ID 选择捕获的 session/window/pane，并在再次核验 server、来源与 client 之后请求激活该窗口一次。由于 tmux session 共享 window/pane 选择，切换所选 client 可能改变同一 session 中其他 client 的显示内容，即使脚本从未对它们执行 `switch-client`。各失败阶段会分别输出简洁的 stderr 诊断——来源/来源 client 过期、无本地窗口匹配、D-Bus/扩展错误（含 gdbus 原始报错）、tmux 切换/选择失败——不会把所有错误都归结为“找不到标题”。D-Bus/扩展报错会立即中止，不会继续遍历剩余候选；标题稍有延迟时最多做 3 轮有界重试；存在多个本地匹配时按优先级与数字 PID 取第一个。
+
+只要 server 至少有一个附着 client（包括仅有 SSH client）就会提供“切回并聚焦”动作：点击前无法枚举本地窗口——扩展只提供激活接口，`org.gnome.Shell.Introspect.GetWindows` 返回 `AccessDenied`，因此没有只读预检。这类点击可能以上述错误失败。非 tmux GNOME 或 server 没有任何 client 时只发送普通通知。`(true,)` 仅表示扩展找到了匹配窗口并调用激活，不保证实际焦点已可观测。终端不更新标题、扩展不可用或调用失败时不会回退到通用类名、X11 或 BEL attention；脚本会向 stderr 报错。
+
+可在 Alacritty 中显式运行 `python3 scripts/test-gnome-focus.py --run` 做桌面冒烟验证：它在独立 tmux server 上打开三个临时窗口，其中两个共享同一 session 以覆盖候选优先级与数字 PID 选择，检查真实终端焦点事件和来源 pane 选中状态，结束后关闭测试窗口。该测试不代替实体通知点击，也不控制显示器布局；仍须将目标终端完全显示在另一屏幕上验证。
+
+回滚时从宿主 tmux 配置移除上述两行，**还须在正在运行的 tmux server 中显式恢复事先保存的 `set-titles` 和 `set-titles-string` 原值**（例如使用 `tmux set -g`）；仅重新加载没有这两行的配置不会清除运行时选项。按需禁用扩展；不影响普通通知。WSL / X11 使用各自原有跳转方式。
+
 ## `yolo`
 
 Boolean，默认 `false`。启用后跳过 Permission guard。
 
 `/yolo` 只切换当前进程内的运行时状态，不写回 JSON。
 
-## `mcp`
+## `mcp`（原生 MCP）
 
-### 本地 server
+MCP 单独配置在 `~/.pi/agent/mcp.json` 中，可信项目也可使用 `.pi/mcp.json`。
+项目条目会替换同名全局条目。它不再是 `pi-base.json` 字段，
+应使用显式 `direct` 暴露：
 
 ```json
 {
-  "mcp": {
-    "startupTimeoutMs": 60000,
-    "callTimeoutMs": 60000,
-    "servers": {
-      "local": {
-        "type": "local",
-        "command": ["my-mcp", "serve"],
-        "cwd": "~/work/project",
-        "env": {
-          "API_KEY": "${API_KEY}"
-        },
-        "toolPrefix": "local"
-      }
+  "mcpServers": {
+    "local-server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "exposure": "direct"
+    },
+    "remote-server": {
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DOCS_TOKEN}"
+      },
+      "timeout": 60,
+      "exposure": "direct"
     }
   }
 }
 ```
 
-### 远程 server
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "docs": {
-        "type": "remote",
-        "transport": "streamable-http",
-        "url": "https://example.com/mcp",
-        "headers": {
-          "Authorization": "${DOCS_TOKEN}"
-        }
-      }
-    }
-  }
-}
-```
-
-支持 transport：
-
-- `streamable-http`
-- `sse`
-- `websocket`
-
-`env` 和 `headers` 只允许整个值引用 `$VAR` 或 `${VAR}`，不支持字符串内插。WebSocket transport 不支持自定义 headers。
-
-`toolPrefix` 默认使用 server key；空字符串保留远端原始工具名。
+`command` 和 `args` 配置 stdio，`url` 配置 streamable HTTP。
+`timeout` 单位为秒。不要将明文凭证提交到配置文件中。
+`exposure: "direct"` 与 `codemode` 注册或激活独立。
+原生发现扩展及 `defaultTools` 在 Pi 的 `settings.json` 中配置，
+不是新增的 `pi-base.json` 字段；启用 `codemode` 并禁用 tool search
+见 [Pi 1.0 settings 示例](tools/mcp.zh-CN.md#原生发现配置)。
+Agent 策略和 session 行为见[原生 MCP 工具](tools/mcp.zh-CN.md)，
+一次性迁移 CLI 与安全规则见[迁移指南](mcp-migration.zh-CN.md)。
 
 ## `subagent`
 

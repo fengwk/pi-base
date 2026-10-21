@@ -15,8 +15,8 @@ Pi
      -> Load runtime configuration
      -> Register base tools
      -> Register Agent / Goal / Notify
-     -> Register MCP / Subagent / Permission
-     -> Register lifecycle hooks
+     -> Register Subagent / Permission
+     -> Register lifecycle hooks (integrating with Pi native MCP)
 ```
 
 `package.json` points to `index.ts` via `pi.extensions`. The extension itself does not start a separate process; all capabilities are mounted onto the current Pi session.
@@ -38,7 +38,7 @@ Pi
    - `apply_patch`
    - three LSP tools
 5. Register the Markdown Agents and the `--agent` flag.
-6. Register Goal, Notify, MCP, and Subagent.
+6. Register Goal, Notify, and Subagent (MCP tools are provided natively by Pi via `~/.pi/agent/mcp.json`).
 7. Register the Permission guard, `/yolo`, `/resume-all`, and `/subagent`.
 8. Register context compression, provider request, and the unified `tool_result` hooks.
 
@@ -55,7 +55,6 @@ Registration order is constrained by the following dependencies: Goal's settled 
 | [`src/subagent/`](../src/subagent/) | `task`, session creation/resumption, concurrency, permission relay, and UI |
 | [`src/goal/`](../src/goal/) | Persistent Goals, budget, auto-resume, and control tools |
 | [`src/lsp/`](../src/lsp/) | LSP discovery, client pool, and tool implementations |
-| [`src/mcp/`](../src/mcp/) | MCP transport, hub, binding, schema, and dynamic tools |
 | [`src/permission.ts`](../src/permission.ts) | Tool call permission matching and confirmation |
 | [`src/context-compression.ts`](../src/context-compression.ts) | Compression of old tool results and file anchor cleanup |
 | [`src/tool-output-core.ts`](../src/tool-output-core.ts) | Unified output truncation and full-result persistence |
@@ -70,8 +69,8 @@ At root session startup or reload:
 - Load or invalidate the `pi-base.json` cache.
 - Clear the LSP resolver cache; close existing LSP clients on reload.
 - Restore the current Agent, Goal, and runtime state.
-- Establish MCP bindings.
-- After the initial MCP connection and tool discovery phase, validate the current Agent's tool allowlist.
+- Pi native MCP establishes per-session server connections in the background.
+- Restore the Agent policy without warning merely for not-yet-ready MCP tools.
 - Register the Subagent permission host, diagnostics host, and live tree widget on the UI root session.
 
 Subagent sessions carry their own depth, root session id, and Agent state, and do not duplicate root UI resources.
@@ -79,23 +78,36 @@ Subagent sessions carry their own depth, root session id, and Agent state, and d
 ### session_shutdown
 
 - The root session closes all LSP clients.
-- MCP leases release shared connections at terminal shutdown.
+- Native MCP per-session connections terminate upon session disposal.
 - Clean up notifications, permission hosts, widgets, and the diagnostics host.
 - Reload and terminal shutdown use different cleanup paths; reload does not release resources that continue to be reused after the reload.
 
 ### before_agent_start
 
-The Agent module, based on the current Agent:
+The Agent module mutates Pi 1.0's shared `event.systemPromptOptions` in place, based on the current Agent; it does not return `systemPrompt` as an opaque replacement:
 
-- Selects the system prompt.
-- Applies the tool allowlist.
-- Injects visible skills.
+- Selects `customPrompt`.
+- Applies the tool allowlist and updates `selectedTools` for explicit allowlists.
+- Filters visible skills using the existing skill policy.
 - Injects `task` when the depth and allowlist conditions are met.
-- Adds `<available_subagents>` and `<env>`.
+- Writes the tool guide and `<available_subagents>` into `sections.pi_base_tools` and `sections.pi_base_subagents`.
+- Uses a separate `<env>` containing only `Current date: YYYY-MM-DD`; cwd stays in the native `<cwd>` section with normalized, XML-escaped metadata.
+
+Other native and extension sections contributed before or after this hook remain available to Pi's final prompt assembly. An existing `forceSystemPrompt` is preserved as an explicit upstream override.
+
+`contextFiles` remain raw shared inputs so later extensions can inspect and modify them without double escaping. Pi 1.0 renders project context verbatim inside its XML envelopes; this is not an XML-sanitization boundary. pi-base follows that native contract rather than pre-encoding inputs or patching the SDK.
+
+### turn_start
+
+Synchronize the Agent's tool selection with current registrations at
+`before_agent_start` and `turn_start`. This is not an initial-MCP-connection callback.
 
 ### tool_call
 
-The Permission guard runs before tool execution:
+The pi-base Markdown Agent execution guard checks authorization at the tool-call
+entry, including MCP calls routed through wrappers. This is separate from the
+Permission guard and is not a general official SDK `tools` guarantee.
+The Permission guard then applies operation rules before execution:
 
 ```text
 tool args
@@ -127,7 +139,7 @@ The implementation is in [`src/tool-result.ts`](../src/tool-result.ts), [`src/to
 |---------|---------|---------|
 | `/agent [name]` | Select or switch the Markdown Agent; `/agent default` restores the built-in default Agent | [Markdown Agents](agents.md) |
 | `/goal ...` | Create, view, pause, resume, or end a long-term Goal | [Goal tools](tools/goal-tools.md) |
-| `/mcp-status` | View MCP server, connection, retry, and dynamic tool status | [MCP dynamic tools](tools/mcp.md) |
+| `/mcp` | Manage Pi native MCP servers, inspect tools, reconnect, OAuth sign-in, and toggle exposure | [MCP tools](tools/mcp.md) |
 | `/subagent [id-or-prefix]` | View running Subagent sessions in the root TUI | [`task`](tools/task.md) |
 | `/yolo` | Toggle the current runtime's Permission bypass without writing back to configuration | [Configuration reference](configuration.md#yolo) |
 | `/resume-all` | Select and resume a session in any project directory from the interactive UI | [`src/resume-all.ts`](../src/resume-all.ts) |
@@ -181,15 +193,29 @@ Explicit configuration does not expand permissions. When both `apply_patch` and 
 
 ### MCP
 
-MCP tools come from the runtime server list; there is no fixed tool name. `McpSessionBinding` converts server schemas into Pi tool definitions and handles aliases, conflicts, disconnections, and recovery.
+Pi native MCP is the sole MCP implementation, configured via `~/.pi/agent/mcp.json` (global) or `<project>/.pi/mcp.json` (trusted project).
+
+pi-base recommends explicit `direct` exposure, independent of `codemode` registration. Root and child sessions own independent
+connections. SDK children supply the public `createMcpExtension()`, `createCodemodeExtension()`, and `createToolSearchExtension()` factories to the native resource loader as `builtin: true`, `replaceable: true` entries named `mcp`, `codemode`, and `tool-search`. The loader honors global and trusted-project `settings.json` extension enable/disable settings; pi-base does not force these tools active or override `defaultTools`. `codemode` has `defaultActive=false`; see the [native settings example](tools/mcp.md#native-discovery-settings).
+Markdown Agent tool
+selection is synchronized at `before_agent_start` / `turn_start`, with authorization
+checked at execution entry. `tools: []` leaves the ordinary allowlist empty; existing
+`task` and Goal runtime injection hooks retain their own conditions.
+See [Native MCP tools](tools/mcp.md) for names, configuration, and the call chain.
 
 ### Subagent
 
 `task` is injected only when the current Agent declares a non-empty `subagents` and the depth has not reached the limit.
 
+Child sessions resolve native tools from their own settings and registrations, not a copied parent active-tool list. The child Agent's explicit allowlist still applies; omitted `tools` preserves the current default policy.
+
+Historical tool cards whose tool definition is no longer available use the SDK's default expandable renderer.
+
 ### Goal
 
 The root session can obtain `create_goal`; once a Goal is active, `get_goal` and `update_goal` are injected according to the Agent tool policy. Goal tools are not injected into Subagents.
+
+Pi 1.2.0 runs both user prompts and idle custom `triggerTurn` starts through `before_agent_start`. Agent system-prompt setup applies to both. Goal guidance is not added again when the starting message is pi-base's own valid control message for the current goal; user and unrelated custom starts still receive it.
 
 ## Process-level and session-level state
 
@@ -197,7 +223,6 @@ The root session can obtain `create_goal`; once a Goal is active, `get_goal` and
 |-------|-------|
 | Configuration cache | In-process, per cwd |
 | LSP manager | In-process client pool |
-| MCP hub registry | In-process, per root session tree |
 | Subagent registry | In-process |
 | Agent state | session entry |
 | Goal state | root session entry |

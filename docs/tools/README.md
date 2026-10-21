@@ -26,7 +26,7 @@
 
 - [`task`](task.md)
 - [Goal tools](goal-tools.md)
-- [MCP tools](mcp.md)
+- [Native MCP tools](mcp.md)
 
 ## Shared mechanisms
 

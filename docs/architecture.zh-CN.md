@@ -15,8 +15,8 @@ Pi
      -> 加载运行时配置
      -> 注册基础工具
      -> 注册 Agent / Goal / Notify
-     -> 注册 MCP / Subagent / Permission
-     -> 注册生命周期钩子
+     -> 注册 Subagent / Permission
+     -> 注册生命周期钩子（与 Pi 原生 MCP 协同）
 ```
 
 `package.json` 通过 `pi.extensions` 指向 `index.ts`。扩展本身不启动独立进程；所有能力都挂载到当前 Pi session。
@@ -38,7 +38,7 @@ Pi
    - `apply_patch`
    - 三个 LSP 工具
 5. 注册 Markdown Agent 和 `--agent` flag。
-6. 注册 Goal、Notify、MCP 和 Subagent。
+6. 注册 Goal、Notify 和 Subagent（MCP 工具由 Pi 内置 MCP 扩展通过 `~/.pi/agent/mcp.json` 原生提供）。
 7. 注册 Permission guard、`/yolo`、`/resume-all`、`/subagent`。
 8. 注册 context compression、provider request 和统一 `tool_result` 钩子。
 
@@ -55,7 +55,6 @@ Pi
 | [`src/subagent/`](../src/subagent/) | `task`、session 创建/恢复、并发、权限中继和 UI |
 | [`src/goal/`](../src/goal/) | 持久化 Goal、预算、自动续跑和控制工具 |
 | [`src/lsp/`](../src/lsp/) | LSP discovery、client pool 和工具实现 |
-| [`src/mcp/`](../src/mcp/) | MCP transport、hub、binding、schema 和动态工具 |
 | [`src/permission.ts`](../src/permission.ts) | 工具调用权限匹配和确认 |
 | [`src/context-compression.ts`](../src/context-compression.ts) | 旧工具结果压缩与文件锚点清理 |
 | [`src/tool-output-core.ts`](../src/tool-output-core.ts) | 统一输出截断和完整结果落盘 |
@@ -70,8 +69,8 @@ Pi
 - 加载或失效 `pi-base.json` 缓存。
 - 清理 LSP resolver cache；reload 时关闭已有 LSP client。
 - 恢复当前 Agent、Goal 和运行时状态。
-- 建立 MCP binding。
-- MCP 初次连接与工具发现阶段结束后，再校验当前 Agent 的 tool allowlist。
+- Pi 原生 MCP 在后台建立 per-session 连接。
+- 恢复 Agent 策略，不会仅因 MCP 工具尚未就绪而发出警告。
 - 在 UI root session 注册 Subagent 权限 host、诊断 host 和实时树形 widget。
 
 Subagent session 携带自己的 depth、root session id 和 Agent state，不重复拥有 root UI 资源。
@@ -79,23 +78,35 @@ Subagent session 携带自己的 depth、root session id 和 Agent state，不�
 ### `session_shutdown`
 
 - 根 session 关闭全部 LSP client。
-- MCP lease 在 terminal shutdown 时释放共享连接。
+- 原生 MCP per-session 连接在 session 销毁时释放。
 - 清理通知、权限 host、widget 和诊断 host。
 - Reload 与 terminal shutdown 使用不同的清理路径；reload 不释放重载后继续复用的资源。
 
 ### `before_agent_start`
 
-Agent 模块根据当前 Agent：
+Agent 模块根据当前 Agent 原地修改 Pi 1.0 共享的 `event.systemPromptOptions`，不返回 `systemPrompt` 做不透明的整体替换：
 
-- 选择 system prompt。
-- 应用 tool allowlist。
-- 注入可见 skills。
+- 选择 `customPrompt`。
+- 应用 tool allowlist，并为显式 allowlist 更新 `selectedTools`。
+- 按既有 skill 策略过滤可见 skills。
 - 在满足 depth 和 allowlist 条件时注入 `task`。
-- 添加 `<available_subagents>` 和 `<env>`。
+- 将工具指南和 `<available_subagents>` 写入 `sections.pi_base_tools` 和 `sections.pi_base_subagents`。
+- 独立的 `<env>` 仅包含 `Current date: YYYY-MM-DD`；cwd 保留在原生 `<cwd>` section 中，对路径元数据规范化并进行 XML escape。
+
+本 hook 前后其他原生或扩展贡献的 sections 仍参与 Pi 最终 prompt 组装。已有 `forceSystemPrompt` 作为上游显式覆盖保留。
+
+`contextFiles` 保持原始共享输入，后置扩展可继续检查和修改，不会因预编码而重复转义。Pi 1.0 将项目上下文原样插入 XML 包装，这不是 XML 清洗边界；pi-base 遵循该原生契约，不预编码输入或修改 SDK。
+
+### `turn_start`
+
+在 `before_agent_start` 和 `turn_start` 根据当前注册状态同步 Agent 工具选择，
+而非依赖初次 MCP 连接完成回调。
 
 ### `tool_call`
 
-Permission guard 在工具执行前运行：
+pi-base Markdown Agent 执行 guard 在工具调用入口检查授权，包括封装工具内的
+MCP 调用。这与 Permission guard 独立，也不是官方 SDK `tools` 选项的通用保证。
+随后 Permission guard 在执行前应用操作规则：
 
 ```text
 tool args
@@ -127,7 +138,7 @@ tool result
 |------|------|----------|
 | `/agent [name]` | 选择或切换 Markdown Agent；`/agent default` 恢复内置默认 Agent | [Markdown Agent](agents.zh-CN.md) |
 | `/goal ...` | 创建、查看、暂停、恢复或结束长期 Goal | [Goal tools](tools/goal-tools.zh-CN.md) |
-| `/mcp-status` | 查看 MCP server、连接、重试和动态工具状态 | [MCP 动态工具](tools/mcp.zh-CN.md) |
+| `/mcp` | 管理 Pi 原生 MCP server、查看工具、重连、OAuth 登录/退出以及切换 exposure | [MCP 动态工具](tools/mcp.zh-CN.md) |
 | `/subagent [id-or-prefix]` | 在 root TUI 中查看运行中的 Subagent session | [`task`](tools/task.zh-CN.md) |
 | `/yolo` | 切换当前运行时的 Permission bypass，不写回配置 | [配置参考](configuration.zh-CN.md#yolo) |
 | `/resume-all` | 在交互式 UI 中选择并恢复任意项目目录的 session | [`src/resume-all.ts`](../src/resume-all.ts) |
@@ -181,15 +192,28 @@ schema
 
 ### MCP
 
-MCP 工具来自运行时 server 列表，不存在固定工具名。`McpSessionBinding` 将 server schema 转成 Pi tool definition，并处理别名、冲突、断线和恢复。
+Pi 原生 MCP 为唯一 MCP 实现，通过全局 `~/.pi/agent/mcp.json` 或项目级 `<project>/.pi/mcp.json`（可信项目）进行配置。
+
+pi-base 推荐显式 `direct` 暴露，与 `codemode` 注册独立。根与子 session 独立持有连接。
+SDK 子 session 将公开的 `createMcpExtension()`、`createCodemodeExtension()` 和 `createToolSearchExtension()` factory 以 `builtin: true`、`replaceable: true` 条目提供给原生 resource loader，名称分别为 `mcp`、`codemode` 和 `tool-search`。Loader 遵循全局及可信项目 `settings.json` 的扩展启禁配置；pi-base 不强制激活这些工具，也不覆盖 `defaultTools`。`codemode` 的 `defaultActive=false`，见[原生 settings 示例](tools/mcp.zh-CN.md#原生发现配置)。
+Markdown Agent 工具选择在 `before_agent_start` / `turn_start` 同步，
+执行入口检查授权。`tools: []` 仅清空普通工具 allowlist，
+已有 `task` 与 Goal runtime 注入 hook 仍按各自条件生效。
+名称、配置及调用链见[原生 MCP 工具](tools/mcp.zh-CN.md)。
 
 ### Subagent
 
 `task` 只在当前 Agent 声明非空 `subagents` 且 depth 未达到上限时注入。
 
+子 session 按自身 settings 和注册状态解析原生工具，不复制父 session 的 active-tool 列表。子 Agent 的显式 allowlist 仍然生效；省略 `tools` 时保留当前默认策略。
+
+历史工具卡片的 tool definition 已不可用时，使用 SDK 默认的可展开 renderer。
+
 ### Goal
 
 根 session 可获得 `create_goal`；Goal active 后按 Agent 工具策略注入 `get_goal` 和 `update_goal`。Goal 工具不注入 Subagent。
+
+Pi 1.2.0 中，用户提示和空闲时自定义消息的 `triggerTurn` 启动都会经过 `before_agent_start`，两者都执行 Agent system prompt 设置。起始消息已是 pi-base 针对当前 Goal 的有效控制消息时，不再重复添加目标指导；用户提示和无关自定义消息启动仍会收到指导。
 
 ## 进程级与 Session 级状态
 
@@ -197,7 +221,6 @@ MCP 工具来自运行时 server 列表，不存在固定工具名。`McpSession
 |------|--------|
 | 配置 cache | 进程内，按 cwd |
 | LSP manager | 进程内 client pool |
-| MCP hub registry | 进程内，按 root session tree |
 | Subagent registry | 进程内 |
 | Agent state | session entry |
 | Goal state | root session entry |

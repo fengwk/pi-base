@@ -543,6 +543,7 @@ describe("goal support", () => {
 
     const result = await registry.emit("before_agent_start", {
       type: "before_agent_start",
+      messageType: "user",
       prompt: "continue",
       systemPrompt: "base prompt",
       systemPromptOptions: {},
@@ -565,6 +566,97 @@ describe("goal support", () => {
     expect(result.messages[0].content).toContain("</system-reminder>");
     expect(registry.getMessages()[0]?.content).toContain("Verify every named artifact");
     expect(registry.getMessages()[0]?.content).toContain("Blocked audit:");
+  });
+
+  it("skips re-injection when a run starts from this goal's own control message", async () => {
+    // Intent: Pi 1.2.0 runs an idle triggerTurn control message through before_agent_start as a
+    // "custom" event. The starting goal_set/continuation message already carries the full guidance
+    // for this exact goal, so the hook must return no second message and avoid duplication.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Ship the verified feature");
+    const goal = latestGoal(registry)!;
+
+    const goalSet = await registry.emit("before_agent_start", {
+      type: "before_agent_start",
+      messageType: "custom",
+      message: {
+        customType: "pi-base-goal-control",
+        content: "goal set guidance",
+        display: true,
+        details: { kind: "goal_set", goal },
+      },
+      systemPrompt: "base prompt",
+      systemPromptOptions: {},
+    });
+    expect(goalSet.messages).toEqual([]);
+
+    const continuation = await registry.emit("before_agent_start", {
+      type: "before_agent_start",
+      messageType: "custom",
+      message: {
+        customType: "pi-base-goal-control",
+        content: "continuation guidance",
+        display: true,
+        details: { kind: "continuation", goal },
+      },
+      systemPrompt: "base prompt",
+      systemPromptOptions: {},
+    });
+    expect(continuation.messages).toEqual([]);
+  });
+
+  it("still injects guidance for unrelated, stale, and malformed custom starts", async () => {
+    // Intent: the skip must match only this goal's own control details. An unrelated customType, a
+    // control message left by a replaced goal, and malformed details must all still receive the
+    // visible continuation contract so a stale message can never suppress the current goal.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+    await registry.runCommand("goal", "Ship the verified feature");
+    const goal = latestGoal(registry)!;
+    const start = { type: "before_agent_start", messageType: "custom" as const, systemPrompt: "base prompt", systemPromptOptions: {} };
+
+    const unrelated = await registry.emit("before_agent_start", {
+      ...start,
+      message: { customType: "other-extension", content: "hello", display: true, details: { kind: "continuation", goal } },
+    });
+    expect(unrelated.messages).toHaveLength(1);
+    expect(unrelated.messages[0]).toMatchObject({ customType: "pi-base-goal-control", details: { kind: "continuation" } });
+    expect(unrelated.messages[0].content).toContain("Ship the verified feature");
+
+    const stale = await registry.emit("before_agent_start", {
+      ...start,
+      message: {
+        customType: "pi-base-goal-control",
+        content: "stale",
+        display: true,
+        details: { kind: "continuation", goal: { ...goal, id: "previous-goal" } },
+      },
+    });
+    expect(stale.messages).toHaveLength(1);
+
+    const malformed = await registry.emit("before_agent_start", {
+      ...start,
+      message: { customType: "pi-base-goal-control", content: "bad", display: true, details: { kind: "continuation" } },
+    });
+    expect(malformed.messages).toHaveLength(1);
+  });
+
+  it("injects nothing before a run when no goal is active", async () => {
+    // Intent: guidance is goal-scoped; a user run without a current active goal must not receive
+    // any goal control message.
+    const registry = createToolRegistry();
+    registerGoalSupport(registry.pi as never);
+
+    const result = await registry.emit("before_agent_start", {
+      type: "before_agent_start",
+      messageType: "user",
+      prompt: "hello",
+      systemPrompt: "base prompt",
+      systemPromptOptions: {},
+    });
+
+    expect(result.messages).toEqual([]);
   });
 
   it("returns goal guidance before the structured get_goal payload", async () => {

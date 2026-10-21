@@ -1,4 +1,6 @@
-import { initTheme, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { initTheme, ToolExecutionComponent, type AgentSessionEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { SubagentViewMessage, SubagentViewSource } from "../src/subagent/runner.js";
 import { SubagentSessionPanel, type SubagentViewportKeybindings } from "../src/subagent/session-panel.js";
@@ -76,6 +78,78 @@ function createHarness(
 }
 
 describe("SubagentSessionPanel", () => {
+  it.each([false, true])("expands missing historical definitions with SDK defaults (error=%s)", (isError) => {
+    // Real SDK components prove that an unknown historical tool no longer uses the
+    // fixed generic truncation path, including arguments, errors and image content.
+    const updateResult = vi.spyOn(ToolExecutionComponent.prototype, "updateResult");
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "historical", name: "removed-tool", arguments: { path: "args-sentinel" } }],
+        stopReason: "toolUse", timestamp: 1,
+      },
+      {
+        role: "toolResult", toolCallId: "historical", toolName: "removed-tool",
+        content: [
+          { type: "text", text: Array.from({ length: 15 }, (_, i) => `result-line-${i + 1}-end`).join("\n") },
+          { type: "image", data: "", mimeType: "image/png" },
+        ],
+        isError, timestamp: 2,
+      },
+    ] as unknown as SubagentViewMessage[];
+    const harness = createHarness(messages, {}, undefined, 60);
+    try {
+      const collapsed = harness.panel.render(120).join("\n");
+      expect(collapsed).toContain("args-sentinel");
+      expect(collapsed).toContain("result-line-10-end");
+      expect(collapsed).not.toContain("result-line-11-end");
+      // The SDK appends one image fallback line to the 15 text lines.
+      expect(collapsed).toContain("6 more lines");
+      expect(updateResult).toHaveBeenCalledWith(messages[1]);
+      harness.panel.handleInput("expand");
+      const expanded = harness.panel.render(120).join("\n");
+      expect(expanded).toContain("result-line-15-end");
+      expect(expanded).toContain("path: args-sentinel");
+      expect(expanded).toContain("image/png");
+      expect(expanded).not.toContain("more lines");
+      harness.panel.handleInput("expand");
+      expect(harness.panel.render(120).join("\n")).toBe(collapsed);
+    } finally {
+      harness.panel.dispose();
+      updateResult.mockRestore();
+    }
+  });
+
+  it("preserves existing definitions and custom SDK renderers", () => {
+    // Nullish fallback must not replace either custom renderer or its render context.
+    const renderCall = vi.fn(() => new Text("custom call", 0, 0));
+    const renderResult = vi.fn((_result, options) => new Text(`custom result expanded=${options.expanded}`, 0, 0));
+    const execute = vi.fn();
+    const definition: ToolDefinition = {
+      name: "known", label: "Known", description: "", parameters: Type.Object({}),
+      execute, renderCall, renderResult,
+    };
+    const harness = createHarness([], { getToolDefinition: () => definition }, undefined, 40);
+    try {
+      harness.emit({ type: "tool_execution_start", toolCallId: "known-call", toolName: "known", args: { value: 7 } });
+      harness.emit({
+        type: "tool_execution_end", toolCallId: "known-call", toolName: "known",
+        result: { content: [{ type: "text", text: "result" }], details: { value: 8 } }, isError: true,
+      });
+      expect(harness.panel.render(120).join("\n")).toContain("custom result expanded=false");
+      harness.panel.handleInput("expand");
+      expect(harness.panel.render(120).join("\n")).toContain("custom result expanded=true");
+      expect(renderCall).toHaveBeenCalledWith({ value: 7 }, expect.anything(), expect.objectContaining({ expanded: true }));
+      expect(renderResult).toHaveBeenLastCalledWith(
+        { content: [{ type: "text", text: "result" }], details: { value: 8 } },
+        { expanded: true, isPartial: false }, expect.anything(), expect.objectContaining({ isError: true }),
+      );
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      harness.panel.dispose();
+    }
+  });
+
   it("renders live assistant text and tool execution with the main Pi components", () => {
     // Intent: the overlay must consume the same message/tool event stream as the main chat renderer.
     const harness = createHarness([], {}, undefined, 24);

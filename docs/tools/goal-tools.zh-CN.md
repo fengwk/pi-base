@@ -140,6 +140,8 @@ Active Goal 在 `agent_settled` 后检查：
 
 `Esc` 暂停后必须 `/goal resume` 才继续。Reload 会把 active Goal 改为 paused；之后必须执行 `/goal resume` 才继续。
 
+Pi 1.2.0 中，空闲时通过自定义消息 `triggerTurn` 启动也会经过 `before_agent_start`，并执行 Agent system prompt 设置。为避免重复指导，仅当起始消息已是 pi-base 针对当前 Goal 的有效控制消息时才跳过 continuation；用户触发和无关自定义消息启动仍会收到指导。
+
 ## Context 过滤
 
 Provider request 前会过滤：
@@ -154,4 +156,5 @@ Provider request 前会过滤：
 
 - [`tests/goal.test.ts`](../../tests/goal.test.ts)
 - [`tests/goal-state.test.ts`](../../tests/goal-state.test.ts)
+- [`tests/goal-runtime-integration.test.ts`](../../tests/goal-runtime-integration.test.ts)
 - [`tests/index-lifecycle.test.ts`](../../tests/index-lifecycle.test.ts)

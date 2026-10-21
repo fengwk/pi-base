@@ -44,7 +44,7 @@ describe("pi-base config", () => {
       expect(loaded.settings.defaultAgent).toBe("jiji");
       expect(loaded.settings.lsp).toBeUndefined();
       expect(loaded.settings.notify).toBeUndefined();
-      expect(loaded.settings.mcp).toBeUndefined();
+      expect(loaded.settings).not.toHaveProperty("mcp");
       expect(loaded.settings.compactionModel).toBeUndefined();
       expect(loaded.settings.compactionThinkingLevel).toBeUndefined();
       expect(loaded.settings.contextCompression).toBeUndefined();
@@ -71,41 +71,34 @@ describe("pi-base config", () => {
     });
   });
 
-  it("merges global MCP timeouts with project servers and lets the project override them", async () => {
-    // Intent: timeout defaults are useful independently from server declarations,
-    // so global and project files must merge both scalars alongside server entries.
+  it.each(["global", "project"])("rejects legacy MCP config in the %s settings with a migration hint", async (scope) => {
+    // Intent: old MCP settings must never be silently ignored or start a custom transport.
+    // Cover both settings layers, including empty/disabled and malformed legacy values.
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
     await mkdir(projectDir, { recursive: true });
     await withTempGlobalSettings(async (globalPath) => {
-      await writeFile(globalPath, JSON.stringify({ mcp: { startupTimeoutMs: 80, callTimeoutMs: 90 } }), "utf8");
-      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
-        mcp: {
-          servers: {
-            mm: {
-              type: "local",
-              command: ["mock-mcp"],
-              callTimeoutMs: 30,
-            },
-          },
-        },
-      }), "utf8");
+      const filePath = scope === "global" ? globalPath : join(projectDir, "pi-base.json");
+      for (const mcp of [{ servers: { mm: { type: "local", command: ["mock-mcp"] } } }, {}, null, false, []]) {
+        await writeFile(filePath, JSON.stringify({ mcp }), "utf8");
+        expect(() => loadPiBaseSettings(root)).toThrow(`Invalid pi-base settings at ${filePath}: settings.mcp is no longer supported.`);
+        expect(() => loadPiBaseSettings(root)).toThrow(/native mcp\.json.*\.pi\/mcp\.json.*"mcpServers".*exposure: "direct"/);
+        expect(() => loadPiBaseSettings(root)).toThrow(/Remove "mcp" from pi-base\.json/);
+      }
+    });
+  });
 
-      const inherited = loadPiBaseSettings(root);
-      expect(inherited.settings.mcp?.startupTimeoutMs).toBe(80);
-      expect(inherited.settings.mcp?.callTimeoutMs).toBe(90);
-      expect(inherited.settings.mcp?.servers?.mm?.callTimeoutMs).toBe(30);
-
-      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
-        mcp: {
-          startupTimeoutMs: 40,
-          callTimeoutMs: 45,
-          servers: { mm: { type: "local", command: ["mock-mcp"] } },
-        },
+  it("leaves native MCP configuration to the host", async () => {
+    // Intent: host mcp.json is a separate contract, not parsed/merged by pi-base.
+    const root = await createTempWorkspace();
+    await mkdir(join(root, ".pi"), { recursive: true });
+    await withTempGlobalSettings(async () => {
+      await writeFile(join(root, ".pi", "mcp.json"), JSON.stringify({
+        mcpServers: { demo: { command: "demo", args: ["--stdio"], exposure: "direct" } },
       }), "utf8");
-      const overridden = loadPiBaseSettings(root);
-      expect(overridden.settings.mcp?.startupTimeoutMs).toBe(40);
-      expect(overridden.settings.mcp?.callTimeoutMs).toBe(45);
+      await writeFile(join(root, ".pi", "pi-base.json"), JSON.stringify({ yolo: false }), "utf8");
+      expect(loadPiBaseSettings(root).settings.yolo).toBe(false);
+      expect(loadPiBaseSettings(root).settings).not.toHaveProperty("mcp");
     });
   });
 
@@ -301,22 +294,6 @@ describe("pi-base config", () => {
     ["invalid context compression tools", { contextCompression: { tools: [""] } }, /empty tool name/],
     ["invalid enabled providers", { contextCompression: { enabledProviders: "openai" } }, /enabledProviders must be an array of strings/],
     ["invalid disabled providers", { contextCompression: { disabledProviders: ["  "] } }, /disabledProviders/],
-    ["invalid mcp shape", { mcp: [] }, /mcp must be an object/],
-    ["invalid mcp servers", { mcp: { servers: null } }, /mcp\.servers must be an object/],
-    ["empty mcp server key", { mcp: { servers: { "": { type: "local", command: ["x"] } } } }, /empty server name/],
-    ["invalid mcp server type", { mcp: { servers: { x: { type: "stdio", command: ["x"] } } } }, /type must be either/],
-    ["empty local command", { mcp: { servers: { x: { type: "local", command: [] } } } }, /command must contain at least one entry/],
-    ["invalid local env", { mcp: { servers: { x: { type: "local", command: ["x"], env: { A: 1 } } } } }, /env\.A must be a string/],
-    ["invalid local cwd", { mcp: { servers: { x: { type: "local", command: ["x"], cwd: 1 } } } }, /cwd must be a string/],
-    ["invalid local startup timeout", { mcp: { servers: { x: { type: "local", command: ["x"], startupTimeoutMs: 0 } } } }, /startupTimeoutMs/],
-    ["invalid local call timeout", { mcp: { servers: { x: { type: "local", command: ["x"], callTimeoutMs: 0 } } } }, /callTimeoutMs/],
-    ["invalid global startup timeout", { mcp: { startupTimeoutMs: 0 } }, /mcp\.startupTimeoutMs/],
-    ["invalid global call timeout", { mcp: { callTimeoutMs: -1 } }, /mcp\.callTimeoutMs/],
-    ["invalid remote url type", { mcp: { servers: { x: { type: "remote", transport: "sse", url: 1 } } } }, /url must be a string/],
-    ["invalid remote transport", { mcp: { servers: { x: { type: "remote", transport: "http", url: "https://example.com" } } } }, /transport/],
-    ["invalid remote url", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "not a url" } } } }, /url must be a valid URL/],
-    ["invalid remote headers", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "https://example.com", headers: [] } } } }, /headers must be an object/],
-    ["invalid remote call timeout", { mcp: { servers: { x: { type: "remote", transport: "sse", url: "https://example.com", callTimeoutMs: 1.5 } } } }, /callTimeoutMs/],
     ["invalid yolo", { yolo: "yes" }, /yolo must be a boolean/],
     ["invalid defaultAgent", { defaultAgent: "   " }, /defaultAgent must be a non-empty string/],
   ])("rejects invalid config: %s", async (_name, settings, expected) => {
@@ -361,24 +338,22 @@ describe("pi-base config", () => {
   });
 
   it("keeps dynamic configuration maps open while validating their fixed containers", async () => {
-    // Intent: strict object validation must not reinterpret tool patterns, MCP/LSP server ids, or
+    // Intent: strict object validation must not reinterpret tool patterns, LSP server ids, or
     // render tool names as schema fields because those maps are deliberately user-extensible.
     const root = await createTempWorkspace();
     const projectDir = join(root, ".pi");
     await mkdir(projectDir, { recursive: true });
     await withTempGlobalSettings(async () => {
       await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
-        permission: { "mcp_custom/tool": { "repo/*": "allow" } },
-        render: { collapsedToolResultLines: { "mcp_custom/tool": 4 } },
+        permission: { "mcp__custom__tool": { "repo/*": "allow" } },
+        render: { collapsedToolResultLines: { "mcp__custom__tool": 4 } },
         lsp: { servers: { "custom-language": { command: ["custom-lsp"], extensions: [".custom"] } } },
-        mcp: { servers: { "custom-server": { type: "local", command: ["custom-mcp"] } } },
       }), "utf8");
 
       const settings = loadPiBaseSettings(root).settings;
-      expect(settings.permission?.["mcp_custom/tool"]).toEqual([{ pattern: "repo/*", action: "allow" }]);
-      expect(settings.render?.collapsedToolResultLines).toEqual({ "mcp_custom/tool": 4 });
+      expect(settings.permission?.["mcp__custom__tool"]).toEqual([{ pattern: "repo/*", action: "allow" }]);
+      expect(settings.render?.collapsedToolResultLines).toEqual({ "mcp__custom__tool": 4 });
       expect(settings.lsp?.servers?.["custom-language"]).toBeDefined();
-      expect(settings.mcp?.servers?.["custom-server"]).toBeDefined();
     });
   });
 
