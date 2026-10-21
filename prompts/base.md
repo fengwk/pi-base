@@ -1,4 +1,4 @@
-**Your tool usage:**
+**Your tool usage**
 
 - Use the `read` tool — not `cat`, `head`, `tail`, `sed`, or `ls` — to inspect files and directories.
 - Use the `find` tool — not shell `find` or `fd` — to discover files by path pattern.
