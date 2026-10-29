@@ -213,15 +213,12 @@ You are the planner.
       );
 
       expect(plannerPrompt.systemPrompt).toContain("You are the planner.");
-      expect(plannerPrompt.systemPrompt).not.toContain("Default system prompt.\nCurrent date:");
-      expect(plannerPrompt.systemPrompt).toContain("<env>");
-      expect(plannerPrompt.systemPrompt).toContain("</env>");
+      expect(plannerPrompt.systemPrompt).not.toContain("Default system prompt.");
+      // Intent: removing the date injection must leave the native cwd section intact.
+      expect(plannerPrompt.systemPrompt).not.toContain("<env>");
+      expect(plannerPrompt.systemPrompt).not.toContain("Current date:");
+      expect(plannerPrompt.systemPromptOptions.sections.env).toBeUndefined();
       expect(plannerPrompt.systemPrompt).toContain(`<cwd>\n${root}\n</cwd>`);
-      // <env> must be preceded by a blank line so it does not glue to whatever came before.
-      expect(plannerPrompt.systemPrompt).toMatch(/\n\n<env>/);
-      // Exactly one <env> block: env info is owned by pi-base, not duplicated by upstream.
-      expect((plannerPrompt.systemPrompt.match(/<env>/g) ?? []).length).toBe(1);
-      expect((plannerPrompt.systemPrompt.match(/Current date:/g) ?? []).length).toBe(1);
       expect(plannerPrompt.systemPrompt).not.toContain("Current working directory:");
       expect(plannerPrompt.systemPromptOptions.forceSystemPrompt).toBeUndefined();
       expect(plannerPrompt.systemPrompt).toContain("Appendix");
@@ -1644,7 +1641,6 @@ skills:
       expect(customResult.systemPrompt).toContain(
         `<cwd>\n${root}/&lt;/cwd&gt;&lt;injected attr=&quot;cwd&quot;&gt;\n</cwd>`,
       );
-      expect((customResult.systemPrompt.match(/<\/env>/g) ?? [])).toHaveLength(1);
       expect((customResult.systemPrompt.match(/<\/cwd>/g) ?? [])).toHaveLength(1);
       expect(customResult.systemPromptOptions.contextFiles).toEqual([{
         path: "AGENTS.md",
@@ -1666,10 +1662,11 @@ skills:
         '<project_instructions path="AGENTS.md">\nUse <safe> & stable.\n</project_instructions>',
       );
       expect(fallbackResult.systemPrompt).not.toContain("&amp;lt;safe&amp;gt;");
-      expect((fallbackResult.systemPrompt.match(/Current date:/g) ?? [])).toHaveLength(1);
+      expect(fallbackResult.systemPrompt).not.toContain("Current date:");
+      expect(fallbackResult.systemPrompt).not.toContain("<env>");
       expect((fallbackResult.systemPrompt.match(/<cwd>/g) ?? [])).toHaveLength(1);
       expect(fallbackResult.systemPrompt).not.toContain("Current working directory:");
-      expect(fallbackResult.systemPromptOptions.sections.env).toMatch(/^Current date: \d{4}-\d{2}-\d{2}$/);
+      expect(fallbackResult.systemPromptOptions.sections.env).toBeUndefined();
       expect(rawOptions.contextFiles[0].content).toBe("Use <safe> & stable.");
     } finally {
       if (previousAgentDir === undefined) {
@@ -1876,7 +1873,6 @@ skills:
       expect(sections.skills).toContain("<skills>");
       expect((result.systemPrompt.match(/<cwd>/g) ?? [])).toHaveLength(1);
       expect(result.systemPrompt).toContain("<project_rules>\nKeep custom sections.\n</project_rules>");
-      expect((result.systemPrompt.match(/<env>/g) ?? [])).toHaveLength(1);
       expect(result.systemPrompt).not.toContain("Current working directory:");
       expect(sections.cwd).toBe(`<cwd>\n${root.replace(/\\/g, "/")}\n</cwd>`);
     } finally {
@@ -1918,7 +1914,6 @@ skills:
       expect(result.systemPrompt).not.toContain("<available_skills>");
       expect(result.systemPrompt).not.toContain("<name>spec</name>");
       expect((result.systemPrompt.match(/<cwd>/g) ?? [])).toHaveLength(1);
-      expect((result.systemPrompt.match(/<env>/g) ?? [])).toHaveLength(1);
       expect(result.systemPrompt).toContain(`<cwd>\n${root.replace(/\\/g, "/")}\n</cwd>`);
     } finally {
       if (previousAgentDir === undefined) {
@@ -1930,7 +1925,7 @@ skills:
   });
 
   it("keeps native skill sections when the agent inherits them", async () => {
-    // Intent: omitting policy preserves skills; cwd stays separate from the date-only env.
+    // Intent: omitting policy preserves skills and the native cwd section.
     const root = await createTempWorkspace();
     const agentDir = await createTempWorkspace();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -1956,7 +1951,6 @@ skills:
       expect(result.systemPrompt).toContain("<skills>");
       expect(result.systemPrompt).toContain("<name>spec</name>");
       expect((result.systemPrompt.match(/<cwd>/g) ?? [])).toHaveLength(1);
-      expect((result.systemPrompt.match(/<env>/g) ?? [])).toHaveLength(1);
       expect(result.systemPrompt).toContain(`<cwd>\n${root.replace(/\\/g, "/")}\n</cwd>`);
     } finally {
       if (previousAgentDir === undefined) {
@@ -2056,7 +2050,7 @@ skills:
     "preserves preceding and following extension sections across %s agent turns",
     async (agentName) => {
       // Intent: all Agent prompt modes share Pi's mutable options. Earlier and later extensions
-      // see the same state, and fresh turns/switches must not retain a prior Agent's policy.
+      // retain their sections (including env), and fresh turns must not retain a prior Agent's policy.
       const root = await createTempWorkspace();
       const agentDir = await createTempWorkspace();
       const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -2073,6 +2067,7 @@ skills:
         registry.pi.on("before_agent_start", (event: any, ctx: any) => {
           sharedOptions = event.systemPromptOptions;
           event.systemPromptOptions.sections.before_extension = "Earlier extension.";
+          event.systemPromptOptions.sections.env = "Extension-owned environment.";
           expect(event.systemPrompt).toBe(ctx.getSystemPrompt());
           expect(event.systemPrompt).toContain("<before_extension>\nEarlier extension.\n</before_extension>");
         });
@@ -2117,6 +2112,7 @@ skills:
           for (const [key, value] of Object.entries({
             existing_extension: "Existing section.",
             before_extension: "Earlier extension.",
+            env: "Extension-owned environment.",
             after_extension: "Later extension.",
             pi_base_tools: "Pi-base tool guide.",
             addendum: "Configured appendix.",
@@ -2125,7 +2121,7 @@ skills:
           expect(result.systemPrompt).toBe(buildSystemPrompt(finalOptions));
           expect(result.buildSystemPrompt()).toBe(result.systemPrompt);
           expect(result.systemPrompt).not.toContain("Decoy rendered text");
-          expect(finalOptions.sections.env).toMatch(/^Current date: \d{4}-\d{2}-\d{2}$/);
+          expect(result.systemPrompt).not.toContain("Current date:");
           expect(sections.cwd).toBe(`<cwd>\n${root}\n</cwd>`);
           expect(sections.project_context).toContain("Use <safe> & stable.");
           if (!expectedCustom) {

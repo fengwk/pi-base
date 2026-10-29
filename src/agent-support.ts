@@ -577,7 +577,6 @@ export function registerAgentSupport(
     promptOptions.sections.pi_base_subagents = activeAgent
       ? buildSubagentSection(activeAgent, promptOptions.selectedTools, promptOptions.cwd).trim()
       : "";
-    promptOptions.sections.env = formatCurrentDate();
     promptOptions.sections.cwd = escapeXml(promptOptions.cwd.replace(/\\/g, "/"));
     // Keep contextFiles raw so later extensions can still inspect and modify native inputs.
     // An existing forceSystemPrompt is an explicit upstream override: leave it untouched.
@@ -726,16 +725,6 @@ function escapeSkillPatternRegex(pattern: string): string {
 /** Matches Pi `formatSkillsForPrompt`: skills marked disable-model-invocation stay CLI-only. */
 function skillsRenderableInPrompt(skills: Skill[]): Skill[] {
   return skills.filter((skill) => !skill.disableModelInvocation);
-}
-
-/** Date is independent of Pi's native cwd section. */
-function formatCurrentDate(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  const date = `${year}-${month}-${day}`;
-  return `Current date: ${date}`;
 }
 
 function loadAgentCatalog(): AgentCatalog {

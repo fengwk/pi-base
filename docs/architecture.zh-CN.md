@@ -91,7 +91,7 @@ Agent 模块根据当前 Agent 原地修改 Pi 1.0 共享的 `event.systemPrompt
 - 按既有 skill 策略过滤可见 skills。
 - 在满足 depth 和 allowlist 条件时注入 `task`。
 - 将工具指南和 `<available_subagents>` 写入 `sections.pi_base_tools` 和 `sections.pi_base_subagents`。
-- 独立的 `<env>` 仅包含 `Current date: YYYY-MM-DD`；cwd 保留在原生 `<cwd>` section 中，对路径元数据规范化并进行 XML escape。
+- cwd 保留在原生 `<cwd>` section 中，对路径元数据规范化并进行 XML escape；不注入日期、时间或时区信息。
 
 本 hook 前后其他原生或扩展贡献的 sections 仍参与 Pi 最终 prompt 组装。已有 `forceSystemPrompt` 作为上游显式覆盖保留。
 
