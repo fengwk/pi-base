@@ -405,7 +405,7 @@ describe("bash tool and index", () => {
     expect(bashResult.isError).toBe(true);
   });
 
-  it("enables the default base tool set and create_goal without injecting an empty base guide", async () => {
+  it("enables the default base tool set and create_goal and injects the tool usage section", async () => {
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     await registry.emit("session_start", { reason: "startup" });
@@ -427,10 +427,12 @@ describe("bash tool and index", () => {
     });
 
     expect(injected.systemPromptOptions.customPrompt).toBe("base system prompt");
-    expect(injected.systemPromptOptions.sections.pi_base_tools).toBe("");
+    expect(injected.systemPromptOptions.sections.pi_base_tools).toContain("**Your tool usage:**");
+    expect(injected.systemPromptOptions.sections.pi_base_tools).toContain("Use the `read` tool");
     expect(injected.systemPromptOptions.forceSystemPrompt).toBeUndefined();
     expect(injected.systemPrompt).toMatch(/^base system prompt\n\n<cwd>/);
-    expect(injected.systemPrompt).not.toContain("**Your tool usage:**");
+    expect(injected.systemPrompt).toContain("**Your tool usage:**");
+    expect(injected.systemPrompt).toContain("Use the `read` tool");
     expect(injected.systemPrompt).not.toContain("<available_subagents>");
   });
 
