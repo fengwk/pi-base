@@ -303,6 +303,8 @@ Enable it only in long sessions with dense tool calls that show clear context pr
 
 `compactionModel` must use the `provider/model` format.
 
+Custom compaction streams through the session's model registry, preserving request-time provider authentication and configured endpoints/headers. Resolved OAuth tokens are not replayed as explicit API keys. If the model is unavailable or the request fails, pi-base warns and falls back to Pi's current-model compaction.
+
 Allowed thinking level values:
 
 - `off`

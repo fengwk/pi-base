@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolExposure } from "@earendil-works/pi-coding-agent";
 import piBaseExtension from "../index.js";
 import { AGENT_STATE_ENTRY, registerAgentSupport } from "../src/agent-support.js";
@@ -18,6 +18,7 @@ describe("native agent tool policy", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   });
@@ -139,6 +140,28 @@ describe("native agent tool policy", () => {
     expect(await call("server_read", true)).toMatchObject({ block: true });
     await start();
     expect(registry.getActiveTools()).toEqual(["read", "server_late"]);
+  });
+
+  it("does not resynchronize an unchanged tool set when Pi preserves a different order", async () => {
+    // Intent: Pi 1.5 preserves the order of already active tools. Comparing array order would
+    // repeatedly reset the loadout before every run/turn; a real membership change must still sync.
+    await writeAgent("reader", "tools: [read, grep]");
+    const { registry, register, start } = harness();
+    register("read");
+    register("grep");
+    await registry.runCommand("agent", "reader");
+    registry.pi.setActiveTools(["grep", "read"]);
+    const setActiveTools = vi.spyOn(registry.pi, "setActiveTools");
+
+    await start();
+    await registry.emit("turn_start", {});
+
+    expect(setActiveTools).not.toHaveBeenCalled();
+    expect(registry.getActiveTools()).toEqual(["grep", "read"]);
+    registry.pi.setActiveTools(["grep"]);
+    setActiveTools.mockClear();
+    await registry.emit("turn_start", {});
+    expect(setActiveTools).toHaveBeenCalledExactlyOnceWith(["read", "grep"]);
   });
 
   it.each(["codemode", "deferred"] as const)("retains allowed %s tools loaded by native tool_search, but removes denied/hidden tools", async (exposure) => {

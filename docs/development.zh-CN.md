@@ -10,7 +10,9 @@
 - npm
 - Pi 相关 peer dependencies 由仓库开发依赖提供（要求 Pi `>=1.2.0`）
 
-支持的 Pi 依赖基线为 `1.2.0`：`@earendil-works/pi-coding-agent`、`@earendil-works/pi-ai` 和 `@earendil-works/pi-tui` 的 peer dependencies 使用 `^1.2.0`，开发依赖固定为 `1.2.0`。原生 MCP 及协议依赖由 Pi 提供，不再维护独立的 pi-base MCP 运行时。集成测试运行真实的 `AgentSession`/`createMcpExtension`，并在隔离的 Node 进程中通过官方 JITI loader 执行 delegation 测试；本项目不依赖 `@earendil-works/pi-server`。
+支持的 Pi 依赖基线仍为 `1.2.0`：`@earendil-works/pi-coding-agent`、`@earendil-works/pi-ai` 和 `@earendil-works/pi-tui` 的 peer dependencies 使用 `^1.2.0`，开发依赖固定为 `1.5.0`，用于验证当前宿主。原生 MCP 及协议依赖由 Pi 提供，不再维护独立的 pi-base MCP 运行时。集成测试运行真实的 `AgentSession`/`createMcpExtension`，并在隔离的 Node 进程中通过官方 JITI loader 执行 delegation 测试；本项目不依赖 `@earendil-works/pi-server`。
+
+检查范围、修复和验证边界见 [Pi 1.5 兼容性检查](compatibility-1.5.zh-CN.md)。
 
 安装依赖：
 
@@ -85,6 +87,8 @@ docs/tools/example.md
 ## Schema 与执行校验
 
 Schema 是模型侧契约，但 execute 仍需校验直接调用场景。测试可能绕过 Pi 的 schema validation 直接调用 `execute`，因此核心执行函数不能假设参数已经可靠。
+
+Pi 1.5 使用 `@earendil-works/pi-schema` 校验工具参数。继续用 TypeBox 构建 JSON Schema，但不要依赖 refinement、codec、自定义 `Format.Set()` 注册或其他 TypeBox 专属校验行为。`tests/tool-schema-compatibility.test.ts` 通过 Pi 的公共参数校验入口覆盖全部已注册工具 schema，包括 coercion 和拒绝路径。
 
 执行层校验：
 

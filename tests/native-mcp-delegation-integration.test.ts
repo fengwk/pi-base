@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import manifest from "../package.json";
 
 const execute = promisify(execFile);
 const fixture = fileURLToPath(new URL("./fixtures/native-mcp-delegation.mjs", import.meta.url));
@@ -31,7 +32,7 @@ it("accepts the complete real JITI task/MCP delegation in an isolated Node proce
   // too, and require the summary emitted only after every fixture assertion and cleanup.
   expect(output.stderr).toBe("");
   expect(JSON.parse(output.stdout.trim())).toEqual({
-    status: "passed", sdkVersion: "1.2.0", report: "Echo report: delegated-echo",
+    status: "passed", sdkVersion: manifest.devDependencies["@earendil-works/pi-coding-agent"], report: "Echo report: delegated-echo",
     childTool: "mcp__fixture__echo", independentConnections: 2, serversExited: 2,
   });
 }, 40_000);

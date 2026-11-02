@@ -302,6 +302,8 @@ Agent 策略和 session 行为见[原生 MCP 工具](tools/mcp.zh-CN.md)，
 
 `compactionModel` 必须使用 `provider/model` 格式。
 
+自定义压缩通过当前 session 的 model registry 发起流式请求，保留 provider 的请求时鉴权和配置的 endpoint/header，不会把已解析的 OAuth token 作为显式 API key 再次传入。模型不可用或请求失败时，pi-base 会告警并回退到 Pi 当前模型的压缩路径。
+
 Thinking level 可选值：
 
 - `off`

@@ -39,7 +39,7 @@ Validate pattern/path
   -> stat target
   -> Single-file binary precheck
   -> ensureTool("rg")
-  -> Spawn ripgrep --json
+  -> Spawn ripgrep --no-config --json
   -> Parse match events
   -> Format paths/line numbers
   -> Handle limit, long lines, and timeout
@@ -50,11 +50,14 @@ Validate pattern/path
 Plain mode always uses:
 
 ```text
+--no-config
 --json
 --line-number
 --color=never
 --hidden
 ```
+
+Both plain and multiline searches ignore ripgrep configuration (`RIPGREP_CONFIG_PATH`), so ambient options cannot change the tool's regex, literal, case, or glob behavior. Use `bash` for searches that intentionally rely on a custom ripgrep configuration.
 
 Additional flags per parameter:
 

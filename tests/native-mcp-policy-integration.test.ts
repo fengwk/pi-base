@@ -13,6 +13,7 @@ import { Type } from "typebox";
 import piBaseExtension from "../index.js";
 import { AGENT_STATE_ENTRY } from "../src/agent-support.js";
 import { loadRuntimePiBaseSettings, reloadRuntimePiBaseSettings } from "../src/runtime-settings.js";
+import manifest from "../package.json";
 
 const nativeTool = "mcp__fixture__echo";
 const nestedTool = "fixture_nested";
@@ -82,7 +83,7 @@ afterEach(async () => {
 });
 
 async function setup(options: { initialAgent?: string; permissionDeny?: boolean } = {}) {
-  expect(VERSION).toBe("1.2.0");
+  expect(VERSION).toBe(manifest.devDependencies["@earendil-works/pi-coding-agent"]);
   root = await mkdtemp(join(tmpdir(), "pi-native-mcp-policy-"));
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");
@@ -205,7 +206,9 @@ describe("native MCP with the real pi-base agent and permission policy", () => {
     // synchronize the explicit allowlist without filtering the builtin-sourced MCP tool.
     const { requests, extensionErrors, beforeAgentTools, nestedAttempts } = await setup();
     await session!.prompt("direct:first");
-    expect(beforeAgentTools[0]).toEqual([nativeTool, nestedTool]);
+    // Pi 1.5 keeps already active tools in place and appends late MCP discoveries.
+    // The policy requires exactly these members, not the frontmatter's declaration order.
+    expect([...beforeAgentTools[0]].sort()).toEqual([nativeTool, nestedTool].sort());
     expect(toolDeclarations(requests[0])).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: nativeTool, description: expect.stringContaining("Echo fixture text"),

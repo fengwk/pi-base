@@ -113,7 +113,7 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
   if (signal?.aborted) throw new Error("Operation aborted");
 
   return new Promise((resolve, reject) => {
-    const args = ["--json", "--line-number", "--color=never", "--hidden"];
+    const args = ["--no-config", "--json", "--line-number", "--color=never", "--hidden"];
     if (options.caseInsensitive) args.push("--ignore-case");
     if (options.literal) args.push("--fixed-strings");
     if (options.include) args.push("--glob", options.include);
@@ -285,7 +285,7 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
   if (signal?.aborted) throw new Error("Operation aborted");
 
   return new Promise((resolve, reject) => {
-    const args = ["--json", "--line-number", "--color=never", "--hidden", "--multiline"];
+    const args = ["--no-config", "--json", "--line-number", "--color=never", "--hidden", "--multiline"];
     if (options.caseInsensitive) args.push("--ignore-case");
     if (options.literal) args.push("--fixed-strings");
     if (options.include) args.push("--glob", options.include);

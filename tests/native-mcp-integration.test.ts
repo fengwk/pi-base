@@ -13,6 +13,7 @@ import {
   createRealSubagentFactory, PI_BASE_MODULE_INSTANCE_MARKER, PI_BASE_MODULE_INSTANCE_TOKEN,
   type SubagentSession,
 } from "../src/subagent/runner.js";
+import manifest from "../package.json";
 
 const fixture = fileURLToPath(new URL("./fixtures/native-mcp-server.mjs", import.meta.url));
 const hooks = fileURLToPath(new URL("./fixtures/native-mcp-hooks.ts", import.meta.url));
@@ -50,7 +51,7 @@ afterEach(async () => {
 });
 
 async function setup(projectTrusted = false, projectConfig = false) {
-  expect(VERSION).toBe("1.2.0");
+  expect(VERSION).toBe(manifest.devDependencies["@earendil-works/pi-coding-agent"]);
   root = await mkdtemp(join(tmpdir(), "pi-native-mcp-"));
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");

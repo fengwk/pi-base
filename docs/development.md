@@ -10,7 +10,7 @@
 - npm
 - Pi-related peer dependencies are provided by the repository's dev dependencies (requires Pi `>=1.2.0`)
 
-The supported Pi dependency baseline is `1.2.0` for `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, and `@earendil-works/pi-tui`: peer dependencies use `^1.2.0` and development dependencies pin `1.2.0`. Native MCP and its protocol dependencies are supplied by Pi rather than a separate pi-base MCP runtime. Integration tests use the real `AgentSession`/`createMcpExtension`, including delegation through the official JITI loader in an isolated Node process; this project does not depend on `@earendil-works/pi-server`.
+The supported Pi dependency baseline remains `1.2.0` for `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, and `@earendil-works/pi-tui`: peer dependencies use `^1.2.0`, while development dependencies pin `1.5.0` to verify the current host. Native MCP and its protocol dependencies are supplied by Pi rather than a separate pi-base MCP runtime. Integration tests use the real `AgentSession`/`createMcpExtension`, including delegation through the official JITI loader in an isolated Node process; this project does not depend on `@earendil-works/pi-server`.
 
 Install dependencies:
 
@@ -85,6 +85,8 @@ Minimal implementation steps:
 ## Schema and execution validation
 
 The schema is the model-side contract, but execute must still validate direct-call scenarios. Tests may call `execute` directly, bypassing Pi's schema validation, so core execution functions cannot assume arguments are already reliable.
+
+Pi 1.5 validates tool arguments with `@earendil-works/pi-schema`. Continue using TypeBox to build JSON Schemas, but do not depend on refinements, codecs, custom `Format.Set()` registrations, or other TypeBox-only validation behavior. `tests/tool-schema-compatibility.test.ts` exercises all registered tool schemas through Pi's public argument validator, including coercion and rejection paths.
 
 Validation at the execution layer:
 

@@ -97,7 +97,8 @@ process.once("SIGTERM", interrupt);
 process.once("SIGINT", interrupt);
 
 async function run() {
-  assert.equal(VERSION, "1.2.0");
+  const manifest = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+  assert.equal(VERSION, manifest.devDependencies["@earendil-works/pi-coding-agent"]);
   root = await mkdtemp(join(tmpdir(), "pi-native-mcp-delegation-"));
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { registerCompactionModel } from "../src/compaction-model.js";
 import { createToolRegistry } from "./helpers.js";
 
@@ -13,7 +14,7 @@ function preparation() {
     isSplitTurn: false,
     tokensBefore: 1_000,
     settings: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
-    fileOps: { readFiles: [], modifiedFiles: [] },
+    fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
   };
 }
 
@@ -34,6 +35,61 @@ afterEach(() => {
 });
 
 describe("configured compaction model", () => {
+  it("uses the registry stream for real compaction without replaying resolved OAuth credentials", async () => {
+    // Intent: run the real compact() pipeline with an offline registry stream. Replaying a
+    // resolved OAuth token as an explicit apiKey would select the wrong provider auth branch.
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network request"));
+    const model = {
+      provider: "summary-fixture", id: "fake", name: "Summary fixture",
+      api: "openai-completions" as const, baseUrl: "https://invalid.local",
+      reasoning: true, input: ["text" as const], contextWindow: 100_000, maxTokens: 1_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+    const message: AssistantMessage = {
+      role: "assistant", api: model.api, provider: model.provider, model: model.id,
+      content: [{ type: "text", text: "Offline summary." }], stopReason: "stop", timestamp: 0,
+      usage: {
+        input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    const streamSimple = vi.fn(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "done", reason: "stop", message });
+      stream.end();
+      return stream;
+    });
+    const modelRegistry = {
+      find: vi.fn().mockReturnValue(model),
+      getApiKeyAndHeaders: vi.fn().mockResolvedValue({
+        ok: true, apiKey: "resolved-oauth-token", headers: { authorization: "resolved-header" },
+        baseUrl: "https://resolved.invalid", env: { RESOLVED_AUTH: "1" },
+      }),
+      streamSimple,
+    };
+    const registry = createToolRegistry({ model: currentModel, modelRegistry });
+    registerCompactionModel(registry.pi as never, () => ({
+      compactionModel: { provider: model.provider, modelId: model.id },
+      compactionThinkingLevel: "high",
+    }));
+    const signal = new AbortController().signal;
+
+    const result = await registry.emit("session_before_compact", compactEvent(signal));
+
+    expect(result).toMatchObject({ compaction: {
+      summary: "Offline summary.", firstKeptEntryId: "keep-entry", tokensBefore: 1_000,
+    } });
+    expect(streamSimple).toHaveBeenCalledOnce();
+    const [requestModel, , options] = streamSimple.mock.calls[0] as unknown as [unknown, unknown, Record<string, unknown>];
+    expect(requestModel).toBe(model);
+    expect(options).toMatchObject({ signal, reasoning: "high", cacheRetention: "none" });
+    expect(options.apiKey).toBeUndefined();
+    expect(options.headers).toBeUndefined();
+    expect(options.env).toBeUndefined();
+    expect(streamSimple.mock.contexts[0]).toBe(modelRegistry);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("preserves Pi's current-model path when no model is configured", async () => {
     // An absent setting must not resolve a model or replace Pi's native compaction.
     const find = vi.fn();
@@ -52,7 +108,7 @@ describe("configured compaction model", () => {
   });
 
   it("uses the configured model while preserving Pi's native compaction preparation", async () => {
-    // The hook must forward Pi's prepared cut point and target-specific request settings unchanged.
+    // Preserve Pi's prepared cut point; request-time credentials and overrides belong to the registry.
     const auth = {
       ok: true as const,
       apiKey: "summary-key",
@@ -90,14 +146,13 @@ describe("configured compaction model", () => {
     expect(getApiKeyAndHeaders).toHaveBeenCalledWith(configuredModel);
     expect(runCompact).toHaveBeenCalledWith(
       event.preparation,
-      { ...configuredModel, baseUrl: auth.baseUrl },
-      auth.apiKey,
-      { "x-summary": "true" },
+      configuredModel,
+      undefined,
+      undefined,
       event.customInstructions,
       signal,
       "high",
-      undefined,
-      auth.env,
+      expect.any(Function),
     );
   });
 

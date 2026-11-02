@@ -39,7 +39,7 @@
   -> stat 目标
   -> 单文件二进制预检查
   -> ensureTool("rg")
-  -> spawn ripgrep --json
+  -> spawn ripgrep --no-config --json
   -> 解析 match events
   -> 路径/行号格式化
   -> limit、长行和 timeout 处理
@@ -50,11 +50,14 @@
 普通模式固定使用：
 
 ```text
+--no-config
 --json
 --line-number
 --color=never
 --hidden
 ```
+
+普通和多行搜索都忽略 ripgrep 配置（`RIPGREP_CONFIG_PATH`），避免环境选项改变工具的正则、literal、大小写或 glob 语义。需要主动使用自定义 ripgrep 配置时，通过 `bash` 执行。
 
 可按参数增加：
 

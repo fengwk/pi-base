@@ -543,7 +543,9 @@ export function registerAgentSupport(
     if (!agent || agent.tools === undefined) return;
     const tools = declarableToolNames(applyTaskInjection(projectAgentTools(agent, activeModelId), agent, ctx));
     const active = pi.getActiveTools();
-    if (tools.length !== active.length || tools.some((name, index) => name !== active[index])) {
+    // Pi preserves the order of tools that remain active; policy synchronizes membership only.
+    const activeSet = new Set(active);
+    if (tools.length !== active.length || tools.some((name) => !activeSet.has(name))) {
       pi.setActiveTools(tools);
     }
   };

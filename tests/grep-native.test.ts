@@ -26,6 +26,7 @@ vi.mock("../src/internal/pi-coding-agent-utils.js", () => ({
 }));
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   fakeToolState.rgPath = "";
   fakeToolState.acquisitionDelayMs = 0;
   delete process.env.PI_BASE_FAKE_RG_MODE;
@@ -78,6 +79,27 @@ if (process.env.PI_BASE_FAKE_RG_REQUIRE_IGNORE_CASE === "1" && !process.argv.inc
 }
 
 describe("executeGrep native ripgrep path", () => {
+  it.each([
+    { multiline: false, pattern: "a.c", content: "abc\n" },
+    { multiline: true, pattern: "alpha\\nbeta", content: "alpha\nbeta\n" },
+  ])("ignores ambient ripgrep configuration (multiline=$multiline)", async ({ multiline, pattern, content }) => {
+    // Intent: RIPGREP_CONFIG_PATH must not silently turn regex searches into literal searches,
+    // in either native execution path. Use real rg so the assertion checks actual config handling.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    const configPath = join(root, "rg.conf");
+    await writeFile(configPath, "--fixed-strings\n");
+    await writeFile(join(root, "example.txt"), content);
+    vi.stubEnv("RIPGREP_CONFIG_PATH", configPath);
+
+    const result = await executeGrep("grep-no-config", {
+      path: "example.txt", pattern, multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain(`example.txt:1: ${content.split("\n")[0]}`);
+  });
+
   it("decodes real ripgrep path.bytes and lines.bytes for standard and multiline GBK output", async () => {
     // Intent: real rg emits base64 JSON fields for non-UTF-8 paths/content; both
     // native parser modes must decode those bytes through the shared text codec.

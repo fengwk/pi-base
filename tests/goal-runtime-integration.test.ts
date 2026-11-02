@@ -13,8 +13,9 @@ import piBaseExtension from "../index.js";
 import { AGENT_STATE_ENTRY } from "../src/agent-support.js";
 import { GOAL_STATE_ENTRY_TYPE } from "../src/goal/state.js";
 import { reloadRuntimePiBaseSettings } from "../src/runtime-settings.js";
+import manifest from "../package.json";
 
-// Real offline AgentSession regressions for Pi 1.2.0 goal starting-message compatibility. A local
+// Real offline AgentSession regressions for the pinned Pi development version. A local
 // provider stream makes every run deterministic without network, credentials, or private Pi APIs.
 
 let root: string | undefined;
@@ -85,7 +86,7 @@ async function setup(options: {
   seedActiveGoal?: boolean;
   completeAt: (requestCount: number) => boolean;
 }): Promise<Harness> {
-  expect(VERSION).toBe("1.2.0");
+  expect(VERSION).toBe(manifest.devDependencies["@earendil-works/pi-coding-agent"]);
   root = await mkdtemp(join(tmpdir(), "pi-goal-runtime-"));
   const cwd = join(root, "project");
   const agentDir = join(root, "agent");
@@ -193,7 +194,7 @@ async function setup(options: {
   return { requests, starts, filteredControls, errors, cwd };
 }
 
-describe("goal runtime compatibility with Pi 1.2.0 starting messages", () => {
+describe("goal runtime compatibility with Pi starting messages", () => {
   it("keeps exactly one control message per run and preserves the first goal_set guidance", async () => {
     // The idle /goal run must expose its goal_set starting message to the model (not filter it as
     // a duplicate), and the automatic continuation must add only one control message for the
