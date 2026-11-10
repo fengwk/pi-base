@@ -77,6 +77,12 @@ interface MultilineGrepOptions {
   limit: number;
 }
 
+// Ripgrep roots --glob at its own process cwd, and it never matches a leading "./"
+// glob ("./src/*.ts" finds nothing). Strip leading "./" while keeping "!" negation.
+function normalizeIncludeGlob(include: string): string {
+  return include.replace(/^(!?)(?:\.\/)+/, "$1");
+}
+
 interface RipgrepMatchEvent {
   filePath?: string;
   lineNumber?: number;
@@ -116,10 +122,16 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     const args = ["--no-config", "--json", "--line-number", "--color=never", "--hidden"];
     if (options.caseInsensitive) args.push("--ignore-case");
     if (options.literal) args.push("--fixed-strings");
-    if (options.include) args.push("--glob", options.include);
-    args.push("--", options.pattern, options.absolutePath);
+    // rg roots --glob at its own cwd, so a directory search runs inside searchPath.
+    // It searches "." because rg canonicalizes its cwd: with an absolute path, a symlinked
+    // searchPath (macOS /tmp) would no longer lie under the glob root.
+    if (options.include) args.push("--glob", normalizeIncludeGlob(options.include));
+    args.push("--", options.pattern, options.searchPathIsDirectory ? "." : options.absolutePath);
 
-    const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(rgPath, args, {
+      cwd: options.searchPathIsDirectory ? options.absolutePath : undefined,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const terminator = createGracefulTerminator(child);
     const rl = createInterface({ input: child.stdout });
     let stderr = "";
@@ -133,21 +145,28 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     const outputLines: string[] = [];
     const fileCache = new Map<string, Promise<string[]>>();
 
+    // Directory searches run rg inside the search root, so its JSON paths may be
+    // relative ("./src/example.ts"); resolve them against the search root, not the
+    // process cwd. Absolute rg output (single-file searches, fake rg binaries)
+    // passes through unchanged.
+    const resolveRgPath = (filePath: string) => path.resolve(options.searchPathIsDirectory ? options.absolutePath : process.cwd(), filePath);
     const formatPath = (filePath: string) => {
+      const absoluteFilePath = resolveRgPath(filePath);
       if (options.searchPathIsDirectory) {
-        const relative = path.relative(options.absolutePath, filePath);
+        const relative = path.relative(options.absolutePath, absoluteFilePath);
         if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) return relative.replace(/\\/g, "/");
       }
-      return path.basename(filePath);
+      return path.basename(absoluteFilePath);
     };
     const getFileLines = async (filePath: string) => {
-      let linesPromise = fileCache.get(filePath);
+      const absoluteFilePath = resolveRgPath(filePath);
+      let linesPromise = fileCache.get(absoluteFilePath);
       if (!linesPromise) {
-        linesPromise = readFile(filePath)
+        linesPromise = readFile(absoluteFilePath)
           .then((buffer) => decodeTextFile(buffer)?.text ?? "")
           .then((content) => content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n"))
           .catch(() => [] as string[]);
-        fileCache.set(filePath, linesPromise);
+        fileCache.set(absoluteFilePath, linesPromise);
       }
       return linesPromise;
     };
@@ -184,20 +203,25 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     child.stderr?.on("data", (chunk) => {
       stderr += chunk.toString();
     });
+    // Reaching the limit alone does not prove truncation: only a further match event
+    // after N stored matches does. That lookahead match stops the search but is never
+    // rendered, so exact-limit results carry no misleading truncation warning.
     rl.on("line", (line) => {
-      if (!line.trim() || matchCount >= options.limit) return;
+      if (!line.trim()) return;
       const match = parseRipgrepMatchEvent(line);
       if (!match) return;
+      if (matchCount >= options.limit) {
+        matchLimitReached = true;
+        stopChild(true);
+        return;
+      }
       matchCount++;
       if (match.filePath && match.lineNumber !== undefined) matches.push({
         filePath: match.filePath,
         lineNumber: match.lineNumber,
         lineText: match.lineText,
       });
-      if (matchCount >= options.limit) {
-        matchLimitReached = true;
-        stopChild(true);
-      }
+      if (matchCount >= options.limit) stopChild(true);
     });
     child.on("error", (error) => {
       cleanup();
@@ -265,7 +289,17 @@ function formatGrepMatchPath(filePath: string, absolutePath: string, searchPathI
   return path.basename(filePath);
 }
 
-function formatMultilineMatchLines(filePath: string, lineNumber: number, lineText: string, options: MultilineGrepOptions): { lines: string[]; linesTruncated: boolean } {
+// Directory searches run rg inside the search root, so its JSON paths may be
+// relative ("./src/example.ts"); resolve them against the search root, not the
+// process cwd. Absolute rg output (single-file searches, fake rg binaries)
+// passes through unchanged.
+function resolveRgEventPath(filePath: string, options: MultilineGrepOptions): string {
+  const base = options.searchPathIsDirectory ? options.absolutePath : process.cwd();
+  return path.resolve(base, filePath);
+}
+
+function formatMultilineMatchLines(rawFilePath: string, lineNumber: number, lineText: string, options: MultilineGrepOptions): { lines: string[]; linesTruncated: boolean } {
+  const filePath = resolveRgEventPath(rawFilePath, options);
   const relativePath = formatGrepMatchPath(filePath, options.absolutePath, options.searchPathIsDirectory);
   const normalized = lineText.replace(/\r\n/g, "\n").replace(/\r/g, "").replace(/\n$/, "");
   const matchedLines = normalized.split("\n");
@@ -288,10 +322,16 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
     const args = ["--no-config", "--json", "--line-number", "--color=never", "--hidden", "--multiline"];
     if (options.caseInsensitive) args.push("--ignore-case");
     if (options.literal) args.push("--fixed-strings");
-    if (options.include) args.push("--glob", options.include);
-    args.push("--", options.pattern, options.absolutePath);
+    // rg roots --glob at its own cwd, so a directory search runs inside searchPath.
+    // It searches "." because rg canonicalizes its cwd: with an absolute path, a symlinked
+    // searchPath (macOS /tmp) would no longer lie under the glob root.
+    if (options.include) args.push("--glob", normalizeIncludeGlob(options.include));
+    args.push("--", options.pattern, options.searchPathIsDirectory ? "." : options.absolutePath);
 
-    const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(rgPath, args, {
+      cwd: options.searchPathIsDirectory ? options.absolutePath : undefined,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const terminator = createGracefulTerminator(child);
     const rl = createInterface({ input: child.stdout });
     let stderr = "";
@@ -328,10 +368,18 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
       stderr += chunk.toString();
     });
 
+    // Same lookahead contract as the standard path: only a match event beyond the
+    // limit proves truncation, and that lookahead match is never rendered.
     rl.on("line", (line) => {
-      if (!line.trim() || matchCount >= options.limit) return;
+      if (!line.trim()) return;
       const match = parseRipgrepMatchEvent(line);
       if (!match) return;
+
+      if (matchCount >= options.limit) {
+        matchLimitReached = true;
+        stopChild(true);
+        return;
+      }
 
       matchCount++;
       if (match.filePath && match.lineNumber !== undefined && match.lineText !== undefined) {
@@ -339,10 +387,7 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
         outputLines.push(...formatted.lines);
         if (formatted.linesTruncated) linesTruncated = true;
       }
-      if (matchCount >= options.limit) {
-        matchLimitReached = true;
-        stopChild(true);
-      }
+      if (matchCount >= options.limit) stopChild(true);
     });
 
     child.on("error", (error) => {

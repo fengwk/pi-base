@@ -68,6 +68,8 @@ Additional flags per parameter:
 
 When the system has no `rg`, the internal tool manager tries to download the official GitHub Release. `PI_OFFLINE=1`, `true`, or `yes` disables the download.
 
+`include` globs are relative to the search path. Directory searches run ripgrep inside the search root (so globs follow the caller's path and symlinked directories resolve through the link), and a leading `./` in the glob is ignored because ripgrep never matches one. A pattern without `/` matches file names at any depth.
+
 ## Target prechecks
 
 - Directories can be searched directly.
@@ -90,7 +92,7 @@ The base64 `bytes` field in ripgrep JSON is text-decoded. If an event lacks line
 ## Limit and truncation
 
 - A single displayed line is at most 500 characters.
-- When `limit` is reached, ripgrep is terminated and `details.matchLimitReached` is set.
+- `limit` counts match events. Reaching the limit alone is not truncation: the notice and `details.matchLimitReached` appear only when ripgrep reports at least one further match event, and that lookahead match is never displayed.
 - In multiline mode, `limit` counts match events; one event may display multiple lines.
 - Long-line truncation sets `details.linesTruncated`.
 
