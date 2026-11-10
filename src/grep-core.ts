@@ -145,21 +145,11 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     const outputLines: string[] = [];
     const fileCache = new Map<string, Promise<string[]>>();
 
-    // Directory searches run rg inside the search root, so its JSON paths may be
-    // relative ("./src/example.ts"); resolve them against the search root, not the
-    // process cwd. Absolute rg output (single-file searches, fake rg binaries)
-    // passes through unchanged.
-    const resolveRgPath = (filePath: string) => path.resolve(options.searchPathIsDirectory ? options.absolutePath : process.cwd(), filePath);
-    const formatPath = (filePath: string) => {
-      const absoluteFilePath = resolveRgPath(filePath);
-      if (options.searchPathIsDirectory) {
-        const relative = path.relative(options.absolutePath, absoluteFilePath);
-        if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) return relative.replace(/\\/g, "/");
-      }
-      return path.basename(absoluteFilePath);
-    };
+    const formatPath = (filePath: string) => formatGrepMatchPath(
+      resolveRgEventPath(filePath, options), options.absolutePath, options.searchPathIsDirectory,
+    );
     const getFileLines = async (filePath: string) => {
-      const absoluteFilePath = resolveRgPath(filePath);
+      const absoluteFilePath = resolveRgEventPath(filePath, options);
       let linesPromise = fileCache.get(absoluteFilePath);
       if (!linesPromise) {
         linesPromise = readFile(absoluteFilePath)
@@ -207,7 +197,7 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     // after N stored matches does. That lookahead match stops the search but is never
     // rendered, so exact-limit results carry no misleading truncation warning.
     rl.on("line", (line) => {
-      if (!line.trim()) return;
+      if (!line.trim() || matchLimitReached) return;
       const match = parseRipgrepMatchEvent(line);
       if (!match) return;
       if (matchCount >= options.limit) {
@@ -221,7 +211,6 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
         lineNumber: match.lineNumber,
         lineText: match.lineText,
       });
-      if (matchCount >= options.limit) stopChild(true);
     });
     child.on("error", (error) => {
       cleanup();
@@ -371,7 +360,7 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
     // Same lookahead contract as the standard path: only a match event beyond the
     // limit proves truncation, and that lookahead match is never rendered.
     rl.on("line", (line) => {
-      if (!line.trim()) return;
+      if (!line.trim() || matchLimitReached) return;
       const match = parseRipgrepMatchEvent(line);
       if (!match) return;
 
@@ -387,7 +376,6 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
         outputLines.push(...formatted.lines);
         if (formatted.linesTruncated) linesTruncated = true;
       }
-      if (matchCount >= options.limit) stopChild(true);
     });
 
     child.on("error", (error) => {

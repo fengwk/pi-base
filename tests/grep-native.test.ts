@@ -65,10 +65,17 @@ if (process.env.PI_BASE_FAKE_RG_REQUIRE_IGNORE_CASE === "1" && !process.argv.inc
   const lineText = process.env.PI_BASE_FAKE_RG_TEXT || "beta\\n";
   const count = Number(process.env.PI_BASE_FAKE_RG_COUNT || "1");
   const includeLines = process.env.PI_BASE_FAKE_RG_NO_LINES !== "1";
-  for (let i = 0; i < count; i++) {
+  const emit = (i) => {
     const data = { path: { text: file }, line_number: i + 2 };
     if (includeLines) data.lines = { text: lineText };
     console.log(JSON.stringify({ type: "match", data }));
+  };
+  if (mode === "paced-overflow") {
+    for (let i = 0; i < count - 1; i++) emit(i);
+    setTimeout(() => emit(count - 1), 100);
+    setInterval(() => {}, 1000);
+  } else {
+    for (let i = 0; i < count; i++) emit(i);
   }
 }
 `,
@@ -405,6 +412,17 @@ describe("executeGrep native ripgrep path", () => {
     const text = getText(result);
     expect(text).toContain("src/example.ts:1: alpha");
     expect(text).not.toContain("other.txt");
+
+    const excluded = await executeGrep(`grep-glob-negated-${label}`, {
+      path: ".",
+      pattern: "alpha",
+      include: "!./src/*.ts",
+      multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(excluded.isError).not.toBe(true);
+    expect(getText(excluded)).toContain("other.txt:1: alpha");
+    expect(getText(excluded)).not.toContain("src/example.ts");
   });
 
   it.each([
@@ -549,29 +567,30 @@ describe("executeGrep native ripgrep path", () => {
     expect(matchLines).toHaveLength(2);
   });
 
-  it("keeps cancelling a broad search once the limit overflows", async () => {
-    // Intent: the lookahead must not disable limit-based termination; once an
-    // (N+1)th match proves truncation, the search stops instead of running to
-    // completion.
+  it.each([false, true])("waits for a delayed lookahead match, then stops rg (multiline=%s)", async (multiline) => {
+    // Intent: matches may arrive in different stdout chunks. Killing rg at N
+    // loses the delayed (N+1)th match and hides truncation; after that match arrives
+    // grep must stop the process, which otherwise stays alive until the timeout.
     const root = await createTempWorkspace();
     await installFakeRg(root);
     const filePath = join(root, "example.txt");
     await writeFile(filePath, "alpha\n", "utf8");
-    process.env.PI_BASE_FAKE_RG_MODE = "match";
+    process.env.PI_BASE_FAKE_RG_MODE = "paced-overflow";
     process.env.PI_BASE_FAKE_RG_FILE = filePath;
     process.env.PI_BASE_FAKE_RG_TEXT = "alpha\n";
-    process.env.PI_BASE_FAKE_RG_COUNT = "120";
+    process.env.PI_BASE_FAKE_RG_COUNT = "3";
 
     const result = await executeGrep("grep-overflow-cancel", {
-      workdir: ".",
       path: "example.txt",
       pattern: "alpha",
-      limit: 3,
+      limit: 2,
+      timeout_seconds: 2,
+      multiline,
     }, undefined, undefined, { cwd: root });
 
     expect(result.isError).not.toBe(true);
-    expect((result as any).details?.matchLimitReached).toBe(3);
+    expect((result as any).details?.matchLimitReached).toBe(2);
     const matchLines = getText(result).split("\n").filter((line) => line.includes("alpha"));
-    expect(matchLines).toHaveLength(3);
+    expect(matchLines).toHaveLength(2);
   });
 });
