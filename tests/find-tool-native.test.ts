@@ -14,6 +14,13 @@ vi.mock("../src/internal/pi-coding-agent-utils.js", () => ({
   }),
 }));
 
+// Resolve the real system fd (PATH lookup, no hardcoded home) so limit
+// normalization can be exercised against the actual fd --max-results semantics.
+const { getToolPath: getRealToolPath } = await vi.importActual<typeof import("../src/internal/pi-coding-agent-utils.js")>(
+  "../src/internal/pi-coding-agent-utils.js",
+);
+const realFdPath = getRealToolPath("fd");
+
 afterEach(() => {
   fakeToolState.fdPath = "";
   delete process.env.PI_BASE_FAKE_FD_MODE;
@@ -122,11 +129,102 @@ describe("createFindToolDefinition native fd path", () => {
 
     expect(getText(result)).toContain("src/alpha.ts");
     expect(getText(result)).toContain("src/nested/");
-    expect(getText(result)).toContain("2 results limit reached");
-    expect((result as any).details.resultLimitReached).toBe(2);
+    expect(getText(result)).not.toContain("results limit reached");
+    expect((result as any).details?.resultLimitReached).toBeUndefined();
     const args = JSON.parse(await readFile(argsFile, "utf8"));
     expect(args).toContain("--full-path");
     expect(args).toContain("**/src/*.ts");
+    // fd must never receive 0 (treated as unlimited) and must be asked for one
+    // result beyond the limit so "exactly N" is distinguishable from "more than N".
+    expect(args).not.toContain("0");
+    expect(args.indexOf("--max-results")).toBeGreaterThanOrEqual(0);
+    expect(args[args.indexOf("--max-results") + 1]).toBe("3");
+  });
+
+  it("never passes 0 to fd and floors positive decimal limits", async () => {
+    // Intent: fd treats --max-results 0 as unlimited and rejects negative or
+    // fractional counts, so the local layer must normalize before spawning:
+    // 0 and negatives clamp to 1, positive decimals floor to an integer.
+    const root = await createTempWorkspace();
+    await installFakeFd(root);
+    const argsFile = join(root, "fd-args.json");
+    process.env.PI_BASE_FAKE_FD_ARGS_FILE = argsFile;
+    process.env.PI_BASE_FAKE_FD_COUNT = "5";
+    const tool = createFindToolDefinition(root);
+
+    const zero = await tool.execute("find-zero", { path: ".", pattern: "*", limit: 0 });
+    const zeroArgs = JSON.parse(await readFile(argsFile, "utf8"));
+    // limit 0 clamps to 1, and fd is probed for limit+1 = 2.
+    expect(zeroArgs[zeroArgs.indexOf("--max-results") + 1]).toBe("2");
+    expect(getText(zero).split("\n\n[")[0].split("\n").filter(Boolean)).toHaveLength(1);
+    expect(getText(zero)).toContain("1 results limit reached");
+
+    const negative = await tool.execute("find-negative", { path: ".", pattern: "*", limit: -5 });
+    const negativeArgs = JSON.parse(await readFile(argsFile, "utf8"));
+    expect(negativeArgs[negativeArgs.indexOf("--max-results") + 1]).toBe("2");
+    expect(getText(negative).split("\n\n[")[0].split("\n").filter(Boolean)).toHaveLength(1);
+
+    const decimal = await tool.execute("find-decimal", { path: ".", pattern: "*", limit: 2.9 });
+    const decimalArgs = JSON.parse(await readFile(argsFile, "utf8"));
+    // 2.9 floors to 2 without losing ordinary positive integers, probe 3.
+    expect(decimalArgs[decimalArgs.indexOf("--max-results") + 1]).toBe("3");
+    expect(getText(decimal).split("\n\n[")[0].split("\n").filter(Boolean)).toHaveLength(2);
+    expect(getText(decimal)).toContain("2 results limit reached");
+  });
+
+  it("emits the limit hint only for real overflow and caps output at the limit", async () => {
+    // Intent: exactly N matches must not claim truncation (the old >= comparison
+    // produced a false hint), while more than N matches must be detected via the
+    // limit+1 probe, cut back to N entries and reported.
+    const root = await createTempWorkspace();
+    await installFakeFd(root);
+    const tool = createFindToolDefinition(root);
+
+    process.env.PI_BASE_FAKE_FD_COUNT = "2";
+    const exact = await tool.execute("find-exact", { path: ".", pattern: "*", limit: 2 });
+    expect(getText(exact).split("\n\n[")).toHaveLength(1);
+    expect((exact as any).details?.resultLimitReached).toBeUndefined();
+
+    process.env.PI_BASE_FAKE_FD_COUNT = "5";
+    const overflow = await tool.execute("find-overflow", { path: ".", pattern: "*", limit: 2 });
+    const overflowBody = getText(overflow).split("\n\n[")[0];
+    expect(overflowBody.split("\n").filter(Boolean)).toHaveLength(2);
+    expect(getText(overflow)).toContain("2 results limit reached");
+    expect((overflow as any).details.resultLimitReached).toBe(2);
+  });
+
+  it.skipIf(!realFdPath)("normalizes limits against real fd output", async () => {
+    // Intent: the regression must hold for the real fd binary, whose --max-results 0
+    // means unlimited and whose negative/fractional counts are argument errors. fd is
+    // resolved through PATH (agent bin dir); the case is skipped when fd is absent.
+    const root = await createTempWorkspace();
+    for (const name of ["a.ts", "b.ts", "c.ts"]) {
+      await writeFile(join(root, name), "");
+    }
+    fakeToolState.fdPath = realFdPath ?? "";
+    const tool = createFindToolDefinition(root);
+
+    // Exactly N matches with limit N: no truncation notice.
+    const exact = await tool.execute("find-real-exact", { path: ".", pattern: "*", limit: 3 });
+    expect(getText(exact).split("\n").filter(Boolean)).toHaveLength(3);
+    expect(getText(exact)).not.toContain("results limit reached");
+    expect((exact as any).details?.resultLimitReached).toBeUndefined();
+
+    // More than N matches with limit N: N lines plus an explicit overflow notice.
+    const overflow = await tool.execute("find-real-overflow", { path: ".", pattern: "*", limit: 2 });
+    const overflowBody = getText(overflow).split("\n\n[")[0];
+    expect(overflowBody.split("\n").filter(Boolean)).toHaveLength(2);
+    expect(getText(overflow)).toContain("2 results limit reached");
+    expect((overflow as any).details.resultLimitReached).toBe(2);
+
+    // 0 and negative limits clamp to 1 (fd's 0 would otherwise mean unlimited).
+    const zero = await tool.execute("find-real-zero", { path: ".", pattern: "*", limit: 0 });
+    expect(getText(zero).split("\n\n[")[0].split("\n").filter(Boolean)).toHaveLength(1);
+    expect(getText(zero)).toContain("1 results limit reached");
+
+    const negative = await tool.execute("find-real-negative", { path: ".", pattern: "*", limit: -5 });
+    expect(getText(negative).split("\n\n[")[0].split("\n").filter(Boolean)).toHaveLength(1);
+    expect(getText(negative)).toContain("1 results limit reached");
   });
 
   it("preserves trailing spaces in matched file names", async () => {

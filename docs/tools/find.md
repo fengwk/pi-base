@@ -67,7 +67,13 @@ When the system has no `fd`, the internal tool manager tries to download the off
 
 ## Limit
 
-When `limit` is reached, a hint is appended to the result and `details.resultLimitReached` is set.
+`limit` is normalized before spawning `fd`: values below 1 (including `0`, which fd
+treats as unlimited) are clamped to `1`, and positive decimals are rounded down.
+Ordinary positive integers pass through unchanged.
+
+The process is asked for `limit + 1` entries so exactly-`limit` searches are
+distinguished from real overflow: only a real overflow appends the hint, sets
+`details.resultLimitReached` and caps the output at `limit` entries.
 
 fd's `--max-results` limits the process output; the local layer supplements metadata based on the actual result count.
 

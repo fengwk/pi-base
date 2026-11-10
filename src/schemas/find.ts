@@ -24,6 +24,6 @@ export const findSchema = Type.Object({
   workdir: Type.Optional(Type.String({
     description: "Working directory for resolving relative paths. Defaults to the agent's current working directory. If provided, relative paths resolve from that directory.",
   })),
-  limit: Type.Optional(Type.Number({ description: "Maximum number of results to return. Defaults to 1000." })),
+  limit: Type.Optional(Type.Number({ description: "Maximum number of results to return. Defaults to 1000. Values below 1 are clamped to 1 and positive decimals are rounded down." })),
   timeout_seconds: Type.Optional(Type.Union([Type.Number(), Type.String()], { description: "Positive timeout in seconds. No timeout is applied by default." })),
 });

@@ -47,7 +47,10 @@ export function createFindToolDefinition(cwd: string): any {
         (async () => {
           try {
             const searchPath = resolveToCwd(searchDir || ".", cwd);
-            const effectiveLimit = limit ?? DEFAULT_LIMIT;
+            // fd treats `--max-results 0` as unlimited and rejects negative or
+            // fractional counts, so normalize before spawning: clamp below 1 to 1
+            // and floor positive decimals. Ordinary positive integers pass through.
+            const effectiveLimit = Math.max(1, Math.floor(limit ?? DEFAULT_LIMIT));
             const fdPath = await ensureTool("fd", true, signal);
             if (!fdPath) {
               settle(() => reject(new Error("fd is not available and could not be downloaded")));
@@ -58,7 +61,7 @@ export function createFindToolDefinition(cwd: string): any {
               return;
             }
 
-            const args = ["--glob", "--color=never", "--hidden", "--no-require-git", "--max-results", String(effectiveLimit)];
+            const args = ["--glob", "--color=never", "--hidden", "--no-require-git", "--max-results", String(effectiveLimit + 1)];
             let effectivePattern = pattern;
             if (pattern.includes("/")) {
               args.push("--full-path");
@@ -131,8 +134,12 @@ export function createFindToolDefinition(cwd: string): any {
                 return;
               }
 
-              const resultLimitReached = relativized.length >= effectiveLimit;
-              let resultOutput = relativized.join("\n");
+              // fd was asked for effectiveLimit + 1 entries, so a full buffer means
+              // real overflow; exactly N matches stay hint-free. Output is capped
+              // at effectiveLimit either way.
+              const resultLimitReached = relativized.length > effectiveLimit;
+              const outputLines = relativized.slice(0, effectiveLimit);
+              let resultOutput = outputLines.join("\n");
               const details: Record<string, unknown> = {};
               const notices: string[] = [];
               if (resultLimitReached) {

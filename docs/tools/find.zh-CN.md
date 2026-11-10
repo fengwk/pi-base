@@ -67,7 +67,11 @@ Pattern 中包含 `/` 时使用 `--full-path`。普通相对 full-path pattern �
 
 ## Limit
 
-达到 `limit` 时结果追加提示并设置 `details.resultLimitReached`。
+`limit` 在生成 `fd` 进程前会先归一化：小于 1 的值（包括 `0`，fd 会视为无限制）钳制为 `1`，
+正小数向下取整。普通正整数保持不变。
+
+进程会以 `limit + 1` 探测结果数，从而区分“恰好 limit 条”与真正溢出：只有真正溢出才追加
+提示、设置 `details.resultLimitReached`，并把输出裁剪到 `limit` 条。
 
 fd 的 `--max-results` 负责限制进程输出；本地层根据实际结果数量补充 metadata。
 
