@@ -37,7 +37,7 @@
 
 ## 安装
 
-需要已安装 [Pi](https://github.com/earendil-works/pi) `>=1.2.0`（受支持的基线）。开发依赖和兼容性测试以 Pi `1.5.0` 为目标。
+需要已安装 [Pi](https://github.com/earendil-works/pi) `>=1.2.0`（受支持的基线）。开发依赖和兼容性测试以 Pi `1.5.1` 为目标。
 
 ```bash
 pi install git:github.com/fengwk/pi-base

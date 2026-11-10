@@ -12,16 +12,16 @@ function render(component: any): string {
 }
 
 describe("index lifecycle behavior", () => {
-  it("retains Pi 1.2 host peers and pins Pi 1.5 development packages", async () => {
+  it("retains Pi 1.2 host peers and pins Pi 1.5.1 development packages", async () => {
     // Intent: package installation must not supply a second runtime copy of host APIs
     // or keep the removed custom MCP SDK/server dependency in the root manifest.
     const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
     const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
     for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
       expect(manifest.peerDependencies[name]).toBe("^1.2.0");
-      expect(manifest.devDependencies[name]).toBe("1.5.0");
+      expect(manifest.devDependencies[name]).toBe("1.5.1");
       expect(manifest.dependencies).not.toHaveProperty(name);
-      expect(lock.packages[`node_modules/${name}`].version).toBe("1.5.0");
+      expect(lock.packages[`node_modules/${name}`].version).toBe("1.5.1");
     }
     expect(manifest.peerDependencies.typebox).toBe("*");
     expect(manifest.devDependencies.typebox).toBeDefined();

@@ -75,3 +75,26 @@ Pi 1.5 把激活工具视为集合：保留仍激活工具的顺序，新工具�
 集成测试使用真实 Pi SDK 和本地 stdio MCP fixture，但模型流和鉴权凭据使用离线替身。没有执行真实供应商 OAuth 登录、远程模型请求、远程 MCP OAuth 登录或交互式终端目视验收；Windows/macOS 的真实系统行为也未在本次 Linux 环境实测。
 
 检查和测试没有更改用户的 Pi 全局配置或凭据，也没有发布软件包。使用该本地扩展的交互会话需要 `/reload` 才会加载修改。
+
+## Pi 1.5.1 复验
+
+开发依赖及兼容性测试基线已从 `1.5.0` 升至 `1.5.1`，同步更新 lockfile、版本断言和中英文安装/开发说明。peer dependencies 保持 `^1.2.0`，没有引入新的运行时 API 或修改工具实现。
+
+仓库原有 `node_modules` 实际残留 `1.2.0`，与声明的 `1.5.0` 不一致。本次通过 `npm ci` 重装，并用 `npm ls` 确认三个 Pi 开发依赖均为 `1.5.1`，没有 invalid 依赖。
+
+| 环境 | 验证 | 结果 |
+|---|---|---|
+| Pi 1.5.1 / Node.js 24.14.0 / Linux | `npm run typecheck` | 通过 |
+| 同上 | `npm test -- --reporter=dot` | 82 个文件、1112 个用例全部通过，无跳过 |
+
+未发现已确认的 1.5.1 升级阻塞项。验证仍使用离线模型流和本地 MCP fixture，没有验证远程模型、代理兼容性、OAuth 登录或 Windows/macOS 的实际行为。
+
+### 仍值得单独处理的工具差异
+
+以下是 pi-base 自有工具原本就有的行为，不是升级 1.5.1 导致的回归，也不会因升级宿主自动修复：
+
+- **grep 路径 glob 基准**：普通和多行路径在启动 rg 时均未设置 `cwd`。用真实 rg 14.1.0 复现：进程启动目录不是搜索根目录时，`include: "src/find-tool.ts"` 会漏掉搜索根内的文件；在搜索根内执行相同命令则正常匹配。
+- **find 结果上限**：`limit: 0` 会原样成为 fd 的 `--max-results 0`。真实 fd 10.2.0 将其视为不限数量；恰好等于 limit 个结果时也仍会显示达到上限的提示。
+- **read 与 grep 的内存边界**：read 仍整文件读取，但已有 64 MiB 大小保护，可将流式读取作为后续优化；grep 没有 context 参数，正常使用 rg JSON 的行文本，仅在事件缺少行文本时回读整文件，该兜底没有逐文件大小保护。
+
+Anthropic message threads 不会使 `before_provider_request` 只收到增量消息：Pi 1.5.1 在调用 payload hook 后才执行 `prepareThreadRequest()` 裁剪消息，并在前缀比较时忽略消息内的 `cache_control`。因此没有发现缓存边界扩展与该 hook 顺序的不兼容；实际网关的 thread 支持仍需独立验证。
