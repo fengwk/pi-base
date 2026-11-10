@@ -36,7 +36,9 @@ describe("grep multiline behavior", () => {
 
   it("supports multiline grep with relative paths and limit notices", async () => {
     const root = await createTempWorkspace();
-    await writeWorkspaceFile(root, "src/example.txt", "alpha\nbeta\nalpha\nbeta\n");
+    // rg 14 merges adjacent multiline blocks into one match event (two submatches,
+    // one event), so a separating line keeps two distinct match events here.
+    await writeWorkspaceFile(root, "src/example.txt", "alpha\nbeta\nGAP\nalpha\nbeta\n");
     const registry = createToolRegistry();
     registerGrepTool(registry.pi as any);
 

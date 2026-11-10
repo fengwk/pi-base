@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import iconv from "iconv-lite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -65,10 +65,17 @@ if (process.env.PI_BASE_FAKE_RG_REQUIRE_IGNORE_CASE === "1" && !process.argv.inc
   const lineText = process.env.PI_BASE_FAKE_RG_TEXT || "beta\\n";
   const count = Number(process.env.PI_BASE_FAKE_RG_COUNT || "1");
   const includeLines = process.env.PI_BASE_FAKE_RG_NO_LINES !== "1";
-  for (let i = 0; i < count; i++) {
+  const emit = (i) => {
     const data = { path: { text: file }, line_number: i + 2 };
     if (includeLines) data.lines = { text: lineText };
     console.log(JSON.stringify({ type: "match", data }));
+  };
+  if (mode === "paced-overflow") {
+    for (let i = 0; i < count - 1; i++) emit(i);
+    setTimeout(() => emit(count - 1), 100);
+    setInterval(() => {}, 1000);
+  } else {
+    for (let i = 0; i < count; i++) emit(i);
   }
 }
 `,
@@ -249,7 +256,9 @@ describe("executeGrep native ripgrep path", () => {
     }, undefined, undefined, { cwd: root });
 
     expect(getText(result).length).toBeGreaterThan(50 * 1024);
-    expect((result as any).details.truncation).toBeUndefined();
+    // Exactly-limit searches may omit details entirely; what matters is that no
+    // byte-truncation metadata was applied by the native layer itself.
+    expect((result as any).details?.truncation).toBeUndefined();
   });
 
   it("persists complete native grep output before returning the shared truncated preview", async () => {
@@ -348,5 +357,240 @@ describe("executeGrep native ripgrep path", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([
+    { multiline: false, label: "standard" },
+    { multiline: true, label: "multiline" },
+  ])("roots include globs at the directory search root instead of process cwd ($label)", async ({ multiline, label }) => {
+    // Intent: ripgrep roots --glob at its own process cwd, so an absolute search
+    // path plus a relative glob like `src/*.ts` finds nothing (verified with real
+    // rg 14). The directory path must spawn rg with cwd=searchPath searching ".",
+    // in both native execution paths, so glob semantics follow the caller's path.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(join(root, "src", "example.ts"), "alpha\n", "utf8");
+    await writeFile(join(root, "other.txt"), "alpha\n", "utf8");
+
+    // Globs are relative to the search path: searching the workspace root with
+    // `src/*.ts` must reach the nested file, which the old process-cwd glob
+    // rooting could not express at all.
+    const result = await executeGrep(`grep-glob-root-${label}`, {
+      workdir: ".",
+      path: ".",
+      pattern: "alpha",
+      include: "src/*.ts",
+      multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("example.ts:1: alpha");
+  });
+
+  it.each([
+    { multiline: false, label: "standard" },
+    { multiline: true, label: "multiline" },
+  ])("strips leading ./ from include globs and keeps ! negation ($label)", async ({ multiline, label }) => {
+    // Intent: ripgrep never matches a leading "./" glob (verified with real rg 14),
+    // silently returning nothing; negated globs must survive the strip.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(join(root, "src", "example.ts"), "alpha\n", "utf8");
+    await writeFile(join(root, "other.txt"), "alpha\n", "utf8");
+
+    const result = await executeGrep(`grep-glob-dot-slash-${label}`, {
+      workdir: ".",
+      path: ".",
+      pattern: "alpha",
+      include: "./src/*.ts",
+      multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const text = getText(result);
+    expect(text).toContain("src/example.ts:1: alpha");
+    expect(text).not.toContain("other.txt");
+
+    const excluded = await executeGrep(`grep-glob-negated-${label}`, {
+      path: ".",
+      pattern: "alpha",
+      include: "!./src/*.ts",
+      multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(excluded.isError).not.toBe(true);
+    expect(getText(excluded)).toContain("other.txt:1: alpha");
+    expect(getText(excluded)).not.toContain("src/example.ts");
+  });
+
+  it.each([
+    { multiline: false, label: "standard" },
+    { multiline: true, label: "multiline" },
+  ])("searches symlinked directories through the link with the glob rooted at the link ($label)", async ({ multiline, label }) => {
+    // Intent: rg canonicalizes its cwd; searching a symlinked directory by absolute
+    // path (common on macOS /tmp) puts the real path outside the glob root, so the
+    // directory search must run inside the symlinked searchPath itself.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    const realDir = join(root, "real");
+    await mkdir(join(realDir, "src"), { recursive: true });
+    await writeFile(join(realDir, "src", "example.ts"), "alpha\n", "utf8");
+    await symlink(realDir, join(root, "linked"));
+
+    const result = await executeGrep(`grep-glob-symlink-${label}`, {
+      workdir: ".",
+      path: "linked",
+      pattern: "alpha",
+      include: "src/*.ts",
+      multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("src/example.ts:1: alpha");
+  });
+
+  it.each([
+    { multiline: false, label: "standard" },
+    { multiline: true, label: "multiline" },
+  ])("resolves rg relative paths against the search root when formatting and re-reading ($label)", async ({ multiline, label }) => {
+    // Intent: once directory searches spawn rg with cwd=searchPath, match paths come
+    // back relative to that root (real rg emits "./example.ts" for a match in the
+    // root itself); both formatting and the missing-line-text fallback must resolve
+    // them against the search root, not the process cwd.
+    const root = await createTempWorkspace();
+    await installFakeRg(root);
+    const filePath = join(root, "example.ts");
+    await writeFile(filePath, "alpha\nbeta\n", "utf8");
+    process.env.PI_BASE_FAKE_RG_MODE = "match";
+    process.env.PI_BASE_FAKE_RG_FILE = "./example.ts";
+    if (multiline) {
+      // Multiline formatting renders event line text; there is no disk fallback there.
+      process.env.PI_BASE_FAKE_RG_TEXT = "beta\n";
+    } else {
+      process.env.PI_BASE_FAKE_RG_NO_LINES = "1";
+    }
+
+    const result = await executeGrep(`grep-relative-fallback-${label}`, {
+      workdir: ".",
+      path: ".",
+      pattern: "beta",
+      multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("example.ts:2: beta");
+  });
+
+  it.each([
+    { multiline: false, label: "standard" },
+    { multiline: true, label: "multiline" },
+  ])("supports absolute-path fake output on directory searches ($label)", async ({ multiline, label }) => {
+    // Intent: extension hosts still hand grep absolute fake rg paths; both native
+    // paths must keep formatting them relative to the search root.
+    const root = await createTempWorkspace();
+    await installFakeRg(root);
+    const filePath = join(root, "example.ts");
+    await writeFile(filePath, "alpha\n", "utf8");
+    process.env.PI_BASE_FAKE_RG_MODE = "match";
+    process.env.PI_BASE_FAKE_RG_FILE = filePath;
+    process.env.PI_BASE_FAKE_RG_TEXT = "alpha\n";
+
+    const result = await executeGrep(`grep-absolute-fake-${label}`, {
+      workdir: ".",
+      path: ".",
+      pattern: "alpha",
+      multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    // The fake rg emits line numbers i+2; only the path formatting is under test here.
+    expect(getText(result)).toContain("example.ts:2: alpha");
+  });
+
+  it.each([
+    { multiline: false, label: "standard" },
+    { multiline: true, label: "multiline" },
+  ])("does not warn when the number of matches exactly equals limit ($label)", async ({ multiline, label }) => {
+    // Intent: reaching the limit only proves truncation when at least one further
+    // match event arrives; exactly N matches must return silently without the
+    // limit notice or details.matchLimitReached.
+    const root = await createTempWorkspace();
+    await installFakeRg(root);
+    const filePath = join(root, "example.txt");
+    await writeFile(filePath, "alpha\nalpha\nalpha\n", "utf8");
+    process.env.PI_BASE_FAKE_RG_MODE = "match";
+    process.env.PI_BASE_FAKE_RG_FILE = filePath;
+    process.env.PI_BASE_FAKE_RG_TEXT = "alpha\n";
+    process.env.PI_BASE_FAKE_RG_COUNT = "3";
+
+    const result = await executeGrep(`grep-exact-limit-${label}`, {
+      workdir: ".",
+      path: "example.txt",
+      pattern: "alpha",
+      limit: 3,
+      multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const text = getText(result);
+    expect(text).toContain("alpha");
+    expect(text).not.toContain("limit reached");
+    expect((result as any).details?.matchLimitReached).toBeUndefined();
+  });
+
+  it("keeps the real-overflow limit notice and never leaks the lookahead match", async () => {
+    // Intent: one more match event beyond the limit must still trigger the truncation
+    // notice, and the terminating lookahead match must not appear in the output.
+    const root = await createTempWorkspace();
+    await installFakeRg(root);
+    const filePath = join(root, "example.txt");
+    await writeFile(filePath, "alpha\n", "utf8");
+    process.env.PI_BASE_FAKE_RG_MODE = "match";
+    process.env.PI_BASE_FAKE_RG_FILE = filePath;
+    process.env.PI_BASE_FAKE_RG_TEXT = "alpha\n";
+    process.env.PI_BASE_FAKE_RG_COUNT = "3";
+
+    const result = await executeGrep("grep-real-overflow", {
+      workdir: ".",
+      path: "example.txt",
+      pattern: "alpha",
+      limit: 2,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const text = getText(result);
+    expect((result as any).details?.matchLimitReached).toBe(2);
+    expect(text).toContain("2 matches limit reached");
+    const matchLines = text.split("\n").filter((line) => line.includes("alpha"));
+    expect(matchLines).toHaveLength(2);
+  });
+
+  it.each([false, true])("waits for a delayed lookahead match, then stops rg (multiline=%s)", async (multiline) => {
+    // Intent: matches may arrive in different stdout chunks. Killing rg at N
+    // loses the delayed (N+1)th match and hides truncation; after that match arrives
+    // grep must stop the process, which otherwise stays alive until the timeout.
+    const root = await createTempWorkspace();
+    await installFakeRg(root);
+    const filePath = join(root, "example.txt");
+    await writeFile(filePath, "alpha\n", "utf8");
+    process.env.PI_BASE_FAKE_RG_MODE = "paced-overflow";
+    process.env.PI_BASE_FAKE_RG_FILE = filePath;
+    process.env.PI_BASE_FAKE_RG_TEXT = "alpha\n";
+    process.env.PI_BASE_FAKE_RG_COUNT = "3";
+
+    const result = await executeGrep("grep-overflow-cancel", {
+      path: "example.txt",
+      pattern: "alpha",
+      limit: 2,
+      timeout_seconds: 2,
+      multiline,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect((result as any).details?.matchLimitReached).toBe(2);
+    const matchLines = getText(result).split("\n").filter((line) => line.includes("alpha"));
+    expect(matchLines).toHaveLength(2);
   });
 });

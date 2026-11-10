@@ -68,6 +68,8 @@
 
 系统没有 `rg` 时，内部 tool manager 会尝试下载官方 GitHub Release。`PI_OFFLINE=1`、`true` 或 `yes` 可禁用下载。
 
+`include` glob 相对搜索 path 生效。目录搜索会在搜索根内部运行 ripgrep（因此 glob 跟随调用者给定的 path，符号链接目录也通过链接本身解析），glob 的前导 `./` 会被忽略，因为 ripgrep 永远不会匹配它。不含 `/` 的模式在任意深度匹配文件名。
+
 ## 目标预检查
 
 - 目录可以直接搜索。
@@ -90,7 +92,7 @@ ripgrep JSON 中的 base64 `bytes` 字段会经过文本解码。若事件缺少
 ## Limit 与截断
 
 - 单个显示行最多 500 字符。
-- 达到 `limit` 时终止 ripgrep 并设置 `details.matchLimitReached`。
+- `limit` 统计 match event。仅达到 `limit` 不算截断：只有 ripgrep 再报告至少一个后续 match event 时，才会出现提示和 `details.matchLimitReached`，且该 lookahead 匹配不会展示。
 - 多行模式的 `limit` 统计 match event；一个 event 可能展示多行。
 - 长行截断设置 `details.linesTruncated`。
 
