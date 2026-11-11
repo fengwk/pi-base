@@ -5,6 +5,8 @@ import { join } from "node:path";
 
 const MAX_LINES = 2000;
 const MAX_BYTES = 50 * 1024;
+// Resumable read windows must fit the same final bounds so their cursor survives unchanged.
+export { MAX_LINES as TOOL_OUTPUT_MAX_LINES, MAX_BYTES as TOOL_OUTPUT_MAX_BYTES };
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const TRUNCATION_DIR_PREFIX = "pi-base-truncation-";
 const PROCESS_TRUNCATION_DIR_PREFIX = `${TRUNCATION_DIR_PREFIX}${process.pid}-`;
