@@ -87,11 +87,13 @@ src/example.ts:42: matching line
 
 目录搜索使用相对搜索根的路径；单文件搜索使用 basename。
 
-ripgrep JSON 中的 base64 `bytes` 字段会经过文本解码。若事件缺少行文本，普通模式会按行号回读文件。
+ripgrep JSON 中的 base64 `bytes` 字段会经过文本解码。取片段前，submatch 偏移使用同一检测编码进行转换，并计入被移除的 BOM；`text` 字段已使用 UTF-8 偏移。若事件缺少行文本，普通模式会按行号回读文件。
+
+超过展示预算的行会以该行首个 ripgrep submatch 为中心的片段展示：submatch 的 UTF-8 字节偏移会映射回报告文本，因此长行深处的命中仍可见并保留两侧上下文。片段最多 500 码点，被裁掉的一端用 `…` 标记；裁切落在码点边界上，多字节字符和代理对不会被切开。多行 event 的每一行只按覆盖该行的匹配部分取片段。若事件没有 submatch 偏移，则沿用行首前缀截断。
 
 ## Limit 与截断
 
-- 单个显示行最多 500 字符。
+- 单个显示片段最多 500 码点，被裁切处另有 `…` 标记。
 - `limit` 统计 match event。仅达到 `limit` 不算截断：只有 ripgrep 再报告至少一个后续 match event 时，才会出现提示和 `details.matchLimitReached`，且该 lookahead 匹配不会展示。
 - 多行模式的 `limit` 统计 match event；一个 event 可能展示多行。
 - 长行截断设置 `details.linesTruncated`。
@@ -114,6 +116,7 @@ ripgrep JSON 中的 base64 `bytes` 字段会经过文本解码。若事件缺少
 ## 相关测试
 
 - [`tests/grep-native.test.ts`](../../tests/grep-native.test.ts)
+- [`tests/grep-excerpts.test.ts`](../../tests/grep-excerpts.test.ts)
 - [`tests/grep-multiline-behavior.test.ts`](../../tests/grep-multiline-behavior.test.ts)
 - [`tests/grep-multiline-errors.test.ts`](../../tests/grep-multiline-errors.test.ts)
 - [`tests/search-tools.test.ts`](../../tests/search-tools.test.ts)
