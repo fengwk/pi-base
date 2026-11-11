@@ -6,8 +6,6 @@ import { readSchema } from "../src/schemas/read.js";
 import { applyUnifiedOutputTruncation, TOOL_OUTPUT_MAX_BYTES, TOOL_OUTPUT_MAX_LINES } from "../src/tool-output-core.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
 
-const CUT_SUFFIX = "... (line truncated to 2000 chars)";
-
 async function executeRead(root: string, params: Record<string, unknown>) {
   const registry = createToolRegistry();
   registerReadTool(registry.pi as any);
@@ -23,8 +21,7 @@ function renderCall(args: Record<string, unknown>): string {
 function firstLineContent(text: string): string {
   const match = text.match(/^ *1\|(.*)$/m);
   if (!match) throw new Error("read output has no numbered line 1");
-  const content = match[1]!;
-  return content.endsWith(CUT_SUFFIX) ? content.slice(0, -CUT_SUFFIX.length) : content;
+  return match[1]!;
 }
 
 async function followReadNotices(root: string, path: string, initialText: string): Promise<string> {
@@ -76,7 +73,7 @@ describe("read window contract", () => {
 
     const first = await executeRead(root, { path: "src/long-line.txt" });
     const firstText = getText(first);
-    expect(firstText).toContain(`1|${"x".repeat(2000)}${CUT_SUFFIX}`);
+    expect(firstText.split("\n")).toContain(`1|${"x".repeat(2000)}`);
     expect(firstText).not.toContain("tail");
     expect(firstText).toContain(
       "[Line 1 was cut at column 2001; lines after 1 were not shown. Re-run read with offset=1, column_offset=2001 to continue this line.]",
@@ -86,7 +83,7 @@ describe("read window contract", () => {
     const second = await executeRead(root, { path: "src/long-line.txt", offset: 1, column_offset: 2001 });
     const secondText = getText(second);
     expect(secondText).toContain("column_offset: 2001 (first displayed line starts mid-line; earlier columns omitted)");
-    expect(secondText).toContain(`1|${"x".repeat(2000)}${CUT_SUFFIX}`);
+    expect(secondText.split("\n")).toContain(`1|${"x".repeat(2000)}`);
     expect(secondText).not.toContain("tail");
     expect(second.details).toMatchObject({ upstreamTextTruncated: true, next: { line: 1, column: 4001 } });
 
@@ -211,7 +208,7 @@ describe("read window contract", () => {
     const firstText = getText(first);
     expect(Buffer.byteLength(firstText, "utf8")).toBeLessThanOrEqual(TOOL_OUTPUT_MAX_BYTES);
     expect(firstText.split("\n").length).toBeLessThanOrEqual(TOOL_OUTPUT_MAX_LINES);
-    expect(firstText).not.toContain(CUT_SUFFIX);
+    expect(first.details?.upstreamTextTruncated).toBeUndefined();
 
     const notice = firstText.match(/\[Showing lines (\d+)-(\d+) of (\d+)\. Re-run read with offset=(\d+) to continue\.\]/);
     expect(notice).not.toBeNull();

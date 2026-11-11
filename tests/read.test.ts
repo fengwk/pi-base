@@ -120,7 +120,8 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/long.txt" }, undefined, undefined, { cwd: root });
     expect(result.details?.upstreamTextTruncated).toBe(true);
-    expect(getText(result)).toContain("line truncated to 2000 chars");
+    expect(getText(result).split("\n")).toContain(`1|${"x".repeat(2000)}`);
+    expect(getText(result)).toContain("Re-run read with offset=1, column_offset=2001");
   });
 
   it("waits for in-flight file mutations before reading file contents", async () => {
@@ -264,7 +265,8 @@ describe("read tool", () => {
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "dist/bundle.txt", limit: 1 }, undefined, undefined, { cwd: root });
-    expect(getText(result)).toContain(`line truncated to 2000 chars`);
+    expect(getText(result).split("\n")).toContain(`1|${"x".repeat(2000)}`);
+    expect(result.details?.next).toEqual({ line: 1, column: 2001 });
   });
 
   it.each(["image.png", "image.bmp"])("delegates supported image %s to the built-in read tool", async (imagePath) => {

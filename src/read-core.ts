@@ -132,9 +132,8 @@ function extractLineFragment(line: string, startIndex: number): LineFragment {
     collected += 1;
   }
   const complete = index >= line.length;
-  const fragment = pieces.join("");
   return {
-    display: complete ? fragment : `${fragment}... (line truncated to ${MAX_LINE_CODE_POINTS} chars)`,
+    display: pieces.join(""),
     complete,
     codePoints: collected,
   };

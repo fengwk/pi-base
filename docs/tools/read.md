@@ -62,7 +62,7 @@ lsp: supported|unsupported
 2|second line
 ```
 
-The number column width is computed from the file's total line count. A trailing newline at the end of the file does not generate an extra numbered blank line.
+The number column width is computed from the file's total line count. A trailing newline at the end of the file does not generate an extra numbered blank line. Continuation notices are outside the numbered body; truncation annotations are never appended to the file-content fragments.
 
 ## Limits
 
