@@ -21,7 +21,6 @@ describe("tool schemas with Pi's argument validator", () => {
     ["read", { path: "example.ts" }],
     ["write", { path: "example.ts", content: "text" }],
     ["edit", { path: "example.ts", old_string: "old", new_string: "new" }],
-    ["apply_patch", { patchText: "*** Begin Patch\n*** End Patch\n" }],
     ["bash", { command: "pwd" }],
     ["grep", { pattern: "text", path: "." }],
     ["find", { pattern: "*.ts", path: "." }],
@@ -52,7 +51,6 @@ describe("tool schemas with Pi's argument validator", () => {
   it.each<[string, Record<string, unknown>, string]>([
     ["find", { pattern: "*.ts" }, "path"],
     ["task", { subagent_type: "coder", prompt: "Inspect.", max_turns: 0 }, "max_turns"],
-    ["apply_patch", { patchText: "patch", unexpected: true }, "unexpected"],
   ])("rejects invalid %s arguments without depending on TypeBox error wording", (name, args, field) => {
     // Intent: required, numeric-bound and additionalProperties constraints must survive the
     // validator migration; only the stable error prefix and field matter, not legacy messages.

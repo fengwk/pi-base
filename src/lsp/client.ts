@@ -831,12 +831,6 @@ export class LspManager {
     }
   }
 
-  async closeFileIfOpen(filePath: string): Promise<void> {
-    for (const client of this.clients.values()) {
-      if (client.isAlive() && client.isOpen(filePath)) client.closeFile(filePath);
-    }
-  }
-
   async shutdownAll(): Promise<void> {
     this.generation++;
     if (this.idleCheckTimer) {

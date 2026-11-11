@@ -13,7 +13,6 @@ export const ERROR_RESULT_PREVIEW_MAX_CHARS = 2_500;
 const MISSING_CALL_ARG_RE = / *<missing-[^>]+>/g;
 const KEY_VALUE_RE = /^([A-Za-z][A-Za-z0-9]*):(?!\/\/)(?:\s*(.*))?$/;
 const SECTION_HEADER_RE = /^([A-Za-z][A-Za-z0-9 ]*):$/;
-const APPLY_PATCH_FILE_HEADING_RE = /^[AMD] .+ \(\+\d+ -\d+\)$/;
 
 function paint(theme: any, color: string, text: string): string {
   return theme?.fg ? theme.fg(color, text) : text;
@@ -313,10 +312,6 @@ function colorizeDiffLine(line: string, theme: any): string {
 function colorizeResultLine(line: string, theme: any, state: { inDiff: boolean }, isError: boolean): string {
   if (!line) return "";
 
-  if (APPLY_PATCH_FILE_HEADING_RE.test(line)) {
-    state.inDiff = false;
-    return emphasize(theme, line);
-  }
   if (state.inDiff) return colorizeDiffLine(line, theme);
   if (line === "diff:") {
     state.inDiff = true;

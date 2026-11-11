@@ -353,6 +353,53 @@ Planner prompt.
     }
   });
 
+  it("keeps active tools unchanged across model switches for implicit and explicit agents", async () => {
+    // Intent: file tools no longer depend on the model id. Neither Pi nor pi-base may
+    // rebuild the loadout when the model changes, so a user's manual tool choices on an
+    // implicit agent and an explicit allowlist both survive the switch verbatim.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const sessionModel = { provider: "provider-a", id: "model-a" };
+    const otherModel = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(
+        agentDir,
+        "editor.md",
+        `---
+name: editor
+tools:
+  - read
+  - grep
+---
+Editor prompt.
+`,
+      );
+
+      const implicit = createToolRegistry({ model: sessionModel, models: [sessionModel, otherModel] });
+      piBaseExtension(implicit.pi as any);
+      await implicit.emit("session_start", { reason: "startup" }, { cwd: root, model: sessionModel });
+      implicit.pi.setActiveTools(["read", "grep"]);
+      await implicit.emit("model_select", { type: "model_select", model: otherModel, previousModel: sessionModel, source: "set" }, { cwd: root, model: otherModel });
+      expect(implicit.getActiveTools()).toEqual(["read", "grep"]);
+
+      const explicit = createToolRegistry({ model: sessionModel, models: [sessionModel, otherModel] });
+      piBaseExtension(explicit.pi as any);
+      await explicit.runCommand("agent", "editor", { cwd: root, model: sessionModel });
+      expect(explicit.getActiveTools()).toEqual(["read", "grep"]);
+      await explicit.emit("model_select", { type: "model_select", model: otherModel, previousModel: sessionModel, source: "set" }, { cwd: root, model: otherModel });
+      expect(explicit.getActiveTools()).toEqual(["read", "grep"]);
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
   it("activates the agent named by the --agent startup flag when the session has none", async () => {
     // Intent: pi lets extensions register CLI flags; pi-base exposes `--agent <name>` so a session
     // can start in a specific agent non-interactively. It must apply only on fresh sessions (root),
@@ -986,7 +1033,7 @@ Dynamic allowlist prompt.
         sourceInfo: { source: "local" },
         execute: async () => ({ content: [] }),
       });
-      await registry.emit("model_select", { model }, { cwd: root });
+      await registry.emit("turn_start", {});
       expect(registry.getActiveTools()).toEqual(["read", "mcp_late_tool"]);
 
       const lateSkill = makeSkill("late-skill", "Late workflow");

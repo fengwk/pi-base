@@ -5,7 +5,6 @@ import { registerReadTool } from "./read.js";
 import { registerEditTool } from "./edit.js";
 import { registerGrepTool } from "./grep.js";
 import { registerWriteTool } from "./write.js";
-import { registerApplyPatchTool } from "./apply-patch.js";
 import { registerBashRendererTool } from "./bash-renderer.js";
 import { type LoadedPiBaseSettings } from "./config.js";
 import { registerPermissionGuard, selectPermissionChoice, truncatePermissionLine } from "./permission.js";
@@ -43,7 +42,6 @@ import { subagentRegistry } from "./subagent/registry.js";
 import { createSubagentWidgetComponent, renderSubagentWidget, SUBAGENT_WIDGET_KEY } from "./subagent/widget.js";
 import { registerSubagentTaskTool } from "./subagent/task-tool.js";
 import { registerSubagentCommand } from "./subagent/command.js";
-import { projectFileMutationTools } from "./model-tool-routing.js";
 import {
   CREATE_GOAL_TOOL_NAME,
   GOAL_TOOL_NAMES,
@@ -62,7 +60,6 @@ const BASE_TOOL_NAMES = [
   "bash",
   "edit",
   "write",
-  "apply_patch",
   "lsp_goto_definition",
   "lsp_workspace_symbols",
   "lsp_java_decompile",
@@ -235,9 +232,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   const syncLsp = (absolutePath: string) => {
     void lspManager.syncFileIfOpen(absolutePath).catch(() => undefined);
   };
-  const closeLsp = (absolutePath: string) => {
-    void lspManager.closeFileIfOpen(absolutePath).catch(() => undefined);
-  };
   pi.on("session_start", async (event, ctx) => {
     goalToolsAvailableInSession = isRootSession(ctx);
     if (event.reason === "reload") {
@@ -249,7 +243,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     }
     const activeTools = pi.getActiveTools();
     const defaultTools = [
-      ...projectFileMutationTools(BASE_TOOL_NAMES, ctx.model?.id, "implicit"),
+      ...BASE_TOOL_NAMES,
       ...(goalToolsAvailableInSession ? [CREATE_GOAL_TOOL_NAME] : []),
     ];
     if (activeTools.length === 0) {
@@ -267,9 +261,8 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
     const preservedTools = withoutBuiltins.includes(TASK_TOOL_NAME)
       ? (withoutTask.length > 0 ? withoutTask : defaultTools)
       : withoutBuiltins;
-    const nextTools = projectFileMutationTools(preservedTools, ctx.model?.id, "implicit");
-    if (nextTools.length !== activeTools.length || nextTools.some((name, index) => name !== activeTools[index])) {
-      pi.setActiveTools(nextTools);
+    if (preservedTools.length !== activeTools.length || preservedTools.some((name, index) => name !== activeTools[index])) {
+      pi.setActiveTools(preservedTools);
     }
   });
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -297,27 +290,6 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
   registerWriteTool(pi, {
     onSuccessfulWrite: syncLsp,
-    getCollapsedResultLines,
-    getCollapsedResultMaxChars,
-    isYoloEnabled,
-  });
-  registerApplyPatchTool(pi, {
-    onCommitted: (result) => {
-      if (result.operation === "delete") {
-        closeLsp(result.absolutePath);
-        return;
-      }
-      if (result.absoluteMoveToPath !== undefined) {
-        closeLsp(result.absolutePath);
-        syncLsp(result.absoluteMoveToPath);
-        return;
-      }
-      syncLsp(result.absolutePath);
-    },
-    onCommitFailed: (failure) => {
-      closeLsp(failure.absolutePath);
-      if (failure.absoluteMoveToPath !== undefined) closeLsp(failure.absoluteMoveToPath);
-    },
     getCollapsedResultLines,
     getCollapsedResultMaxChars,
     isYoloEnabled,

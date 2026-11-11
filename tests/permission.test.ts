@@ -177,14 +177,6 @@ describe("permission guard", () => {
 
     await expect(evaluateTarget("win32", "write", { path: "src/example.ts" })).resolves.toBeUndefined();
     await expect(evaluateTarget("linux", "write", { path: "src/example.ts" })).resolves.toMatchObject({ block: true });
-    const patchText = [
-      "*** Begin Patch",
-      "*** Add File: src/example.ts",
-      "+export const example = true;",
-      "*** End Patch",
-    ].join("\n");
-    await expect(evaluateTarget("win32", "apply_patch", { patchText })).resolves.toBeUndefined();
-    await expect(evaluateTarget("linux", "apply_patch", { patchText })).resolves.toMatchObject({ block: true });
 
     const bashRegistry = createToolRegistry({ hasUI: false });
     registerPermissionGuard(bashRegistry.pi as any, {

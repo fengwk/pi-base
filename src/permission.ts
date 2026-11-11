@@ -6,8 +6,6 @@ import { describeToolWorkdirForDisplay, expandHomePath, normalizeSlashes, resolv
 import { PI_BASE_PERMISSION_STATUS_KEY } from "./yolo-footer.js";
 import { loadRuntimePiBaseSettings, toggleRuntimeYolo } from "./runtime-settings.js";
 import { askSubagentPermissionHost } from "./subagent/permission-host.js";
-import { getApplyPatchIntents, parseApplyPatch, type ApplyPatchIntent } from "./apply-patch-core.js";
-import { applyPatchOperationLabel } from "./apply-patch-display.js";
 
 const STATUS_KEY = PI_BASE_PERMISSION_STATUS_KEY;
 const ALLOW_LABEL = "Yes";
@@ -20,14 +18,8 @@ interface TargetDescriptor {
   caseSensitive: boolean;
 }
 
-interface ApplyPatchPermissionTarget {
-  intent: ApplyPatchIntent;
-  descriptor: TargetDescriptor;
-}
-
 interface PermissionEvaluation {
   action: PermissionAction;
-  applyPatchTargets?: ApplyPatchIntent[];
 }
 
 
@@ -134,7 +126,7 @@ function describeTarget(
 ): TargetDescriptor {
   if (typeof input.path === "string" && input.path.trim().length > 0) {
     // Argument validation belongs to the tool. Permission falls back to the session cwd when
-    // workdir is malformed instead of throwing, matching evaluateApplyPatchPermission.
+    // workdir is malformed instead of throwing.
     let targetCwd: string;
     try {
       targetCwd = resolveToolWorkdir(input.workdir, cwd).cwd;
@@ -182,65 +174,8 @@ function evaluateBashRules(command: string, ...rulesets: Array<PermissionRuleEnt
   return action;
 }
 
-function aggregatePermissionActions(actions: readonly PermissionAction[]): PermissionAction {
-  if (actions.includes("deny")) return "deny";
-  if (actions.includes("ask")) return "ask";
-  return "allow";
-}
-
 function getToolPermissionRules(permission: PermissionConfig, toolName: string): PermissionRuleEntry[] | undefined {
   return Object.prototype.hasOwnProperty.call(permission, toolName) ? permission[toolName] : undefined;
-}
-
-function inheritedApplyPatchToolName(intent: ApplyPatchIntent): "edit" | "write" {
-  return intent.operation === "update" && intent.moveTo === undefined ? "edit" : "write";
-}
-
-function evaluateApplyPatchPermission(
-  input: Record<string, unknown>,
-  cwd: string,
-  loaded: LoadedPiBaseSettings,
-  platform: NodeJS.Platform,
-): PermissionEvaluation {
-  const permission = loaded.settings.permission;
-  if (!permission || typeof input.patchText !== "string") {
-    return { action: evaluateRules(buildGenericTargetDescriptor("apply_patch"), permission?.["*"], permission?.apply_patch) };
-  }
-
-  try {
-    const applyPatch = parseApplyPatch(input.patchText);
-    const { cwd: targetCwd } = resolveToolWorkdir(applyPatch.workdir, cwd);
-    const intents = getApplyPatchIntents(applyPatch);
-    const targets: ApplyPatchPermissionTarget[] = intents.map((intent) => ({
-      intent,
-      descriptor: buildPathTargetDescriptor(intent.path, targetCwd, loaded, platform),
-    }));
-    const actions = targets.flatMap(({ intent, descriptor }) => {
-      const primary = evaluateRules(
-        descriptor,
-        permission["*"],
-        permission[inheritedApplyPatchToolName(intent)],
-        permission.apply_patch,
-      );
-      if (intent.moveTo === undefined) return [primary];
-      // Move removes its source and creates/overwrites its destination, so both inherit write rules.
-      const destination = buildPathTargetDescriptor(intent.moveTo, targetCwd, loaded, platform);
-      return [
-        primary,
-        evaluateRules(
-          destination,
-          permission["*"],
-          permission.write,
-          permission.apply_patch,
-        ),
-      ];
-    });
-    return { action: aggregatePermissionActions(actions), applyPatchTargets: intents };
-  } catch {
-    // Parsing and workdir validation belong to the tool. Permission falls back to
-    // generic apply_patch rules without attempting to infer malformed targets.
-    return { action: evaluateRules(buildGenericTargetDescriptor("apply_patch"), permission["*"], permission.apply_patch) };
-  }
 }
 
 function updateYoloStatus(ctx: ExtensionContext, enabled: boolean): void {
@@ -273,32 +208,13 @@ export function truncatePermissionLine(value: string, maxChars = PERMISSION_PROM
   return `${singleLine.slice(0, sliceLength)}...`;
 }
 
-function getPromptWorkdirSuffix(input: unknown, cwd: string, toolName?: string): string {
+function getPromptWorkdirSuffix(input: unknown, cwd: string): string {
   let workdir: unknown = input && typeof input === "object" ? (input as Record<string, unknown>).workdir : undefined;
-  if (toolName === "apply_patch" && input && typeof input === "object") {
-    const patchText = (input as Record<string, unknown>).patchText;
-    if (typeof patchText === "string") {
-      try {
-        workdir = parseApplyPatch(patchText).workdir;
-      } catch {
-        workdir = undefined;
-      }
-    }
-  }
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(workdir, cwd);
   return usedDefault ? "" : ` in ${rawWorkdir}`;
 }
 
-function formatApplyPatchPromptTargets(targets: readonly ApplyPatchIntent[]): string {
-  return targets.map((target) => {
-    const operation = applyPatchOperationLabel(target.operation);
-    const destination = target.moveTo === undefined ? "" : ` -> ${target.moveTo}`;
-    return `${operation} ${target.path}${destination}`;
-  }).join(", ");
-}
-
-function summarizePromptInput(input: unknown, applyPatchTargets?: readonly ApplyPatchIntent[]): string {
-  if (applyPatchTargets && applyPatchTargets.length > 0) return formatApplyPatchPromptTargets(applyPatchTargets);
+function summarizePromptInput(input: unknown): string {
   if (!input || typeof input !== "object") return stringifyPromptArguments(input);
   const record = input as Record<string, unknown>;
   if (typeof record.command === "string") return record.command;
@@ -309,7 +225,6 @@ function summarizePromptInput(input: unknown, applyPatchTargets?: readonly Apply
     "content",
     "old_string",
     "new_string",
-    "patchText",
   ].includes(key));
   return summaryEntries.length > 0 ? stringifyPromptArguments(Object.fromEntries(summaryEntries)) : "";
 }
@@ -318,11 +233,10 @@ function buildPrompt(
   toolName: string,
   input: unknown,
   cwd: string,
-  applyPatchTargets?: readonly ApplyPatchIntent[],
 ): string {
-  const summary = summarizePromptInput(input, applyPatchTargets);
+  const summary = summarizePromptInput(input);
   const detail = summary ? ` ${summary}` : "";
-  return truncatePermissionLine(`Permission request: ${toolName}${detail}${getPromptWorkdirSuffix(input, cwd, toolName)}`);
+  return truncatePermissionLine(`Permission request: ${toolName}${detail}${getPromptWorkdirSuffix(input, cwd)}`);
 }
 
 function buildSettingsHint(loaded: LoadedPiBaseSettings): string {
@@ -410,19 +324,14 @@ export function registerPermissionGuard(
     const permission = loaded.settings.permission;
     if (!permission) return undefined;
 
-    let evaluation: PermissionEvaluation;
-    if (event.toolName === "apply_patch") {
-      evaluation = evaluateApplyPatchPermission(event.input, ctx.cwd, loaded, platform);
-    } else {
-      const target = describeTarget(event.toolName, event.input, ctx.cwd, loaded, platform);
-      const globalRules = getToolPermissionRules(permission, "*");
-      const toolRules = getToolPermissionRules(permission, event.toolName);
-      evaluation = {
-        action: event.toolName === "bash" && typeof event.input.command === "string"
-          ? evaluateBashRules(event.input.command, globalRules, toolRules)
-          : evaluateRules(target, globalRules, toolRules),
-      };
-    }
+    const target = describeTarget(event.toolName, event.input, ctx.cwd, loaded, platform);
+    const globalRules = getToolPermissionRules(permission, "*");
+    const toolRules = getToolPermissionRules(permission, event.toolName);
+    const evaluation: PermissionEvaluation = {
+      action: event.toolName === "bash" && typeof event.input.command === "string"
+        ? evaluateBashRules(event.input.command, globalRules, toolRules)
+        : evaluateRules(target, globalRules, toolRules),
+    };
     const { action } = evaluation;
 
     if (action === "allow") return undefined;
@@ -438,7 +347,7 @@ export function registerPermissionGuard(
           agentType: info.agentType,
           depth: info.depth,
           rootSessionId: info.rootSessionId,
-          prompt: buildPrompt(event.toolName, event.input, ctx.cwd, evaluation.applyPatchTargets),
+          prompt: buildPrompt(event.toolName, event.input, ctx.cwd),
           signal: (event as { signal?: AbortSignal }).signal,
         });
         if (decision !== null) {
@@ -456,7 +365,7 @@ export function registerPermissionGuard(
     if (signal?.aborted) throw new Error("Operation aborted");
     const choice = await selectPermissionChoice(
       ctx,
-      buildPrompt(event.toolName, event.input, ctx.cwd, evaluation.applyPatchTargets),
+      buildPrompt(event.toolName, event.input, ctx.cwd),
       [ALLOW_LABEL, DENY_LABEL],
       signal,
     );
