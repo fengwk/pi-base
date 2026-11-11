@@ -25,6 +25,7 @@ Reads text files, directories, and supported images, and returns a line-numbered
 | `workdir` | no | session cwd | Base for resolving relative paths |
 | `offset` | no | `1` | Starting text line, 1-based |
 | `limit` | no | `200` | Maximum text lines, up to 2000 |
+| `column_offset` | no | `1` | 1-based Unicode code-point column where the first returned line starts; text reads only |
 
 ## Execution chain
 
@@ -67,11 +68,16 @@ The number column width is computed from the file's total line count. A trailing
 
 - `limit` is capped at 2000.
 - Candidate text files over 64 MiB are rejected before a full read.
-- A single line displays at most 2000 characters.
+- A single line displays at most 2000 Unicode code points.
 - Non-regular files and binary files are rejected.
 - The display layer escapes carriage returns and NUL.
+- `column_offset` applies only to the first returned line; a column past the end of that line is rejected, while column 1 stays valid for any line.
+- When `column_offset` is greater than 1, the header gains a `column_offset:` line stating that the first displayed line starts mid-line, so it is not mistaken for a complete source line.
+- Explicit `column_offset` values are rejected for directory and image reads.
 
-When the end of the read window is reached but the file still has content, the result includes a hint for the next `offset`.
+The window stops at the first line whose fragment hits the per-line cap so later lines are never displayed before that line's remainder, and the whole result (header, body, and continuation notices) is kept inside the shared tool-output budget (50 KiB / 2000 physical lines) so downstream truncation never removes the cursor.
+
+When the window stops before the end of the file, the result includes a continuation notice with the exact next position: `offset` for line-based continuation, plus `column_offset` when a line was cut mid-line.
 
 ## Directories
 
@@ -104,11 +110,12 @@ It does not automatically open an LSP document because a file was read.
 
 All exceptions are converted to `Error: ...` with `isError: true`.
 
-If a single line is truncated at the read layer, the result writes `details.upstreamTextTruncated` so the [public result handling chain](../architecture.md#tool_result) knows the full text can no longer be recovered from the current result.
+If a line fragment is cut at the read layer, the window stops at that line, the result writes `details.upstreamTextTruncated` plus `details.next` (`line` and `column`) so the [public result handling chain](../architecture.md#tool_result) knows the full text can no longer be recovered from the current result, and the continuation notice names the executable follow-up call (`offset` plus `column_offset`) that resumes from the exact next code point.
 
 ## Related tests
 
 - [`tests/read.test.ts`](../../tests/read.test.ts)
+- [`tests/read-window.test.ts`](../../tests/read-window.test.ts)
 - [`tests/image-fallback.test.ts`](../../tests/image-fallback.test.ts)
 - [`tests/text-codec.test.ts`](../../tests/text-codec.test.ts)
 - [`tests/line-endings.test.ts`](../../tests/line-endings.test.ts)

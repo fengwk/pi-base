@@ -23,13 +23,18 @@ import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { readSchema } from "./schemas/read.js";
 import { mapFilePathToPath } from "./tool-arg-aliases.js";
 import { decodeTextFile } from "./text-codec.js";
+import { TOOL_OUTPUT_MAX_BYTES, TOOL_OUTPUT_MAX_LINES } from "./tool-output-core.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 2000;
-const MAX_LINE_CHARS = 2000;
+const MAX_LINE_CODE_POINTS = 2000;
 const MAX_TEXT_FILE_BYTES = 64 * 1024 * 1024;
+// Continuation notices share the final output budget with the body, so the
+// window reserves room for the blank separator plus the notice lines up front.
+const NOTICE_RESERVE_LINES = 3;
+const NOTICE_RESERVE_BYTES = 1024;
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
 type ReadFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
@@ -72,15 +77,67 @@ function assertRegularReadFile(rawPath: string, fileStat: { isFile: () => boolea
   throw new Error(`${rawPath} is not a regular file. read supports text files, directories, and supported images.`);
 }
 
-function formatLine(content: string): { display: string; truncated: boolean } {
-  const display = content.replace(/\r/g, "\\r").replace(/\u0000/g, "\\0");
-  if (display.length > MAX_LINE_CHARS) {
-    return {
-      display: `${display.slice(0, MAX_LINE_CHARS)}... (line truncated to ${MAX_LINE_CHARS} chars)`,
-      truncated: true,
-    };
+function rejectExplicitColumnOffset(params: any): void {
+  if (params?.column_offset !== undefined) {
+    throw new Error("column_offset is only supported for text file reads.");
   }
-  return { display, truncated: false };
+}
+
+function codePointSize(code: number, nextCode: number): number {
+  return code >= 0xd800 && code < 0xdc00 && nextCode >= 0xdc00 && nextCode < 0xe000 ? 2 : 1;
+}
+
+function countCodePoints(line: string): number {
+  let count = 0;
+  for (let index = 0; index < line.length; ) {
+    index += codePointSize(line.charCodeAt(index), line.charCodeAt(index + 1));
+    count += 1;
+  }
+  return count;
+}
+
+function skipToCodePointColumn(line: string, column: number): number | null {
+  let index = 0;
+  let current = 1;
+  while (current < column) {
+    if (index >= line.length) return null;
+    index += codePointSize(line.charCodeAt(index), line.charCodeAt(index + 1));
+    current += 1;
+  }
+  return index;
+}
+
+interface LineFragment {
+  display: string;
+  complete: boolean;
+  codePoints: number;
+}
+
+/**
+ * Iterates the line by Unicode code points and collects at most the display
+ * fragment, so potentially huge lines are never materialized as arrays and
+ * surrogate pairs are never split at the fragment boundary.
+ */
+function extractLineFragment(line: string, startIndex: number): LineFragment {
+  const pieces: string[] = [];
+  let index = startIndex;
+  let collected = 0;
+  while (collected < MAX_LINE_CODE_POINTS && index < line.length) {
+    const code = line.charCodeAt(index);
+    const size = codePointSize(code, line.charCodeAt(index + 1));
+    if (code === 13) pieces.push("\\r");
+    else if (code === 0) pieces.push("\\0");
+    else pieces.push(line.slice(index, index + size));
+    index += size;
+    collected += 1;
+  }
+  const complete = index >= line.length;
+  const fragment = pieces.join("");
+  return {
+    display: complete ? fragment : `${fragment}... (line truncated to ${MAX_LINE_CODE_POINTS} chars)`,
+    complete,
+    codePoints: collected,
+  };
 }
 
 function formatNumberedLine(line: number, lineNumberWidth: number, display: string): string {
@@ -92,7 +149,7 @@ function formatReadCall(args: any, theme: any, cwd?: string): string {
   const path = shortenHomePath(rawPath);
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
   const workdir = usedDefault ? "" : `${styleOutput(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
-  return `${styleToolTitle(theme, "Read")} ${styleAccent(theme, path)}${workdir}${styleOutput(theme, formatOptionalArgs([["offset", args?.offset], ["limit", args?.limit]]))}`;
+  return `${styleToolTitle(theme, "Read")} ${styleAccent(theme, path)}${workdir}${styleOutput(theme, formatOptionalArgs([["offset", args?.offset], ["limit", args?.limit], ["column_offset", args?.column_offset]]))}`;
 }
 
 function formatLspStatus(lsp: LspSupportInfo): string {
@@ -101,21 +158,31 @@ function formatLspStatus(lsp: LspSupportInfo): string {
   return `lsp: file type supported, but server not installed (${lsp.language})`;
 }
 
+interface ReadNextPosition {
+  line: number;
+  column: number;
+}
+
 function buildReadNotices(args: {
   start: number;
   end: number;
   totalLines: number;
-  hasMore: boolean;
-  upstreamTextTruncated: boolean;
+  next: ReadNextPosition | null;
+  lineCapped: boolean;
 }): string[] {
-  const notices: string[] = [];
-  if (args.hasMore && args.end >= args.start) {
-    notices.push(`[Showing lines ${args.start}-${args.end} of ${args.totalLines}. Re-run read with offset=${args.end + 1} to continue.]`);
+  const next = args.next;
+  if (next === null) return [];
+  if (args.lineCapped) {
+    const rest = next.line < args.totalLines ? `; lines after ${next.line} were not shown` : "";
+    return [
+      `[Line ${next.line} was cut at column ${next.column}${rest}. `
+      + `Re-run read with offset=${next.line}, column_offset=${next.column} to continue this line.]`,
+    ];
   }
-  if (args.upstreamTextTruncated) {
-    notices.push(`[Some displayed lines were truncated to ${MAX_LINE_CHARS} characters. Re-read a smaller window if you need the full line text.]`);
+  if (args.end >= args.start) {
+    return [`[Showing lines ${args.start}-${args.end} of ${args.totalLines}. Re-run read with offset=${next.line} to continue.]`];
   }
-  return notices;
+  return [`[Line ${next.line} was not displayed within the output budget. Re-run read with offset=${next.line} to continue.]`];
 }
 
 function buildDisplayedFileLines(text: string): { lines: string[]; endsWithNewline: boolean } {
@@ -134,11 +201,15 @@ function buildTextReadHeader(args: {
   rawPath: string;
   endsWithNewline: boolean;
   lsp: LspSupportInfo;
+  columnOffset: number;
 }): string[] {
   return [
     `path: ${args.rawPath}`,
     `ends_with_newline: ${args.endsWithNewline ? "yes" : "no"}`,
     formatLspStatus(args.lsp),
+    ...(args.columnOffset > 1
+      ? [`column_offset: ${args.columnOffset} (first displayed line starts mid-line; earlier columns omitted)`]
+      : []),
   ];
 }
 
@@ -187,11 +258,13 @@ export function registerReadTool(
         const offset = parsePositiveInteger(params.offset, "offset", 1);
         const limit = parsePositiveInteger(params.limit, "limit", DEFAULT_LIMIT);
         if (limit > MAX_LIMIT) throw new Error(`limit must be <= ${MAX_LIMIT}.`);
+        const columnOffset = parsePositiveInteger(params.column_offset, "column_offset", 1);
         const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const absolutePath = resolveToCwd(rawPath, cwd);
         const st = await throwIfAbortedAfter(stat(absolutePath), signal);
 
         if (st.isDirectory()) {
+          rejectExplicitColumnOffset(params);
           const entries = await throwIfAbortedAfter(readdir(absolutePath, { withFileTypes: true }), signal);
           const names = entries.map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`).sort((a, b) => a.localeCompare(b));
           return { content: [{ type: "text" as const, text: [`path: ${rawPath}`, "kind: directory", "", ...names].join("\n") }] };
@@ -199,6 +272,7 @@ export function registerReadTool(
         assertRegularReadFile(rawPath, st);
 
         if (IMAGE_EXTENSIONS.has(extname(rawPath).toLowerCase())) {
+          rejectExplicitColumnOffset(params);
           if (!modelSupportsImages(ctx?.model)) {
             return { content: [{ type: "text" as const, text: buildImageReadDowngradeMessage(rawPath, absolutePath) }] };
           }
@@ -257,27 +331,64 @@ export function registerReadTool(
         const lsp: LspSupportInfo = options.createResolver
           ? options.createResolver(resolverBaseDir).supportsLsp(absolutePath)
           : { supported: false };
-        const start = Math.min(offset, displayedFileLines.length + 1);
-        const end = Math.min(displayedFileLines.length, start + limit - 1);
-        const lineNumberWidth = Math.max(1, String(Math.max(displayedFileLines.length, 1)).length);
-        const body: string[] = [];
-        let upstreamTextTruncated = false;
-        for (let line = start; line <= end; line++) {
-          throwIfAborted(signal);
-          const rawLine = displayedFileLines[line - 1] ?? "";
-          const formatted = formatLine(rawLine);
-          if (formatted.truncated) upstreamTextTruncated = true;
-          body.push(formatNumberedLine(line, lineNumberWidth, formatted.display));
+        const totalLines = displayedFileLines.length;
+        const start = Math.min(offset, totalLines + 1);
+
+        let firstLineStartIndex = 0;
+        if (start > totalLines) {
+          if (columnOffset !== 1) {
+            throw new Error(`column_offset ${columnOffset} is invalid: line ${start} does not exist (the file has ${totalLines} lines).`);
+          }
+        } else if (columnOffset > 1) {
+          const firstLine = displayedFileLines[start - 1]!;
+          const skipped = skipToCodePointColumn(firstLine, columnOffset);
+          if (skipped === null || skipped === firstLine.length) {
+            throw new Error(`column_offset ${columnOffset} is out of bounds for line ${start} (${countCodePoints(firstLine)} code points).`);
+          }
+          firstLineStartIndex = skipped;
         }
-        const notices = buildReadNotices({
-          start,
-          end,
-          totalLines: displayedFileLines.length,
-          hasMore: end < displayedFileLines.length,
-          upstreamTextTruncated,
-        });
+
+        const headerLines = buildTextReadHeader({ rawPath, endsWithNewline, lsp, columnOffset });
+        const headerText = headerLines.join("\n");
+        const headerBytes = Buffer.byteLength(headerText, "utf8") + 2;
+        const maxBodyLines = Math.min(limit, MAX_LIMIT, TOOL_OUTPUT_MAX_LINES - headerText.split("\n").length - 1 - NOTICE_RESERVE_LINES);
+        const maxBodyBytes = TOOL_OUTPUT_MAX_BYTES - headerBytes - NOTICE_RESERVE_BYTES;
+        if (maxBodyLines < 1 || maxBodyBytes < 1) {
+          throw new Error("Read metadata exceeds the output budget. Use a shorter path.");
+        }
+        const lineNumberWidth = Math.max(1, String(Math.max(totalLines, 1)).length);
+        const body: string[] = [];
+        let bodyBytes = 0;
+        let upstreamTextTruncated = false;
+        let next: ReadNextPosition | null = null;
+        let line = start;
+        while (line <= totalLines) {
+          throwIfAborted(signal);
+          if (body.length >= maxBodyLines) break;
+          const rawLine = displayedFileLines[line - 1]!;
+          const fragment = extractLineFragment(rawLine, line === start ? firstLineStartIndex : 0);
+          const physical = formatNumberedLine(line, lineNumberWidth, fragment.display);
+          const physicalBytes = Buffer.byteLength(physical, "utf8") + 1;
+          if (bodyBytes + physicalBytes > maxBodyBytes) break;
+          body.push(physical);
+          bodyBytes += physicalBytes;
+          if (!fragment.complete) {
+            // The fragment hit the per-line cap: stop the window here so later
+            // lines never appear before this line's remainder is shown.
+            upstreamTextTruncated = true;
+            next = { line, column: (line === start ? columnOffset : 1) + fragment.codePoints };
+            break;
+          }
+          line += 1;
+        }
+        if (body.length === 0 && line <= totalLines) {
+          throw new Error("Read output cannot fit the first line fragment. Use a shorter path.");
+        }
+        if (next === null && line <= totalLines) next = { line, column: 1 };
+        const end = start + body.length - 1;
+        const notices = buildReadNotices({ start, end, totalLines, next, lineCapped: upstreamTextTruncated });
         const contentLines: string[] = [
-          ...buildTextReadHeader({ rawPath, endsWithNewline, lsp }),
+          ...headerLines,
           "",
           ...body,
           ...(notices.length > 0 ? ["", ...notices] : []),
@@ -287,9 +398,12 @@ export function registerReadTool(
         } catch {
           // Observer failures cannot invalidate the completed read.
         }
+        const details: Record<string, unknown> = {};
+        if (upstreamTextTruncated) details.upstreamTextTruncated = true;
+        if (next !== null) details.next = { line: next.line, column: next.column };
         return {
           content: [{ type: "text" as const, text: contentLines.join("\n") }],
-          ...(upstreamTextTruncated ? { details: { upstreamTextTruncated: true } } : {}),
+          ...(Object.keys(details).length > 0 ? { details } : {}),
         };
       } catch (error) {
         return { content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }], isError: true };
