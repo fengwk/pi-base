@@ -258,7 +258,7 @@ describe("native agent tool policy", () => {
     expect(await call("task", nested)).toMatchObject({ block: true });
   });
 
-  it("keeps model routing authoritative for execution and blocks nested model-only tools", async () => {
+  it("keeps explicit file tools across model changes and blocks nested model-only tools", async () => {
     // Intent: an explicit allowlist preserves its file tools across model changes and
     // the execution guard continues to block undeclared tools.
     await writeAgent("editor", "tools: [edit, write, model_only]");

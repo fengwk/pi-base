@@ -18,10 +18,6 @@ interface TargetDescriptor {
   caseSensitive: boolean;
 }
 
-interface PermissionEvaluation {
-  action: PermissionAction;
-}
-
 
 function normalizeMatchValue(value: string): string {
   return normalizeSlashes(value.trim());
@@ -327,12 +323,9 @@ export function registerPermissionGuard(
     const target = describeTarget(event.toolName, event.input, ctx.cwd, loaded, platform);
     const globalRules = getToolPermissionRules(permission, "*");
     const toolRules = getToolPermissionRules(permission, event.toolName);
-    const evaluation: PermissionEvaluation = {
-      action: event.toolName === "bash" && typeof event.input.command === "string"
-        ? evaluateBashRules(event.input.command, globalRules, toolRules)
-        : evaluateRules(target, globalRules, toolRules),
-    };
-    const { action } = evaluation;
+    const action = event.toolName === "bash" && typeof event.input.command === "string"
+      ? evaluateBashRules(event.input.command, globalRules, toolRules)
+      : evaluateRules(target, globalRules, toolRules);
 
     if (action === "allow") return undefined;
     if (action === "deny") {

@@ -254,8 +254,8 @@ function isFileContextResult(toolName: string, message: ToolResultMessageLike): 
   return false;
 }
 
-function shouldMarkMutationPathsDirty(toolName: string, message: ToolResultMessageLike): boolean {
-  return (toolName === "write" || toolName === "edit") && message.isError !== true;
+function shouldMarkMutationPathsDirty(toolName: string): boolean {
+  return toolName === "write" || toolName === "edit";
 }
 
 function placeholderForToolName(toolName: string): string {
@@ -316,14 +316,10 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
 
     const call = resolveToolCall(message, toolCalls);
     if (!call) continue;
+    // Errors stay visible, and a failed edit/write does not invalidate older file context.
+    if (message.isError === true) continue;
     const toolName = call.toolName;
     const paths = resolveInputPaths(call.input, cwd);
-    if (message.isError === true) {
-      if (shouldMarkMutationPathsDirty(toolName, message)) {
-        for (const candidate of paths) dirtyFiles.add(candidate);
-      }
-      continue;
-    }
     const skillRead = toolName === "read" && paths.some((candidate) => isSkillReadPath(candidate, skillRoots));
 
     let reason: CompressionReason | undefined;
@@ -338,7 +334,7 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
       changed = true;
     }
 
-    if (shouldMarkMutationPathsDirty(toolName, message)) {
+    if (shouldMarkMutationPathsDirty(toolName)) {
       for (const candidate of paths) dirtyFiles.add(candidate);
     }
   }
