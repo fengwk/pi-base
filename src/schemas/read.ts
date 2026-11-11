@@ -5,4 +5,5 @@ export const readSchema = Type.Object({
   workdir: Type.Optional(Type.String({ description: "Working directory for resolving relative paths. Defaults to the agent's current working directory. If provided, relative paths resolve from that directory." })),
   offset: Type.Optional(Type.Union([Type.Number(), Type.String()], { description: "Positive integer 1-based line offset for text reads. Defaults to 1." })),
   limit: Type.Optional(Type.Union([Type.Number(), Type.String()], { description: "Positive integer maximum number of text lines to return. Defaults to 200 and must not exceed 2000." })),
+  column_offset: Type.Optional(Type.Union([Type.Number(), Type.String()], { description: "Positive integer 1-based Unicode code-point column where the first returned text line starts. Defaults to 1 and applies only to the first line of the window." })),
 });

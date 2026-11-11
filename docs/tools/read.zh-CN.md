@@ -25,6 +25,7 @@
 | `workdir` | 否 | session cwd | 相对路径解析基准 |
 | `offset` | 否 | `1` | 文本起始行，1-based |
 | `limit` | 否 | `200` | 最大文本行数，上限 2000 |
+| `column_offset` | 否 | `1` | 首行返回内容的起始列，1-based Unicode 码点；仅文本读取支持 |
 
 ## 执行链
 
@@ -67,11 +68,16 @@ lsp: supported|unsupported
 
 - `limit` 最大 2000。
 - 文本候选文件超过 64 MiB 时在完整读取前拒绝。
-- 单行最多展示 2000 字符。
+- 单行最多展示 2000 个 Unicode 码点。
 - 非普通文件和二进制文件拒绝。
 - 显示层会转义回车和 NUL。
+- `column_offset` 只作用于返回窗口的第一行；列超出该行内容时拒绝，列 1 对任意行都合法。
+- `column_offset` 大于 1 时，header 会多出一行 `column_offset:`，说明首个展示行从行中开始，避免被误认为完整源行。
+- 目录与图片读取拒绝显式 `column_offset` 参数。
 
-达到读取窗口末尾但文件仍有内容时，结果附带下一次 `offset` 提示。
+窗口在第一处单行片段达到上限的行停止，保证该行的剩余内容展示之前不会展示后续行；完整结果（header、正文与续读提示）始终保持在共享工具输出预算内（50 KiB / 2000 物理行），下游截断不会吃掉游标。
+
+窗口未到达文件末尾时，结果附带精确下一位置的续读提示：按行续读给出 `offset`，行内被截断时额外给出 `column_offset`。
 
 ## 目录
 
@@ -104,11 +110,12 @@ lsp: supported|unsupported
 
 所有异常转换为 `Error: ...` 和 `isError: true`。
 
-如果单行在 read 层被截断，结果写入 `details.upstreamTextTruncated`，使[公共结果处理链](../architecture.zh-CN.md#tool_result)知道完整文本已经无法从当前结果恢复。
+如果某行的片段在 read 层被截断，窗口在该行停止，结果写入 `details.upstreamTextTruncated` 和 `details.next`（`line` 与 `column`），使[公共结果处理链](../architecture.zh-CN.md#tool_result)知道完整文本已经无法从当前结果恢复；续读提示给出可执行的后续调用（`offset` 加 `column_offset`），从精确的下一个码点继续。
 
 ## 相关测试
 
 - [`tests/read.test.ts`](../../tests/read.test.ts)
+- [`tests/read-window.test.ts`](../../tests/read-window.test.ts)
 - [`tests/image-fallback.test.ts`](../../tests/image-fallback.test.ts)
 - [`tests/text-codec.test.ts`](../../tests/text-codec.test.ts)
 - [`tests/line-endings.test.ts`](../../tests/line-endings.test.ts)
