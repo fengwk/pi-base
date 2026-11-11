@@ -50,8 +50,10 @@ import { pipeline } from "node:stream/promises";
  * the grace timer is re-armed on every chunk, so an actively writing descendant keeps
  * us reading, while a quiet inherited handle (e.g. a Windows daemonized descendant
  * that never lets `close` fire) still releases us after the grace elapses.
+ * Cancellation stops extending that window so inherited output cannot delay
+ * an abort or timeout indefinitely.
  */
-export function waitForChildProcess(child: import("node:child_process").ChildProcess): Promise<number | null> {
+export function waitForChildProcess(child: import("node:child_process").ChildProcess, signal?: AbortSignal): Promise<number | null> {
   const EXIT_STDIO_GRACE_MS = 100;
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -93,7 +95,7 @@ export function waitForChildProcess(child: import("node:child_process").ChildPro
     const onData = () => {
       // Output is still arriving after exit; defer finalizing so we don't
       // destroy the stream mid-write and truncate the tail.
-      if (exited && !settled) armIdleTimer();
+      if (exited && !settled && !signal?.aborted) armIdleTimer();
     };
     const onStdoutEnd = () => {
       stdoutEnded = true;

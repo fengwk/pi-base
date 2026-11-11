@@ -88,6 +88,49 @@ describe("createGracefulTerminator", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("starts graceful group termination after the leader already exited", async () => {
+    // A shell may exit before cancellation while its descendants keep inherited
+    // pipes open. The surviving group still needs TERM and later escalation.
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+    try {
+      const child = Object.assign(new EventEmitter(), { pid: 12345, kill: vi.fn(() => true) });
+      const terminator = createGracefulTerminator(child as any, { killTree: true, forceKillAfterMs: 50 });
+      child.emit("exit", 0);
+      terminator.terminate();
+      terminator.cleanup();
+      expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(50);
+      expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("does not re-arm termination for a vanished post-exit group", () => {
+    // Avoid arming a delayed kill after both the leader and its group are gone.
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("No such process"), { code: "ESRCH" });
+    });
+    try {
+      const child = Object.assign(new EventEmitter(), { pid: 12345, kill: vi.fn(() => true) });
+      const terminator = createGracefulTerminator(child as any, { killTree: true });
+      child.emit("exit", 0);
+      terminator.terminate();
+      terminator.cleanup();
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([]);
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not signal a child that already exited", () => {
     // Intent: late cancellation after process exit must be a no-op and must not
     // resurrect a force-kill timer.

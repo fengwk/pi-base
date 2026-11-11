@@ -68,18 +68,22 @@ export function createGracefulBashOperations(options?: { shellPath?: string }): 
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const terminator = createGracefulTerminator(child, { killTree: true });
+        const drainController = new AbortController();
+        const onAbort = () => {
+          drainController.abort();
+          terminator.terminate();
+        };
 
         if (timeout !== undefined && timeout > 0) {
           timeoutHandle = setTimeout(() => {
             timedOut = true;
-            terminator.terminate();
+            onAbort();
           }, timeout * 1000);
         }
 
         child.stdout?.on("data", onData);
         child.stderr?.on("data", onData);
 
-        const onAbort = () => terminator.terminate();
         if (signal) {
           if (signal.aborted) onAbort();
           else signal.addEventListener("abort", onAbort, { once: true });
@@ -91,7 +95,7 @@ export function createGracefulBashOperations(options?: { shellPath?: string }): 
           terminator.cleanup();
         };
 
-        waitForChildProcess(child)
+        waitForChildProcess(child, drainController.signal)
           .then((code: number | null) => {
             cleanup();
             if (signal?.aborted) {

@@ -120,7 +120,10 @@ export function createGracefulTerminator(child: ChildProcess, options: GracefulT
 
   return {
     terminate: () => {
-      if (terminating || exited) return;
+      if (terminating) return;
+      // POSIX groups may outlive their leader. Only re-target a group that
+      // still exists; Windows taskkill requires the original root PID.
+      if (exited && (process.platform === "win32" || processTreePid === undefined || !hasProcessTree(processTreePid))) return;
       terminating = true;
       forceKillTimer = setTimeout(() => {
         forceKillTimer = undefined;
