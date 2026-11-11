@@ -138,6 +138,41 @@ describe("edit/write flow", () => {
     expect(await readFile(join(root, "src/new.ts"), "utf8")).toBe("export const demo = 2;\n");
   });
 
+  it("keeps full-file snapshots out of serialized edit success results", async () => {
+    // Intent: session persistence serializes the whole tool result, so unused
+    // details.oldText/newText snapshots previously re-embedded the entire file
+    // body in every small edit. Marker lines far from the changed region (beyond
+    // the 4-line diff context) must not appear in the serialized payload while
+    // diff/firstChangedLine/path/replacements and the file change are retained.
+    const root = await createTempWorkspace();
+    const lines: string[] = [];
+    for (let i = 1; i <= 500; i++) {
+      lines.push(`// filler-${i} ${"x".repeat(40)}`);
+    }
+    lines.push("export const marker = 'edit-me';");
+    await writeWorkspaceFile(root, "src/large.ts", lines.join("\n") + "\n");
+    const registry = createToolRegistry();
+    piBaseExtension(registry.pi as any);
+    const result = await registry.getTool("edit").execute(
+      "1",
+      { workdir: ".", path: "src/large.ts", old_string: "export const marker = 'edit-me';", new_string: "export const marker = 'edited';" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    expect(result.isError).not.toBe(true);
+    const details = result.details as Record<string, unknown>;
+    expect(details.diff).toContain("edited");
+    expect(details.firstChangedLine).toBe(501);
+    expect(details.path).toBe(join(root, "src/large.ts"));
+    expect(details.replacements).toBe(1);
+    const serialized = JSON.stringify(result);
+    expect(serialized.length).toBeLessThan(2000);
+    expect(serialized).not.toContain("filler-100");
+    expect(serialized).not.toContain("filler-300");
+    expect(await readFile(join(root, "src/large.ts"), "utf8")).toContain("export const marker = 'edited';");
+  });
+
   it("rejects edit when old_string is not found", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\nbeta\n");

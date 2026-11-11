@@ -565,7 +565,7 @@ export function registerEditTool(
 
         return {
           content: [{ type: "text" as const, text: outputTextResult }],
-          details: { diff, firstChangedLine, path: absolutePath, oldText: computation.fileText, newText: computation.replacedText, replacements },
+          details: { diff, firstChangedLine, path: absolutePath, replacements },
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
