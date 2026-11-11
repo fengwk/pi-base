@@ -108,10 +108,6 @@ Supports `allow`, `ask`, and `deny`.
     "*": "allow",
     "edit": "ask",
     "write": "ask",
-    "apply_patch": {
-      "vendor/**": "deny",
-      "*": "ask"
-    },
     "bash": {
       "*": "ask",
       "git status*": "allow"
@@ -129,7 +125,7 @@ Path tools consider all of:
 - The path relative to the project root.
 - The absolute path.
 
-`apply_patch` resolves all source and target paths and inherits the edit/write rules. Bash uses static command analysis; commands that cannot be conservatively analyzed and are not explicitly denied fall back to `ask`.
+Bash uses static command analysis; commands that cannot be conservatively analyzed and are not explicitly denied fall back to `ask`.
 
 Permission guards against accidental operations; it is not a security sandbox.
 
@@ -266,7 +262,7 @@ Off by default. When `contextCompression` is not configured, no historical tool 
 
 There are two independent ways to enable it:
 
-- `anchorHygiene: true`: after a file is later modified successfully, earlier successful `read`, `edit`, and `apply_patch` results for the same path are replaced. Failed results and `write` acknowledgements are not replaced by this mechanism.
+- `anchorHygiene: true`: after a file is later modified successfully, earlier successful `read` and `edit` results for the same path are replaced. Failed results and `write` acknowledgements are not replaced by this mechanism.
 - `tools` with a non-empty array: age compression is applied to the listed tools. Only successful results that are both outside the retention window and match a listed tool name are replaced; `read` results for skill files are kept.
 
 When neither is enabled, `contextCompression` has no effect. Compression only replaces the content of tool results sent to the model; it does not replace user messages, assistant messages, tool call arguments, or tool errors. When the model needs details from old results, it must re-read or re-run the tool, so tools with side effects or high cost should be added to `tools` with caution.
@@ -277,7 +273,7 @@ Enable it only in long sessions with dense tool calls that show clear context pr
 {
   "contextCompression": {
     "anchorHygiene": true,
-    "tools": ["read", "grep", "find", "bash", "edit", "write", "apply_patch"],
+    "tools": ["read", "grep", "find", "bash", "edit", "write"],
     "retainedUserMessageRounds": 2,
     "retainedAssistantTurns": 4,
     "enabledProviders": ["openai"],

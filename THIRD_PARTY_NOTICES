@@ -1,21 +1,5 @@
 # Third-Party Notices
 
-## OpenAI Codex apply_patch grammar
-
-`src/apply-patch-grammar.ts` is derived from the OpenAI Codex apply_patch
-grammar and has been modified by pi-base contributors.
-
-Source:
-https://github.com/openai/codex/blob/9417cf969682330ea5fcccbdf39818bc4b213167/codex-rs/core/src/tools/handlers/apply_patch.lark
-
-License: Apache License 2.0 (`LICENSES/Apache-2.0.txt`)
-
-Upstream NOTICE attribution:
-
-OpenAI Codex
-
-Copyright 2025 OpenAI
-
 ## pi-coding-agent selected utilities
 
 `src/internal/pi-coding-agent-utils.ts` contains selected utilities derived
@@ -28,31 +12,3 @@ https://github.com/earendil-works/pi/tree/107d79f11072bbc8a3a757ed7fd69596bee7d6
 License: MIT (`LICENSES/pi-coding-agent-MIT.txt`)
 
 Copyright (c) 2025 Mario Zechner
-
-## OpenCode apply_patch protocol and fuzzy-matching semantics
-
-The apply_patch protocol parsing and fuzzy-matching compatibility behavior in this package is derived from OpenCode.
-
-Source: https://github.com/anomalyco/opencode
-
-MIT License
-
-Copyright (c) 2025 opencode
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.

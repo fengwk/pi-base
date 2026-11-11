@@ -134,7 +134,7 @@ Pi 1.5 使用 `@earendil-works/pi-schema` 校验工具参数。继续用 TypeBox
 - 只处理普通文件。
 - 二进制文件应明确拒绝。
 - 使用 [`src/text-codec.ts`](../src/text-codec.ts) 检测 BOM、UTF-16 和旧编码。
-- `edit` / `apply_patch` 通过 [`src/line-endings.ts`](../src/line-endings.ts) 保留行尾。
+- `edit` 通过 [`src/line-endings.ts`](../src/line-endings.ts) 保留行尾。
 - legacy encoding 写回必须无损；无法表示时失败而不是替换字符。
 - 同一路径的读改写应进入文件变更队列。
 

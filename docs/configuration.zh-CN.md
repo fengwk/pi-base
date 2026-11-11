@@ -108,10 +108,6 @@ Server 字段：
     "*": "allow",
     "edit": "ask",
     "write": "ask",
-    "apply_patch": {
-      "vendor/**": "deny",
-      "*": "ask"
-    },
     "bash": {
       "*": "ask",
       "git status*": "allow"
@@ -129,7 +125,7 @@ Server 字段：
 - 相对项目根的路径。
 - 绝对路径。
 
-`apply_patch` 会解析全部源路径和目标路径，并继承 edit/write 规则。Bash 使用静态命令分析；无法保守分析且未明确 deny 的命令会退回 `ask`。
+Bash 使用静态命令分析；无法保守分析且未明确 deny 的命令会退回 `ask`。
 
 Permission 用于防误操作，不是安全沙箱。
 
@@ -265,7 +261,7 @@ Agent 策略和 session 行为见[原生 MCP 工具](tools/mcp.zh-CN.md)，
 
 有两种独立的启用方式：
 
-- `anchorHygiene: true`：文件被后续成功修改后，替换同一路径上更早的成功 `read`、`edit` 和 `apply_patch` 结果。失败结果和 `write` acknowledgement 不在此机制中替换。
+- `anchorHygiene: true`：文件被后续成功修改后，替换同一路径上更早的成功 `read` 和 `edit` 结果。失败结果和 `write` acknowledgement 不在此机制中替换。
 - `tools` 使用非空数组：对列出的工具执行 age compression。只有同时满足保留窗口之外和工具名匹配的成功结果才会替换；skill 文件的 `read` 结果保留。
 
 两项都未启用时，`contextCompression` 不生效。压缩只替换发送给模型的工具结果正文，不替换 user message、assistant message、tool call 参数或工具错误。模型需要旧结果细节时必须重新读取或重新执行工具，因此有副作用或成本较高的工具应谨慎加入 `tools`。
@@ -276,7 +272,7 @@ Agent 策略和 session 行为见[原生 MCP 工具](tools/mcp.zh-CN.md)，
 {
   "contextCompression": {
     "anchorHygiene": true,
-    "tools": ["read", "grep", "find", "bash", "edit", "write", "apply_patch"],
+    "tools": ["read", "grep", "find", "bash", "edit", "write"],
     "retainedUserMessageRounds": 2,
     "retainedAssistantTurns": 4,
     "enabledProviders": ["openai"],

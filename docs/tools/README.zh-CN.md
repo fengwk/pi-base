@@ -14,7 +14,6 @@
 - [`bash`](bash.zh-CN.md)
 - [`edit`](edit.zh-CN.md)
 - [`write`](write.zh-CN.md)
-- [`apply_patch`](apply-patch.zh-CN.md)
 
 ## LSP 工具
 

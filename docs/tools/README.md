@@ -14,7 +14,6 @@
 - [`bash`](bash.md)
 - [`edit`](edit.md)
 - [`write`](write.md)
-- [`apply_patch`](apply-patch.md)
 
 ## LSP tools
 
