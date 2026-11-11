@@ -360,8 +360,8 @@ Planner prompt.
     const root = await createTempWorkspace();
     const agentDir = await createTempWorkspace();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    const sessionModel = { provider: "provider-a", id: "model-a" };
-    const otherModel = { provider: "provider-b", id: "model-b" };
+    const sessionModel = { provider: "openai", id: "gpt-5" };
+    const otherModel = { provider: "anthropic", id: "claude-sonnet-4-5" };
 
     process.env.PI_CODING_AGENT_DIR = agentDir;
     try {
@@ -372,7 +372,8 @@ Planner prompt.
 name: editor
 tools:
   - read
-  - grep
+  - edit
+  - write
 ---
 Editor prompt.
 `,
@@ -381,16 +382,20 @@ Editor prompt.
       const implicit = createToolRegistry({ model: sessionModel, models: [sessionModel, otherModel] });
       piBaseExtension(implicit.pi as any);
       await implicit.emit("session_start", { reason: "startup" }, { cwd: root, model: sessionModel });
-      implicit.pi.setActiveTools(["read", "grep"]);
+      expect(implicit.getActiveTools()).toEqual(expect.arrayContaining(["edit", "write"]));
+      implicit.pi.setActiveTools(["read", "edit", "write"]);
       await implicit.emit("model_select", { type: "model_select", model: otherModel, previousModel: sessionModel, source: "set" }, { cwd: root, model: otherModel });
+      expect(implicit.getActiveTools()).toEqual(["read", "edit", "write"]);
+      implicit.pi.setActiveTools(["read", "grep"]);
+      await implicit.emit("model_select", { type: "model_select", model: sessionModel, previousModel: otherModel, source: "set" }, { cwd: root, model: sessionModel });
       expect(implicit.getActiveTools()).toEqual(["read", "grep"]);
 
       const explicit = createToolRegistry({ model: sessionModel, models: [sessionModel, otherModel] });
       piBaseExtension(explicit.pi as any);
       await explicit.runCommand("agent", "editor", { cwd: root, model: sessionModel });
-      expect(explicit.getActiveTools()).toEqual(["read", "grep"]);
+      expect(explicit.getActiveTools()).toEqual(["read", "edit", "write"]);
       await explicit.emit("model_select", { type: "model_select", model: otherModel, previousModel: sessionModel, source: "set" }, { cwd: root, model: otherModel });
-      expect(explicit.getActiveTools()).toEqual(["read", "grep"]);
+      expect(explicit.getActiveTools()).toEqual(["read", "edit", "write"]);
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;

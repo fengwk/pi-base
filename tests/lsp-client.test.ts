@@ -346,6 +346,30 @@ describe("LspClient internals", () => {
       expect(client.isOpen(filePath)).toBe(false);
     });
 
+    it("closes an open file and clears all per-file client state", async () => {
+      // Intent: closing a document clears its caches and sends didClose only once,
+      // so externally removed files do not leave stale LSP state.
+      const root = await createTempWorkspace();
+      const filePath = await writeWorkspaceFile(root, "src/deleted.ts", "export const value = 1;\n");
+      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      const notifySpy = vi.spyOn(client as any, "notify").mockImplementation(() => undefined);
+      await client.openFile(filePath);
+      notifySpy.mockClear();
+
+      const uri = pathToFileURL(filePath).href;
+      client.closeFile(filePath);
+
+      expect(notifySpy).toHaveBeenCalledOnce();
+      expect(notifySpy).toHaveBeenCalledWith("textDocument/didClose", { textDocument: { uri } });
+      expect(client.isOpen(filePath)).toBe(false);
+      expect((client as any).fileVersions.has(filePath)).toBe(false);
+      expect((client as any).fileMtimes.has(filePath)).toBe(false);
+      expect((client as any).fileContents.has(filePath)).toBe(false);
+
+      client.closeFile(filePath);
+      expect(notifySpy).toHaveBeenCalledOnce();
+    });
+
     it("maps high-level helper methods to the expected JSON-RPC requests", async () => {
       // Intent: LSP tools rely on these helpers to translate user-facing
       // arguments into protocol requests, including encoded character offsets.
