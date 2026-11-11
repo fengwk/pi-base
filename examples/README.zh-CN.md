@@ -198,7 +198,7 @@ Context compression 默认关闭，不写入 [`pi-base.json`](pi-base.json)。�
 
 支持两个独立机制：
 
-- `anchorHygiene: true`：文件被后续成功修改后，替换同一路径上更早的成功 `read`、`edit` 和 `apply_patch` 结果。
+- `anchorHygiene: true`：文件被后续成功修改后，替换同一路径上更早的成功 `read` 和 `edit` 结果。
 - 非空 `tools`：对列出的工具执行 age compression。`retainedUserMessageRounds` 和 `retainedAssistantTurns` 共同定义结果进入压缩范围的年龄阈值，默认值分别为 `2` 和 `4`。
 
 工具错误、user message、assistant message 和 tool call 参数不会被替换。启用后，模型需要旧输出细节时必须重新读取文件或重新执行工具；重新执行 Bash 等有副作用的命令可能不安全。因此只在长时间、工具输出较多且已出现上下文压力的 session 中开启。
@@ -209,7 +209,7 @@ Context compression 默认关闭，不写入 [`pi-base.json`](pi-base.json)。�
 {
   "contextCompression": {
     "anchorHygiene": true,
-    "tools": ["read", "grep", "find", "bash", "edit", "write", "apply_patch"],
+    "tools": ["read", "grep", "find", "bash", "edit", "write"],
     "retainedUserMessageRounds": 2,
     "retainedAssistantTurns": 4,
     "enabledProviders": ["openai"]

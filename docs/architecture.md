@@ -35,7 +35,6 @@ Pi
    - `bash`
    - `edit`
    - `write`
-   - `apply_patch`
    - three LSP tools
 5. Register the Markdown Agents and the `--agent` flag.
 6. Register Goal, Notify, and Subagent (MCP tools are provided natively by Pi via `~/.pi/agent/mcp.json`).
@@ -179,17 +178,15 @@ Path-based tools support:
 - `~/`, `$HOME/`, `${HOME}/`.
 - Compatible alias mapping from `filePath` to `path`.
 
-`edit`, `write`, and `apply_patch` use a file change queue to serialize the read-modify-write process for the same target. Existing targets are decoded as text and binary files are rejected. The Update/Move of `edit` and `apply_patch` preserves the existing encoding, BOM, and line endings; `write` preserves the encoding and BOM when overwriting an existing file, while line breaks follow the passed `content`.
+`edit` and `write` use a file change queue to serialize the read-modify-write process for the same target. Existing targets are decoded as text and binary files are rejected. `edit` preserves the existing encoding, BOM, and line endings; `write` preserves the encoding and BOM when overwriting an existing file, while line breaks follow the passed `content`. Use Bash to delete or move files.
 
 `permission` is a lexical safeguard against accidental misuse, not a filesystem sandbox. When security isolation is required, containers, restricted accounts, or OS-level boundaries must be used.
 
 ## Dynamic tools
 
-### Model-driven file tool projection
+### Default file modification tools
 
-`edit`, `write`, and `apply_patch` are all registered. When no file modification tool is specified in the Agent's `tools`, models whose ID contains `gpt-` and not `gpt-4` or `oss` use `apply_patch`; other models use `edit` and `write`.
-
-Explicit configuration does not expand permissions. When both `apply_patch` and `edit`/`write` are configured, only `apply_patch` is enabled; models whose ID contains `gpt-` and not `gpt-4` or `oss` also use `apply_patch` when both `edit` and `write` are configured; when only `edit` or `write` is configured, that single tool is kept.
+All models use `edit` and `write` as the default file modification tools. Explicitly configured Agent tools are used as declared. Use Bash to delete or move files.
 
 ### MCP
 
@@ -232,4 +229,4 @@ The process-level configuration cache, YOLO snapshots, and LSP client pool assum
 
 ## Third-party boundaries
 
-[`src/internal/pi-coding-agent-utils.ts`](../src/internal/pi-coding-agent-utils.ts) contains internal helpers derived from `pi-coding-agent`; the `apply_patch` grammar is derived from OpenAI Codex. Sources and licenses are in [`THIRD_PARTY_NOTICES`](../THIRD_PARTY_NOTICES).
+[`src/internal/pi-coding-agent-utils.ts`](../src/internal/pi-coding-agent-utils.ts) contains internal helpers derived from `pi-coding-agent`. Sources and licenses are in [`THIRD_PARTY_NOTICES`](../THIRD_PARTY_NOTICES).

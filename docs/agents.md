@@ -58,7 +58,6 @@ Unknown fields invalidate the entire Agent file. String arrays are deduplicated;
 - `tools` omitted: inherit the current default tool policy, preserving native `settings.json` / `defaultTools` choices rather than force-activating registered tools.
 - Explicit array: an **ordinary-tool execution allowlist**, enforced by the pi-base Markdown Agent guard, not a generic official SDK `tools` guarantee.
 - Empty array (`tools: []`): no ordinary tools are authorized. Runtime hooks may still inject `task` or Goal tools under their own conditions.
-- File modification tools are projected against the current model, but the explicit allowlist is never expanded.
 - Direct MCP tools use their actual official names, normally `mcp__<server>__<tool>`.
 - Exposure is not authorization. If wrappers such as `codemode` or `tool_search` are separately enabled, authorize both the wrapper and the MCP tools it invokes; the execution guard still applies.
 - Dynamic MCP names may be allowlisted before registration. `session_start` avoids warnings merely for not-yet-ready tools; `before_agent_start` and `turn_start` synchronize selection, and the execution entry checks authorization.

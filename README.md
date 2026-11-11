@@ -22,7 +22,6 @@ More and more people inject large numbers of rules and tools into agents, believ
 | `bash` | Run builds, tests, Git, and other commands |
 | `edit` | Precisely replace existing text |
 | `write` | Create new files or rewrite entire files |
-| `apply_patch` | Structurally add, update, delete, or move multiple files |
 | `lsp_goto_definition` | Look up symbol definitions |
 | `lsp_workspace_symbols` | Search workspace symbols |
 | `lsp_java_decompile` | Decompile external Java classes in the JDTLS workspace |
@@ -31,7 +30,7 @@ More and more people inject large numbers of rules and tools into agents, believ
 | `get_goal` | Read Goal status |
 | `update_goal` | Mark a Goal as complete or blocked |
 
-When no file modification tool is specified in an Agent's `tools`, models whose ID contains `gpt-` but not `gpt-4` or `oss` use `apply_patch`, and other models use `edit` and `write`; explicit configuration does not expand permissions: when `apply_patch` is configured alongside `edit` / `write`, only `apply_patch` is enabled, and models whose ID contains `gpt-` but not `gpt-4` or `oss` also use `apply_patch` when both `edit` and `write` are configured.
+All models use `edit` and `write` as the default file modification tools. Explicitly configured Agent tools are used as declared; use Bash to delete or move files.
 
 See the [tool documentation](docs/tools/README.md) for parameters and usage boundaries.
 

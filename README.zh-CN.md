@@ -22,7 +22,6 @@
 | `bash` | 运行构建、测试、Git 和其他命令 |
 | `edit` | 精确替换已有文本 |
 | `write` | 创建新文件或重写整个文件 |
-| `apply_patch` | 结构化新增、更新、删除或移动多个文件 |
 | `lsp_goto_definition` | 查询符号定义 |
 | `lsp_workspace_symbols` | 搜索工作区符号 |
 | `lsp_java_decompile` | 反编译 JDTLS 工作区中的外部 Java class |
@@ -31,7 +30,7 @@
 | `get_goal` | 读取 Goal 状态 |
 | `update_goal` | 将 Goal 标记为完成或阻塞 |
 
-未在 Agent `tools` 中指定文件修改工具时，模型 ID 包含 `gpt-` 且不包含 `gpt-4` 或 `oss` 的模型使用 `apply_patch`，其他模型使用 `edit` 和 `write`；显式配置不扩大权限，同时配置 `apply_patch` 与 `edit` / `write` 时只启用 `apply_patch`，模型 ID 包含 `gpt-` 且不包含 `gpt-4` 或 `oss` 的模型同时配置 `edit` 和 `write` 时也使用 `apply_patch`。
+所有模型默认使用 `edit` 和 `write` 作为文件修改工具。显式配置的 Agent tools 会按声明生效；删除或移动文件请使用 Bash。
 
 参数和使用边界见[工具文档](docs/tools/README.zh-CN.md)。
 

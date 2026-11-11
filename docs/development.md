@@ -132,7 +132,7 @@ Text tools share the following constraints:
 - Only regular files are processed.
 - Binary files must be explicitly rejected.
 - [`src/text-codec.ts`](../src/text-codec.ts) detects BOM, UTF-16, and legacy encodings.
-- `edit` / `apply_patch` preserve line endings via [`src/line-endings.ts`](../src/line-endings.ts).
+- `edit` preserves line endings via [`src/line-endings.ts`](../src/line-endings.ts).
 - Writing back legacy encodings must be lossless; fail rather than substituting characters when a value cannot be represented.
 - Read-modify-write cycles for the same path should go through the file change queue.
 

@@ -198,7 +198,7 @@ Context compression is disabled by default and is not included in [`pi-base.json
 
 Two independent mechanisms are supported:
 
-- `anchorHygiene: true`: after a file is subsequently modified successfully, replaces earlier successful `read`, `edit`, and `apply_patch` results for the same path.
+- `anchorHygiene: true`: after a file is subsequently modified successfully, replaces earlier successful `read` and `edit` results for the same path.
 - A non-empty `tools`: applies age compression to the listed tools. `retainedUserMessageRounds` and `retainedAssistantTurns` together define the age threshold at which results enter compression scope, with default values of `2` and `4` respectively.
 
 Tool errors, user messages, assistant messages, and tool call arguments are never replaced. Once enabled, the model must re-read files or re-run tools when it needs details from old output; re-running commands with side effects such as Bash may be unsafe. Therefore, enable it only in long sessions with heavy tool output that have already shown context pressure.
@@ -209,7 +209,7 @@ Optional configuration:
 {
   "contextCompression": {
     "anchorHygiene": true,
-    "tools": ["read", "grep", "find", "bash", "edit", "write", "apply_patch"],
+    "tools": ["read", "grep", "find", "bash", "edit", "write"],
     "retainedUserMessageRounds": 2,
     "retainedAssistantTurns": 4,
     "enabledProviders": ["openai"]

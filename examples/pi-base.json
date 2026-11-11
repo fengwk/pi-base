@@ -6,7 +6,6 @@
     "find": "allow",
     "edit": "ask",
     "write": "ask",
-    "apply_patch": "ask",
     "bash": {
       "*": "ask",
       "git status*": "allow",

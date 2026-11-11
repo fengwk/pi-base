@@ -35,7 +35,6 @@ Pi
    - `bash`
    - `edit`
    - `write`
-   - `apply_patch`
    - 三个 LSP 工具
 5. 注册 Markdown Agent 和 `--agent` flag。
 6. 注册 Goal、Notify 和 Subagent（MCP 工具由 Pi 内置 MCP 扩展通过 `~/.pi/agent/mcp.json` 原生提供）。
@@ -178,17 +177,15 @@ schema
 - `~/`、`$HOME/`、`${HOME}/`。
 - `filePath` 到 `path` 的兼容别名映射。
 
-`edit`、`write` 和 `apply_patch` 使用文件变更队列串行化同一目标的读改写过程。已有目标统一按文本解码，并拒绝二进制文件。`edit` 和 `apply_patch` 的 Update/Move 保留已有 encoding、BOM 和行尾；`write` 覆盖已有文件时保留 encoding 和 BOM，换行以传入的 `content` 为准。
+`edit` 和 `write` 使用文件变更队列串行化同一目标的读改写过程。已有目标统一按文本解码，并拒绝二进制文件。`edit` 保留已有 encoding、BOM 和行尾；`write` 覆盖已有文件时保留 encoding 和 BOM，换行以传入的 `content` 为准。删除或移动文件请使用 Bash。
 
 `permission` 是词法防误操作机制，不是文件系统沙箱。需要安全隔离时必须使用容器、受限账户或操作系统级边界。
 
 ## 动态工具
 
-### 模型驱动的文件工具投影
+### 默认文件修改工具
 
-`edit`、`write` 和 `apply_patch` 都会注册。未在 Agent `tools` 中指定文件修改工具时，模型 ID 包含 `gpt-` 且不包含 `gpt-4` 或 `oss` 的模型使用 `apply_patch`，其他模型使用 `edit` 和 `write`。
-
-显式配置不扩大权限。同时配置 `apply_patch` 与 `edit` / `write` 时只启用 `apply_patch`；模型 ID 包含 `gpt-` 且不包含 `gpt-4` 或 `oss` 的模型同时配置 `edit` 和 `write` 时也使用 `apply_patch`；只配置 `edit` 或 `write` 时保留该单项工具。
+所有模型默认使用 `edit` 和 `write` 作为文件修改工具。显式配置的 Agent tools 会按声明生效。删除或移动文件请使用 Bash。
 
 ### MCP
 
@@ -230,4 +227,4 @@ Pi 1.2.0 中，用户提示和空闲时自定义消息的 `triggerTurn` 启动�
 
 ## 第三方边界
 
-[`src/internal/pi-coding-agent-utils.ts`](../src/internal/pi-coding-agent-utils.ts) 包含从 `pi-coding-agent` 派生的内部 helper；`apply_patch` grammar 派生自 OpenAI Codex。来源和许可证见 [`THIRD_PARTY_NOTICES`](../THIRD_PARTY_NOTICES)。
+[`src/internal/pi-coding-agent-utils.ts`](../src/internal/pi-coding-agent-utils.ts) 包含从 `pi-coding-agent` 派生的内部 helper。来源和许可证见 [`THIRD_PARTY_NOTICES`](../THIRD_PARTY_NOTICES)。
