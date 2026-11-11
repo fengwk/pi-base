@@ -1,3 +1,4 @@
+import iconv from "iconv-lite";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
@@ -7,7 +8,7 @@ import { ensureTool } from "./internal/pi-coding-agent-utils.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
 import { formatOptionalArgs, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
-import { decodeTextFile } from "./text-codec.js";
+import { type DecodedTextFile, decodeTextFile } from "./text-codec.js";
 import { createTimeoutSignal, parsePositiveNumber, parseTimeoutSeconds } from "./timeout.js";
 
 const DEFAULT_LIMIT = 100;
@@ -112,11 +113,44 @@ function parseRipgrepSubmatches(value: unknown): RipgrepSubmatch[] | undefined {
   for (const item of value) {
     const start = (item as { start?: unknown } | null)?.start;
     const end = (item as { end?: unknown } | null)?.end;
-    if (typeof start === "number" && typeof end === "number" && start >= 0 && end >= start) {
+    if (typeof start === "number" && typeof end === "number" && Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start) {
       submatches.push({ start, end });
     }
   }
   return submatches.length > 0 ? submatches : undefined;
+}
+
+// Raw-byte events may use a legacy encoding. rg's submatches are ordered and
+// non-overlapping, so one decoder translates their offsets in a single pass.
+// Account for leading BOM characters removed by the shared text codec.
+function mapSubmatchesToDecodedOffsets(raw: Buffer, decoded: DecodedTextFile, submatches: RipgrepSubmatch[]): RipgrepSubmatch[] {
+  const whole = iconv.decode(raw, decoded.encoding, { stripBOM: false });
+  let utf8Offset = Buffer.byteLength(decoded.text, "utf8") - Buffer.byteLength(whole, "utf8");
+  let rawOffset = 0;
+  const decoder = iconv.getDecoder(decoded.encoding, { stripBOM: false });
+  const mapOffset = (offset: number): number => {
+    utf8Offset += Buffer.byteLength(decoder.write(raw.subarray(rawOffset, offset)), "utf8");
+    rawOffset = offset;
+    return Math.max(0, utf8Offset);
+  };
+  return submatches.map(({ start, end }) => ({ start: mapOffset(start), end: mapOffset(end) }));
+}
+
+// Decode a ripgrep "lines" block together with submatch offsets that are valid
+// for the decoded text. The `text` field is already decoded by ripgrep, so its
+// offsets need no adjustment.
+function decodeRipgrepLines(value: unknown, submatches: RipgrepSubmatch[] | undefined): { text?: string; submatches?: RipgrepSubmatch[] } {
+  if (!value || typeof value !== "object") return {};
+  const data = value as { text?: unknown; bytes?: unknown };
+  if (typeof data.text === "string") return { text: data.text, submatches };
+  if (typeof data.bytes !== "string") return {};
+  const raw = Buffer.from(data.bytes, "base64");
+  const decoded = decodeTextFile(raw);
+  if (!decoded) return {};
+  return {
+    text: decoded.text,
+    submatches: submatches && mapSubmatchesToDecodedOffsets(raw, decoded, submatches),
+  };
 }
 
 function parseRipgrepMatchEvent(line: string): RipgrepMatchEvent | null {
@@ -127,11 +161,13 @@ function parseRipgrepMatchEvent(line: string): RipgrepMatchEvent | null {
     return null;
   }
   if (event.type !== "match") return null;
+  const submatches = parseRipgrepSubmatches(event.data?.submatches);
+  const lines = decodeRipgrepLines(event.data?.lines, submatches);
   return {
     filePath: decodeRipgrepData(event.data?.path),
     lineNumber: typeof event.data?.line_number === "number" ? event.data.line_number : undefined,
-    lineText: decodeRipgrepData(event.data?.lines),
-    submatches: parseRipgrepSubmatches(event.data?.submatches),
+    lineText: lines.text,
+    submatches: lines.submatches,
   };
 }
 

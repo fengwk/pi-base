@@ -87,7 +87,7 @@ src/example.ts:42: matching line
 
 Directory searches use paths relative to the search root; single-file searches use the basename.
 
-The base64 `bytes` field in ripgrep JSON is text-decoded. If an event lacks line text, plain mode re-reads the file by line number.
+The base64 `bytes` field in ripgrep JSON is text-decoded. Its submatch offsets are translated using the same detected encoding, including any removed BOM, before excerpting. The `text` field already uses UTF-8 offsets. If an event lacks line text, plain mode re-reads the file by line number.
 
 A line longer than the display budget is shown as an excerpt centered on the first ripgrep submatch of that line: the submatch's UTF-8 byte offsets are mapped back onto the reported text, so a match far into a long line stays visible with context on both sides. Excerpts hold at most 500 code points and mark trimmed content with `…`; they are cut on code-point boundaries, so multi-byte characters and surrogate pairs are never split. Multiline events excerpt each displayed line against the part of the match that covers it. If an event carries no submatch offsets, the line-start prefix fallback applies.
 

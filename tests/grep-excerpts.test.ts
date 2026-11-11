@@ -1,3 +1,4 @@
+import iconv from "iconv-lite";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -59,7 +60,7 @@ describe("grep match excerpts", () => {
   });
 
   it("keeps surrogate pairs intact at excerpt boundaries", async () => {
-    // Intent: 600 emoji put the match at byte 2400 and UTF-16 unit 600 with
+    // Intent: 600 emoji put the match at byte 2400 and UTF-16 unit 1200 with
     // surrogate pairs around the window edges; the excerpt must be cut on
     // code-point boundaries, never slicing a pair in half.
     const root = await createTempWorkspace();
@@ -118,6 +119,28 @@ describe("grep match excerpts", () => {
     const line = matchLine(getText(result), "NEEDLE");
     expect(line).toMatch(/x{200}NEEDLE/);
     expect(line.length).toBeLessThan(520);
+  });
+
+  it("locates excerpts through GBK-encoded lines.bytes blocks", async () => {
+    // Intent: non-UTF-8 blocks arrive as base64 `bytes`, and rg reports
+    // submatch offsets in raw GBK bytes (2 per character here). Those offsets
+    // must be translated to offsets of the decoded text before excerpting;
+    // otherwise the window centers on the wrong character and the ASCII match
+    // behind a long Chinese prefix stays hidden, as it did before this fix.
+    const root = await createTempWorkspace();
+    const content = `${"中".repeat(800)}NEEDLE${"y".repeat(600)}\n`;
+    await writeFile(join(root, "long.txt"), iconv.encode(content, "gbk"));
+
+    const result = await executeGrep("grep-excerpt-gbk", {
+      workdir: ".",
+      path: "long.txt",
+      pattern: "NEEDLE",
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const line = matchLine(getText(result), "NEEDLE");
+    expect(line).toMatch(/中{200}NEEDLE/);
+    expect(line).not.toContain("\uFFFD");
   });
 
   it("shows per-line excerpts for multiline matches spanning long lines", async () => {
