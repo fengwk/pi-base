@@ -89,9 +89,11 @@ Directory searches use paths relative to the search root; single-file searches u
 
 The base64 `bytes` field in ripgrep JSON is text-decoded. If an event lacks line text, plain mode re-reads the file by line number.
 
+A line longer than the display budget is shown as an excerpt centered on the first ripgrep submatch of that line: the submatch's UTF-8 byte offsets are mapped back onto the reported text, so a match far into a long line stays visible with context on both sides. Excerpts hold at most 500 code points and mark trimmed content with `…`; they are cut on code-point boundaries, so multi-byte characters and surrogate pairs are never split. Multiline events excerpt each displayed line against the part of the match that covers it. If an event carries no submatch offsets, the line-start prefix fallback applies.
+
 ## Limit and truncation
 
-- A single displayed line is at most 500 characters.
+- A single displayed line is at most 500 code points, plus an `…` marker where content was cut.
 - `limit` counts match events. Reaching the limit alone is not truncation: the notice and `details.matchLimitReached` appear only when ripgrep reports at least one further match event, and that lookahead match is never displayed.
 - In multiline mode, `limit` counts match events; one event may display multiple lines.
 - Long-line truncation sets `details.linesTruncated`.
@@ -114,6 +116,7 @@ The child process tree is terminated via [`src/process-termination.ts`](../../sr
 ## Related tests
 
 - [`tests/grep-native.test.ts`](../../tests/grep-native.test.ts)
+- [`tests/grep-excerpts.test.ts`](../../tests/grep-excerpts.test.ts)
 - [`tests/grep-multiline-behavior.test.ts`](../../tests/grep-multiline-behavior.test.ts)
 - [`tests/grep-multiline-errors.test.ts`](../../tests/grep-multiline-errors.test.ts)
 - [`tests/search-tools.test.ts`](../../tests/search-tools.test.ts)

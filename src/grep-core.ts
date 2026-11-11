@@ -14,6 +14,8 @@ const DEFAULT_LIMIT = 100;
 const DEFAULT_TIMEOUT_SECONDS = 15;
 const BINARY_PROBE_MAX_BYTES = 1024 * 1024;
 const BINARY_PROBE_CHUNK_BYTES = 64 * 1024;
+// Displayed budget per line, counted in Unicode code points so surrogate
+// pairs are never split when excerpts are cut.
 const GREP_MAX_LINE_LENGTH = 500;
 export type GrepFactory = (cwd: string) => { execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any> };
 
@@ -83,10 +85,17 @@ function normalizeIncludeGlob(include: string): string {
   return include.replace(/^(!?)(?:\.\/)+/, "$1");
 }
 
+interface RipgrepSubmatch {
+  // UTF-8 byte offsets relative to the start of the raw "lines" block.
+  start: number;
+  end: number;
+}
+
 interface RipgrepMatchEvent {
   filePath?: string;
   lineNumber?: number;
   lineText?: string;
+  submatches?: RipgrepSubmatch[];
 }
 
 function decodeRipgrepData(value: unknown): string | undefined {
@@ -95,6 +104,19 @@ function decodeRipgrepData(value: unknown): string | undefined {
   if (typeof data.text === "string") return data.text;
   if (typeof data.bytes !== "string") return undefined;
   return decodeTextFile(Buffer.from(data.bytes, "base64"))?.text;
+}
+
+function parseRipgrepSubmatches(value: unknown): RipgrepSubmatch[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const submatches: RipgrepSubmatch[] = [];
+  for (const item of value) {
+    const start = (item as { start?: unknown } | null)?.start;
+    const end = (item as { end?: unknown } | null)?.end;
+    if (typeof start === "number" && typeof end === "number" && start >= 0 && end >= start) {
+      submatches.push({ start, end });
+    }
+  }
+  return submatches.length > 0 ? submatches : undefined;
 }
 
 function parseRipgrepMatchEvent(line: string): RipgrepMatchEvent | null {
@@ -109,6 +131,7 @@ function parseRipgrepMatchEvent(line: string): RipgrepMatchEvent | null {
     filePath: decodeRipgrepData(event.data?.path),
     lineNumber: typeof event.data?.line_number === "number" ? event.data.line_number : undefined,
     lineText: decodeRipgrepData(event.data?.lines),
+    submatches: parseRipgrepSubmatches(event.data?.submatches),
   };
 }
 
@@ -141,7 +164,7 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     let aborted = false;
     let killedDueToLimit = false;
     let settled = false;
-    const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
+    const matches: Array<{ filePath: string; lineNumber: number; lineText?: string; submatches?: RipgrepSubmatch[] }> = [];
     const outputLines: string[] = [];
     const fileCache = new Map<string, Promise<string[]>>();
 
@@ -210,6 +233,7 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
         filePath: match.filePath,
         lineNumber: match.lineNumber,
         lineText: match.lineText,
+        submatches: match.submatches,
       });
     });
     child.on("error", (error) => {
@@ -234,10 +258,11 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
       for (const match of matches) {
         if (match.lineText !== undefined) {
           const relativePath = formatPath(match.filePath);
-          const sanitized = match.lineText.replace(/\r\n/g, "\n").replace(/\r/g, "").replace(/\n$/, "");
-          const { text, wasTruncated } = truncateGrepLine(sanitized);
-          if (wasTruncated) linesTruncated = true;
-          outputLines.push(`${relativePath}:${match.lineNumber}: ${text}`);
+          const formatted = formatMatchBlockLines(match.lineText, match.submatches);
+          if (formatted.linesTruncated) linesTruncated = true;
+          formatted.texts.forEach((text, index) => {
+            outputLines.push(`${relativePath}:${match.lineNumber + index}: ${text}`);
+          });
         } else {
           outputLines.push(await formatSingleLineFromFile(match.filePath, match.lineNumber));
         }
@@ -265,9 +290,153 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
 }
 
 
+// Prefix-truncate to GREP_MAX_LINE_LENGTH code points without splitting a
+// surrogate pair; applied when no submatch position is available.
 function truncateGrepLine(text: string): { text: string; wasTruncated: boolean } {
-  if (text.length <= GREP_MAX_LINE_LENGTH) return { text, wasTruncated: false };
-  return { text: `${text.slice(0, GREP_MAX_LINE_LENGTH)}…`, wasTruncated: true };
+  const { unit } = walkForwardCodePoints(text, 0, GREP_MAX_LINE_LENGTH);
+  if (unit >= text.length) return { text, wasTruncated: false };
+  return { text: `${text.slice(0, unit)}…`, wasTruncated: true };
+}
+
+// Walk up to maxCodePoints code points forward from a code-point boundary,
+// stopping at `to`. Counting on the fly avoids line-sized code-point arrays.
+function walkForwardCodePoints(text: string, from: number, maxCodePoints: number, to = text.length): { unit: number; count: number } {
+  let unit = from;
+  let count = 0;
+  while (unit < to && count < maxCodePoints) {
+    const codePoint = text.codePointAt(unit)!;
+    unit += codePoint >= 0x10000 ? 2 : 1;
+    count += 1;
+  }
+  return { unit, count };
+}
+
+// Walk backward over up to maxCodePoints code points from a code-point
+// boundary. A low surrogate preceded by a high surrogate is one code point,
+// so the walk steps over both halves at once.
+function walkBackwardCodePoints(text: string, from: number, maxCodePoints: number): { unit: number; count: number } {
+  let unit = from;
+  let count = 0;
+  while (unit > 0 && count < maxCodePoints) {
+    const low = text.charCodeAt(unit - 1);
+    const high = unit >= 2 ? text.charCodeAt(unit - 2) : -1;
+    unit -= low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff ? 2 : 1;
+    count += 1;
+  }
+  return { unit, count };
+}
+
+// Convert a UTF-8 byte offset inside `text` into a UTF-16 unit index. rg
+// reports submatch offsets on code-point boundaries; on any inconsistency the
+// walk stops early instead of landing mid-code-point.
+function unitAtByteOffset(text: string, byteOffset: number): number {
+  let bytes = 0;
+  let units = 0;
+  while (units < text.length && bytes < byteOffset) {
+    const codePoint = text.codePointAt(units)!;
+    const width = codePoint >= 0x10000 ? 4 : codePoint >= 0x800 ? 3 : codePoint >= 0x80 ? 2 : 1;
+    if (bytes + width > byteOffset) break;
+    bytes += width;
+    units += codePoint >= 0x10000 ? 2 : 1;
+  }
+  return units;
+}
+
+interface RawBlockLine {
+  text: string;
+  startByte: number;
+  endByte: number;
+}
+
+// Split a raw ripgrep "lines" block into per-line records that keep each line's
+// UTF-8 byte range within the block, so submatch byte offsets can be matched
+// per line. Carriage returns stay in the text here because rg offsets include
+// them; they are stripped from the rendered excerpt later.
+function splitRawBlockLines(block: string): RawBlockLine[] {
+  const rawLines = block.split("\n");
+  // A trailing LF only terminates the last line; it does not start a new one.
+  if (rawLines.length > 1 && rawLines[rawLines.length - 1] === "") rawLines.pop();
+  const lines: RawBlockLine[] = [];
+  let startByte = 0;
+  for (const text of rawLines) {
+    const endByte = startByte + Buffer.byteLength(text, "utf8");
+    lines.push({ text, startByte, endByte });
+    startByte = endByte + 1; // + 1 for the LF that ended this line
+  }
+  return lines;
+}
+
+// Build a bounded excerpt around [matchStart, matchEnd) (UTF-16 indices on
+// code-point boundaries). The excerpt content holds at most
+// GREP_MAX_LINE_LENGTH code points, centered on the match when it fits; a
+// match longer than the budget renders its leading part, which keeps the
+// excerpt inside the matched region. Cut-off content is marked with "…".
+function buildMatchExcerpt(text: string, matchStart: number, matchEnd: number): { text: string; wasTruncated: boolean } {
+  // Probes are capped at budget + 1: a saturated probe proves the line exceeds
+  // the budget, while unsaturated probes keep the fit check exact.
+  const probeCap = GREP_MAX_LINE_LENGTH + 1;
+  const matchCount = walkForwardCodePoints(text, matchStart, probeCap, matchEnd).count;
+  const before = walkBackwardCodePoints(text, matchStart, probeCap);
+  const after = walkForwardCodePoints(text, matchEnd, probeCap);
+  if (before.count + matchCount + after.count <= GREP_MAX_LINE_LENGTH) {
+    return { text, wasTruncated: false };
+  }
+  let startUnit: number;
+  let endUnit: number;
+  if (matchCount >= GREP_MAX_LINE_LENGTH) {
+    startUnit = matchStart;
+    endUnit = walkForwardCodePoints(text, matchStart, GREP_MAX_LINE_LENGTH).unit;
+  } else {
+    let beforeTake = Math.floor((GREP_MAX_LINE_LENGTH - matchCount) / 2);
+    let afterTake = GREP_MAX_LINE_LENGTH - matchCount - beforeTake;
+    if (beforeTake > before.count) {
+      afterTake += beforeTake - before.count;
+      beforeTake = before.count;
+    }
+    if (afterTake > after.count) {
+      beforeTake = Math.min(beforeTake + afterTake - after.count, before.count);
+      afterTake = after.count;
+    }
+    startUnit = walkBackwardCodePoints(text, matchStart, beforeTake).unit;
+    endUnit = walkForwardCodePoints(text, matchEnd, afterTake).unit;
+  }
+  let excerpt = text.slice(startUnit, endUnit);
+  if (startUnit > 0) excerpt = `…${excerpt}`;
+  if (endUnit < text.length) excerpt = `${excerpt}…`;
+  return { text: excerpt, wasTruncated: true };
+}
+
+// A zero-width match is a point, not a range: it belongs to a line when that
+// point lies on the line, including its start and end (e.g. "^" and "$").
+function submatchIntersectsLine(submatch: RipgrepSubmatch, line: RawBlockLine): boolean {
+  if (submatch.start === submatch.end) {
+    return submatch.start >= line.startByte && submatch.start <= line.endByte;
+  }
+  return submatch.end > line.startByte && submatch.start < line.endByte;
+}
+
+// Render each raw line of a ripgrep "lines" block. When rg reports submatch
+// byte offsets, each line shows a bounded excerpt around the first matching
+// range on that line, so far-tail matches stay visible; without offsets the
+// line-start prefix fallback applies.
+function formatMatchBlockLines(block: string, submatches: RipgrepSubmatch[] | undefined): { texts: string[]; linesTruncated: boolean } {
+  let linesTruncated = false;
+  const texts = splitRawBlockLines(block).map((rawLine) => {
+    const hit = submatches?.find((submatch) => submatchIntersectsLine(submatch, rawLine));
+    let excerpt: { text: string; wasTruncated: boolean };
+    if (hit) {
+      const from = Math.max(hit.start, rawLine.startByte) - rawLine.startByte;
+      const to = Math.min(hit.end, rawLine.endByte) - rawLine.startByte;
+      excerpt = buildMatchExcerpt(rawLine.text, unitAtByteOffset(rawLine.text, from), unitAtByteOffset(rawLine.text, to));
+    } else {
+      excerpt = truncateGrepLine(rawLine.text);
+    }
+    if (excerpt.wasTruncated) linesTruncated = true;
+    // Carriage returns are stripped only after excerpting so byte offsets stay
+    // aligned with the raw rg block.
+    return excerpt.text.replace(/\r/g, "");
+  });
+  return { texts, linesTruncated };
 }
 
 function formatGrepMatchPath(filePath: string, absolutePath: string, searchPathIsDirectory: boolean): string {
@@ -287,18 +456,12 @@ function resolveRgEventPath(filePath: string, options: MultilineGrepOptions): st
   return path.resolve(base, filePath);
 }
 
-function formatMultilineMatchLines(rawFilePath: string, lineNumber: number, lineText: string, options: MultilineGrepOptions): { lines: string[]; linesTruncated: boolean } {
+function formatMultilineMatchLines(rawFilePath: string, lineNumber: number, lineText: string, submatches: RipgrepSubmatch[] | undefined, options: MultilineGrepOptions): { lines: string[]; linesTruncated: boolean } {
   const filePath = resolveRgEventPath(rawFilePath, options);
   const relativePath = formatGrepMatchPath(filePath, options.absolutePath, options.searchPathIsDirectory);
-  const normalized = lineText.replace(/\r\n/g, "\n").replace(/\r/g, "").replace(/\n$/, "");
-  const matchedLines = normalized.split("\n");
-  let linesTruncated = false;
-  const lines = matchedLines.map((line, index) => {
-    const { text, wasTruncated } = truncateGrepLine(line);
-    if (wasTruncated) linesTruncated = true;
-    return `${relativePath}:${lineNumber + index}: ${text}`;
-  });
-  return { lines, linesTruncated };
+  const formatted = formatMatchBlockLines(lineText, submatches);
+  const lines = formatted.texts.map((text, index) => `${relativePath}:${lineNumber + index}: ${text}`);
+  return { lines, linesTruncated: formatted.linesTruncated };
 }
 
 async function executeMultilineGrep(options: MultilineGrepOptions, signal?: AbortSignal): Promise<any> {
@@ -372,7 +535,7 @@ async function executeMultilineGrep(options: MultilineGrepOptions, signal?: Abor
 
       matchCount++;
       if (match.filePath && match.lineNumber !== undefined && match.lineText !== undefined) {
-        const formatted = formatMultilineMatchLines(match.filePath, match.lineNumber, match.lineText, options);
+        const formatted = formatMultilineMatchLines(match.filePath, match.lineNumber, match.lineText, match.submatches, options);
         outputLines.push(...formatted.lines);
         if (formatted.linesTruncated) linesTruncated = true;
       }
