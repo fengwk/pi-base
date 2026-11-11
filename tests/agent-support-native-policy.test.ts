@@ -205,7 +205,7 @@ describe("native agent tool policy", () => {
     const { registry, register, call, start } = harness();
     register("read");
     register("bash");
-    for (const name of ["edit", "write", "apply_patch"]) register(name);
+    for (const name of ["edit", "write"]) register(name);
     register("server_code", "codemode");
     await registry.runCommand("agent", "reader");
     expect(await call("bash", true)).toMatchObject({ block: true });
@@ -220,7 +220,6 @@ describe("native agent tool policy", () => {
     expect(await call("bash", true)).toBeUndefined();
     expect(await call("server_code", true)).toBeUndefined();
     expect(await call("edit", true)).toBeUndefined();
-    expect(await call("apply_patch")).toBeUndefined();
     expect(await call("unknown", true)).toMatchObject({ block: true });
   });
 
@@ -259,22 +258,21 @@ describe("native agent tool policy", () => {
     expect(await call("task", nested)).toMatchObject({ block: true });
   });
 
-  it("keeps model routing authoritative for execution and blocks nested model-only tools", async () => {
-    // Projected edit/write capability must not re-enable the obsolete representation at execution.
+  it("keeps explicit file tools across model changes and blocks nested model-only tools", async () => {
+    // Intent: an explicit allowlist preserves its file tools across model changes and
+    // the execution guard continues to block undeclared tools.
     await writeAgent("editor", "tools: [edit, write, model_only]");
     const { registry, register, call } = harness();
-    for (const name of ["edit", "write", "apply_patch"]) register(name);
+    for (const name of ["edit", "write"]) register(name);
     register("model_only", "model-only");
     await registry.runCommand("agent", "editor");
-    expect(registry.getActiveTools()).toEqual(["apply_patch", "model_only"]);
-    expect(await call("apply_patch", true)).toBeUndefined();
-    expect(await call("edit", true)).toMatchObject({ block: true });
-    expect(await call("write")).toMatchObject({ block: true });
+    expect(registry.getActiveTools()).toEqual(["edit", "write", "model_only"]);
+    expect(await call("edit", true)).toBeUndefined();
+    expect(await call("write", true)).toBeUndefined();
     expect(await call("model_only")).toBeUndefined();
     expect(await call("model_only", true)).toMatchObject({ block: true });
     await registry.emit("model_select", { model: { provider: "other", id: "other-model" } });
     expect(registry.getActiveTools()).toEqual(["edit", "write", "model_only"]);
     expect(await call("edit", true)).toBeUndefined();
-    expect(await call("apply_patch", true)).toMatchObject({ block: true });
   });
 });

@@ -49,7 +49,7 @@ describe("pi-base config", () => {
       expect(loaded.settings.compactionThinkingLevel).toBeUndefined();
       expect(loaded.settings.contextCompression).toBeUndefined();
       expect(loaded.settings.yolo).toBeUndefined();
-      expect(loaded.settings.permission?.apply_patch).toEqual([{ pattern: "*", action: "ask" }]);
+      expect(loaded.settings.permission?.write).toEqual([{ pattern: "*", action: "ask" }]);
       expect(loaded.settings.subagent?.maxTotalConcurrency).toBe(8);
     });
   });

@@ -149,18 +149,21 @@ describe("context compression", () => {
     piBaseExtension(registry.pi as any);
     const readArgs = { workdir: "pkg\\nested", path: "example.txt" };
     const readResult = await registry.getTool("read").execute("read-separator", readArgs, undefined, undefined, { cwd: root });
-    const patchArgs = {
-      patchText: "*** Begin Patch\n*** Workdir: pkg/nested\n*** Update File: .\\example.txt\n@@\n-alpha\n+alpha v1\n*** End Patch",
+    const editArgs = {
+      workdir: "pkg/nested",
+      path: ".\\example.txt",
+      old_string: "alpha",
+      new_string: "alpha v1",
     };
-    const patchResult = await registry.getTool("apply_patch").execute("patch-separator", patchArgs, undefined, undefined, { cwd: root });
+    const editResult = await registry.getTool("edit").execute("edit-separator", editArgs, undefined, undefined, { cwd: root });
     const messages = [
       ...toolExchange("read", "read-separator", readArgs, readResult),
-      ...toolExchange("apply_patch", "patch-separator", patchArgs, patchResult),
+      ...toolExchange("edit", "edit-separator", editArgs, editResult),
     ];
     const transformed = await registry.emit("context", { messages }, { cwd: root });
 
     expect(readResult.isError).not.toBe(true);
-    expect(patchResult.isError).not.toBe(true);
+    expect(editResult.isError).not.toBe(true);
     expect(getText(transformed.messages[1])).toBe(GENERIC_TOOL_OUTPUT_PLACEHOLDER);
     expect(await readFile(join(root, "pkg", "nested", "example.txt"), "utf8")).toBe("alpha v1\nbeta\n");
   });

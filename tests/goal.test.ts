@@ -488,7 +488,7 @@ describe("goal support", () => {
     const latestControl = { ...currentControl, timestamp: 2 };
     const aborted = {
       ...assistantMessage("aborted"),
-      content: [{ type: "toolCall", id: "call", name: "apply_patch", arguments: { patchText: "x".repeat(100_000) } }],
+      content: [{ type: "toolCall", id: "call", name: "write", arguments: { content: "x".repeat(100_000) } }],
     };
     const normal = assistantMessage("stop");
     const messages = [

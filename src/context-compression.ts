@@ -2,9 +2,8 @@ import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative } from "node:path";
 import { normalizeSlashes, resolveToCwd, stripAtPrefix } from "./path-utils.js";
 import type { ContextCompressionConfig } from "./config.js";
-import { getApplyPatchIntents, parseApplyPatch } from "./apply-patch-core.js";
 
-type AnchorHygieneToolName = "read" | "edit" | "apply_patch";
+type AnchorHygieneToolName = "read" | "edit";
 
 type CompressionReason = "file_changed_later" | "older_tool_output";
 
@@ -57,7 +56,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isAnchorHygieneToolName(value: unknown): value is AnchorHygieneToolName {
-  return value === "read" || value === "edit" || value === "apply_patch";
+  return value === "read" || value === "edit";
 }
 
 
@@ -87,92 +86,6 @@ function resolveInputPaths(input: unknown, cwd: string): string[] {
     return [canonicalizePath(resolveToCwd(stripAtPrefix(input.path), baseCwd))];
   }
   return [];
-}
-
-function resolveApplyPatchInputPaths(input: unknown, cwd: string): string[] {
-  if (!isRecord(input) || typeof input.patchText !== "string") return [];
-  try {
-    const patch = parseApplyPatch(input.patchText);
-    const baseCwd = resolveInputBaseCwd(patch.workdir, cwd);
-    const paths: string[] = [];
-    for (const intent of getApplyPatchIntents(patch)) {
-      paths.push(canonicalizePath(resolveToCwd(stripAtPrefix(intent.path), baseCwd)));
-      if (intent.moveTo !== undefined) {
-        paths.push(canonicalizePath(resolveToCwd(stripAtPrefix(intent.moveTo), baseCwd)));
-      }
-    }
-    return paths;
-  } catch {
-    return [];
-  }
-}
-
-function resolveAppliedDetailPaths(details: unknown, cwd: string): string[] {
-  if (!isRecord(details) || !Array.isArray(details.files)) return [];
-  const paths: string[] = [];
-  for (const file of details.files) {
-    if (!isRecord(file)) continue;
-    if (typeof file.absolutePath === "string" && file.absolutePath.trim().length > 0) {
-      paths.push(canonicalizePath(resolvePromptPath(file.absolutePath, cwd)));
-    }
-    if (typeof file.absoluteMoveToPath === "string" && file.absoluteMoveToPath.trim().length > 0) {
-      paths.push(canonicalizePath(resolvePromptPath(file.absoluteMoveToPath, cwd)));
-    }
-  }
-  return paths;
-}
-
-function resolveUnknownFailedDetailPaths(details: unknown, input: unknown, cwd: string): string[] {
-  if (
-    !isRecord(details)
-    || details.failedPathState !== "unknown"
-    || typeof details.failedPath !== "string"
-    || details.failedPath.trim().length === 0
-  ) return [];
-  let baseCwd = cwd;
-  if (isRecord(input) && typeof input.patchText === "string") {
-    try {
-      baseCwd = resolveInputBaseCwd(parseApplyPatch(input.patchText).workdir, cwd);
-    } catch {
-      baseCwd = cwd;
-    }
-  } else if (isRecord(input)) {
-    baseCwd = resolveInputBaseCwd(input.workdir, cwd);
-  }
-  const legacyParts = details.failedPath.split(" -> ", 2);
-  const failedPath = legacyParts[0]!;
-  const failedMoveTo = typeof details.failedMoveTo === "string" && details.failedMoveTo.trim().length > 0
-    ? details.failedMoveTo
-    : legacyParts[1];
-  const failedAbsolutePath = typeof details.failedAbsolutePath === "string" && details.failedAbsolutePath.trim().length > 0
-    ? details.failedAbsolutePath
-    : undefined;
-  const failedAbsoluteMoveToPath = typeof details.failedAbsoluteMoveToPath === "string" && details.failedAbsoluteMoveToPath.trim().length > 0
-    ? details.failedAbsoluteMoveToPath
-    : undefined;
-  return [...new Set([
-    failedAbsolutePath === undefined
-      ? canonicalizePath(resolveToCwd(failedPath, baseCwd))
-      : resolvePromptPath(failedAbsolutePath, cwd),
-    ...(failedMoveTo === undefined && failedAbsoluteMoveToPath === undefined
-      ? []
-      : [failedAbsoluteMoveToPath === undefined
-        ? canonicalizePath(resolveToCwd(failedMoveTo!, baseCwd))
-        : resolvePromptPath(failedAbsoluteMoveToPath, cwd)]),
-  ])];
-}
-
-function resolveToolPaths(toolName: string, input: unknown, message: ToolResultMessageLike, cwd: string): string[] {
-  if (toolName !== "apply_patch") return resolveInputPaths(input, cwd);
-  if (message.isError === true) {
-    const failedPaths = resolveUnknownFailedDetailPaths(message.details, input, cwd);
-    return [...new Set([
-      ...resolveAppliedDetailPaths(message.details, cwd),
-      ...failedPaths,
-    ])];
-  }
-  const inputPaths = resolveApplyPatchInputPaths(input, cwd);
-  return inputPaths.length > 0 ? inputPaths : resolveAppliedDetailPaths(message.details, cwd);
 }
 
 function resolvePromptPath(path: string, cwd: string): string {
@@ -335,19 +248,18 @@ function buildAgeCompressionEligibility(
 }
 
 function isFileContextResult(toolName: string, message: ToolResultMessageLike): boolean {
-  // read/edit/apply_patch expose file-version context that becomes stale after a later
+  // read/edit expose file-version context that becomes stale after a later
   // mutation. write acknowledgements remain timeline anchors and are never masked here.
-  if (toolName === "read" || toolName === "edit" || toolName === "apply_patch") return message.isError !== true;
+  if (toolName === "read" || toolName === "edit") return message.isError !== true;
   return false;
 }
 
-function shouldMarkMutationPathsDirty(toolName: string, message: ToolResultMessageLike, paths: readonly string[]): boolean {
-  if (toolName === "apply_patch") return paths.length > 0;
-  return (toolName === "write" || toolName === "edit") && message.isError !== true;
+function shouldMarkMutationPathsDirty(toolName: string): boolean {
+  return toolName === "write" || toolName === "edit";
 }
 
 function placeholderForToolName(toolName: string): string {
-  if (toolName === "write" || toolName === "edit" || toolName === "apply_patch") return WRITE_EDIT_OUTPUT_PLACEHOLDER;
+  if (toolName === "write" || toolName === "edit") return WRITE_EDIT_OUTPUT_PLACEHOLDER;
   if (toolName === "bash") return BASH_OUTPUT_PLACEHOLDER;
   return GENERIC_TOOL_OUTPUT_PLACEHOLDER;
 }
@@ -404,16 +316,10 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
 
     const call = resolveToolCall(message, toolCalls);
     if (!call) continue;
+    // Errors stay visible, and a failed edit/write does not invalidate older file context.
+    if (message.isError === true) continue;
     const toolName = call.toolName;
-    const paths = resolveToolPaths(toolName, call.input, message, cwd);
-    if (message.isError === true) {
-      // Partial apply_patch failures remain visible. Confirmed commits and a failed
-      // path whose state is explicitly unknown both invalidate older file context.
-      if (shouldMarkMutationPathsDirty(toolName, message, paths)) {
-        for (const candidate of paths) dirtyFiles.add(candidate);
-      }
-      continue;
-    }
+    const paths = resolveInputPaths(call.input, cwd);
     const skillRead = toolName === "read" && paths.some((candidate) => isSkillReadPath(candidate, skillRoots));
 
     let reason: CompressionReason | undefined;
@@ -428,7 +334,7 @@ export function applyContextCompressionToMessages<T extends ToolResultMessageLik
       changed = true;
     }
 
-    if (shouldMarkMutationPathsDirty(toolName, message, paths)) {
+    if (shouldMarkMutationPathsDirty(toolName)) {
       for (const candidate of paths) dirtyFiles.add(candidate);
     }
   }

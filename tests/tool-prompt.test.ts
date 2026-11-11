@@ -73,7 +73,7 @@ describe("tool prompt loading", () => {
   });
 
   it("keeps structured parameters out of ordinary tool prose", () => {
-    // Intent: schemas own structured parameter documentation; apply_patch remains the explicit freeform exception.
+    // Intent: schemas own structured parameter documentation for every registered tool.
     const schemaOwnedTools = [
       "read",
       "bash",
@@ -90,6 +90,5 @@ describe("tool prompt loading", () => {
     for (const name of schemaOwnedTools) {
       expect(loadToolDescription(name)).not.toContain("\nParameters:");
     }
-    expect(loadToolDescription("apply_patch")).toContain("\nParameters:");
   });
 });

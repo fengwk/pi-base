@@ -74,7 +74,6 @@ describe("tool renderers", () => {
         { name: "bash", args: { command: `printf '%s\\n' ${longText}`, timeout_seconds: 5 } },
         { name: "edit", args: { path: "src/demo.ts", old_string: longText, new_string: `${longText}x` }, isError: true },
         { name: "write", args: { path: "src/demo.ts", content: `${longText}\n${resultText}` } },
-        { name: "apply_patch", args: { patchText: `*** Begin Patch\n*** Add File: demo.txt\n+${longText}\n*** End Patch\n` } },
         { name: "lsp_goto_definition", args: { path: "src/demo.ts", line: 3, character: 0 } },
         { name: "lsp_workspace_symbols", args: { path: "src/demo.ts", query: longText, limit: 20 } },
         { name: "lsp_java_decompile", args: { path: "src/App.java", target: `jdt://${longText}` } },
@@ -402,7 +401,6 @@ describe("tool renderers", () => {
         { name: "bash", args: { timeout_seconds: 5 } },
         { name: "edit", args: { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" } },
         { name: "write", args: { path: "src/example.ts", content: Array.from({ length: 14 }, (_, index) => `line-${index + 1}`).join("\n") } },
-        { name: "apply_patch", args: { patchText: ["*** Begin Patch", "*** Add File: src/example.ts", ...Array.from({ length: 14 }, (_, index) => `+line-${index + 1}`), "*** End Patch"].join("\n") } },
         { name: "lsp_goto_definition", args: { line: 3 } },
         { name: "lsp_workspace_symbols", args: { query: "Example" } },
         { name: "lsp_java_decompile", args: { target: "jdt://demo" } },
@@ -469,133 +467,12 @@ describe("tool renderers", () => {
       expect(editRendered).toContain("earlier lines");
       expect(editRendered).not.toContain("-old-3");
 
-      const applyPatchRendered = render(registry.getTool("apply_patch").renderCall(
-        { patchText: ["*** Begin Patch", "*** Add File: src/example.ts", ...Array.from({ length: 14 }, (_, index) => `+line-${index + 1}`), "*** End Patch"].join("\n") },
-        {} as any,
-        streamingContext as any,
-      ));
-      expect(applyPatchRendered).toContain("+line-14");
-      expect(applyPatchRendered).toContain("earlier lines");
-      expect([writeRendered, editRendered, applyPatchRendered].map((text) => text.split("\n").length)).toEqual([10, 10, 10]);
-    });
-  });
-
-  it("keeps apply_patch complete for review, then collapses only settled Add bodies", async () => {
-    await withTempGlobalPiBaseConfig({}, async (root) => {
-      const registry = createToolRegistry();
-      piBaseExtension(registry.pi as any);
-      const lines = Array.from({ length: 40 }, (_, index) => `line-${index + 1}`);
-      const args = {
-        patchText: [
-          "*** Begin Patch",
-          "*** Add File: large.txt",
-          ...lines.map((line) => `+${line}`),
-          "*** Update File: existing.txt",
-          "@@",
-          ...Array.from({ length: 12 }, (_, index) => `+updated-${index + 1}`),
-          "*** Delete File: removed.txt",
-          "*** End Patch",
-        ].join("\n"),
-      };
-      const reviewContext = {
-        lastComponent: undefined,
-        argsComplete: true,
-        executionStarted: true,
-        isPartial: true,
-        expanded: false,
-        isError: false,
-        cwd: root,
-        state: {},
-      };
-
-      const review = render(registry.getTool("apply_patch").renderCall(args, {} as any, reviewContext as any));
-      const settled = render(registry.getTool("apply_patch").renderCall(args, {} as any, {
-        ...reviewContext,
-        isPartial: false,
-        state: {},
-      } as any));
-      const expanded = render(registry.getTool("apply_patch").renderCall(args, {} as any, {
-        ...reviewContext,
-        isPartial: false,
-        expanded: true,
-        state: {},
-      } as any));
-      const edit = render(registry.getTool("edit").renderCall({
-        path: "large.txt",
-        old_string: lines.map((line) => `old-${line}`).join("\n"),
-        new_string: "replacement",
-      }, {} as any, { ...reviewContext, state: {} } as any));
-      const write = render(registry.getTool("write").renderCall({
-        path: "large.txt",
-        content: lines.join("\n"),
-      }, {} as any, { ...reviewContext, isPartial: false, state: {} } as any));
-
-      expect(review).not.toContain("Targets:");
-      expect(review).toContain("+line-40");
-      expect(review).toContain("+updated-12");
-      expect(review).toContain("D removed.txt");
-      expect(settled).toContain("+line-10");
-      expect(settled).not.toContain("+line-11");
-      expect(settled).toContain("... (30 more lines, 40 total)");
-      expect(settled).toContain("+updated-12");
-      expect(settled).toContain("D removed.txt");
-      expect(expanded).toContain("+line-40");
-      expect(expanded).not.toContain("30 more lines");
-      expect(edit).toContain("-40|old-line-40");
-      expect(write).toContain("line-7");
-      expect(write).not.toContain("line-8");
-      expect(write).not.toContain("line-40");
-      expect(write).toContain("33 more lines");
-    });
-  });
-
-  it("bounds a settled Add preview line without truncating review or expanded content", async () => {
-    await withTempGlobalPiBaseConfig({}, async (root) => {
-      const registry = createToolRegistry();
-      piBaseExtension(registry.pi as any);
-      const longLine = "x".repeat(1_700);
-      const renderWide = (component: any) => component.render(2_000).join("\n");
-      const args = {
-        patchText: [
-          "*** Begin Patch",
-          "*** Add File: generated.txt",
-          `+${longLine}`,
-          "*** End Patch",
-        ].join("\n"),
-      };
-      const reviewContext = {
-        lastComponent: undefined,
-        argsComplete: true,
-        executionStarted: true,
-        isPartial: true,
-        expanded: false,
-        isError: false,
-        cwd: root,
-        state: {},
-      };
-
-      const review = renderWide(registry.getTool("apply_patch").renderCall(args, {} as any, reviewContext as any));
-      const settled = renderWide(registry.getTool("apply_patch").renderCall(args, {} as any, {
-        ...reviewContext,
-        isPartial: false,
-        state: {},
-      } as any));
-      const expanded = renderWide(registry.getTool("apply_patch").renderCall(args, {} as any, {
-        ...reviewContext,
-        isPartial: false,
-        expanded: true,
-        state: {},
-      } as any));
-
-      expect(review).toContain(`+${longLine}`);
-      expect(settled).toContain(`+${"x".repeat(1_496)}...`);
-      expect(settled).not.toContain(`+${longLine}`);
-      expect(expanded).toContain(`+${longLine}`);
+      expect([writeRendered, editRendered].map((text) => text.split("\n").length)).toEqual([10, 10]);
     });
   });
 
   it("uses one yolo state for permission bypass and compact mutation call previews", async () => {
-    await withTempGlobalPiBaseConfig({ yolo: true, permission: { apply_patch: "deny", write: "deny" } }, async (root) => {
+    await withTempGlobalPiBaseConfig({ yolo: true, permission: { write: "deny" } }, async (root) => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const lines = Array.from({ length: 20 }, (_, index) => `line-${index + 1}`);
@@ -609,50 +486,26 @@ describe("tool renderers", () => {
         cwd: root,
         state: {},
       };
-      const patchArgs = {
-        patchText: [
-          "*** Begin Patch",
-          "*** Add File: generated.txt",
-          ...lines.map((line) => `+${line}`),
-          "*** End Patch",
-        ].join("\n"),
-      };
 
-      const applyPatch = render(registry.getTool("apply_patch").renderCall(patchArgs, {} as any, context as any));
       const write = render(registry.getTool("write").renderCall({ path: "generated.txt", content: lines.join("\n") }, {} as any, context as any));
-      const expandedPatch = render(registry.getTool("apply_patch").renderCall(patchArgs, {} as any, {
-        ...context,
-        expanded: true,
-        state: {},
-      } as any));
       const expandedWrite = render(registry.getTool("write").renderCall({ path: "generated.txt", content: lines.join("\n") }, {} as any, {
         ...context,
         expanded: true,
         state: {},
       } as any));
 
-      expect(applyPatch).toContain("+line-10");
-      expect(applyPatch).not.toContain("+line-11");
-      expect(applyPatch).toContain("10 more lines");
       expect(write).toContain("line-7");
       expect(write).not.toContain("line-8");
       expect(write).toContain("13 more lines");
-      expect(expandedPatch).toContain("+line-20");
       expect(expandedWrite).toContain("line-20");
 
-      const applied = await registry.getTool("apply_patch").execute("yolo-apply", {
-        workdir: root,
-        patchText: patchArgs.patchText,
-      }, undefined, undefined, { cwd: root });
       const written = await registry.getTool("write").execute("yolo-write", {
         workdir: root,
         path: "written.txt",
         content: "written\n",
       }, undefined, undefined, { cwd: root });
 
-      expect(applied.isError).not.toBe(true);
       expect(written.isError).not.toBe(true);
-      expect(await readFile(join(root, "generated.txt"), "utf8")).toBe(`${lines.join("\n")}\n`);
       expect(await readFile(join(root, "written.txt"), "utf8")).toBe("written\n");
     });
   });
