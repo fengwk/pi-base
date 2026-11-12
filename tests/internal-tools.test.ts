@@ -1,4 +1,5 @@
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createTempWorkspace } from "./helpers.js";
@@ -44,6 +45,97 @@ describe("shell environment", () => {
 });
 
 describe("managed fd/rg installation", () => {
+  it.skipIf(process.platform === "win32")("prefers a compatible alternative and fails closed offline", async () => {
+    // A legacy fd must not suppress ignore rules; another PATH binary may already support them.
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousPath = process.env.PATH;
+    const previousOffline = process.env.PI_OFFLINE;
+    const root = await createTempWorkspace();
+    const bin = join(root, "commands");
+    await mkdir(bin);
+    const legacy = join(bin, "fd");
+    const alternative = join(bin, "fdfind");
+    await writeFile(legacy, "#!/bin/sh\nexit 2\n", { mode: 0o755 });
+    await writeFile(alternative, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+    process.env.PATH = bin;
+    process.env.PI_OFFLINE = "1";
+    vi.resetModules();
+    try {
+      const { ensureFdNoRequireGit } = await import("../src/internal/pi-coding-agent-utils.js");
+      await expect(ensureFdNoRequireGit(legacy)).resolves.toBe("fdfind");
+      await rm(alternative);
+      await expect(ensureFdNoRequireGit(legacy)).resolves.toBeUndefined();
+      expect(await readFile(legacy, "utf8")).toBe("#!/bin/sh\nexit 2\n");
+      const aborted = new AbortController();
+      aborted.abort();
+      await expect(ensureFdNoRequireGit(legacy, aborted.signal)).rejects.toThrow("Operation aborted");
+      // A caller must also be able to interrupt an already running capability probe.
+      const slow = join(bin, "slow-fd");
+      await writeFile(slow, "#!/bin/sh\nexec /bin/sleep 20\n", { mode: 0o755 });
+      const running = new AbortController();
+      const pending = ensureFdNoRequireGit(slow, running.signal);
+      setTimeout(() => running.abort(), 25);
+      await expect(pending).rejects.toThrow("Operation aborted");
+    } finally {
+      vi.resetModules();
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+      else process.env.PI_OFFLINE = previousOffline;
+    }
+  });
+
+  it.skipIf(process.platform !== "linux")("installs a separate compatible fd once without replacing the old binary", async () => {
+    // Two callers share the new download; the original fd remains untouched and the cached
+    // compatible executable is checked before it is reused.
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousPath = process.env.PATH;
+    const previousOffline = process.env.PI_OFFLINE;
+    const root = await createTempWorkspace();
+    const bin = join(root, "commands");
+    const payloadDir = join(root, "payload");
+    await mkdir(bin);
+    await mkdir(payloadDir);
+    const legacy = join(bin, "fd");
+    const legacyScript = "#!/bin/sh\nexit 2\n";
+    await writeFile(legacy, legacyScript, { mode: 0o755 });
+    await writeFile(join(bin, "fdfind"), legacyScript, { mode: 0o755 });
+    await writeFile(join(payloadDir, "fd"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const archive = join(root, "fd.tar.gz");
+    execFileSync("tar", ["-czf", archive, "-C", payloadDir, "fd"]);
+    const payload = await readFile(archive);
+    process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+    delete process.env.PI_OFFLINE;
+    vi.resetModules();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: "https://github.com/sharkdp/fd/releases/tag/v10.3.0" } }))
+      .mockResolvedValueOnce(new Response(payload, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { ensureFdNoRequireGit } = await import("../src/internal/pi-coding-agent-utils.js");
+      const [first, second] = await Promise.all([ensureFdNoRequireGit(legacy), ensureFdNoRequireGit(legacy)]);
+      expect(first).toBe(join(root, "agent", "bin", "fd-pi-base-compat"));
+      expect(second).toBe(first);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await expect(ensureFdNoRequireGit(legacy)).resolves.toBe(first);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(await readFile(legacy, "utf8")).toBe(legacyScript);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+      else process.env.PI_OFFLINE = previousOffline;
+    }
+  });
+
   it("selects musl Linux assets and rejects unsupported architectures", async () => {
     // Intent: Linux downloads must run on both musl and glibc systems, while unknown Node
     // architectures must fail closed rather than installing an incompatible binary.

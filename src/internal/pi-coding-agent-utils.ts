@@ -19,7 +19,7 @@
  * continue to be imported from there.
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import {
   accessSync,
   chmodSync,
@@ -415,7 +415,7 @@ function extractZipArchive(archivePath: string, extractDir: string, assetName: s
   throw new Error(`Failed to extract ${assetName}: ${failures.join("; ")}`);
 }
 
-async function downloadTool(tool: SupportedTool): Promise<string> {
+async function downloadTool(tool: SupportedTool, destination?: string): Promise<string> {
   const config = TOOLS[tool];
   if (!config) throw new Error(`Unknown tool: ${tool}`);
   const plat = process.platform;
@@ -435,7 +435,7 @@ async function downloadTool(tool: SupportedTool): Promise<string> {
   const archivePath = join(TOOLS_DIR, `download_tmp_${config.binaryName}_${installNonce}_${assetName}`);
   const extractDir = join(TOOLS_DIR, `extract_tmp_${config.binaryName}_${installNonce}`);
   const binaryExt = plat === "win32" ? ".exe" : "";
-  const binaryPath = join(TOOLS_DIR, config.binaryName + binaryExt);
+  const binaryPath = destination ?? join(TOOLS_DIR, config.binaryName + binaryExt);
 
   try {
     await downloadFile(downloadUrl, archivePath);
@@ -473,6 +473,46 @@ async function downloadTool(tool: SupportedTool): Promise<string> {
     try { rmSync(extractDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
   }
   return binaryPath;
+}
+
+// A legacy fd cannot honor .gitignore outside repositories. Keep a separate
+// managed binary for that case rather than replacing the user's existing fd.
+let compatibleFdInstall: Promise<string | undefined> | undefined;
+
+async function supportsNoRequireGit(fdPath: string, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) throw new Error("Operation aborted");
+  const supported = await new Promise<boolean>((resolve) => {
+    execFile(fdPath, ["--no-require-git", "--version"], { timeout: 2000, signal }, (error) => resolve(!error));
+  });
+  if (signal?.aborted) throw new Error("Operation aborted");
+  return supported;
+}
+
+/** Find or install an fd able to respect .gitignore outside Git repositories. */
+export async function ensureFdNoRequireGit(fdPath: string, signal?: AbortSignal): Promise<string | undefined> {
+  const compatiblePath = join(TOOLS_DIR, `fd-pi-base-compat${process.platform === "win32" ? ".exe" : ""}`);
+  const candidates = [fdPath, ...(isUsableManagedBinary(compatiblePath) ? [compatiblePath] : []), "fd", "fdfind"];
+  for (const candidate of new Set(candidates)) {
+    if (await supportsNoRequireGit(candidate, signal)) return candidate;
+  }
+  if (isOfflineModeEnabled() || process.platform === "android") return undefined;
+
+  let install = compatibleFdInstall;
+  if (!install) {
+    install = (async () => {
+      try {
+        const installed = await downloadTool("fd", compatiblePath);
+        return await supportsNoRequireGit(installed) ? installed : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
+    compatibleFdInstall = install;
+    void install.finally(() => {
+      if (compatibleFdInstall === install) compatibleFdInstall = undefined;
+    });
+  }
+  return waitForInstall(install, signal);
 }
 
 const TERMUX_PACKAGES: Record<SupportedTool, string> = {

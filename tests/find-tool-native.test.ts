@@ -1,17 +1,19 @@
+import { spawnSync } from "node:child_process";
 import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createFindToolDefinition } from "../src/find-tool.js";
 import { createTempWorkspace, getText } from "./helpers.js";
 
-const fakeToolState = vi.hoisted(() => ({ fdPath: "" }));
+const fakeToolState = vi.hoisted(() => ({ fdPath: "", compatible: true }));
 
 vi.mock("../src/internal/pi-coding-agent-utils.js", () => ({
   ensureTool: vi.fn(async (tool: string) => {
     if (tool !== "fd" || !fakeToolState.fdPath) return undefined;
     return fakeToolState.fdPath;
   }),
+  ensureFdNoRequireGit: vi.fn(async (fdPath: string) => fakeToolState.compatible ? fdPath : undefined),
 }));
 
 // Resolve the real system fd (PATH lookup, no hardcoded home) so limit
@@ -20,9 +22,12 @@ const { getToolPath: getRealToolPath } = await vi.importActual<typeof import("..
   "../src/internal/pi-coding-agent-utils.js",
 );
 const realFdPath = getRealToolPath("fd");
+const realFdSupportsNoRequireGit = realFdPath !== null
+  && spawnSync(realFdPath, ["--no-require-git", "--version"], { stdio: "ignore", timeout: 2000 }).status === 0;
 
 afterEach(() => {
   fakeToolState.fdPath = "";
+  fakeToolState.compatible = true;
   delete process.env.PI_BASE_FAKE_FD_MODE;
   delete process.env.PI_BASE_FAKE_FD_OUTPUT;
   delete process.env.PI_BASE_FAKE_FD_COUNT;
@@ -111,6 +116,68 @@ async function waitForPidFile(pidFile: string, timeoutMs: number): Promise<numbe
 }
 
 describe("createFindToolDefinition native fd path", () => {
+  it.each(["directory", "file"])("omits --no-require-git inside a Git %s marker", async (marker) => {
+    // A repository or worktree must retain fd's native Git boundary, including on old fd.
+    const root = await createTempWorkspace();
+    const repo = join(root, "repo");
+    await mkdir(join(repo, "nested"), { recursive: true });
+    if (marker === "directory") await mkdir(join(repo, ".git"));
+    else await writeFile(join(repo, ".git"), "gitdir: ../elsewhere\n");
+    await installFakeFd(root);
+    const argsFile = join(root, "fd-args.json");
+    process.env.PI_BASE_FAKE_FD_ARGS_FILE = argsFile;
+    fakeToolState.compatible = false;
+
+    const result = await createFindToolDefinition(root).execute("find-repo", { path: "repo/nested", pattern: "*" });
+    expect((result as any).isError).not.toBe(true);
+    expect(JSON.parse(await readFile(argsFile, "utf8"))).not.toContain("--no-require-git");
+  });
+
+  it("requires a compatible fd outside Git rather than silently ignoring .gitignore", async () => {
+    // Old fd lacks the option that enables .gitignore outside a Git repository.
+    const root = await createTempWorkspace();
+    await installFakeFd(root);
+    fakeToolState.compatible = false;
+    await expect(createFindToolDefinition(root).execute("find-old", { path: ".", pattern: "*" }))
+      .rejects.toThrow("fd 8.7.0 or newer");
+  });
+
+  it.skipIf(!realFdSupportsNoRequireGit)("respects repository boundaries and outside-repository ignore files", async () => {
+    // Verify actual fd behavior, not just argv: parent rules must not hide a repo's files,
+    // while nested .gitignore files must still apply outside repositories.
+    const root = await createTempWorkspace();
+    const repo = join(root, "repo");
+    const outside = join(root, "outside");
+    await mkdir(join(repo, ".git"), { recursive: true });
+    await mkdir(join(outside, "nested"), { recursive: true });
+    await writeFile(join(root, ".gitignore"), "*.keepme\n");
+    await writeFile(join(repo, "visible.keepme"), "");
+    await writeFile(join(outside, ".gitignore"), "ignored.txt\n");
+    await writeFile(join(outside, "nested", "ignored.txt"), "");
+    await writeFile(join(outside, "nested", "visible.txt"), "");
+    fakeToolState.fdPath = realFdPath ?? "";
+
+    const tool = createFindToolDefinition(root);
+    const inRepo = await tool.execute("find-boundary", { path: "repo", pattern: "*.keepme" });
+    expect(getText(inRepo)).toContain("visible.keepme");
+    const outsideRepo = await tool.execute("find-ignore", { path: "outside", pattern: "*.txt" });
+    expect(getText(outsideRepo)).toContain("nested/visible.txt");
+    expect(getText(outsideRepo)).not.toContain("ignored.txt");
+  });
+
+  it.skipIf(!realFdPath || process.platform === "win32")("detects a Git repository through a symlinked search root", async () => {
+    // A lexical parent walk misses the repo when the search root points into it.
+    const root = await createTempWorkspace();
+    await mkdir(join(root, "repo", ".git"), { recursive: true });
+    await mkdir(join(root, "repo", "nested"));
+    await writeFile(join(root, ".gitignore"), "*.keepme\n");
+    await writeFile(join(root, "repo", "nested", "visible.keepme"), "");
+    await symlink(join(root, "repo", "nested"), join(root, "link"));
+    fakeToolState.fdPath = realFdPath ?? "";
+    const result = await createFindToolDefinition(root).execute("find-symlink", { path: "link", pattern: "*.keepme" });
+    expect(getText(result)).toContain("visible.keepme");
+  });
+
   it("uses full-path matching for slash patterns and relativizes fd output", async () => {
     // Intent: pi-base wraps fd to require an explicit search path and to return
     // workspace-relative, POSIX-style results that are safe to feed into read.
@@ -198,6 +265,7 @@ describe("createFindToolDefinition native fd path", () => {
     // means unlimited and whose negative/fractional counts are argument errors. fd is
     // resolved through PATH (agent bin dir); the case is skipped when fd is absent.
     const root = await createTempWorkspace();
+    await mkdir(join(root, ".git"));
     for (const name of ["a.ts", "b.ts", "c.ts"]) {
       await writeFile(join(root, name), "");
     }
@@ -205,24 +273,24 @@ describe("createFindToolDefinition native fd path", () => {
     const tool = createFindToolDefinition(root);
 
     // Exactly N matches with limit N: no truncation notice.
-    const exact = await tool.execute("find-real-exact", { path: ".", pattern: "*", limit: 3 });
+    const exact = await tool.execute("find-real-exact", { path: ".", pattern: "*.ts", limit: 3 });
     expect(getText(exact).split("\n").filter(Boolean)).toHaveLength(3);
     expect(getText(exact)).not.toContain("results limit reached");
     expect((exact as any).details?.resultLimitReached).toBeUndefined();
 
     // More than N matches with limit N: N lines plus an explicit overflow notice.
-    const overflow = await tool.execute("find-real-overflow", { path: ".", pattern: "*", limit: 2 });
+    const overflow = await tool.execute("find-real-overflow", { path: ".", pattern: "*.ts", limit: 2 });
     const overflowBody = getText(overflow).split("\n\n[")[0];
     expect(overflowBody.split("\n").filter(Boolean)).toHaveLength(2);
     expect(getText(overflow)).toContain("2 results limit reached");
     expect((overflow as any).details.resultLimitReached).toBe(2);
 
     // 0 and negative limits clamp to 1 (fd's 0 would otherwise mean unlimited).
-    const zero = await tool.execute("find-real-zero", { path: ".", pattern: "*", limit: 0 });
+    const zero = await tool.execute("find-real-zero", { path: ".", pattern: "*.ts", limit: 0 });
     expect(getText(zero).split("\n\n[")[0].split("\n").filter(Boolean)).toHaveLength(1);
     expect(getText(zero)).toContain("1 results limit reached");
 
-    const negative = await tool.execute("find-real-negative", { path: ".", pattern: "*", limit: -5 });
+    const negative = await tool.execute("find-real-negative", { path: ".", pattern: "*.ts", limit: -5 });
     expect(getText(negative).split("\n\n[")[0].split("\n").filter(Boolean)).toHaveLength(1);
     expect(getText(negative)).toContain("1 results limit reached");
   });

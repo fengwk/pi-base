@@ -50,13 +50,14 @@ Fixed arguments:
 --glob
 --color=never
 --hidden
---no-require-git
---max-results <limit>
+--max-results <limit + 1>
 ```
 
 `--full-path` is used when the pattern contains `/`. Plain relative full-path patterns get a `**/` prefix so they can match at any depth below the search root.
 
-When the system has no `fd`, the internal tool manager tries to download the official GitHub Release; `PI_OFFLINE=1` disables this.
+Inside a Git repository (including worktrees), `find` uses fd's native Git-aware ignore handling so rules above the repository do not hide its files. Outside a repository, it adds `--no-require-git` so `.gitignore` remains effective. That option requires fd 8.7.0 or a compatible build: pi-base checks the available binaries and, if necessary, downloads a separate compatible fd without replacing the existing one. If none is available and the download is disabled or fails, `find` reports an error rather than silently ignoring `.gitignore`.
+
+When the system has no `fd`, the internal tool manager tries to download the official GitHub Release; `PI_OFFLINE=1` disables all of these downloads.
 
 ## Path output
 

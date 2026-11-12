@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
+import { access, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { createFindToolDefinition as createUpstreamFindToolDefinition } from "@earendil-works/pi-coding-agent";
-import { ensureTool } from "./internal/pi-coding-agent-utils.js";
+import { ensureFdNoRequireGit, ensureTool } from "./internal/pi-coding-agent-utils.js";
 import { resolveToCwd } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
 
@@ -10,6 +11,28 @@ const DEFAULT_LIMIT = 1000;
 
 function toPosixPath(value: string): string {
   return value.split(path.sep).join("/");
+}
+
+async function isInsideGitRepository(searchPath: string, signal?: AbortSignal): Promise<boolean> {
+  let resolvedPath = searchPath;
+  try {
+    // fd follows a symlink passed as its search root; inspect the target's Git
+    // ancestry too, while preserving the caller's path in the actual results.
+    resolvedPath = await realpath(searchPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+  }
+  for (let current = resolvedPath; ; current = path.dirname(current)) {
+    if (signal?.aborted) throw new Error("Operation aborted");
+    try {
+      // .git may be a directory or a file (worktrees and submodules).
+      await access(path.join(current, ".git"));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+    }
+    if (path.dirname(current) === current) return false;
+  }
 }
 
 export function createFindToolDefinition(cwd: string): any {
@@ -51,17 +74,28 @@ export function createFindToolDefinition(cwd: string): any {
             // fractional counts, so normalize before spawning: clamp below 1 to 1
             // and floor positive decimals. Ordinary positive integers pass through.
             const effectiveLimit = Math.max(1, Math.floor(limit ?? DEFAULT_LIMIT));
-            const fdPath = await ensureTool("fd", true, signal);
+            let fdPath = await ensureTool("fd", true, signal);
             if (!fdPath) {
               settle(() => reject(new Error("fd is not available and could not be downloaded")));
               return;
+            }
+            const insideGit = await isInsideGitRepository(searchPath, signal);
+            if (!insideGit) {
+              // Omitting the flag on older fd would silently stop respecting
+              // .gitignore outside Git repositories. Find a capable binary instead.
+              fdPath = await ensureFdNoRequireGit(fdPath, signal);
+              if (!fdPath) {
+                settle(() => reject(new Error("fd with --no-require-git support (fd 8.7.0 or newer) is required to respect .gitignore outside Git repositories; install a newer fd or enable downloading")));
+                return;
+              }
             }
             if (signal?.aborted) {
               onAbort();
               return;
             }
 
-            const args = ["--glob", "--color=never", "--hidden", "--no-require-git", "--max-results", String(effectiveLimit + 1)];
+            const args = ["--glob", "--color=never", "--hidden", "--max-results", String(effectiveLimit + 1)];
+            if (!insideGit) args.push("--no-require-git");
             let effectivePattern = pattern;
             if (pattern.includes("/")) {
               args.push("--full-path");

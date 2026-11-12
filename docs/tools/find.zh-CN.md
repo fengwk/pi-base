@@ -50,13 +50,14 @@
 --glob
 --color=never
 --hidden
---no-require-git
---max-results <limit>
+--max-results <limit + 1>
 ```
 
 Pattern 中包含 `/` 时使用 `--full-path`。普通相对 full-path pattern 会前置 `**/`，使其能在搜索根的任意深度匹配。
 
-系统没有 `fd` 时，内部 tool manager 会尝试下载官方 GitHub Release；`PI_OFFLINE=1` 可禁用。
+Git 仓库内（包括 worktree）使用 fd 原生的 Git ignore 语义，避免仓库上级规则隐藏仓库内文件。仓库外增加 `--no-require-git`，确保 `.gitignore` 仍然生效。该参数需要 fd 8.7.0 或兼容版本：pi-base 会检查可用二进制，必要时下载单独的兼容版本，不覆盖原有 fd。若没有兼容版本且下载被禁用或失败，`find` 会明确报错，不会静默忽略 `.gitignore`。
+
+系统没有 `fd` 时，内部 tool manager 会尝试下载官方 GitHub Release；`PI_OFFLINE=1` 可禁用所有上述下载。
 
 ## 路径输出
 
