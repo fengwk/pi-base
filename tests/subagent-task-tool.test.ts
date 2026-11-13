@@ -189,14 +189,14 @@ describe("task tool", () => {
     expect(tool.parameters.properties.max_turns.description).toContain("Defaults to 7");
   });
 
-  it("describes batching all ready independent delegations in one assistant turn", () => {
-    // Intent: the task contract must require separate calls and same-turn batching so independent
-    // delegations actually execute in parallel instead of being serialized through one subagent.
+  it("describes one call per independent delegation without repeating the system prompt", () => {
+    // Intent: the tool description owns the one-call-per-subtask rule, while same-turn
+    // batching lives in prompts/task-system.md (deduplicated in d02e8d3); the description
+    // must not grow the removed duplicate back.
     const tool = registerAndCapture(baseDeps());
     expect(tool.description).toContain("such as `X + Y + Z`");
     expect(tool.description).toContain("delegate each with a separate `task` call");
-    expect(tool.description).toContain("All calls must be emitted in the same assistant turn");
-    expect(tool.description).toContain("subagents run in parallel");
+    expect(tool.description).not.toContain("All calls must be emitted in the same assistant turn");
   });
 
   it("uses task max_turns to override the configured budget", async () => {
