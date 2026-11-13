@@ -47,10 +47,10 @@ The text branch re-runs `stat` and the read in the file-change queue to avoid in
 Decoding is deterministic and done by [`src/text-codec.ts`](../../src/text-codec.ts):
 
 - A UTF byte order mark decides the encoding (UTF-32 is checked before UTF-16); a BOM-marked file is judged by its decoded characters.
-- Otherwise a standard declaration decides: an XML `encoding` at byte 0, a CSS `@charset` at byte 0, an HTML head `meta charset` / `http-equiv` (first 1024 bytes), a Python or Ruby coding cookie (`coding[:=]`, `fileencoding=`, `encoding:`) on line 1 or line 2, or a JSP page directive (`pageEncoding`, or `charset` inside `contentType`, first 1024 bytes). Similar text elsewhere is not a declaration.
+- Otherwise a standard declaration decides: an XML `encoding` at byte 0, a CSS `@charset "X";` rule at byte 0 (the exact form, one space and no line break), an HTML head `meta charset` / `http-equiv` (first 1024 bytes), a Python or Ruby coding cookie (`coding[:=]`, `fileencoding=`, `encoding:`) on line 1 or line 2, or a JSP page directive (`pageEncoding`, or `charset` inside `contentType`, first 1024 bytes). Similar text elsewhere is not a declaration.
 - Labels resolve through the Encoding Standard for HTML/CSS and through IANA names otherwise, with CPython's `get_normal_name` for Python/Ruby cookies; every label maps to one canonical name (`GBK`, `Big5`, `Shift_JIS`, `ISO-8859-1`, …).
 - Without a byte order mark or declaration, only valid UTF-8 is accepted.
-- Binary means a NUL byte in the first 8000 bytes (Git's rule); other control characters are text.
+- Binary means a NUL byte in the first 8000 bytes (Git's rule); a BOM-marked UTF-16/32 file is judged on the characters decoded from that same window. Other control characters are text.
 
 A declaration must agree with the content: a non-UTF-8 declaration over valid non-ASCII UTF-8 is a conflict, and the bytes must decode and re-encode losslessly.
 

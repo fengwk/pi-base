@@ -91,6 +91,8 @@ describe("text codec", () => {
     { why: "an HTML script body", filePath: "sample.html", text: "<html><head><script>const s = '<meta charset=\"big5\">';</script></head>" },
     { why: "an HTML body meta", filePath: "sample.html", text: '<html><head></head><body><meta charset="big5"></body>' },
     { why: "a @charset after the first byte", filePath: "sample.css", text: "/* x */\n@charset \"big5\";\n" },
+    { why: "a CSS @charset with two spaces", filePath: "sample.css", text: '@charset  "gbk";\n' },
+    { why: "a CSS @charset with a newline", filePath: "sample.css", text: '@charset\n"gbk";\n' },
     { why: "an XML declaration after the first byte", filePath: "sample.xml", text: '\n<?xml version="1.0" encoding="GBK"?>' },
   ])("ignores declaration-like text in $why", ({ filePath, text, expected }) => {
     // Intent: only a standard declaration in its defined position may choose the
@@ -110,6 +112,25 @@ describe("text codec", () => {
     // CSS follows the Encoding Standard, where these labels mean windows-1252.
     expect(declaredEncoding('@charset "iso-8859-1";\n', "a.css").name).toBe("windows-1252");
     expect(declaredEncoding('@charset "gb2312";\n', "a.css").name).toBe("GBK");
+  });
+
+  it("detects a legacy declaration on UTF-8 content whose non-ASCII text starts after the binary probe", () => {
+    // Intent: the conflict rule scans the whole file, so ASCII-only early bytes must
+    // not let a GBK declaration mojibake Chinese text later in the same file.
+    const text = `<?xml version="1.0" encoding="GBK"?>\n${"a".repeat(8100)}你好\n`;
+    expect(() => decodeTextFile(Buffer.from(text, "utf8"), "sample.xml")).toThrow(EncodingDeclarationConflictError);
+  });
+
+  it("judges a BOM-marked file's binary rule inside the first 8000 decoded body bytes", () => {
+    // Intent: a NUL character past the probe window is text; only the window decides.
+    const lateNul = `${"a".repeat(4000)}\u0000tail\n`;
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(lateNul, "utf16le")]);
+    expect(decodeTextFile(utf16, "sample.txt").text).toBe(lateNul);
+    const utf8Text = `${"a".repeat(8000)}\u0000tail\n`;
+    const utf8 = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(utf8Text, "utf8")]);
+    expect(decodeTextFile(utf8, "sample.txt").text).toBe(utf8Text);
+    const earlyNul = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("a\u0000b\n", "utf16le")]);
+    expect(() => decodeTextFile(earlyNul, "sample.txt")).toThrow(BinaryFileError);
   });
 
   it("reports unsupported labels, conflicts and undecodable bytes distinctly", () => {

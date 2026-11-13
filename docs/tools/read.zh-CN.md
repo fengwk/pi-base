@@ -47,10 +47,10 @@
 解码是确定性的，由 [`src/text-codec.ts`](../../src/text-codec.ts) 完成：
 
 - UTF BOM 优先决定编码（UTF-32 先于 UTF-16 判断）；带 BOM 的文件按解码后的字符判断二进制。
-- 否则由标准声明决定：字节 0 处的 XML `encoding`、字节 0 处的 CSS `@charset`、HTML head 的 `meta charset` / `http-equiv`（前 1024 字节）、第 1 或第 2 行的 Python/Ruby 编码注释（`coding[:=]`、`fileencoding=`、`encoding:`），以及 JSP page 指令中的 `pageEncoding` 或 `contentType` 内的 `charset`（前 1024 字节）。其他位置的相似文本不是声明。
+- 否则由标准声明决定：字节 0 处的 XML `encoding`、字节 0 处的 CSS `@charset "X";` 规则（精确形式，一个空格且不换行）、HTML head 的 `meta charset` / `http-equiv`（前 1024 字节）、第 1 或第 2 行的 Python/Ruby 编码注释（`coding[:=]`、`fileencoding=`、`encoding:`），以及 JSP page 指令中的 `pageEncoding` 或 `contentType` 内的 `charset`（前 1024 字节）。其他位置的相似文本不是声明。
 - HTML/CSS 标签按 Encoding Standard 解析，其他来源按 IANA 名称解析，Python/Ruby 注释先经过 CPython 的 `get_normal_name`；每个标签只对应一个规范名称（`GBK`、`Big5`、`Shift_JIS`、`ISO-8859-1` 等）。
 - 无 BOM 也无声明时，只接受合法 UTF-8。
-- 二进制判定为前 8000 字节内出现 NUL（Git 规则）；其他控制字符仍视为文本。
+- 二进制判定为前 8000 字节内出现 NUL（Git 规则）；带 BOM 的 UTF-16/32 文件按同一窗口解码后的字符判断。其他控制字符仍视为文本。
 
 声明必须与内容一致：非 UTF-8 声明遇上包含非 ASCII 字符的合法 UTF-8 时视为冲突；字节必须能无损解码并重编码。
 

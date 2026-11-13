@@ -307,7 +307,7 @@ function detectDeclaredLabel(probe: string, filePath: string): DeclaredLabel | u
   const text = probe.startsWith(LEADING_BOM_CHAR) ? probe.slice(1) : probe;
   const xml = /^<\?xml\s[^?]*\bencoding\s*=\s*(["'])([A-Za-z][A-Za-z0-9._-]*)\1[^?]*\?>/.exec(text);
   if (xml) return { label: xml[2]!, where: "in the XML declaration", source: "xml" };
-  const css = /^@charset\s+"([A-Za-z][A-Za-z0-9._-]*)"\s*;/.exec(text);
+  const css = /^@charset "([A-Za-z][A-Za-z0-9._-]*)";/.exec(text);
   if (css) return { label: css[1]!, where: "in the @charset rule", source: "css" };
   const extension = fileExtension(filePath);
   if (extension === "html" || extension === "htm") {
@@ -363,15 +363,30 @@ function hasNulByte(buffer: Buffer): boolean {
   return buffer.subarray(0, BINARY_PROBE_BYTES).includes(0);
 }
 
+function hasNonAsciiByte(buffer: Buffer): boolean {
+  for (let index = 0; index < buffer.length; index++) {
+    if (buffer[index]! >= 0x80) return true;
+  }
+  return false;
+}
+
 function assertDeclarationMatchesBytes(buffer: Buffer, encoding: TextEncoding, declared: DeclaredLabel): void {
   // UTF-8 and ASCII declarations describe exactly what the decoder verifies.
   if (encoding.name === "UTF-8" || encoding.name === "US-ASCII") return;
   if (!isUtf8(buffer)) return;
-  const probe = buffer.subarray(0, BINARY_PROBE_BYTES).toString("latin1");
-  if (!/[^\x00-\x7f]/.test(probe)) return;
+  // The whole file decides: a declaration over later non-ASCII UTF-8 is still a conflict.
+  if (!hasNonAsciiByte(buffer)) return;
   throw new EncodingDeclarationConflictError(
     `Declared text encoding ${encoding.name} ${declared.where}, but the content is valid UTF-8 with non-ASCII characters.`,
   );
+}
+
+/**
+ * The binary rule for a BOM-marked file judges the characters decoded from the
+ * first 8000 body bytes; the decoded text itself may legitimately contain NUL later.
+ */
+function decodeBinaryProbe(body: Buffer, bom: BomSpec): string {
+  return iconv.decode(body.subarray(0, Math.min(body.length, BINARY_PROBE_BYTES)), bom.encoding.codec, { stripBOM: false });
 }
 
 /**
@@ -382,10 +397,10 @@ function assertDeclarationMatchesBytes(buffer: Buffer, encoding: TextEncoding, d
 export function decodeTextFile(buffer: Buffer, filePath = ""): DecodedTextFile {
   const bom = detectBom(buffer);
   if (bom) {
-    // A BOM-marked UTF-16/32 file always contains NUL bytes, so judge its characters instead.
-    const text = decodeExact(buffer.subarray(bom.bytes.length), bom.encoding);
-    if (text.includes("\u0000")) throw new BinaryFileError();
-    return { text, encoding: bom.encoding, bom: bom.bom };
+    const body = buffer.subarray(bom.bytes.length);
+    // A BOM-marked UTF-16/32 file always contains NUL bytes, so judge its characters.
+    if (decodeBinaryProbe(body, bom).includes("\u0000")) throw new BinaryFileError();
+    return { text: decodeExact(body, bom.encoding), encoding: bom.encoding, bom: bom.bom };
   }
   if (hasNulByte(buffer)) throw new BinaryFileError();
   const declared = detectDeclaredLabel(declarationProbe(buffer), filePath);

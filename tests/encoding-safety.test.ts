@@ -93,6 +93,29 @@ describe("text encoding safety", () => {
     expect(await readFile(file)).toEqual(bytes);
   });
 
+  it("refuses a legacy declaration on UTF-8 content whose non-ASCII text is past the probe", async () => {
+    // Intent: ASCII-only early bytes must not let a gb2312 declaration decode later
+    // Chinese as GBK; the conflict rule has to scan the whole file.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const file = join(root, "page.html");
+    const body = `<html><head><meta charset="gb2312"></head>\n<p>${"a".repeat(8100)}你好</p>\n`;
+    const bytes = Buffer.from(body, "utf8");
+    await writeFile(file, bytes);
+
+    const read = await run(registry, "read", root, { path: "page.html" });
+    expect(read.isError).toBe(true);
+    expect(getText(read)).toContain("Declared text encoding GBK");
+
+    const edit = await run(registry, "edit", root, { path: "page.html", edits: [{ old_string: "<p>", new_string: "<p>ok " }] });
+    expect(edit.isError).toBe(true);
+
+    const write = await run(registry, "write", root, { path: "page.html", content: "<html><body>你好</body></html>\n" });
+    expect(write.isError).toBe(true);
+
+    expect(await readFile(file)).toEqual(bytes);
+  });
+
   it.each([
     { encoding: "gbk", text: "中文测试" },
     { encoding: "big5", text: "繁體中文" },
