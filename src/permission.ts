@@ -221,6 +221,7 @@ function summarizePromptInput(input: unknown): string {
     "content",
     "old_string",
     "new_string",
+    "edits",
   ].includes(key));
   return summaryEntries.length > 0 ? stringifyPromptArguments(Object.fromEntries(summaryEntries)) : "";
 }

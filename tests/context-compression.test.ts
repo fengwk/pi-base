@@ -87,7 +87,7 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-1", readArgs, undefined, undefined, { cwd: root });
-    const editArgs = { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "alpha v1" };
+    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ old_string: "alpha", new_string: "alpha v1" }] };
     const editResult = await registry.getTool("edit").execute("edit-1", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -118,7 +118,7 @@ describe("context compression", () => {
     // Same real file (<root>/pkg/example.txt) referenced two different ways.
     const readArgs = { workdir: "pkg", path: "example.txt" };
     const readResult = await registry.getTool("read").execute("read-1", readArgs, undefined, undefined, { cwd: root });
-    const editArgs = { workdir: ".", path: "pkg/example.txt", old_string: "alpha", new_string: "alpha v1" };
+    const editArgs = { workdir: ".", path: "pkg/example.txt", edits: [{ old_string: "alpha", new_string: "alpha v1" }] };
     const editResult = await registry.getTool("edit").execute("edit-1", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -152,8 +152,7 @@ describe("context compression", () => {
     const editArgs = {
       workdir: "pkg/nested",
       path: ".\\example.txt",
-      old_string: "alpha",
-      new_string: "alpha v1",
+      edits: [{ old_string: "alpha", new_string: "alpha v1" }],
     };
     const editResult = await registry.getTool("edit").execute("edit-separator", editArgs, undefined, undefined, { cwd: root });
     const messages = [
@@ -184,7 +183,7 @@ describe("context compression", () => {
 
     const readA = { workdir: "pkg", path: "a.txt" };
     const readAResult = await registry.getTool("read").execute("read-a", readA, undefined, undefined, { cwd: root });
-    const editA = { workdir: ".", path: "pkg/a.txt", old_string: "alpha", new_string: "alpha v1" };
+    const editA = { workdir: ".", path: "pkg/a.txt", edits: [{ old_string: "alpha", new_string: "alpha v1" }] };
     const editAResult = await registry.getTool("edit").execute("edit-a", editA, undefined, undefined, { cwd: root });
 
     const turn1 = [
@@ -197,7 +196,7 @@ describe("context compression", () => {
     // Append a later, unrelated turn on a different file, then recompress the full history.
     const readB = { workdir: "pkg", path: "b.txt" };
     const readBResult = await registry.getTool("read").execute("read-b", readB, undefined, undefined, { cwd: root });
-    const editB = { workdir: ".", path: "pkg/b.txt", old_string: "one", new_string: "one v1" };
+    const editB = { workdir: ".", path: "pkg/b.txt", edits: [{ old_string: "one", new_string: "one v1" }] };
     const editBResult = await registry.getTool("edit").execute("edit-b", editB, undefined, undefined, { cwd: root });
 
     const turn2 = [
@@ -220,7 +219,7 @@ describe("context compression", () => {
 
     const writeArgs = { workdir: ".", path: "src/example.txt", content: "alpha\nbeta\n" };
     const writeResult = await registry.getTool("write").execute("write-1", writeArgs, undefined, undefined, { cwd: root });
-    const editArgs = { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "alpha v1" };
+    const editArgs = { workdir: ".", path: "src/example.txt", edits: [{ old_string: "alpha", new_string: "alpha v1" }] };
     const editResult = await registry.getTool("edit").execute("edit-after-write", editArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -247,12 +246,12 @@ describe("context compression", () => {
     const registry = createToolRegistry({ cwd: root });
     piBaseExtension(registry.pi as any);
 
-    const failedEditArgs = { workdir: ".", path: "src/example.txt", old_string: "nonexistent", new_string: "replacement" };
+    const failedEditArgs = { workdir: ".", path: "src/example.txt", edits: [{ old_string: "nonexistent", new_string: "replacement" }] };
     const failedEdit = await registry.getTool("edit").execute("edit-error-context", failedEditArgs, undefined, undefined, { cwd: root });
     expect(failedEdit.isError).toBe(true);
     expect(getText(failedEdit)).toContain("Could not find old_string");
 
-    const goodEditArgs = { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "alpha v1" };
+    const goodEditArgs = { workdir: ".", path: "src/example.txt", edits: [{ old_string: "alpha", new_string: "alpha v1" }] };
     const goodEdit = await registry.getTool("edit").execute("edit-after-error-context", goodEditArgs, undefined, undefined, { cwd: root });
 
     const messages = [
@@ -272,7 +271,7 @@ describe("context compression", () => {
 
     const readArgs = { workdir: ".", path: "src/example.txt" };
     const readResult = await registry.getTool("read").execute("read-default", readArgs, undefined, undefined, { cwd: root });
-    await registry.getTool("edit").execute("edit-default", { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "alpha v1" }, undefined, undefined, { cwd: root });
+    await registry.getTool("edit").execute("edit-default", { workdir: ".", path: "src/example.txt", edits: [{ old_string: "alpha", new_string: "alpha v1" }] }, undefined, undefined, { cwd: root });
 
     const messages = [...toolExchange("read", "read-default", readArgs, readResult)];
     const transformed = await registry.emit("context", { messages }, { cwd: root });

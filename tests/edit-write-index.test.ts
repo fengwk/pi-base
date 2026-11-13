@@ -13,7 +13,7 @@ describe("edit/write flow", () => {
 
     let message = "";
     try {
-      editTool.prepareArguments({ workdir: ".", path: "test.ts", old_string: "a" });
+      editTool.prepareArguments({ workdir: ".", path: "test.ts", edits: [{ old_string: "a" }] });
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -121,14 +121,14 @@ describe("edit/write flow", () => {
     expect(await readFile(file)).toEqual(originalBytes);
   });
 
-  it("edits a file using old_string/new_string", async () => {
+  it("edits a file using a one-entry edits array", async () => {
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/new.ts", "export const demo = 1;\n");
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const editResult = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/new.ts", old_string: "export const demo = 1;", new_string: "export const demo = 2;" },
+      { workdir: ".", path: "src/new.ts", edits: [{ old_string: "export const demo = 1;", new_string: "export const demo = 2;" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -155,7 +155,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/large.ts", old_string: "export const marker = 'edit-me';", new_string: "export const marker = 'edited';" },
+      { workdir: ".", path: "src/large.ts", edits: [{ old_string: "export const marker = 'edit-me';", new_string: "export const marker = 'edited';" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -180,7 +180,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "nonexistent", new_string: "replacement" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "nonexistent", new_string: "replacement" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -196,7 +196,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "beta" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "beta" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -214,7 +214,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "aa", new_string: "b" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "aa", new_string: "b" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -231,7 +231,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "beta", replace_all: true },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "beta", replace_all: true }] },
       undefined,
       undefined,
       { cwd: root },
@@ -249,7 +249,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "aa", new_string: "b", replace_all: true },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "aa", new_string: "b", replace_all: true }] },
       undefined,
       undefined,
       { cwd: root },
@@ -266,7 +266,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "alpha" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "alpha" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -286,7 +286,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha\r\n", new_string: "alpha\n" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha\r\n", new_string: "alpha\n" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -303,7 +303,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "", new_string: "beta" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "", new_string: "beta" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -321,7 +321,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -338,7 +338,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "gamma" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "gamma" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -356,7 +356,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "beta", new_string: "gamma" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "beta", new_string: "gamma" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -374,7 +374,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha\nbeta", new_string: "left\nright" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha\nbeta", new_string: "left\nright" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -392,7 +392,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha\nbeta", new_string: "left\nright" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha\nbeta", new_string: "left\nright" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -410,7 +410,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "middle", new_string: "left\nright" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "middle", new_string: "left\nright" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -431,7 +431,7 @@ describe("edit/write flow", () => {
 
     const addNewline = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/no-newline.txt", old_string: "tail", new_string: "tail\n" },
+      { workdir: ".", path: "src/no-newline.txt", edits: [{ old_string: "tail", new_string: "tail\n" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -441,7 +441,7 @@ describe("edit/write flow", () => {
 
     const removeNewline = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/with-newline.txt", old_string: "tail\n", new_string: "tail" },
+      { workdir: ".", path: "src/with-newline.txt", edits: [{ old_string: "tail\n", new_string: "tail" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -460,7 +460,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "gamma" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "gamma" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -482,7 +482,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.txt", old_string: "alpha", new_string: "gamma" },
+      { workdir: ".", path: "src/example.txt", edits: [{ old_string: "alpha", new_string: "gamma" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -506,7 +506,7 @@ describe("edit/write flow", () => {
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/legacy.txt", old_string: "café", new_string: "漢字" },
+      { workdir: ".", path: "src/legacy.txt", edits: [{ old_string: "café", new_string: "漢字" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -519,7 +519,7 @@ describe("edit/write flow", () => {
   it("edit reports missing path", async () => {
     const registry = createToolRegistry();
     const tool = registerEditTool(registry.pi as any);
-    const result = await tool.execute("1", { workdir: ".", old_string: "a", new_string: "b" }, undefined, undefined, { cwd: process.cwd() });
+    const result = await tool.execute("1", { workdir: ".", edits: [{ old_string: "a", new_string: "b" }] }, undefined, undefined, { cwd: process.cwd() });
     expect(result.isError).toBe(true);
     expect(getText(result)).toContain("path is required");
   });

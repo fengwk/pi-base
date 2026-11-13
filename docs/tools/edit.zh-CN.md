@@ -23,9 +23,10 @@
 | 参数 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `path` | 是 | — | 已有文本文件 |
-| `old_string` | 是 | — | 要替换的精确文本 |
-| `new_string` | 是 | — | 替换文本 |
-| `replace_all` | 否 | `false` | 替换全部精确匹配 |
+| `edits` | 是 | — | 同一文件的非空独立替换数组 |
+| `edits[].old_string` | 是 | — | 原始文件中要替换的精确文本 |
+| `edits[].new_string` | 是 | — | 替换文本；允许空字符串以删除匹配 |
+| `edits[].replace_all` | 否 | `false` | 替换本项的全部精确匹配 |
 | `workdir` | 否 | session cwd | 相对路径解析基准 |
 
 ## 执行链
@@ -55,6 +56,19 @@
 - `replace_all=true` 时替换全部非重叠匹配；重叠匹配会拒绝。
 
 匹配前只把换行规范化为 LF，不会 trim 空白、缩进或标点。`old_string` 的空白、缩进、标点和换行必须与目标文件内容一致。
+
+## 单一调用格式
+
+统一传入非空 `edits` 数组：改一处放一项，改多处放多项，均针对同一文件。不接受顶层 `old_string`、`new_string` 或 `replace_all`：
+
+```ts
+edit({ path: "a.ts", edits: [
+  { old_string: "const alpha = 1;", new_string: "const alpha = 2;" },
+  { old_string: "const beta = 3;", new_string: "const beta = 4;" },
+] });
+```
+
+每项都匹配同一原始文件快照，不匹配前一项的输出。所有匹配区间必须互不重叠，包括某项 `replace_all` 展开的全部区间。缺失、歧义、重叠、非法或无法编码的替换均在写入前失败。成功时只写入一次，统计全部被替换匹配的数量，并返回合并 diff。这是写入前校验，不是文件系统崩溃原子性，也不是跨工具调用的事务。依赖前一次修改结果的替换仍需分别调用。
 
 ## 编码与换行
 
@@ -109,6 +123,7 @@ Legacy encoding 写回使用 round-trip 校验；新文本无法无损表示时�
 - [`tests/edit-write-index.test.ts`](../../tests/edit-write-index.test.ts)
 - [`tests/edit-diff.test.ts`](../../tests/edit-diff.test.ts)
 - [`tests/edit-queue.test.ts`](../../tests/edit-queue.test.ts)
+- [`tests/edit-batch.test.ts`](../../tests/edit-batch.test.ts)
 - [`tests/line-endings.test.ts`](../../tests/line-endings.test.ts)
 - [`tests/text-codec.test.ts`](../../tests/text-codec.test.ts)
 - [`tests/permission.test.ts`](../../tests/permission.test.ts)

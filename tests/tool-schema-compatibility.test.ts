@@ -20,7 +20,7 @@ describe("tool schemas with Pi's argument validator", () => {
   it.each<[string, Record<string, unknown>]>([
     ["read", { path: "example.ts" }],
     ["write", { path: "example.ts", content: "text" }],
-    ["edit", { path: "example.ts", old_string: "old", new_string: "new" }],
+    ["edit", { path: "example.ts", edits: [{ old_string: "old", new_string: "new" }] }],
     ["bash", { command: "pwd" }],
     ["grep", { pattern: "text", path: "." }],
     ["find", { pattern: "*.ts", path: "." }],

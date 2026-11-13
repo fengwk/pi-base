@@ -61,9 +61,10 @@ describe("tool prompt loading", () => {
 
   it("keeps edit and task parameter guidance in their schemas", () => {
     // Intent: removing duplicated Parameters sections must not remove constraints needed to call the tools correctly.
-    expect(descriptionOf(editSchema.properties.old_string)).toContain("non-empty");
-    expect(descriptionOf(editSchema.properties.old_string)).toContain("exactly once");
-    expect(descriptionOf(editSchema.properties.new_string)).toContain("may be empty");
+    const replacement = editSchema.properties.edits.items;
+    expect(descriptionOf(replacement.properties.old_string)).toContain("non-empty");
+    expect(descriptionOf(replacement.properties.old_string)).toContain("exactly once");
+    expect(descriptionOf(replacement.properties.new_string)).toContain("may be empty");
 
     const taskSchema = createTaskSchema(7);
     expect(descriptionOf(taskSchema.properties.subagent_type)).toContain("<available_subagents>");

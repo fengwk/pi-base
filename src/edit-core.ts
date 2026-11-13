@@ -43,17 +43,46 @@ interface EditRenderState {
   completedKey: string | undefined;
 }
 
+interface EditReplacement {
+  old_string: string;
+  new_string: string;
+  replace_all?: boolean;
+}
+
+function readEditReplacements(params: any): EditReplacement[] {
+  if (["old_string", "new_string", "replace_all"].some((key) => Object.prototype.hasOwnProperty.call(params ?? {}, key))) {
+    throw new Error("Put old_string, new_string and replace_all inside edits entries, not at the top level.");
+  }
+  if (!Array.isArray(params?.edits) || params.edits.length === 0) {
+    throw new Error("edits must be a non-empty array of replacements; use one entry for a single change.");
+  }
+  for (let index = 0; index < params.edits.length; index++) {
+    const replacement = params.edits[index];
+    const prefix = `Edit ${index + 1}: `;
+    for (const key of ["old_string", "new_string"]) {
+      if (!hasStringProperty(replacement, key)) throw new Error(`${prefix}${key} is required and must be a string.`);
+    }
+    if (replacement.replace_all !== undefined && typeof replacement.replace_all !== "boolean") {
+      throw new Error(`${prefix}replace_all must be a boolean.`);
+    }
+  }
+  return params.edits;
+}
+
 function prepareEditArguments(args: unknown, validationTool: any): any {
   try {
-    return validateToolArguments(validationTool, {
+    const prepared = validateToolArguments(validationTool, {
       type: "toolCall",
       id: "edit-argument-validation",
       name: "edit",
       arguments: mapFilePathToPath(args) as any,
     });
+    readEditReplacements(prepared);
+    return prepared;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${message}\n\n${EDIT_ARGUMENT_VALIDATION_HINT}`);
+    const prefix = message.startsWith("Validation failed for tool") ? "" : 'Validation failed for tool "edit": ';
+    throw new Error(`${prefix}${message}\n\n${EDIT_ARGUMENT_VALIDATION_HINT}`);
   }
 }
 
@@ -62,10 +91,22 @@ function formatEditCall(args: any, theme: any, cwd?: string): string {
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
   const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   const allMatchesTag = args?.replace_all === true ? " [replace_all]" : "";
-  return `${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}${allMatchesTag}`;
+  const batchTag = Array.isArray(args?.edits) ? ` [${args.edits.length} edit${args.edits.length === 1 ? "" : "s"}]` : "";
+  return `${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}${allMatchesTag}${batchTag}`;
 }
 
 function formatEditCallPreview(args: any, theme: any): string {
+  if (Array.isArray(args?.edits)) {
+    return args.edits.map((entry: any, index: number) => {
+      const preview = formatReplacementPreview(entry, theme);
+      return preview ? `${styleMuted(theme, `Edit ${index + 1}${entry?.replace_all === true ? " [replace_all]" : ""}`)}\n${preview}` : "";
+    }).filter(Boolean).join("\n\n");
+  }
+  // Render archived single-style calls, but do not accept them for execution.
+  return formatReplacementPreview(args, theme);
+}
+
+function formatReplacementPreview(args: any, theme: any): string {
   const oldText = String(args?.old_string ?? "");
   const newText = String(args?.new_string ?? "");
   if (!oldText && !newText) return "";
@@ -150,7 +191,6 @@ interface ReplacementOccurrence {
   start: DocumentCursor;
   end: DocumentCursor;
   consumedEndings: ConcreteLineEnding[];
-  trailingEnding: ConcreteLineEnding | null;
 }
 
 type EditComputationResult =
@@ -219,7 +259,6 @@ function buildReplacementOccurrences(document: ParsedLineEndingDocument, search:
       start,
       end,
       consumedEndings: document.eolAfter.slice(start.lineIndex, end.lineIndex).filter((ending): ending is ConcreteLineEnding => ending !== null),
-      trailingEnding: document.eolAfter[end.lineIndex] ?? null,
     };
   });
 }
@@ -253,7 +292,9 @@ function applyOccurrenceToDocument(
   replacementLines[lastReplacementIndex] = `${replacementLines[lastReplacementIndex] ?? ""}${suffix}`;
   for (let index = 0; index < replacementEolAfter.length; index++) {
     if (index === replacementEolAfter.length - 1) {
-      replacementEolAfter[index] = occurrence.trailingEnding;
+      // A later replacement on this same line may already have inserted a
+      // newline. Keep its current boundary instead of restoring the original.
+      replacementEolAfter[index] = document.eolAfter[occurrence.end.lineIndex] ?? null;
       continue;
     }
     replacementEolAfter[index] = resolveInsertedEnding(style, index, occurrence.consumedEndings);
@@ -462,28 +503,22 @@ export function registerEditTool(
 
         const rawPath = String(params.path ?? "").replace(/^@/, "");
         if (!rawPath) throw new Error("path is required.");
-        if (!hasStringProperty(params, "old_string")) {
-          return { content: [{ type: "text" as const, text: "old_string is required and must be a string." }], isError: true };
-        }
-        if (!hasStringProperty(params, "new_string")) {
-          return { content: [{ type: "text" as const, text: "new_string is required and must be a string." }], isError: true };
-        }
-
-        const oldText = params.old_string;
-        const newText = params.new_string;
-        const applyToAllMatches = params.replace_all === true;
-
-        if (oldText === newText) {
-          return { content: [{ type: "text" as const, text: "No changes to apply: old_string and new_string are identical." }], isError: true };
-        }
-        if (oldText === "") {
-          return { content: [{ type: "text" as const, text: "old_string must not be empty. Use write to create or overwrite a file." }], isError: true };
-        }
-        const normalizedOld = normalizeToLF(oldText);
-        const normalizedNew = normalizeToLF(newText);
-        if (normalizedOld === normalizedNew) {
-          return { content: [{ type: "text" as const, text: "No changes to apply: old_string and new_string are identical after line-ending normalization." }], isError: true };
-        }
+        const requestedReplacements = readEditReplacements(params);
+        const normalizedReplacements = requestedReplacements.map((replacement, index) => {
+          const prefix = `Edit ${index + 1}: `;
+          if (replacement.old_string === replacement.new_string) {
+            throw new Error(`${prefix}No changes to apply: old_string and new_string are identical.`);
+          }
+          if (replacement.old_string === "") {
+            throw new Error(`${prefix}old_string must not be empty. Use write to create or overwrite a file.`);
+          }
+          const oldText = normalizeToLF(replacement.old_string);
+          const newText = normalizeToLF(replacement.new_string);
+          if (oldText === newText) {
+            throw new Error(`${prefix}No changes to apply: old_string and new_string are identical after line-ending normalization.`);
+          }
+          return { oldText, newText, replaceAll: replacement.replace_all === true, prefix };
+        });
 
         const { cwd } = resolveToolWorkdir(params.workdir, ctx.cwd ?? process.cwd());
         const absolutePath = resolveToCwd(rawPath, cwd);
@@ -503,28 +538,47 @@ export function registerEditTool(
           const endingStyle = detectLineEnding(decodedFile.text);
           const originalDocument = parseLineEndingDocument(decodedFile.text);
           const fileText = serializeNormalizedDocument(originalDocument);
-          const occurrences = buildReplacementOccurrences(originalDocument, normalizedOld);
+          const planned: { occurrence: ReplacementOccurrence; newText: string; editIndex: number }[] = [];
+          for (const [editIndex, replacement] of normalizedReplacements.entries()) {
+            const occurrences = buildReplacementOccurrences(originalDocument, replacement.oldText);
+            if (occurrences.length === 0) {
+              return { kind: "error", text: `${replacement.prefix}Could not find old_string in ${rawPath}. It must match exactly, including whitespace and indentation.` };
+            }
+            if (occurrences.length > 1 && !replacement.replaceAll) {
+              return {
+                kind: "error",
+                text: `${replacement.prefix}Found ${occurrences.length} exact matches for old_string in ${rawPath}. Provide more surrounding context to make the match unique, or set replace_all to true.`,
+              };
+            }
+            if (replacement.replaceAll && hasOverlappingOccurrences(occurrences)) {
+              return {
+                kind: "error",
+                text: `${replacement.prefix}Found overlapping exact matches for old_string in ${rawPath}. replace_all cannot safely apply overlapping replacements; provide a more specific old_string.`,
+              };
+            }
+            for (const occurrence of occurrences) {
+              planned.push({ occurrence, newText: replacement.newText, editIndex });
+            }
+          }
 
-          if (occurrences.length === 0) {
-            return { kind: "error", text: `Could not find old_string in ${rawPath}. It must match exactly, including whitespace and indentation.` };
-          }
-          if (occurrences.length > 1 && !applyToAllMatches) {
-            return {
-              kind: "error",
-              text: `Found ${occurrences.length} exact matches for old_string in ${rawPath}. Provide more surrounding context to make the match unique, or set replace_all to true.`,
-            };
-          }
-          if (applyToAllMatches && hasOverlappingOccurrences(occurrences)) {
-            return {
-              kind: "error",
-              text: `Found overlapping exact matches for old_string in ${rawPath}. replace_all cannot safely apply overlapping replacements; provide a more specific old_string.`,
-            };
+          // All matches refer to the original snapshot. Validate the entire
+          // batch before changing anything, then apply from right to left so
+          // original coordinates remain valid even for multi-line replacements.
+          planned.sort((left, right) => left.occurrence.startIndex - right.occurrence.startIndex);
+          for (let index = 1; index < planned.length; index++) {
+            const previous = planned[index - 1]!;
+            const current = planned[index]!;
+            if (current.occurrence.startIndex < previous.occurrence.endIndex) {
+              return {
+                kind: "error",
+                text: `Edit ${previous.editIndex + 1} and Edit ${current.editIndex + 1} overlap in ${rawPath}. Batch edits must match independent, non-overlapping regions of the original file.`,
+              };
+            }
           }
 
           let nextDocument = originalDocument;
-          const pendingOccurrences = applyToAllMatches ? [...occurrences] : [occurrences[0]!];
-          for (const occurrence of pendingOccurrences.reverse()) {
-            nextDocument = applyOccurrenceToDocument(nextDocument, occurrence, normalizedNew, endingStyle);
+          for (const { occurrence, newText } of planned.reverse()) {
+            nextDocument = applyOccurrenceToDocument(nextDocument, occurrence, newText, endingStyle);
           }
 
           const replacedText = serializeNormalizedDocument(nextDocument);
@@ -539,7 +593,7 @@ export function registerEditTool(
             kind: "success",
             fileText,
             replacedText,
-            replacements: applyToAllMatches ? occurrences.length : 1,
+            replacements: planned.length,
           };
         });
         if (computation.kind === "error") {

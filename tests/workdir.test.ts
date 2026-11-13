@@ -47,7 +47,7 @@ describe("workdir defaults", () => {
 
     const editResult = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "beta" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "beta" }] },
       undefined,
       undefined,
       { cwd: root },
@@ -89,7 +89,7 @@ describe("workdir defaults", () => {
 
     const editResult = await registry.getTool("edit").execute(
       "2",
-      { workdir: "repo", path: "src/example.ts", old_string: "alpha", new_string: "beta" },
+      { workdir: "repo", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "beta" }] },
       undefined,
       undefined,
       { cwd: root },

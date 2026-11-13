@@ -8,11 +8,12 @@ afterEach(() => {
 });
 
 describe("edit queue", () => {
-  it("serializes same-file concurrent edits through one read-modify-write critical section", async () => {
+  // Intent: one-entry and two-entry `edits` arrays must share the same queue path.
+  it.each([1, 2])("serializes same-file edits through one critical section (edits=%i)", async (entryCount) => {
     // Intent: block the first write after its read. If the second edit can still
     // read old bytes, the final file is clobbered. Keeping the whole cycle inside
     // the queue makes the second edit observe the first write instead.
-    let fileBytes = Buffer.from("alpha\n", "utf8");
+    let fileBytes = Buffer.from("alpha\ntail\n", "utf8");
     let releaseFirstWrite = () => {};
     let resolveFirstWriteStarted = () => {};
     const firstWriteStarted = new Promise<void>((resolve) => {
@@ -41,14 +42,19 @@ describe("edit queue", () => {
 
     const firstEdit = registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "gamma" },
+      {
+        path: "src/example.ts",
+        edits: entryCount === 2
+          ? [{ old_string: "alpha", new_string: "gamma" }, { old_string: "tail", new_string: "end" }]
+          : [{ old_string: "alpha", new_string: "gamma" }],
+      },
       undefined,
       undefined,
       { cwd: "/tmp/pi-base-edit-queue" },
     );
     const secondEdit = registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/example.ts", old_string: "alpha", new_string: "beta" },
+      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "beta" }] },
       undefined,
       undefined,
       { cwd: "/tmp/pi-base-edit-queue" },
@@ -62,6 +68,7 @@ describe("edit queue", () => {
     expect(firstResult.isError).not.toBe(true);
     expect(secondResult.isError).toBe(true);
     expect(getText(secondResult)).toContain("Could not find old_string");
-    expect(fileBytes.toString("utf8")).toBe("gamma\n");
+    expect(fileBytes.toString("utf8")).toBe(entryCount === 2 ? "gamma\nend\n" : "gamma\ntail\n");
+    expect(writeCount).toBe(1);
   });
 });

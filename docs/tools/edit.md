@@ -23,9 +23,10 @@ Performs exact string replacement in an existing text file.
 | Parameter | Required | Default | Description |
 |------|------|------|------|
 | `path` | yes | — | Existing text file |
-| `old_string` | yes | — | Exact text to replace |
-| `new_string` | yes | — | Replacement text |
-| `replace_all` | no | `false` | Replace all exact matches |
+| `edits` | yes | — | Non-empty array of independent replacements in this file |
+| `edits[].old_string` | yes | — | Exact text to replace in the original file |
+| `edits[].new_string` | yes | — | Replacement text; may be empty for deletion |
+| `edits[].replace_all` | no | `false` | Replace all exact matches for this entry |
 | `workdir` | no | session cwd | Base for relative path resolution |
 
 ## Execution chain
@@ -55,6 +56,19 @@ validate parameters
 - With `replace_all=true`, all non-overlapping matches are replaced; overlapping matches are rejected.
 
 Only line endings are normalized to LF before matching; whitespace, indentation, and punctuation are not trimmed. The whitespace, indentation, punctuation, and line breaks in `old_string` must match the target file content exactly.
+
+## One input format
+
+Always pass a non-empty `edits` array: one entry for one change, multiple entries for independent changes in the same file. Top-level `old_string`, `new_string`, and `replace_all` are not accepted:
+
+```ts
+edit({ path: "a.ts", edits: [
+  { old_string: "const alpha = 1;", new_string: "const alpha = 2;" },
+  { old_string: "const beta = 3;", new_string: "const beta = 4;" },
+] });
+```
+
+Every entry is matched against the same original file snapshot, not the output of the preceding entry. All matches must be non-overlapping, including matches expanded by an entry's `replace_all`. Missing, ambiguous, overlapping, invalid, or unencodable replacements fail before any write. A successful batch writes once, reports the total number of replaced occurrences, and returns one combined diff. This is validation-before-write, not filesystem crash-atomicity or a transaction across separate tool calls. Replacements that depend on earlier edits need separate calls.
 
 ## Encoding and line endings
 
@@ -109,6 +123,7 @@ The following cases return `isError: true`:
 - [`tests/edit-write-index.test.ts`](../../tests/edit-write-index.test.ts)
 - [`tests/edit-diff.test.ts`](../../tests/edit-diff.test.ts)
 - [`tests/edit-queue.test.ts`](../../tests/edit-queue.test.ts)
+- [`tests/edit-batch.test.ts`](../../tests/edit-batch.test.ts)
 - [`tests/line-endings.test.ts`](../../tests/line-endings.test.ts)
 - [`tests/text-codec.test.ts`](../../tests/text-codec.test.ts)
 - [`tests/permission.test.ts`](../../tests/permission.test.ts)

@@ -30,7 +30,7 @@ async function callEdit(
 ): Promise<{ content: Array<{ type: string; text?: string }>; details?: { diff?: string; replacements?: number } }> {
   return registry.getTool("edit").execute(
     "test-call",
-    { path: oldPath, workdir: ".", old_string: oldString, new_string: newString, replace_all: replaceAll },
+    { path: oldPath, workdir: ".", edits: [{ old_string: oldString, new_string: newString, replace_all: replaceAll }] },
     undefined,
     undefined,
     { cwd: root },
@@ -335,7 +335,7 @@ describe("edit diff renderer (position-aware context folding)", () => {
         await writeLines(root, "nochange.txt", ["L1", "L2", "L3", "L4", "L5"]);
         const result = await registry.getTool("edit").execute(
           "test-call",
-          { path: "nochange.txt", workdir: ".", old_string: "L3", new_string: "L3" },
+          { path: "nochange.txt", workdir: ".", edits: [{ old_string: "L3", new_string: "L3" }] },
           undefined,
           undefined,
           { cwd: root },
@@ -472,10 +472,12 @@ describe("edit diff renderer (position-aware context folding)", () => {
           {
             path: "story.txt",
             workdir: ".",
-            old_string:
-              "时光旅人\n\n我叫苏晚，今年二十八岁，是一个普通的图书管理员。",
-            new_string:
-              "时光旅人：觉醒之路\n\n我叫苏晚，今年二十八岁，是一名普通的图书管理员。",
+            edits: [{
+              old_string:
+                "时光旅人\n\n我叫苏晚，今年二十八岁，是一个普通的图书管理员。",
+              new_string:
+                "时光旅人：觉醒之路\n\n我叫苏晚，今年二十八岁，是一名普通的图书管理员。",
+            }],
           },
           undefined,
           undefined,

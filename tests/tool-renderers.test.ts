@@ -40,8 +40,7 @@ describe("tool renderers", () => {
           args: {
             workdir: "packages/app",
             path: "src/example.ts",
-            old_string: "const a = 1;",
-            new_string: "const a = 2;",
+            edits: [{ old_string: "const a = 1;", new_string: "const a = 2;" }],
           },
         },
         { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" } },
@@ -72,7 +71,7 @@ describe("tool renderers", () => {
         { name: "grep", args: { pattern: longText, path: "src", include: "**/*.ts" } },
         { name: "find", args: { pattern: `*${longText}*`, path: "src" } },
         { name: "bash", args: { command: `printf '%s\\n' ${longText}`, timeout_seconds: 5 } },
-        { name: "edit", args: { path: "src/demo.ts", old_string: longText, new_string: `${longText}x` }, isError: true },
+        { name: "edit", args: { path: "src/demo.ts", edits: [{ old_string: longText, new_string: `${longText}x` }] }, isError: true },
         { name: "write", args: { path: "src/demo.ts", content: `${longText}\n${resultText}` } },
         { name: "lsp_goto_definition", args: { path: "src/demo.ts", line: 3, character: 0 } },
         { name: "lsp_workspace_symbols", args: { path: "src/demo.ts", query: longText, limit: 20 } },
@@ -253,7 +252,7 @@ describe("tool renderers", () => {
       expect(rendered).toContain("<toolDiffAdded>+1|const x = 2;</toolDiffAdded>");
 
       const callRendered = render(registry.getTool("edit").renderCall(
-        { path: "src/a.ts", old_string: "const x = 1;", new_string: "const x = 2;" },
+        { path: "src/a.ts", edits: [{ old_string: "const x = 1;", new_string: "const x = 2;" }] },
         { fg: (role: string, text: string) => `<${role}>${text}</${role}>` } as any,
         { lastComponent: undefined, state: sharedState, executionStarted: true, argsComplete: true, cwd: "/tmp/ws" },
       ));
@@ -282,7 +281,7 @@ describe("tool renderers", () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const editCall = render(registry.getTool("edit").renderCall(
-        { workdir: "pkg", path: "a.ts", old_string: "old", new_string: "new" },
+        { workdir: "pkg", path: "a.ts", edits: [{ old_string: "old", new_string: "new" }] },
         { fg: (_role: string, text: string) => text } as any,
         { cwd: "/tmp/ws" },
       ));
@@ -305,7 +304,7 @@ describe("tool renderers", () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const rendered = render(registry.getTool("edit").renderCall(
-        { path: "src/example.ts", old_string: "old", new_string: "new" },
+        { path: "src/example.ts", edits: [{ old_string: "old", new_string: "new" }] },
         { fg: (role: string, text: string) => `<${role}>${text}</${role}>` } as any,
         { lastComponent: undefined, argsComplete: true, cwd: "/tmp/ws" },
       ));
@@ -319,7 +318,7 @@ describe("tool renderers", () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const rendered = render(registry.getTool("edit").renderCall(
-        { path: "src/example.ts", old_string: "alpha\nbeta", new_string: "alpha\nbeta\ngamma" },
+        { path: "src/example.ts", edits: [{ old_string: "alpha\nbeta", new_string: "alpha\nbeta\ngamma" }] },
         {} as any,
         { lastComponent: undefined, state: {}, executionStarted: true, argsComplete: true, cwd: "/tmp/ws" },
       ));
@@ -335,7 +334,7 @@ describe("tool renderers", () => {
       const registry = createToolRegistry();
       piBaseExtension(registry.pi as any);
       const rendered = render(registry.getTool("edit").renderCall(
-        { path: "src/example.ts", old_string: "old", new_string: "new" },
+        { path: "src/example.ts", edits: [{ old_string: "old", new_string: "new" }] },
         {} as any,
         { lastComponent: undefined, state: {}, executionStarted: true, argsComplete: true, isPartial: false, cwd: "/tmp/ws" },
       ));
@@ -399,7 +398,7 @@ describe("tool renderers", () => {
         { name: "grep", args: { pattern: "demo" } },
         { name: "find", args: { path: "src" } },
         { name: "bash", args: { timeout_seconds: 5 } },
-        { name: "edit", args: { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" } },
+        { name: "edit", args: { path: "src/example.ts", edits: [{ old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" }] } },
         { name: "write", args: { path: "src/example.ts", content: Array.from({ length: 14 }, (_, index) => `line-${index + 1}`).join("\n") } },
         { name: "lsp_goto_definition", args: { line: 3 } },
         { name: "lsp_workspace_symbols", args: { query: "Example" } },
@@ -447,7 +446,7 @@ describe("tool renderers", () => {
       expect(writeRendered).toContain("earlier lines");
 
       const editRendered = render(registry.getTool("edit").renderCall(
-        { path: "src/example.ts", old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" },
+        { path: "src/example.ts", edits: [{ old_string: Array.from({ length: 14 }, (_, index) => `old-${index + 1}`).join("\n"), new_string: "new" }] },
         {} as any,
         streamingContext as any,
       ));
@@ -722,7 +721,7 @@ describe("tool renderers", () => {
       { name: "grep", args: { pattern: "demo", path: "src", workdir: "packages/web", include: "*.ts", multiline: true }, expected: "grep \"demo\" in src from packages/web [include=*.ts, multiline=true]" },
       { name: "find", args: { pattern: "*.ts", path: "src", workdir: "packages/web" }, expected: "find *.ts in src from packages/web" },
       { name: "bash", args: { command: "npm test", workdir: "packages/web", timeout_seconds: 5 }, expected: "$ npm test (timeout 5s) in packages/web" },
-      { name: "edit", args: { workdir: "services/api", path: "src/example.ts", old_string: "alpha", new_string: "beta" }, expected: "edit src/example.ts in services/api" },
+      { name: "edit", args: { workdir: "services/api", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "beta" }] }, expected: "edit src/example.ts in services/api [1 edit]" },
       { name: "write", args: { path: "src/example.ts", workdir: "services/api", content: "export const x = 1;" }, expected: "write src/example.ts in services/api" },
       { name: "lsp_goto_definition", args: { path: "src/example.ts", workdir: "services/api", line: 2 }, expected: "lsp_goto_definition src/example.ts in services/api [line=2, character=0]" },
       { name: "lsp_workspace_symbols", args: { path: "src/example.ts", workdir: "packages/web", query: "Example", limit: 10 }, expected: "lsp_workspace_symbols src/example.ts in packages/web Example [limit=10]" },

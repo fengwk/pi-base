@@ -16,7 +16,7 @@ describe.skipIf(process.platform === "win32")("special filesystem nodes", () => 
       registry.getTool("grep").execute("grep-special", { path: "/dev/null", pattern: "x" }, undefined, undefined, { cwd: root }),
       registry.getTool("edit").execute(
         "edit-special",
-        { path: "/dev/null", old_string: "x", new_string: "y" },
+        { path: "/dev/null", edits: [{ old_string: "x", new_string: "y" }] },
         undefined,
         undefined,
         { cwd: root },

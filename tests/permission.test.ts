@@ -293,7 +293,7 @@ describe("permission guard", () => {
     );
     const editResult = await registry.getTool("edit").execute(
       "edit",
-      { workdir: ".", path: "nested\\edit.txt", old_string: "old", new_string: "new" },
+      { workdir: ".", path: "nested\\edit.txt", edits: [{ old_string: "old", new_string: "new" }] },
       undefined,
       undefined,
       { cwd: root, hasUI: false },
@@ -317,11 +317,12 @@ describe("permission guard", () => {
     expect(await readdir(root)).not.toContain("nested\\sub");
   });
 
-  // Intent: edit permission must resolve targets from the path parameter
-  it("asks for edit when path does not match allow rules", async () => {
+  // Intent: edit permission must resolve targets from the path parameter, for both
+  // one-entry and two-entry `edits` arrays.
+  it.each([1, 2])("asks for edit when path does not match allow rules (edits=%i)", async (entryCount) => {
     const root = await createTempWorkspace();
     await mkdir(join(root, "src"), { recursive: true });
-    await writeFile(join(root, "src", "secret.ts"), "old\n", "utf8");
+    await writeFile(join(root, "src", "secret.ts"), "old\nkeep\n", "utf8");
     await writeProjectSettings(root, {
       permission: {
         edit: {
@@ -343,7 +344,13 @@ describe("permission guard", () => {
     await registry.emit("session_start", { reason: "startup" }, { cwd: root });
     const result = await registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/secret.ts", old_string: "old", new_string: "new" },
+      {
+        workdir: ".",
+        path: "src/secret.ts",
+        edits: entryCount === 2
+          ? [{ old_string: "old", new_string: "new" }, { old_string: "keep", new_string: "kept" }]
+          : [{ old_string: "old", new_string: "new" }],
+      },
       undefined,
       undefined,
       {
@@ -360,6 +367,7 @@ describe("permission guard", () => {
     expect(prompts[0]).toContain("src/secret.ts");
     expect(prompts[0]).not.toContain("old");
     expect(prompts[0]).not.toContain("new");
+    expect(await readFile(join(root, "src", "secret.ts"), "utf8")).toBe("old\nkeep\n");
     // Intent: rejecting one tool call should surface an error result without
     // aborting the whole agent turn.
     expect(aborted).toBe(false);
