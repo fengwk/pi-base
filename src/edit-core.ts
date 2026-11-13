@@ -1,7 +1,7 @@
 import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import * as Diff from "diff";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import {
   detectLineEnding,
   normalizeToLF,
@@ -32,8 +32,9 @@ import {
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { editSchema } from "./schemas/edit.js";
 import { mapFilePathToPath } from "./tool-arg-aliases.js";
-import { assertOriginalBytesRoundTrip, decodeTextFile, detectDeclaredTextEncoding, encodeTextFile } from "./text-codec.js";
+import { type DecodedTextFile, decodeTextFile, encodingForBom, encodeTextFile, formatTextFileError, resolveDeclaredEncoding } from "./text-codec.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
+import { writeFileAtomic } from "./atomic-write.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
 const EDIT_ARGUMENT_VALIDATION_HINT = "Hint: Adjust the input parameters and re-run the `edit` command.";
@@ -111,7 +112,11 @@ function formatReplacementPreview(args: any, theme: any): string {
   const newText = String(args?.new_string ?? "");
   if (!oldText && !newText) return "";
   try {
-    const { diff } = generateNumberedDiff(oldText, newText);
+    const oldDocument = parseLineEndingDocument(normalizeToLF(oldText));
+    const newDocument = parseLineEndingDocument(normalizeToLF(newText));
+    const { diff } = generateNumberedDiff(oldDocument, newDocument, [
+      { oldStart: 0, oldEnd: oldDocument.lines.length, newStart: 0, newEnd: newDocument.lines.length },
+    ]);
     if (!diff.trim()) return "";
     return colorizeCompletedEditDiff(diff, theme);
   } catch {
@@ -128,13 +133,6 @@ function formatEditPreview(oldText: string, newText: string, theme: any): string
 
 function previewLines(value: string, prefix: "+" | "-", styleLine: (line: string) => string): string[] {
   return normalizeToLF(value).split("\n").map((line) => styleLine(`${prefix}${line}`));
-}
-
-function countDisplayedLines(text: string): number {
-  if (text.length === 0) return 0;
-  const lines = text.split("\n");
-  if (text.endsWith("\n") && lines[lines.length - 1] === "") lines.pop();
-  return lines.length;
 }
 
 function getEditRenderState(context: any): EditRenderState {
@@ -185,20 +183,36 @@ interface DocumentCursor {
   column: number;
 }
 
-interface ReplacementOccurrence {
+interface ReplacementSpan {
   startIndex: number;
   endIndex: number;
   start: DocumentCursor;
   end: DocumentCursor;
   consumedEndings: ConcreteLineEnding[];
+  editIndex: number;
+}
+
+interface AppliedEdit {
+  span: ReplacementSpan;
+  newText: string;
+}
+
+interface ChangeRegion {
+  /** Old-document line range, end exclusive. */
+  oldStart: number;
+  oldEnd: number;
+  /** New-document line range, end exclusive. */
+  newStart: number;
+  newEnd: number;
 }
 
 type EditComputationResult =
   | { kind: "error"; text: string }
   | {
       kind: "success";
-      fileText: string;
-      replacedText: string;
+      oldDocument: ParsedLineEndingDocument;
+      newDocument: ParsedLineEndingDocument;
+      changes: ChangeRegion[];
       replacements: number;
     };
 
@@ -217,48 +231,57 @@ function findOccurrenceStarts(content: string, search: string): number[] {
   return starts;
 }
 
-function hasOverlappingOccurrences(occurrences: readonly ReplacementOccurrence[]): boolean {
+function hasOverlappingOccurrences(occurrences: readonly Pick<ReplacementSpan, "startIndex" | "endIndex">[]): boolean {
   for (let index = 1; index < occurrences.length; index++) {
     if (occurrences[index]!.startIndex < occurrences[index - 1]!.endIndex) return true;
   }
   return false;
 }
 
-function cursorFromNormalizedIndex(document: Pick<ParsedLineEndingDocument, "lines" | "eolAfter">, index: number): DocumentCursor {
+/** Normalized index at which every line starts, so span boundaries map by binary search. */
+function normalizedLineStarts(document: ParsedLineEndingDocument): number[] {
+  const starts: number[] = new Array(document.lines.length);
   let offset = 0;
   for (let lineIndex = 0; lineIndex < document.lines.length; lineIndex++) {
-    const line = document.lines[lineIndex] ?? "";
-    if (index <= offset + line.length) {
-      return { lineIndex, column: index - offset };
-    }
-    offset += line.length;
-    if (document.eolAfter[lineIndex] !== null) {
-      if (index === offset + 1) {
-        return { lineIndex: Math.min(lineIndex + 1, document.lines.length - 1), column: 0 };
-      }
-      offset += 1;
-    }
+    starts[lineIndex] = offset;
+    offset += (document.lines[lineIndex] ?? "").length + (document.eolAfter[lineIndex] === null ? 0 : 1);
   }
-  if (document.lines.length === 0 && index === 0) return { lineIndex: 0, column: 0 };
-  const lastLineIndex = Math.max(0, document.lines.length - 1);
-  const lastLine = document.lines[lastLineIndex] ?? "";
-  if (index === offset) return { lineIndex: lastLineIndex, column: lastLine.length };
-  throw new Error("line ending document index is out of range.");
+  return starts;
 }
 
-function buildReplacementOccurrences(document: ParsedLineEndingDocument, search: string): ReplacementOccurrence[] {
-  const normalizedText = serializeNormalizedDocument(document);
-  const starts = findOccurrenceStarts(normalizedText, search);
-  return starts.map((startIndex) => {
+function cursorAtLineStarts(starts: readonly number[], index: number): DocumentCursor {
+  let low = 0;
+  let high = starts.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (starts[middle]! <= index) low = middle;
+    else high = middle - 1;
+  }
+  return { lineIndex: low, column: index - starts[low]! };
+}
+
+function isConcreteEnding(ending: ConcreteLineEnding | null): ending is ConcreteLineEnding {
+  return ending !== null;
+}
+
+function buildReplacementSpans(
+  document: ParsedLineEndingDocument,
+  normalizedText: string,
+  lineStarts: readonly number[],
+  search: string,
+  editIndex: number,
+): ReplacementSpan[] {
+  return findOccurrenceStarts(normalizedText, search).map((startIndex) => {
     const endIndex = startIndex + search.length;
-    const start = cursorFromNormalizedIndex(document, startIndex);
-    const end = cursorFromNormalizedIndex(document, endIndex);
+    const start = cursorAtLineStarts(lineStarts, startIndex);
+    const end = cursorAtLineStarts(lineStarts, endIndex);
     return {
       startIndex,
       endIndex,
       start,
       end,
-      consumedEndings: document.eolAfter.slice(start.lineIndex, end.lineIndex).filter((ending): ending is ConcreteLineEnding => ending !== null),
+      consumedEndings: document.eolAfter.slice(start.lineIndex, end.lineIndex).filter(isConcreteEnding),
+      editIndex,
     };
   });
 }
@@ -276,169 +299,162 @@ function resolveInsertedEnding(
   return consumedEndings[index] ?? chooseAmbiguousEnding();
 }
 
-function applyOccurrenceToDocument(
+/**
+ * Applies sorted, non-overlapping spans in a single forward pass: unchanged text
+ * is copied verbatim (so untouched lines keep their own endings) and the cost is
+ * linear in the document size instead of one full document rebuild per match.
+ */
+function buildEditedDocument(
   document: ParsedLineEndingDocument,
-  occurrence: ReplacementOccurrence,
-  replacement: string,
+  edits: readonly AppliedEdit[],
   style: LineEndingStyle,
 ): ParsedLineEndingDocument {
-  const prefix = (document.lines[occurrence.start.lineIndex] ?? "").slice(0, occurrence.start.column);
-  const suffix = (document.lines[occurrence.end.lineIndex] ?? "").slice(occurrence.end.column);
-  const replacementDocument = parseLineEndingDocument(replacement);
-  const replacementLines = [...replacementDocument.lines];
-  const replacementEolAfter = [...replacementDocument.eolAfter];
-  const lastReplacementIndex = replacementLines.length - 1;
-  replacementLines[0] = `${prefix}${replacementLines[0] ?? ""}`;
-  replacementLines[lastReplacementIndex] = `${replacementLines[lastReplacementIndex] ?? ""}${suffix}`;
-  for (let index = 0; index < replacementEolAfter.length; index++) {
-    if (index === replacementEolAfter.length - 1) {
-      // A later replacement on this same line may already have inserted a
-      // newline. Keep its current boundary instead of restoring the original.
-      replacementEolAfter[index] = document.eolAfter[occurrence.end.lineIndex] ?? null;
-      continue;
-    }
-    replacementEolAfter[index] = resolveInsertedEnding(style, index, occurrence.consumedEndings);
-  }
-  return {
-    lines: [
-      ...document.lines.slice(0, occurrence.start.lineIndex),
-      ...replacementLines,
-      ...document.lines.slice(occurrence.end.lineIndex + 1),
-    ],
-    eolAfter: [
-      ...document.eolAfter.slice(0, occurrence.start.lineIndex),
-      ...replacementEolAfter,
-      ...document.eolAfter.slice(occurrence.end.lineIndex + 1),
-    ],
-    defaultEnding: document.defaultEnding,
+  const lines: string[] = [];
+  const eolAfter: Array<ConcreteLineEnding | null> = [];
+  let pending = "";
+  let lineIndex = 0;
+  let column = 0;
+  const endLine = (ending: ConcreteLineEnding | null) => {
+    lines.push(pending);
+    eolAfter.push(ending);
+    pending = "";
   };
+
+  for (const edit of edits) {
+    while (lineIndex < edit.span.start.lineIndex) {
+      pending += (document.lines[lineIndex] ?? "").slice(column);
+      endLine(document.eolAfter[lineIndex] ?? null);
+      lineIndex++;
+      column = 0;
+    }
+    pending += (document.lines[lineIndex] ?? "").slice(column, edit.span.start.column);
+    const replacement = parseLineEndingDocument(edit.newText);
+    pending += replacement.lines[0] ?? "";
+    for (let index = 0; index < replacement.lines.length - 1; index++) {
+      endLine(resolveInsertedEnding(style, index, edit.span.consumedEndings));
+      pending = replacement.lines[index + 1] ?? "";
+    }
+    // The text after the span is copied next, so the replacement's last line
+    // inherits the original ending that follows the replaced text.
+    lineIndex = edit.span.end.lineIndex;
+    column = edit.span.end.column;
+  }
+
+  while (lineIndex < document.lines.length) {
+    pending += (document.lines[lineIndex] ?? "").slice(column);
+    endLine(document.eolAfter[lineIndex] ?? null);
+    lineIndex++;
+    column = 0;
+  }
+  return { lines, eolAfter, defaultEnding: document.defaultEnding };
+}
+
+/** Changed line ranges of the applied spans, in both document coordinates. */
+function buildChangeRegions(edits: readonly AppliedEdit[]): ChangeRegion[] {
+  const regions: ChangeRegion[] = [];
+  let lineDelta = 0;
+  for (const edit of edits) {
+    const oldStart = edit.span.start.lineIndex;
+    const oldEnd = edit.span.end.lineIndex + 1;
+    const newStart = oldStart + lineDelta;
+    const replacementLines = parseLineEndingDocument(edit.newText).lines.length;
+    const region = { oldStart, oldEnd, newStart, newEnd: newStart + replacementLines };
+    const previous = regions[regions.length - 1];
+    if (previous && region.oldStart < previous.oldEnd) {
+      previous.oldEnd = Math.max(previous.oldEnd, region.oldEnd);
+      previous.newEnd = Math.max(previous.newEnd, region.newEnd);
+    } else {
+      regions.push(region);
+    }
+    lineDelta += replacementLines - (oldEnd - oldStart);
+  }
+  return regions;
+}
+
+function displayedLineCount(document: ParsedLineEndingDocument): number {
+  const lastLineIndex = document.lines.length - 1;
+  // A final newline produces a phantom empty line that read never numbers.
+  if (lastLineIndex > 0 && document.lines[lastLineIndex] === "" && document.eolAfter[lastLineIndex] === null) {
+    return lastLineIndex;
+  }
+  return document.lines.length;
 }
 
 /**
- * Emit a context block into `output`, applying the unified "head + ... + tail" rule
- * for inter-hunk blocks and the position-aware "single-side" rule for leading or
- * trailing context. The leading/trailing distinction is what makes the result match
- * git's `diff -U<N>`: a trailing context block keeps only its first `contextLines`
- * lines (the ones closest to the preceding hunk), a leading context block keeps
- * only its last `contextLines` lines (the ones closest to the following hunk), and
- * an inter-hunk block keeps `contextLines` lines on each side. Blocks that fit
- * within the merge threshold for their position are emitted verbatim.
+ * Generate a display-oriented diff from the changed line ranges only, so its cost
+ * scales with the change instead of the whole file.
  *
- * The caller's cursor is advanced by the full block length so line numbers stay
- * correct even when the middle is elided.
+ * Context follows git's `diff -U<N>` for the block's position: a leading block
+ * keeps its last `contextLines` lines, a trailing block its first
+ * `contextLines`, and an inter-hunk block `contextLines` on each side; a block
+ * short enough to fit both windows is shown whole.
  */
-function appendContextBlock(
-  output: string[],
-  block: string[],
-  cursor: { oldLineNum: number; newLineNum: number; lineNumberWidth: number },
-  contextLines: number,
-  position: "leading" | "inter-hunk" | "trailing",
-): void {
-  const { lineNumberWidth } = cursor;
-  let runningOld = cursor.oldLineNum;
-  let runningNew = cursor.newLineNum;
-  const emit = (line: string) => {
-    output.push(formatDiffLine(" ", runningOld, lineNumberWidth, line));
-    runningOld++;
-    runningNew++;
-  };
-
-  if (position === "inter-hunk") {
-    // Two hunks share this block. Short enough that both windows fit back-to-back
-    // → emit everything; otherwise keep head + "..." + tail.
-    if (block.length <= 2 * contextLines) {
-      for (const line of block) emit(line);
-    } else {
-      for (let i = 0; i < contextLines; i++) emit(block[i]!);
-      output.push("...");
-      const skipCount = block.length - 2 * contextLines;
-      runningOld += skipCount;
-      runningNew += skipCount;
-      for (let i = block.length - contextLines; i < block.length; i++) emit(block[i]!);
-    }
-  } else if (position === "trailing") {
-    // Only the lines closest to the preceding hunk matter; elide the rest.
-    if (block.length <= contextLines) {
-      for (const line of block) emit(line);
-    } else {
-      const shownLines = block.slice(0, contextLines);
-      const skippedLines = block.length - shownLines.length;
-      for (const line of shownLines) emit(line);
-      output.push("...");
-      runningOld += skippedLines;
-      runningNew += skippedLines;
-    }
-  } else {
-    // leading: only the lines closest to the following hunk matter. The elided
-    // head of the block lands first, so the cursor must skip ahead before we
-    // start emitting the surviving tail.
-    if (block.length <= contextLines) {
-      for (const line of block) emit(line);
-    } else {
-      const skippedLines = block.length - contextLines;
-      runningOld += skippedLines;
-      runningNew += skippedLines;
-      output.push("...");
-      for (const line of block.slice(skippedLines)) emit(line);
-    }
-  }
-
-  cursor.oldLineNum = runningOld;
-  cursor.newLineNum = runningNew;
-}
-
-/**
- * Generate a display-oriented diff with line numbers and context.
- *
- * Each context block is classified by its position relative to the surrounding
- * hunks (leading, inter-hunk, trailing) and rendered with the rule that matches
- * git's `diff -U<N>`:
- *   - leading: keep the last `contextLines` lines (closest to the following hunk)
- *   - inter-hunk: keep `contextLines` lines on each side
- *   - trailing: keep the first `contextLines` lines (closest to the preceding hunk)
- * Adjacent hunks whose context windows would touch are merged into a single
- * inter-hunk block (no "..." separator) so the output reads as one continuous
- * region around the change.
- */
-function generateNumberedDiff(oldContent: string, newContent: string, contextLines = 4): { diff: string; firstChangedLine: number | undefined } {
-  const parts = Diff.diffLines(oldContent, newContent);
+function generateNumberedDiff(
+  oldDocument: ParsedLineEndingDocument,
+  newDocument: ParsedLineEndingDocument,
+  changes: readonly ChangeRegion[],
+  contextLines = 4,
+): { diff: string; firstChangedLine: number | undefined } {
   const output: string[] = [];
-  const lineNumberWidth = Math.max(1, String(Math.max(countDisplayedLines(oldContent), countDisplayedLines(newContent), 1)).length);
-  const cursor = { oldLineNum: 1, newLineNum: 1, lineNumberWidth };
+  const lineNumberWidth = Math.max(1, String(Math.max(displayedLineCount(oldDocument), displayedLineCount(newDocument), 1)).length);
   let firstChangedLine: number | undefined;
+  let previousOldEnd = 0;
 
-  for (let index = 0; index < parts.length; index++) {
-    const part = parts[index]!;
-    const rawLines = part.value.split("\n");
-    if (rawLines[rawLines.length - 1] === "") rawLines.pop();
+  const emitContext = (from: number, count: number) => {
+    for (let offset = 0; offset < count; offset++) {
+      const oldLineIndex = from + offset;
+      output.push(formatDiffLine(" ", oldLineIndex + 1, lineNumberWidth, oldDocument.lines[oldLineIndex] ?? ""));
+    }
+  };
 
-    if (part.added || part.removed) {
-      if (firstChangedLine === undefined) firstChangedLine = cursor.newLineNum;
-      for (const line of rawLines) {
+  for (const [regionIndex, region] of changes.entries()) {
+    const gap = region.oldStart - previousOldEnd;
+    if (gap > 0) {
+      if (regionIndex === 0) {
+        if (gap <= contextLines) emitContext(previousOldEnd, gap);
+        else {
+          output.push("...");
+          emitContext(region.oldStart - contextLines, contextLines);
+        }
+      } else if (gap <= 2 * contextLines) {
+        emitContext(previousOldEnd, gap);
+      } else {
+        emitContext(previousOldEnd, contextLines);
+        output.push("...");
+        emitContext(region.oldStart - contextLines, contextLines);
+      }
+    }
+
+    firstChangedLine ??= region.newStart + 1;
+    const oldLines = oldDocument.lines.slice(region.oldStart, region.oldEnd).join("\n");
+    const newLines = newDocument.lines.slice(region.newStart, region.newEnd).join("\n");
+    let oldLineNumber = region.oldStart + 1;
+    let newLineNumber = region.newStart + 1;
+    for (const part of Diff.diffLines(oldLines, newLines)) {
+      const partLines = part.value.split("\n");
+      if (partLines[partLines.length - 1] === "") partLines.pop();
+      for (const line of partLines) {
         if (part.added) {
-          output.push(formatDiffLine("+", cursor.newLineNum, lineNumberWidth, line));
-          cursor.newLineNum++;
+          output.push(formatDiffLine("+", newLineNumber++, lineNumberWidth, line));
+        } else if (part.removed) {
+          output.push(formatDiffLine("-", oldLineNumber++, lineNumberWidth, line));
         } else {
-          output.push(formatDiffLine("-", cursor.oldLineNum, lineNumberWidth, line));
-          cursor.oldLineNum++;
+          output.push(formatDiffLine(" ", oldLineNumber++, lineNumberWidth, line));
+          newLineNumber++;
         }
       }
-      continue;
     }
+    previousOldEnd = region.oldEnd;
+  }
 
-    const nextPartIsChange = index < parts.length - 1 && (parts[index + 1]!.added || parts[index + 1]!.removed);
-    const prevPartWasChange = index > 0 && (parts[index - 1]!.added || parts[index - 1]!.removed);
-    if (!prevPartWasChange && !nextPartIsChange) {
-      // File head or tail context that no hunk touches: skip entirely.
-      cursor.oldLineNum += rawLines.length;
-      cursor.newLineNum += rawLines.length;
-      continue;
+  const trailing = displayedLineCount(oldDocument) - previousOldEnd;
+  if (trailing > 0) {
+    if (trailing <= contextLines) {
+      emitContext(previousOldEnd, trailing);
+    } else {
+      emitContext(previousOldEnd, contextLines);
+      output.push("...");
     }
-    const position: "leading" | "inter-hunk" | "trailing" =
-      prevPartWasChange && nextPartIsChange ? "inter-hunk"
-      : prevPartWasChange ? "trailing"
-      : "leading";
-    appendContextBlock(output, rawLines, cursor, contextLines, position);
   }
 
   return { diff: output.join("\n"), firstChangedLine };
@@ -530,77 +546,82 @@ export function registerEditTool(
           const currentStat = await throwIfAbortedAfter(stat(absolutePath), signal);
           if (!currentStat.isFile()) throw new Error(`${rawPath} is not a regular file. edit supports text files only.`);
           const rawBytes = await throwIfAbortedAfter(readFile(absolutePath), signal);
-          const decodedFile = decodeTextFile(rawBytes);
-          if (decodedFile === null) {
-            return { kind: "error", text: `Error: ${rawPath} appears to be a binary file. edit supports text files only.` };
+          let decodedFile: DecodedTextFile;
+          try {
+            decodedFile = decodeTextFile(rawBytes, absolutePath);
+          } catch (error) {
+            return { kind: "error", text: `Error: ${formatTextFileError(error, rawPath, "edited")} edit supports text files only.` };
           }
 
-          assertOriginalBytesRoundTrip(rawBytes, decodedFile);
           const endingStyle = detectLineEnding(decodedFile.text);
           const originalDocument = parseLineEndingDocument(decodedFile.text);
-          const fileText = serializeNormalizedDocument(originalDocument);
-          const planned: { occurrence: ReplacementOccurrence; newText: string; editIndex: number }[] = [];
+          const normalizedText = serializeNormalizedDocument(originalDocument);
+          const lineStarts = normalizedLineStarts(originalDocument);
+          const planned: AppliedEdit[] = [];
           for (const [editIndex, replacement] of normalizedReplacements.entries()) {
-            const occurrences = buildReplacementOccurrences(originalDocument, replacement.oldText);
-            if (occurrences.length === 0) {
+            const spans = buildReplacementSpans(originalDocument, normalizedText, lineStarts, replacement.oldText, editIndex);
+            if (spans.length === 0) {
               return { kind: "error", text: `${replacement.prefix}Could not find old_string in ${rawPath}. It must match exactly, including whitespace and indentation.` };
             }
-            if (occurrences.length > 1 && !replacement.replaceAll) {
+            if (spans.length > 1 && !replacement.replaceAll) {
               return {
                 kind: "error",
-                text: `${replacement.prefix}Found ${occurrences.length} exact matches for old_string in ${rawPath}. Provide more surrounding context to make the match unique, or set replace_all to true.`,
+                text: `${replacement.prefix}Found ${spans.length} exact matches for old_string in ${rawPath}. Provide more surrounding context to make the match unique, or set replace_all to true.`,
               };
             }
-            if (replacement.replaceAll && hasOverlappingOccurrences(occurrences)) {
+            if (replacement.replaceAll && hasOverlappingOccurrences(spans)) {
               return {
                 kind: "error",
                 text: `${replacement.prefix}Found overlapping exact matches for old_string in ${rawPath}. replace_all cannot safely apply overlapping replacements; provide a more specific old_string.`,
               };
             }
-            for (const occurrence of occurrences) {
-              planned.push({ occurrence, newText: replacement.newText, editIndex });
+            for (const span of spans) {
+              planned.push({ span, newText: replacement.newText });
             }
           }
 
-          // All matches refer to the original snapshot. Validate the entire
-          // batch before changing anything, then apply from right to left so
-          // original coordinates remain valid even for multi-line replacements.
-          planned.sort((left, right) => left.occurrence.startIndex - right.occurrence.startIndex);
+          // All spans refer to the original snapshot: validate the whole batch,
+          // then apply it in one forward pass over the original document.
+          planned.sort((left, right) => left.span.startIndex - right.span.startIndex);
           for (let index = 1; index < planned.length; index++) {
             const previous = planned[index - 1]!;
             const current = planned[index]!;
-            if (current.occurrence.startIndex < previous.occurrence.endIndex) {
+            if (current.span.startIndex < previous.span.endIndex) {
               return {
                 kind: "error",
-                text: `Edit ${previous.editIndex + 1} and Edit ${current.editIndex + 1} overlap in ${rawPath}. Batch edits must match independent, non-overlapping regions of the original file.`,
+                text: `Edit ${previous.span.editIndex + 1} and Edit ${current.span.editIndex + 1} overlap in ${rawPath}. Batch edits must match independent, non-overlapping regions of the original file.`,
               };
             }
           }
 
-          let nextDocument = originalDocument;
-          for (const { occurrence, newText } of planned.reverse()) {
-            nextDocument = applyOccurrenceToDocument(nextDocument, occurrence, newText, endingStyle);
-          }
-
-          const replacedText = serializeNormalizedDocument(nextDocument);
+          const nextDocument = buildEditedDocument(originalDocument, planned, endingStyle);
           const serializedOutput = serializeLineEndingDocument(nextDocument);
           const outputBytes = encodeTextFile(serializedOutput, decodedFile.encoding, decodedFile.bom);
-          if (decodedFile.bom === "none") {
-            const declared = detectDeclaredTextEncoding(serializedOutput);
-            if (declared && declared !== detectDeclaredTextEncoding(decodedFile.text)
-              && !encodeTextFile(serializedOutput, declared, "none").equals(outputBytes)) {
-              throw new Error("Changing the encoding declaration requires converting the file. Use write with the complete content instead.");
-            }
+          // Edits may move text around but must not silently convert the file.
+          let resultEncoding: string;
+          try {
+            resultEncoding = decodedFile.bom !== "none"
+              ? encodingForBom(decodedFile.bom)!.name
+              : resolveDeclaredEncoding(serializedOutput, absolutePath, "none")?.name ?? "UTF-8";
+          } catch (error) {
+            return { kind: "error", text: `Error: ${rawPath}: ${(error as Error).message}` };
+          }
+          if (resultEncoding !== decodedFile.encoding.name) {
+            return {
+              kind: "error",
+              text: `This change would change the encoding of ${rawPath} from ${decodedFile.encoding.name} to ${resultEncoding}. Use write with the complete content to convert the file.`,
+            };
           }
           if (outputBytes.equals(rawBytes)) {
             return { kind: "error", text: "No changes to apply: edit would not change the file." };
           }
 
-          await writeFile(absolutePath, outputBytes);
+          await writeFileAtomic(absolutePath, outputBytes);
           return {
             kind: "success",
-            fileText,
-            replacedText,
+            oldDocument: originalDocument,
+            newDocument: nextDocument,
+            changes: buildChangeRegions(planned),
             replacements: planned.length,
           };
         });
@@ -618,7 +639,11 @@ export function registerEditTool(
         }
 
         // Generate diff for display.
-        const { diff, firstChangedLine } = generateNumberedDiff(computation.fileText, computation.replacedText);
+        const { diff, firstChangedLine } = generateNumberedDiff(
+          computation.oldDocument,
+          computation.newDocument,
+          computation.changes,
+        );
         const replacements = computation.replacements;
 
         const outputTextResult = diff.trim()

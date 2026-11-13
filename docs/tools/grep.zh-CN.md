@@ -37,12 +37,12 @@
 校验 pattern/path
   -> 解析 workdir/path
   -> stat 目标
-  -> 单文件二进制预检查
   -> ensureTool("rg")
-  -> spawn ripgrep --no-config --json
+  -> 目录搜索：先启动编码候选预扫描，再启动主搜索（并发）
   -> 解析 match events
+  -> 解码候选文件；对声明编码的文件改用解码文本重新搜索
   -> 路径/行号格式化
-  -> limit、长行和 timeout 处理
+  -> limit、长行、timeout 与未搜索提示处理
 ```
 
 ## ripgrep 参数
@@ -72,10 +72,8 @@
 
 ## 目标预检查
 
-- 目录可以直接搜索。
-- 单文件必须是普通文件。
-- 单文件搜索会先读取最多 1 MiB 做二进制检测。
-- 目录内的二进制过滤交给 ripgrep。
+- 目录可以直接搜索；目录内的二进制过滤交给 ripgrep。
+- 单文件必须是可解码文本。声明了非 UTF-8 编码时按解码文本搜索；二进制或无法解码的文件直接报错并使用 `read` 的措辞，不会静默跳过。
 
 ## 结果格式
 
@@ -87,7 +85,21 @@ src/example.ts:42: matching line
 
 目录搜索使用相对搜索根的路径；单文件搜索使用 basename。
 
-ripgrep JSON 中的 base64 `bytes` 字段会经过文本解码。取片段前，submatch 偏移使用同一检测编码进行转换，并计入被移除的 BOM；`text` 字段已使用 UTF-8 偏移。若事件缺少行文本，普通模式会按行号回读文件。
+ripgrep JSON 中的 base64 `bytes` 字段只用于路径显示；行文本按 UTF-8 偏移取片段。若事件缺少行文本，普通模式会回读文件并用共享 codec 解码一次。
+
+### 文本编码
+
+结果必须与 `read` 一致，因此目录搜索会在主搜索之前启动第二个并发 `rg` 进程：使用相同过滤条件执行 `rg --files-with-matches --encoding utf-8`，模式为 `coding[:=]|charset|<\?xml|pageEncoding|\x{FFFD}`。它列出唯一可能与纯 UTF-8 解码结果不同的文件：带声明样式的文件，以及不是合法 UTF-8 的文件。两次扫描并行运行，只在格式化结果时等待预扫描完成。
+
+每个候选文件用 [`src/text-codec.ts`](../../src/text-codec.ts) 解码。UTF-8 文件保留 ripgrep 的原始结果；带 BOM 或声明了其他编码的文件，由 ripgrep 从 stdin 读取规范化后的解码文本重新搜索，因此使用同一正则引擎，行号与 `read` 一致。codec 拒绝的文件会被跳过并丢弃其匹配。
+
+最终提示会列出被跳过的文件：
+
+```text
+[Not searched because the text encoding could not be determined: /abs/a.txt, /abs/b.txt, … and 3 more]
+```
+
+最多列出 10 个绝对路径并附带剩余数量；无论是否有匹配都会出现（无匹配时跟在 `No matches found` 之后）；所有候选都成功解码时不出现。
 
 超过展示预算的行会以该行首个 ripgrep submatch 为中心的片段展示：submatch 的 UTF-8 字节偏移会映射回报告文本，因此长行深处的命中仍可见并保留两侧上下文。片段最多 500 码点，被裁掉的一端用 `…` 标记；裁切落在码点边界上，多字节字符和代理对不会被切开。多行 event 的每一行只按覆盖该行的匹配部分取片段。若事件没有 submatch 偏移，则沿用行首前缀截断。
 

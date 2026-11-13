@@ -11,3 +11,4 @@ Usage:
 - The edit fails if `old_string` is not found in the file with an error "Could not find old_string".
 - The edit fails if `old_string` is found more than once, reporting the match count as "Found N exact matches". Either provide a larger string with more surrounding context to make the match unique or use `replace_all` to change every instance of `old_string`.
 - Use `replace_all` for file-wide exact renames or repeated replacements when every occurrence should change.
+- `edit` keeps the file's text encoding, so the result must still decode with the same encoding; a change that would convert it (for example editing an `encoding` declaration) is refused. Use `write` with the complete content to convert a file.

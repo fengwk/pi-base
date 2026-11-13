@@ -38,12 +38,12 @@ validate parameters
   -> file change queue
      -> stat + read
      -> decode text
-     -> find exact match
+     -> locate all matches in one pass
      -> build replacement result
      -> preserve encoding/BOM/EOL
-     -> write
+     -> atomic write (temp file + rename)
   -> LSP sync observer
-  -> numbered diff
+  -> numbered diff from the changed ranges
 ```
 
 ## Matching semantics
@@ -68,26 +68,30 @@ edit({ path: "a.ts", edits: [
 ] });
 ```
 
-Every entry is matched against the same original file snapshot, not the output of the preceding entry. All matches must be non-overlapping, including matches expanded by an entry's `replace_all`. Missing, ambiguous, overlapping, invalid, or unencodable replacements fail before any write. A successful batch writes once, reports the total number of replaced occurrences, and returns one combined diff. This is validation-before-write, not filesystem crash-atomicity or a transaction across separate tool calls. Replacements that depend on earlier edits need separate calls, waiting for the earlier call to return before issuing the next.
+Every entry is matched against the same original file snapshot, not the output of the preceding entry. All matches must be non-overlapping, including matches expanded by an entry's `replace_all`. Missing, ambiguous, overlapping, invalid, or unencodable replacements fail before any write. A successful batch writes once, reports the total number of replaced occurrences, and returns one combined diff. A single edit commits atomically, but separate tool calls are not one transaction. Replacements that depend on earlier edits need separate calls, waiting for the earlier call to return before issuing the next.
 
 ## Encoding and line endings
 
-Existing files are read via `decodeTextFile`, preserving:
+Existing files are read via `decodeTextFile` with the deterministic rules of [read](read.md#reading-text), preserving:
 
 - Original encoding
 - BOM
 - Per-line line endings
 - Whether a final newline exists
 
-The replacement text is applied in an LF view and written back via `serializeLineEndingDocument`. For files with mixed line endings, the line endings of the replaced region are preferred for reuse.
+The replacement text is applied in an LF view over the original snapshot and written back via `serializeLineEndingDocument`. Untouched lines keep their own endings; a mixed-ending file reuses the endings of the replaced region.
 
-Legacy encodings use round-trip validation on write-back; writing fails when the new text cannot be represented losslessly.
+Every match is located in one pass over the original text, the spans are sorted once, and the output is built in one pass from slices, so `replace_all` stays linear in the file size. The numbered diff is built from the changed line ranges with context instead of diffing the whole file.
 
-Encoding selection prefers a BOM, then a standard file-header declaration (XML, Python coding cookie, HTML head meta, or CSS charset), then validated UTF-8, and otherwise retains automatic UTF-16/legacy detection. Before modifying an existing file, its decoded text must re-encode to the exact original bytes; otherwise the tool refuses to rewrite it. This prevents demonstrable decoding loss without rejecting inferred encodings as a class. A byte round-trip does not prove that an ambiguous encoding guess is semantically correct. No extra tool arguments or confirmation steps are required. An edit that changes a header to an incompatible encoding is rejected rather than relabeling the existing bytes; use a complete-file `write` for conversion.
+An edit never converts the file: a BOM stays authoritative, the declaration in the result must select the original encoding, and an undeclared UTF-8 file stays UTF-8. A change that would switch encodings is rejected with `This change would change the encoding of …`; use a complete-file `write` to convert. Text the encoding cannot represent fails with the character, its code point and the line.
+
+The commit writes a temporary file in the target's directory, applies the original file mode, fsyncs, and renames it over the target, so a crash or a full disk cannot leave a truncated file. When the target is a symlink, the link is kept and the file it resolves to is replaced.
+
+No extra tool arguments or confirmation steps are required.
 
 ## Concurrency
 
-The full read-match-write flow sits in the process-local file change queue. Concurrent modifications to the same file are serialized; a later edit re-reads and matches the file after the previous operation completes, rejecting stale old text instead of blindly overwriting it. Separate calls are not one transaction: a later failure does not roll back earlier successful calls or automatically cancel other independent calls. The queue is not a cross-process lock or a filesystem crash-atomicity guarantee.
+The full read-match-write flow sits in the process-local file change queue. Concurrent modifications to the same file are serialized; a later edit re-reads and matches the file after the previous operation completes, rejecting stale old text instead of blindly overwriting it. Separate calls are not one transaction: a later failure does not roll back earlier successful calls or automatically cancel other independent calls. The queue is not a cross-process lock.
 
 ## Diff
 
@@ -117,7 +121,8 @@ The following cases return `isError: true`:
 - Old string not found.
 - Match is not unique.
 - Replace-all matches overlap.
-- Encoding cannot be written back losslessly.
+- The result would change the file's encoding.
+- The new text cannot be encoded in the file's encoding.
 - Output bytes are unchanged.
 
 ## Related tests

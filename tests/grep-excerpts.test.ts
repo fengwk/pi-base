@@ -121,19 +121,17 @@ describe("grep match excerpts", () => {
     expect(line.length).toBeLessThan(520);
   });
 
-  it("locates excerpts through GBK-encoded lines.bytes blocks", async () => {
-    // Intent: non-UTF-8 blocks arrive as base64 `bytes`, and rg reports
-    // submatch offsets in raw GBK bytes (2 per character here). Those offsets
-    // must be translated to offsets of the decoded text before excerpting;
-    // otherwise the window centers on the wrong character and the ASCII match
-    // behind a long Chinese prefix stays hidden, as it did before this fix.
+  it("locates excerpts in a declared GBK file searched on its decoded text", async () => {
+    // Intent: a declared legacy file is decoded once and searched as UTF-8 text,
+    // so the excerpt centers on NEEDLE behind a long Chinese prefix instead of
+    // drifting with raw-byte offsets.
     const root = await createTempWorkspace();
-    const content = `${"中".repeat(800)}NEEDLE${"y".repeat(600)}\n`;
-    await writeFile(join(root, "long.txt"), iconv.encode(content, "gbk"));
+    const content = `# coding: gbk\n${"中".repeat(800)}NEEDLE${"y".repeat(600)}\n`;
+    await writeFile(join(root, "long.py"), iconv.encode(content, "gbk"));
 
     const result = await executeGrep("grep-excerpt-gbk", {
       workdir: ".",
-      path: "long.txt",
+      path: "long.py",
       pattern: "NEEDLE",
     }, undefined, undefined, { cwd: root });
 

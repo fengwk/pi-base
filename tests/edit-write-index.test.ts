@@ -99,25 +99,25 @@ describe("edit/write flow", () => {
     expect(getText(result)).toContain("content is required");
   });
 
-  it("write rejects text that cannot be represented in the existing legacy encoding", async () => {
+  it("write rejects text that cannot be represented in the existing declared encoding", async () => {
     // Intent: legacy encoded files must not silently replace unrepresentable
     // characters with '?' while reporting the original text as written.
     const root = await createTempWorkspace();
     await mkdir(join(root, "src"), { recursive: true });
-    const file = join(root, "src/legacy.txt");
-    const originalBytes = Buffer.from("café\nolé\n", "latin1");
+    const file = join(root, "src/legacy.py");
+    const originalBytes = Buffer.from("# coding: latin-1\ncafé\nolé\n", "latin1");
     await writeFile(file, originalBytes);
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("write").execute(
       "1",
-      { workdir: ".", path: "src/legacy.txt", content: "snow 漢字\n" },
+      { workdir: ".", path: "src/legacy.py", content: "# coding: latin-1\nsnow 漢字\n" },
       undefined,
       undefined,
       { cwd: root },
     );
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("cannot be represented");
+    expect(getText(result)).toContain('The new text cannot be encoded in ISO-8859-1: "漢" (U+6F22)');
     expect(await readFile(file)).toEqual(originalBytes);
   });
 
@@ -494,25 +494,25 @@ describe("edit/write flow", () => {
     expect(written.subarray(2).toString("utf16le")).toBe("gamma\nbeta\n");
   });
 
-  it("edit rejects text that cannot be represented in the existing legacy encoding", async () => {
+  it("edit rejects text that cannot be represented in the existing declared encoding", async () => {
     // Intent: edit previews and written bytes must stay consistent for legacy
     // encodings by refusing lossy replacement before writing.
     const root = await createTempWorkspace();
     await mkdir(join(root, "src"), { recursive: true });
-    const file = join(root, "src/legacy.txt");
-    const originalBytes = Buffer.from("café\n", "latin1");
+    const file = join(root, "src/legacy.py");
+    const originalBytes = Buffer.from("# coding: latin-1\ncafé\n", "latin1");
     await writeFile(file, originalBytes);
     const registry = createToolRegistry();
     piBaseExtension(registry.pi as any);
     const result = await registry.getTool("edit").execute(
       "1",
-      { workdir: ".", path: "src/legacy.txt", edits: [{ old_string: "café", new_string: "漢字" }] },
+      { workdir: ".", path: "src/legacy.py", edits: [{ old_string: "café", new_string: "漢字" }] },
       undefined,
       undefined,
       { cwd: root },
     );
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("cannot be represented");
+    expect(getText(result)).toContain('The new text cannot be encoded in ISO-8859-1: "漢" (U+6F22)');
     expect(await readFile(file)).toEqual(originalBytes);
   });
 

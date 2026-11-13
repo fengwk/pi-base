@@ -28,17 +28,33 @@ describe("edit queue", () => {
       releaseFirstWrite = resolve;
     });
     let writeCount = 0;
+    let pendingBytes = Buffer.alloc(0);
 
     vi.doMock("node:fs/promises", () => ({
       stat: vi.fn(async () => ({ isFile: () => true })),
+      lstat: vi.fn(async () => {
+        const error: any = new Error("ENOENT");
+        error.code = "ENOENT";
+        throw error;
+      }),
       readFile: vi.fn(async () => Buffer.from(fileBytes)),
-      writeFile: vi.fn(async (_path: string, data: Buffer | string) => {
+      // The edit commits through a synced temporary file renamed over the target,
+      // so the first commit is what the second edit must wait for.
+      open: vi.fn(async () => ({
+        writeFile: vi.fn(async (data: Buffer) => {
+          pendingBytes = Buffer.from(data);
+        }),
+        sync: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      })),
+      rename: vi.fn(async () => {
         if (writeCount++ === 0) {
           resolveFirstWriteStarted();
           await firstWriteReleased;
         }
-        fileBytes = Buffer.isBuffer(data) ? Buffer.from(data) : Buffer.from(data, "utf8");
+        fileBytes = Buffer.from(pendingBytes);
       }),
+      rm: vi.fn(async () => undefined),
     }));
 
     const { registerEditTool } = await import("../src/edit.js");

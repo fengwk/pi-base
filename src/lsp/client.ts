@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { decodeTextFile } from "../text-codec.js";
+import { BinaryFileError, decodeTextFile } from "../text-codec.js";
 import { createGracefulTerminator, type GracefulTerminator } from "../process-termination.js";
 import { findBestJavaHome, LspDiscoveryResolver, type LspServerConfig, type LspWorkspaceDataConfig } from "./discovery.js";
 
@@ -37,9 +37,12 @@ const FORCE_KILL_WAIT_MS = 1000;
 const NOOP = () => undefined;
 
 function readLspTextFile(filePath: string): string {
-  const decoded = decodeTextFile(readFileSync(filePath));
-  if (decoded === null) throw new Error(`LSP cannot open binary file: ${filePath}`);
-  return decoded.text;
+  try {
+    return decodeTextFile(readFileSync(filePath), filePath).text;
+  } catch (error) {
+    if (error instanceof BinaryFileError) throw new Error(`LSP cannot open binary file: ${filePath}`);
+    throw new Error(`LSP cannot open ${filePath}: ${(error as Error).message}`);
+  }
 }
 
 function isJdtlsCommand(command: string[]): boolean {

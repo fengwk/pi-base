@@ -37,12 +37,12 @@ Searches file contents with ripgrep, supporting plain, literal, case-insensitive
 Validate pattern/path
   -> Resolve workdir/path
   -> stat target
-  -> Single-file binary precheck
   -> ensureTool("rg")
-  -> Spawn ripgrep --no-config --json
+  -> Directory search: start the encoding-candidate pre-pass, then the main search (concurrent)
   -> Parse match events
+  -> Decode candidate files; re-search declared ones on their decoded text
   -> Format paths/line numbers
-  -> Handle limit, long lines, and timeout
+  -> Handle limit, long lines, timeout, and the not-searched notice
 ```
 
 ## ripgrep arguments
@@ -72,10 +72,8 @@ When the system has no `rg`, the internal tool manager tries to download the off
 
 ## Target prechecks
 
-- Directories can be searched directly.
-- A single file must be a regular file.
-- Single-file searches first read up to 1 MiB for binary detection.
-- Binary filtering inside directories is left to ripgrep.
+- Directories can be searched directly; binary filtering inside them is left to ripgrep.
+- A single file must be regular and decodable text. Its decoded text is searched when it declares a non-UTF-8 encoding, and a binary or undecodable file returns an error with the `read` wording instead of a silent skip.
 
 ## Result format
 
@@ -87,7 +85,21 @@ src/example.ts:42: matching line
 
 Directory searches use paths relative to the search root; single-file searches use the basename.
 
-The base64 `bytes` field in ripgrep JSON is text-decoded. Its submatch offsets are translated using the same detected encoding, including any removed BOM, before excerpting. The `text` field already uses UTF-8 offsets. If an event lacks line text, plain mode re-reads the file by line number.
+### Text encoding
+
+Results must agree with `read`, so a directory search starts a second, concurrent `rg` process before the main search: `rg --files-with-matches --encoding utf-8` over the same filters with the pattern `coding[:=]|charset|<\?xml|pageEncoding|\x{FFFD}`. It lists the only files whose decoded text can differ from plain UTF-8: files with declaration-like text and files that are not valid UTF-8. Both scans run in parallel; the search waits for the pre-pass only when it formats the result.
+
+Each candidate file is decoded with [`src/text-codec.ts`](../../src/text-codec.ts). A UTF-8 file keeps ripgrep's raw results. A file with a byte order mark or a declaration that selects another encoding is searched again by ripgrep reading its normalized decoded text from stdin, so the regex engine is the same and line numbers equal `read`'s. A file the codec rejects is skipped, and its matches are dropped.
+
+A final notice names skipped files:
+
+```text
+[Not searched because the text encoding could not be determined: /abs/a.txt, /abs/b.txt, … and 3 more]
+```
+
+It lists at most ten absolute paths and a remaining count, appears with or without matches (after `No matches found` when nothing matched), and is absent when every candidate decoded.
+
+Line excerpts use ripgrep's UTF-8 byte offsets on the reported text. If an event lacks line text, plain mode re-reads the file and decodes it once.
 
 A line longer than the display budget is shown as an excerpt centered on the first ripgrep submatch of that line: the submatch's UTF-8 byte offsets are mapped back onto the reported text, so a match far into a long line stays visible with context on both sides. Excerpts hold at most 500 code points and mark trimmed content with `…`; they are cut on code-point boundaries, so multi-byte characters and surrogate pairs are never split. Multiline events excerpt each displayed line against the part of the match that covers it. If an event carries no submatch offsets, the line-start prefix fallback applies.
 
@@ -111,7 +123,7 @@ The child process tree is terminated via [`src/process-termination.ts`](../../sr
 - ripgrep exit code `0`: there are matches.
 - Exit code `1`: no matches, returns `No matches found`.
 - Other exit codes: returns the stderr error.
-- Non-regular files, binary files, invalid regexes, and download failures all return `isError: true`.
+- Non-regular files, binary files, undecodable single files, invalid regexes, and download failures all return `isError: true`.
 
 ## Related tests
 

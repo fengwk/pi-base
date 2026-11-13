@@ -44,25 +44,31 @@ Validate parameters
 
 The text branch re-runs `stat` and the read in the file-change queue to avoid interleaving with concurrent writes.
 
-Decoding is done by [`src/text-codec.ts`](../../src/text-codec.ts), covering:
+Decoding is deterministic and done by [`src/text-codec.ts`](../../src/text-codec.ts):
 
-- UTF BOM
-- Standard file-header declarations: XML `encoding`, Python coding cookies on the first two lines, HTML head `meta charset` / `http-equiv`, and CSS `@charset` (within the first 4096 bytes)
-- Validated UTF-8 before statistical guessing
-- UTF-16 heuristic without BOM
-- Legacy encoding detection
-- Binary detection
+- A UTF byte order mark decides the encoding (UTF-32 is checked before UTF-16); a BOM-marked file is judged by its decoded characters.
+- Otherwise a standard declaration decides: an XML `encoding` at byte 0, a CSS `@charset` at byte 0, an HTML head `meta charset` / `http-equiv` (first 1024 bytes), a Python or Ruby coding cookie (`coding[:=]`, `fileencoding=`, `encoding:`) on line 1 or line 2, or a JSP page directive (`pageEncoding`, or `charset` inside `contentType`, first 1024 bytes). Similar text elsewhere is not a declaration.
+- Labels resolve through the Encoding Standard for HTML/CSS and through IANA names otherwise, with CPython's `get_normal_name` for Python/Ruby cookies; every label maps to one canonical name (`GBK`, `Big5`, `Shift_JIS`, `ISO-8859-1`, …).
+- Without a byte order mark or declaration, only valid UTF-8 is accepted.
+- Binary means a NUL byte in the first 8000 bytes (Git's rule); other control characters are text.
+
+A declaration must agree with the content: a non-UTF-8 declaration over valid non-ASCII UTF-8 is a conflict, and the bytes must decode and re-encode losslessly.
 
 Text result format:
 
 ```text
 path: ...
 ends_with_newline: yes|no
+encoding: GBK            (only when the encoding is not UTF-8)
 lsp: supported|unsupported
 
 1|first line
 2|second line
 ```
+
+The `encoding:` line names the decoded encoding, so the numbered body is never ambiguous. A UTF-8 byte order mark does not add it.
+
+A file that is not UTF-8 and declares no encoding is refused with an explanation and a conversion example; a binary file is refused as binary. Unsupported labels, declaration conflicts and non-lossless bytes name the file, the encoding and where it was declared.
 
 The number column width is computed from the file's total line count. A trailing newline at the end of the file does not generate an extra numbered blank line. Continuation notices are outside the numbered body; truncation annotations are never appended to the file-content fragments.
 
@@ -72,6 +78,7 @@ The number column width is computed from the file's total line count. A trailing
 - Candidate text files over 64 MiB are rejected before a full read.
 - A single line displays at most 2000 Unicode code points.
 - Non-regular files and binary files are rejected.
+- A file that is not UTF-8 and declares no encoding is rejected instead of being guessed; convert it to UTF-8 or add a standard declaration.
 - The display layer escapes carriage returns and NUL.
 - `column_offset` applies only to the first returned line; a column past the end of that line is rejected, while column 1 stays valid for any line.
 - When `column_offset` is greater than 1, the header gains a `column_offset:` line stating that the first displayed line starts mid-line, so it is not mistaken for a complete source line.

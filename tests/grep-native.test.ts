@@ -107,15 +107,13 @@ describe("executeGrep native ripgrep path", () => {
     expect(getText(result)).toContain(`example.txt:1: ${content.split("\n")[0]}`);
   });
 
-  it("decodes real ripgrep path.bytes and lines.bytes for standard and multiline GBK output", async () => {
-    // Intent: real rg emits base64 JSON fields for non-UTF-8 paths/content; both
-    // native parser modes must decode those bytes through the shared text codec.
+  it("searches declared legacy files on their decoded text in standard and multiline mode", async () => {
+    // Intent: a declared GBK file is decoded before searching, so decoded Chinese
+    // text is found and the printed line is the same text read shows.
     const root = await createTempWorkspace();
     fakeToolState.rgPath = "rg";
-    const fileName = "这是一个用于路径解码的中文文件名.txt";
-    const sourceLine = "这是一个中文文件，用于测试旧编码识别，确保搜索输出正确。 alpha\n";
-    const filePath = Buffer.concat([Buffer.from(`${root}/`), iconv.encode(fileName, "gbk")]);
-    await writeFile(filePath, iconv.encode(sourceLine, "gbk"));
+    const sourceLine = "这是一个中文文件，用于测试旧编码识别，确保搜索输出正确。 alpha";
+    await writeFile(join(root, "legacy.py"), iconv.encode(`# coding: gbk\n${sourceLine}\n`, "gbk"));
 
     for (const multiline of [false, true]) {
       const result = await executeGrep(`grep-gbk-${multiline}`, {
@@ -126,8 +124,65 @@ describe("executeGrep native ripgrep path", () => {
       }, undefined, undefined, { cwd: root });
 
       expect(result.isError).not.toBe(true);
-      expect(getText(result)).toContain(`${fileName}:1: ${sourceLine.trimEnd()}`);
+      expect(getText(result)).toContain(`legacy.py:2: ${sourceLine}`);
     }
+  });
+
+  it("lists every undecodable file up to ten paths and counts the rest", async () => {
+    // Intent: skipped files must stay visible even without matches, and the
+    // notice has to stay bounded when a whole tree is undecodable.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    for (let index = 0; index < 12; index++) {
+      await writeFile(join(root, `legacy-${String(index).padStart(2, "0")}.txt`), iconv.encode("中文\n", "gbk"));
+    }
+
+    const result = await executeGrep("grep-not-searched", {
+      workdir: ".",
+      path: ".",
+      pattern: "中文",
+    }, undefined, undefined, { cwd: root });
+
+    const text = getText(result);
+    expect(text).toContain("No matches found");
+    expect(text).toContain("Not searched because the text encoding could not be determined:");
+    expect(text).toContain("and 2 more");
+    expect((text.match(/\/legacy-\d\d\.txt/g) ?? []).length).toBe(10);
+  });
+
+  it("runs the encoding pre-pass concurrently with the main search in one extra process", async () => {
+    // Intent: the candidate scan must overlap the main search instead of running before it,
+    // and a directory search must spawn exactly one extra rg process for it.
+    const root = await createTempWorkspace();
+    const logPath = join(root, "rg.log");
+    const rgPath = join(root, "bin", "rg");
+    await mkdir(join(root, "bin"), { recursive: true });
+    await writeFile(rgPath, `#!/usr/bin/env node
+const fs = require("fs");
+const log = (entry) => fs.appendFileSync(${JSON.stringify(logPath)}, entry + "\\n");
+if (process.argv.includes("--files-with-matches")) {
+  log("prepass-start");
+  setTimeout(() => { log("prepass-end"); process.exit(1); }, 150);
+} else {
+  log("main-start");
+  console.log(JSON.stringify({ type: "match", data: { path: { text: ${JSON.stringify(join(root, "example.txt"))} }, lines: { text: "alpha\\n" }, line_number: 1 } }));
+  log("main-end");
+}
+`, { mode: 0o755 });
+    fakeToolState.rgPath = rgPath;
+    await writeFile(join(root, "example.txt"), "alpha\n", "utf8");
+
+    const result = await executeGrep("grep-concurrent-prepass", {
+      workdir: ".",
+      path: ".",
+      pattern: "alpha",
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const events = (await readFile(logPath, "utf8")).trim().split("\n");
+    expect(events.filter((event) => event === "prepass-start")).toHaveLength(1);
+    expect(events.filter((event) => event === "main-start")).toHaveLength(1);
+    expect(events.indexOf("main-start")).toBeLessThan(events.indexOf("prepass-end"));
   });
 
   it("returns the required-argument error for a missing pattern", async () => {

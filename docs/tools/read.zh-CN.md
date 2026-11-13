@@ -44,25 +44,31 @@
 
 文本分支在文件变更队列中重新执行 `stat` 和读取，避免与并发写入交错。
 
-解码由 [`src/text-codec.ts`](../../src/text-codec.ts) 完成，覆盖：
+解码是确定性的，由 [`src/text-codec.ts`](../../src/text-codec.ts) 完成：
 
-- UTF BOM
-- 标准文件头声明：XML `encoding`、Python 前两行编码注释、HTML head 的 `meta charset` / `http-equiv`、CSS `@charset`（扫描前 4096 字节）
-- 先验证 UTF-8，再做统计推断
-- UTF-16 无 BOM 启发式
-- 旧编码检测
-- 二进制判断
+- UTF BOM 优先决定编码（UTF-32 先于 UTF-16 判断）；带 BOM 的文件按解码后的字符判断二进制。
+- 否则由标准声明决定：字节 0 处的 XML `encoding`、字节 0 处的 CSS `@charset`、HTML head 的 `meta charset` / `http-equiv`（前 1024 字节）、第 1 或第 2 行的 Python/Ruby 编码注释（`coding[:=]`、`fileencoding=`、`encoding:`），以及 JSP page 指令中的 `pageEncoding` 或 `contentType` 内的 `charset`（前 1024 字节）。其他位置的相似文本不是声明。
+- HTML/CSS 标签按 Encoding Standard 解析，其他来源按 IANA 名称解析，Python/Ruby 注释先经过 CPython 的 `get_normal_name`；每个标签只对应一个规范名称（`GBK`、`Big5`、`Shift_JIS`、`ISO-8859-1` 等）。
+- 无 BOM 也无声明时，只接受合法 UTF-8。
+- 二进制判定为前 8000 字节内出现 NUL（Git 规则）；其他控制字符仍视为文本。
+
+声明必须与内容一致：非 UTF-8 声明遇上包含非 ASCII 字符的合法 UTF-8 时视为冲突；字节必须能无损解码并重编码。
 
 文本结果格式：
 
 ```text
 path: ...
 ends_with_newline: yes|no
+encoding: GBK            (仅当编码不是 UTF-8)
 lsp: supported|unsupported
 
 1|first line
 2|second line
 ```
+
+`encoding:` 行给出解码使用的编码，编号正文因此不含歧义；仅有 UTF-8 BOM 时不出现该行。
+
+不是 UTF-8 且没有声明的文件会被拒绝，并给出转换示例；二进制文件按二进制拒绝。不支持的标签、声明冲突与无法无损解码的字节会同时说明文件、编码与声明位置。
 
 编号列宽按文件总行数计算。文件末尾换行不会额外生成一个编号空行。续读提示放在编号正文之外，不会把截断说明追加进文件内容片段。
 
@@ -72,6 +78,7 @@ lsp: supported|unsupported
 - 文本候选文件超过 64 MiB 时在完整读取前拒绝。
 - 单行最多展示 2000 个 Unicode 码点。
 - 非普通文件和二进制文件拒绝。
+- 不是 UTF-8 且没有声明的文件拒绝而不是猜测；请转换为 UTF-8 或添加标准声明。
 - 显示层会转义回车和 NUL。
 - `column_offset` 只作用于返回窗口的第一行；列超出该行内容时拒绝，列 1 对任意行都合法。
 - `column_offset` 大于 1 时，header 会多出一行 `column_offset:`，说明首个展示行从行中开始，避免被误认为完整源行。

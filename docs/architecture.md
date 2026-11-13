@@ -167,6 +167,7 @@ Related shared modules:
 - Runtime abort: [`src/runtime.ts`](../src/runtime.ts)
 - Timeout: [`src/timeout.ts`](../src/timeout.ts)
 - Text encoding: [`src/text-codec.ts`](../src/text-codec.ts)
+- Atomic write: [`src/atomic-write.ts`](../src/atomic-write.ts)
 - Line endings: [`src/line-endings.ts`](../src/line-endings.ts)
 
 ## Paths and file writes
@@ -178,7 +179,7 @@ Path-based tools support:
 - `~/`, `$HOME/`, `${HOME}/`.
 - Compatible alias mapping from `filePath` to `path`.
 
-`edit` and `write` use a file change queue to serialize the read-modify-write process for the same target. Existing targets are decoded as text and binary files are rejected. `edit` preserves the existing encoding, BOM, and line endings; `write` preserves the encoding and BOM when overwriting an existing file, while line breaks follow the passed `content`. Use Bash to delete or move files.
+`edit` and `write` use a file change queue to serialize the read-modify-write process for the same target. Existing targets are decoded as text and binary or undecodable files are rejected. `edit` keeps the file's encoding (a change that would convert it is refused) and preserves its BOM and line endings; `write` keeps an existing BOM and encoding, while a declaration in `content` may convert a file without a BOM. Both commit through a synced temporary file renamed over the target. Use Bash to delete or move files.
 
 `permission` is a lexical safeguard against accidental misuse, not a filesystem sandbox. When security isolation is required, containers, restricted accounts, or OS-level boundaries must be used.
 

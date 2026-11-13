@@ -3,129 +3,141 @@ import { join } from "node:path";
 import iconv from "iconv-lite";
 import { describe, expect, it } from "vitest";
 import piBaseExtension from "../index.js";
-import { decodeTextFile, detectDeclaredTextEncoding } from "../src/text-codec.js";
 import { createTempWorkspace, createToolRegistry, getText } from "./helpers.js";
 
-const declared = [
-  { encoding: "utf-8", prefix: '<?xml version="1.0" encoding="UTF-8"?>\n', text: "中文 日本語 café" },
-  { encoding: "gbk", prefix: '<?xml version="1.0" encoding="GBK"?>\n', text: "中文" },
-  { encoding: "gb18030", prefix: '<?xml version="1.0" encoding="GB18030"?>\n', text: "中文𠮷" },
-  { encoding: "big5", prefix: '# -*- coding: big5 -*-\n', text: "中文" },
-  { encoding: "shift_jis", prefix: '#!/usr/bin/python\n# coding: shift_jis\n', text: "日本語" },
-  { encoding: "iso-8859-1", prefix: '# coding: iso-8859-1\n', text: "café" },
-  { encoding: "big5", prefix: '<!doctype html><html><head><meta CHARSET="big5"></head>\n', text: "中文" },
-  { encoding: "gb2312", prefix: "<html><head><meta content='text/html; charset=gb2312' http-equiv='Content-Type'></head>\n", text: "中文" },
-  { encoding: "windows-1252", prefix: '@charset "windows-1252";\n', text: "café €" },
-];
-
-async function checkBomFlow(bytes: Buffer, text: string) {
-  const root = await createTempWorkspace();
-  const file = join(root, "sample.txt");
-  await writeFile(file, bytes);
+function tools() {
   const registry = createToolRegistry();
   piBaseExtension(registry.pi as never);
-  const execute = (name: string, args: Record<string, unknown>) => registry.getTool(name).execute("formats", { path: "sample.txt", ...args }, undefined, undefined, { cwd: root });
-  const read = await execute("read", {});
-  expect(read.isError).not.toBe(true);
-  expect(decodeTextFile(bytes)?.text).toBe(text);
-  expect(getText(read)).toContain("state=old");
-  const edited = text.replace("state=old", "state=编辑");
-  const edit = await execute("edit", { edits: [{ old_string: "state=old", new_string: "state=编辑" }] });
-  return { file, execute, edit, edited };
+  return registry;
+}
+
+async function run(registry: ReturnType<typeof tools>, name: string, cwd: string, args: Record<string, unknown>) {
+  return registry.getTool(name).execute("formats", { workdir: ".", ...args }, undefined, undefined, { cwd });
 }
 
 describe("common text encoding formats", () => {
   it.each([
-    { encoding: "utf-8", bom: [0xef, 0xbb, 0xbf] },
-    { encoding: "utf-16le", bom: [0xff, 0xfe] },
-    { encoding: "utf-16be", bom: [0xfe, 0xff] },
-    { encoding: "utf-32le", bom: [0xff, 0xfe, 0x00, 0x00] },
-    { encoding: "utf-32be", bom: [0x00, 0x00, 0xfe, 0xff] },
-  ])("preserves $encoding BOM, mixed line endings and non-ASCII edits", async ({ encoding, bom }) => {
-    // Intent: every supported BOM must survive read/edit/write with exact expected bytes.
-    const family = encoding.startsWith("utf-16") ? "utf-16" : encoding.startsWith("utf-32") ? "utf-32" : "utf-8";
+    { encoding: "UTF-8", codec: "utf-8", bom: [0xef, 0xbb, 0xbf], header: "UTF-8" },
+    { encoding: "UTF-16LE", codec: "utf-16le", bom: [0xff, 0xfe], header: "UTF-16LE" },
+    { encoding: "UTF-16BE", codec: "utf-16be", bom: [0xfe, 0xff], header: "UTF-16BE" },
+    { encoding: "UTF-32LE", codec: "utf-32le", bom: [0xff, 0xfe, 0x00, 0x00], header: "UTF-32LE" },
+    { encoding: "UTF-32BE", codec: "utf-32be", bom: [0x00, 0x00, 0xfe, 0xff], header: "UTF-32BE" },
+  ])("preserves a $encoding BOM, mixed line endings and non-ASCII edits", async ({ encoding, codec, bom, header }) => {
+    // Intent: every supported BOM must survive read, edit and write with exactly
+    // the expected bytes.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const family = encoding.startsWith("UTF-16") ? "utf-16" : encoding.startsWith("UTF-32") ? "utf-32" : "utf-8";
     const text = `<?xml version="1.0" encoding="${family}"?>\r\n中文 日本語\r\nstate=old\nunchanged\r\n`;
-    const encode = (value: string) => Buffer.concat([Buffer.from(bom), iconv.encode(value, encoding)]);
-    const flow = await checkBomFlow(encode(text), text);
-    expect(flow.edit.isError).not.toBe(true);
-    expect(await readFile(flow.file)).toEqual(encode(flow.edited));
-    const write = await flow.execute("write", { content: flow.edited.replace("unchanged", "done") });
-    expect(write.isError).not.toBe(true);
-    expect(await readFile(flow.file)).toEqual(encode(flow.edited.replace("unchanged", "done")));
-  });
+    const encode = (value: string) => Buffer.concat([Buffer.from(bom), iconv.encode(value, codec)]);
+    const file = join(root, "sample.xml");
+    await writeFile(file, encode(text));
 
-  it.each(declared)("honors the $encoding file header: $prefix", async ({ encoding, prefix, text }) => {
-    // Intent: explicit headers resolve short ambiguous samples without new tool arguments.
-    const content = `${prefix}${text}\r\nstate=old\n`;
-    const root = await createTempWorkspace();
-    const registry = createToolRegistry();
-    piBaseExtension(registry.pi as never);
-    const execute = (name: string, args: Record<string, unknown>) => registry.getTool(name).execute("declared", { path: "sample.txt", ...args }, undefined, undefined, { cwd: root });
-    const created = await execute("write", { content });
-    expect(created.isError).not.toBe(true);
-    expect(await readFile(join(root, "sample.txt"))).toEqual(iconv.encode(content, encoding));
-    const read = await execute("read", {});
-    expect(getText(read)).toContain(text);
-    const edit = await execute("edit", { edits: [
-      { old_string: "state=old", new_string: "state=new" },
-      { old_string: text, new_string: `${text}${text}` },
-    ] });
+    const read = await run(registry, "read", root, { path: "sample.xml" });
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain("state=old");
+    expect(getText(read)).toContain(header === "UTF-8" ? "ends_with_newline: yes" : `encoding: ${header}`);
+    expect(getText(read)).not.toContain("encoding: UTF-8\n");
+
+    const edited = text.replace("state=old", "state=编辑");
+    const edit = await run(registry, "edit", root, { path: "sample.xml", edits: [{ old_string: "state=old", new_string: "state=编辑" }] });
     expect(edit.isError).not.toBe(true);
-    expect(await readFile(join(root, "sample.txt"))).toEqual(iconv.encode(content.replace("state=old", "state=new").replace(text, `${text}${text}`), encoding));
-    const write = await execute("write", { content: content.replace("state=old", "state=done") });
+    expect(await readFile(file)).toEqual(encode(edited));
+
+    const rewritten = edited.replace("unchanged", "done");
+    const write = await run(registry, "write", root, { path: "sample.xml", content: rewritten });
     expect(write.isError).not.toBe(true);
-    expect(await readFile(join(root, "sample.txt"))).toEqual(iconv.encode(content.replace("state=old", "state=done"), encoding));
+    expect(await readFile(file)).toEqual(encode(rewritten));
   });
 
-  it("keeps a changed declaration consistent with bytes rather than merely relabeling them", async () => {
-    // Intent: changing a header alone cannot silently reinterpret the remaining non-ASCII bytes.
+  it("adds a byte order mark when the new content starts with U+FEFF", async () => {
+    // Intent: write treats a leading U+FEFF as a request for that encoding's mark.
     const root = await createTempWorkspace();
-    const file = join(root, "sample.txt");
-    const before = '# coding: big5\n中文\n';
-    await writeFile(file, iconv.encode(before, "big5"));
-    const registry = createToolRegistry();
-    piBaseExtension(registry.pi as never);
-    const edit = await registry.getTool("edit").execute("header", { path: "sample.txt", edits: [{ old_string: "coding: big5", new_string: "coding: utf-8" }] }, undefined, undefined, { cwd: root });
-    expect(edit.isError).toBe(true);
-    expect(await readFile(file)).toEqual(iconv.encode(before, "big5"));
-    const content = before.replace("big5", "utf-8");
-    const write = await registry.getTool("write").execute("convert", { path: "sample.txt", content }, undefined, undefined, { cwd: root });
+    const registry = tools();
+
+    const write = await run(registry, "write", root, { path: "bom.txt", content: "\uFEFFhello\n" });
+
     expect(write.isError).not.toBe(true);
-    expect(await readFile(file)).toEqual(Buffer.from(content, "utf8"));
-  });
-
-  it.each(["edit", "write"])("honors an explicit ASCII declaration during %s", async (name) => {
-    // Intent: detector-reported ASCII may default to UTF-8, but a declared ASCII file must remain ASCII.
-    const root = await createTempWorkspace();
-    const file = join(root, "sample.txt");
-    const content = '# coding: ASCII\nstate=old\n';
-    const original = Buffer.from(content, "ascii");
-    await writeFile(file, original);
-    const registry = createToolRegistry();
-    piBaseExtension(registry.pi as never);
-    const args = name === "edit"
-      ? { edits: [{ old_string: "state=old", new_string: "state=中文" }] }
-      : { content: content.replace("old", "中文") };
-    const result = await registry.getTool(name).execute("ascii", { path: "sample.txt", ...args }, undefined, undefined, { cwd: root });
-    expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("cannot be represented");
-    expect(await readFile(file)).toEqual(original);
-  });
-
-  it("does not silently guess when a standard header declares an unsupported encoding", () => {
-    // Intent: an explicit but unsupported declaration is not a license to decode it as UTF-8.
-    expect(() => detectDeclaredTextEncoding('# coding: x-unknown\n')).toThrow(/Unsupported declared/);
+    expect(await readFile(join(root, "bom.txt"))).toEqual(Buffer.from("\uFEFFhello\n", "utf8"));
+    const read = await run(registry, "read", root, { path: "bom.txt" });
+    expect(getText(read)).toContain("hello");
+    expect(getText(read)).not.toContain("encoding:");
   });
 
   it.each([
-    ['const xml = \'<?xml encoding="GBK"?>\';\n', undefined],
-    ['const meta = \'<meta charset="big5">\';\n', undefined],
-    ['<html><head><!-- <meta charset="big5"> --><meta charset="utf-8"></head>', "utf-8"],
-    ['<html><head><script>const s = \'<meta charset="big5">\';</script></head>', undefined],
-    ['<html><head></head><body><meta charset="big5"></body>', undefined],
-    ['print("x")\n# coding: gbk\n', undefined],
-  ])("does not interpret source strings or non-header declarations: %s", (text, expected) => {
-    // Intent: honoring headers must not reinterpret ordinary UTF-8 source files.
-    expect(detectDeclaredTextEncoding(text!)).toBe(expected);
+    { filePath: "sample.xml", prefix: '<?xml version="1.0" encoding="GBK"?>\n', encoding: "gbk", name: "GBK", text: "中文" },
+    { filePath: "sample.css", prefix: '@charset "windows-1252";\n', encoding: "windows-1252", name: "windows-1252", text: "café €" },
+    { filePath: "sample.html", prefix: '<!doctype html><html><head><meta charset="big5"></head>\n', encoding: "big5", name: "Big5", text: "中文" },
+    { filePath: "sample.py", prefix: "# coding: gbk\n", encoding: "gbk", name: "GBK", text: "中文" },
+    { filePath: "sample.rb", prefix: "# encoding: shift_jis\n", encoding: "shift_jis", name: "Shift_JIS", text: "日本語" },
+    { filePath: "sample.jsp", prefix: '<%@ page pageEncoding="gbk" %>\n', encoding: "gbk", name: "GBK", text: "中文" },
+  ])("writes and keeps the $name declaration of $filePath", async ({ filePath, prefix, encoding, name, text }) => {
+    // Intent: write/read/edit all agree on the declaration, and a whole-file
+    // rewrite keeps the declared encoding instead of converting to UTF-8.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const content = `${prefix}${text}\r\nstate=old\n`;
+
+    const created = await run(registry, "write", root, { path: filePath, content });
+    expect(created.isError).not.toBe(true);
+    expect(await readFile(join(root, filePath))).toEqual(iconv.encode(content, encoding));
+
+    const read = await run(registry, "read", root, { path: filePath });
+    expect(getText(read)).toContain(text);
+    expect(getText(read)).toContain(`encoding: ${name}`);
+
+    const edit = await run(registry, "edit", root, {
+      path: filePath,
+      edits: [{ old_string: "state=old", new_string: "state=new" }],
+    });
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(join(root, filePath))).toEqual(iconv.encode(content.replace("state=old", "state=new"), encoding));
+
+    const rewritten = content.replace("state=old", "state=done");
+    const write = await run(registry, "write", root, { path: filePath, content: rewritten });
+    expect(write.isError).not.toBe(true);
+    expect(await readFile(join(root, filePath))).toEqual(iconv.encode(rewritten, encoding));
+  });
+
+  it("refuses a declaration that names an unsupported encoding", async () => {
+    // Intent: an explicit but unusable declaration is an error, never a silent fallback.
+    const root = await createTempWorkspace();
+    const registry = tools();
+
+    const write = await run(registry, "write", root, { path: "sample.py", content: "# coding: x-unknown\n" });
+
+    expect(write.isError).toBe(true);
+    expect(getText(write)).toContain('Unsupported declared text encoding "x-unknown"');
+  });
+
+  it("keeps declaration-like source strings as ordinary UTF-8", async () => {
+    // Intent: only standard declaration positions choose the codec, so source
+    // code that mentions a declaration stays UTF-8.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const content = 'const xml = \'<?xml encoding="GBK"?>\';\nconst s = "中文";\n';
+
+    const write = await run(registry, "write", root, { path: "sample.ts", content });
+
+    expect(write.isError).not.toBe(true);
+    expect(await readFile(join(root, "sample.ts"))).toEqual(Buffer.from(content, "utf8"));
+  });
+
+  it("keeps a BOM-marked file's encoding when the new content declares another", async () => {
+    // Intent: an existing BOM stays authoritative; a conflicting declaration is refused.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const file = join(root, "sample.xml");
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), iconv.encode('<?xml version="1.0" encoding="utf-16"?>\n<body>中文</body>\n', "utf-16le")]);
+    await writeFile(file, bytes);
+
+    const write = await run(registry, "write", root, {
+      path: "sample.xml",
+      content: '<?xml version="1.0" encoding="utf-8"?>\n<body>中文</body>\n',
+    });
+
+    expect(write.isError).toBe(true);
+    expect(getText(write)).toMatch(/byte order mark/);
+    expect(await readFile(file)).toEqual(bytes);
   });
 });

@@ -1,20 +1,29 @@
-import iconv from "iconv-lite";
 import { spawn } from "node:child_process";
-import { constants } from "node:fs";
 import { open, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { ensureTool } from "./internal/pi-coding-agent-utils.js";
+import { normalizeToLF } from "./line-endings.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
 import { formatOptionalArgs, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
-import { type DecodedTextFile, decodeTextFile } from "./text-codec.js";
+import {
+  BINARY_PROBE_BYTES,
+  BinaryFileError,
+  type DecodedTextFile,
+  decodeTextFile,
+  formatTextFileError,
+  looksLikeBinary,
+} from "./text-codec.js";
 import { createTimeoutSignal, parsePositiveNumber, parseTimeoutSeconds } from "./timeout.js";
 
 const DEFAULT_LIMIT = 100;
 const DEFAULT_TIMEOUT_SECONDS = 15;
-const BINARY_PROBE_MAX_BYTES = 1024 * 1024;
-const BINARY_PROBE_CHUNK_BYTES = 64 * 1024;
+/** Declaration-like text or invalid UTF-8: the only files that can decode differently from plain UTF-8. */
+const DECODE_CANDIDATE_PATTERN = "coding[:=]|charset|<\\?xml|pageEncoding|\\x{FFFD}";
+const NOT_SEARCHED_NOTICE_LIMIT = 10;
+/** Decoded-text searches run as separate ripgrep processes, so keep the fan-out bounded. */
+const DECODED_SEARCH_CONCURRENCY = 8;
 // Displayed budget per line, counted in Unicode code points so surrogate
 // pairs are never split when excerpts are cut.
 const GREP_MAX_LINE_LENGTH = 500;
@@ -46,44 +55,43 @@ export function formatGrepCall(args: any, theme: any, cwd?: string): string {
   return `${styleToolTitle(theme, "grep")} ${styleOutput(theme, pattern)} ${styleMuted(theme, "in")} ${styleAccent(theme, searchPath)}${workdir}${styleOutput(theme, suffix)}`;
 }
 
-async function readBinaryProbeBuffer(filePath: string, signal?: AbortSignal): Promise<Buffer> {
-  const flags = process.platform === "win32"
-    ? "r"
-    : constants.O_RDONLY | constants.O_NONBLOCK;
-  const handle = await open(filePath, flags);
+/** The built-in grep implementation reads files itself, so only its binary verdict comes from the codec. */
+async function hasBinaryPrefix(filePath: string): Promise<boolean> {
+  const handle = await open(filePath, "r");
   try {
-    const fileStat = await handle.stat();
-    if (!fileStat.isFile()) throw new Error(`${filePath} is not a regular file.`);
-    const { size } = fileStat;
-    const totalBytes = Math.min(size, BINARY_PROBE_MAX_BYTES);
-    const sample = Buffer.allocUnsafe(totalBytes);
-    let offset = 0;
-    while (offset < totalBytes) {
-      if (signal?.aborted) throw new Error("Operation aborted");
-      const { bytesRead } = await handle.read(sample, offset, Math.min(BINARY_PROBE_CHUNK_BYTES, totalBytes - offset), offset);
-      if (bytesRead === 0) break;
-      offset += bytesRead;
-    }
-    return sample.subarray(0, offset);
+    const prefix = Buffer.allocUnsafe(BINARY_PROBE_BYTES);
+    const { bytesRead } = await handle.read(prefix, 0, prefix.length, 0);
+    return looksLikeBinary(prefix.subarray(0, bytesRead));
   } finally {
     await handle.close().catch(() => undefined);
   }
 }
 
-interface MultilineGrepOptions {
+interface GrepSearchOptions {
   pattern: string;
+  /** Path as the caller wrote it, for messages. */
+  displayPath: string;
   absolutePath: string;
   searchPathIsDirectory: boolean;
+  /** False when the single-file path does not exist yet: ripgrep reports that itself. */
+  existingFile: boolean;
   include?: string;
   caseInsensitive?: boolean;
   literal?: boolean;
+  multiline?: boolean;
   limit: number;
 }
 
-// Ripgrep roots --glob at its own process cwd, and it never matches a leading "./"
-// glob ("./src/*.ts" finds nothing). Strip leading "./" while keeping "!" negation.
-function normalizeIncludeGlob(include: string): string {
-  return include.replace(/^(!?)(?:\.\/)+/, "$1");
+interface GrepMatch {
+  /** Byte identity of the absolute path, so non-UTF-8 names still match a pre-pass entry. */
+  fileKey: string;
+  /** Absolute path bytes for reading the file back. */
+  filePathBytes: Buffer;
+  /** Absolute path for display, decoded as UTF-8. */
+  absolutePath: string;
+  lineNumber: number;
+  lineText?: string;
+  submatches?: RipgrepSubmatch[];
 }
 
 interface RipgrepSubmatch {
@@ -92,19 +100,45 @@ interface RipgrepSubmatch {
   end: number;
 }
 
+// Ripgrep roots --glob at its own process cwd, and it never matches a leading "./"
+// glob ("./src/*.ts" finds nothing). Strip leading "./" while keeping "!" negation.
+function normalizeIncludeGlob(include: string): string {
+  return include.replace(/^(!?)(?:\.\/)+/, "$1");
+}
+
 interface RipgrepMatchEvent {
-  filePath?: string;
+  fileKey: string;
+  filePathBytes: Buffer;
+  absolutePath: string;
   lineNumber?: number;
   lineText?: string;
   submatches?: RipgrepSubmatch[];
 }
 
-function decodeRipgrepData(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const data = value as { text?: unknown; bytes?: unknown };
-  if (typeof data.text === "string") return data.text;
-  if (typeof data.bytes !== "string") return undefined;
-  return decodeTextFile(Buffer.from(data.bytes, "base64"))?.text;
+/** A path keeps its bytes as identity; only its display copy is decoded as UTF-8. */
+interface ResolvedGrepPath {
+  fileKey: string;
+  filePathBytes: Buffer;
+  absolutePath: string;
+}
+
+function resolvedGrepPath(filePathBytes: Buffer): ResolvedGrepPath {
+  return {
+    fileKey: filePathBytes.toString("latin1"),
+    filePathBytes,
+    absolutePath: filePathBytes.toString("utf8"),
+  };
+}
+
+function pathIsAbsoluteBytes(filePathBytes: Buffer): boolean {
+  return filePathBytes[0] === 0x2f || (filePathBytes[1] === 0x3a && filePathBytes[0] !== undefined);
+}
+
+/** Directory searches print paths relative to the search root; absolute output passes through. */
+function absolutePathBytes(filePathBytes: Buffer, options: GrepSearchOptions): Buffer {
+  if (pathIsAbsoluteBytes(filePathBytes) || !options.searchPathIsDirectory) return filePathBytes;
+  const relative = filePathBytes.subarray(0, 2).toString("latin1") === "./" ? filePathBytes.subarray(2) : filePathBytes;
+  return Buffer.concat([Buffer.from(`${options.absolutePath}${path.sep}`, "utf8"), relative]);
 }
 
 function parseRipgrepSubmatches(value: unknown): RipgrepSubmatch[] | undefined {
@@ -120,40 +154,7 @@ function parseRipgrepSubmatches(value: unknown): RipgrepSubmatch[] | undefined {
   return submatches.length > 0 ? submatches : undefined;
 }
 
-// Raw-byte events may use a legacy encoding. rg's submatches are ordered and
-// non-overlapping, so one decoder translates their offsets in a single pass.
-// Account for leading BOM characters removed by the shared text codec.
-function mapSubmatchesToDecodedOffsets(raw: Buffer, decoded: DecodedTextFile, submatches: RipgrepSubmatch[]): RipgrepSubmatch[] {
-  const whole = iconv.decode(raw, decoded.encoding, { stripBOM: false });
-  let utf8Offset = Buffer.byteLength(decoded.text, "utf8") - Buffer.byteLength(whole, "utf8");
-  let rawOffset = 0;
-  const decoder = iconv.getDecoder(decoded.encoding, { stripBOM: false });
-  const mapOffset = (offset: number): number => {
-    utf8Offset += Buffer.byteLength(decoder.write(raw.subarray(rawOffset, offset)), "utf8");
-    rawOffset = offset;
-    return Math.max(0, utf8Offset);
-  };
-  return submatches.map(({ start, end }) => ({ start: mapOffset(start), end: mapOffset(end) }));
-}
-
-// Decode a ripgrep "lines" block together with submatch offsets that are valid
-// for the decoded text. The `text` field is already decoded by ripgrep, so its
-// offsets need no adjustment.
-function decodeRipgrepLines(value: unknown, submatches: RipgrepSubmatch[] | undefined): { text?: string; submatches?: RipgrepSubmatch[] } {
-  if (!value || typeof value !== "object") return {};
-  const data = value as { text?: unknown; bytes?: unknown };
-  if (typeof data.text === "string") return { text: data.text, submatches };
-  if (typeof data.bytes !== "string") return {};
-  const raw = Buffer.from(data.bytes, "base64");
-  const decoded = decodeTextFile(raw);
-  if (!decoded) return {};
-  return {
-    text: decoded.text,
-    submatches: submatches && mapSubmatchesToDecodedOffsets(raw, decoded, submatches),
-  };
-}
-
-function parseRipgrepMatchEvent(line: string): RipgrepMatchEvent | null {
+function parseRipgrepMatchEvent(line: string, options: GrepSearchOptions): RipgrepMatchEvent | null {
   let event: any;
   try {
     event = JSON.parse(line);
@@ -161,24 +162,179 @@ function parseRipgrepMatchEvent(line: string): RipgrepMatchEvent | null {
     return null;
   }
   if (event.type !== "match") return null;
-  const submatches = parseRipgrepSubmatches(event.data?.submatches);
-  const lines = decodeRipgrepLines(event.data?.lines, submatches);
+  const rawPath = event.data?.path as { text?: unknown; bytes?: unknown } | undefined;
+  let filePathBytes: Buffer | undefined;
+  if (typeof rawPath?.bytes === "string") {
+    filePathBytes = absolutePathBytes(Buffer.from(rawPath.bytes, "base64"), options);
+  } else if (typeof rawPath?.text === "string") {
+    const base = options.searchPathIsDirectory ? options.absolutePath : process.cwd();
+    filePathBytes = Buffer.from(path.resolve(base, rawPath.text), "utf8");
+  }
+  if (!filePathBytes) return null;
   return {
-    filePath: decodeRipgrepData(event.data?.path),
+    ...resolvedGrepPath(filePathBytes),
     lineNumber: typeof event.data?.line_number === "number" ? event.data.line_number : undefined,
-    lineText: lines.text,
-    submatches: lines.submatches,
+    lineText: typeof event.data?.lines?.text === "string" ? event.data.lines.text : undefined,
+    submatches: parseRipgrepSubmatches(event.data?.submatches),
   };
 }
 
-async function executeStandardGrep(options: MultilineGrepOptions, signal?: AbortSignal): Promise<any> {
-  if (signal?.aborted) throw new Error("Operation aborted");
-  const rgPath = await ensureTool("rg", true, signal);
-  if (!rgPath) throw new Error("ripgrep (rg) is not available and could not be downloaded");
-  if (signal?.aborted) throw new Error("Operation aborted");
+/**
+ * One ripgrep scan lists the only files whose decoded text can differ from what
+ * the main search matched: files with declaration-like text, and files that are
+ * not valid UTF-8 (decoded lossily, so invalid bytes show up as U+FFFD).
+ */
+function scanDecodeCandidates(rgPath: string, options: GrepSearchOptions, signal?: AbortSignal): { candidates: Promise<Map<string, Buffer>>; stop: () => void } {
+  const args = ["--no-config", "--files-with-matches", "--encoding", "utf-8", "--hidden", "--null"];
+  if (options.include) args.push("--glob", normalizeIncludeGlob(options.include));
+  args.push("--", DECODE_CANDIDATE_PATTERN, ".");
+  const child = spawn(rgPath, args, {
+    cwd: options.absolutePath,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const chunks: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+  const stop = () => {
+    signal?.removeEventListener("abort", stop);
+    child.kill();
+  };
+  signal?.addEventListener("abort", stop, { once: true });
+  const candidates = new Promise<Map<string, Buffer>>((resolve) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", stop);
+      const paths = new Map<string, Buffer>();
+      for (const entry of Buffer.concat(chunks).toString("latin1").split("\0")) {
+        if (!entry) continue;
+        const filePathBytes = absolutePathBytes(Buffer.from(entry, "latin1"), options);
+        paths.set(filePathBytes.toString("latin1"), filePathBytes);
+      }
+      resolve(paths);
+    };
+    // A pre-pass failure only costs the encoding notice, so it never fails the search.
+    child.on("error", finish);
+    child.on("close", finish);
+  });
+  return { candidates, stop };
+}
 
+interface DecodedCandidates {
+  /** Files that must be searched on their decoded text instead of ripgrep's raw matches. */
+  replacements: Map<string, GrepMatch[]>;
+  /** Rejected files by key, with the absolute path shown in the notice. */
+  skipped: Map<string, string>;
+}
+
+async function decodeCandidates(
+  rgPath: string,
+  paths: Map<string, Buffer>,
+  options: GrepSearchOptions,
+  signal?: AbortSignal,
+): Promise<DecodedCandidates> {
+  const replacements = new Map<string, GrepMatch[]>();
+  const skipped = new Map<string, string>();
+  const entries = [...paths.entries()];
+  const decodeOne = async ([fileKey, filePathBytes]: [string, Buffer]): Promise<void> => {
+    let decoded: DecodedTextFile;
+    try {
+      decoded = decodeTextFile(await readFile(filePathBytes), filePathBytes.toString("utf8"));
+    } catch (error) {
+      // Binary files are not text at all; other rejections mean the encoding is undetermined.
+      if (!(error instanceof BinaryFileError)) skipped.set(fileKey, filePathBytes.toString("utf8"));
+      return;
+    }
+    if (decoded.encoding.name === "UTF-8") return;
+    const resolved = resolvedGrepPath(filePathBytes);
+    replacements.set(fileKey, await searchDecodedText(rgPath, decoded.text, resolved, options, signal));
+  };
+  for (let offset = 0; offset < entries.length; offset += DECODED_SEARCH_CONCURRENCY) {
+    await Promise.all(entries.slice(offset, offset + DECODED_SEARCH_CONCURRENCY).map((entry) => decodeOne(entry)));
+  }
+  return { replacements, skipped };
+}
+
+/** Runs the same ripgrep engine over decoded UTF-8 text so line numbers match read. */
+async function searchDecodedText(
+  rgPath: string,
+  text: string,
+  resolved: ResolvedGrepPath,
+  options: GrepSearchOptions,
+  signal?: AbortSignal,
+): Promise<GrepMatch[]> {
+  if (signal?.aborted) throw new Error("Operation aborted");
+  const args = ["--no-config", "--json", "--line-number", "--color=never"];
+  if (options.multiline) args.push("--multiline");
+  if (options.caseInsensitive) args.push("--ignore-case");
+  if (options.literal) args.push("--fixed-strings");
+  args.push("--max-count", String(options.limit + 1), "--", options.pattern);
+  return new Promise((resolve, reject) => {
+    const child = spawn(rgPath, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const terminator = createGracefulTerminator(child);
+    const rl = createInterface({ input: child.stdout });
+    const matches: GrepMatch[] = [];
+    let stderr = "";
+    let settled = false;
+    const cleanup = () => {
+      rl.close();
+      signal?.removeEventListener("abort", onAbort);
+      terminator.cleanup();
+    };
+    const onAbort = () => terminator.terminate();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    rl.on("line", (line) => {
+      let event: any;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (event.type !== "match" || typeof event.data?.line_number !== "number") return;
+      matches.push({
+        ...resolved,
+        lineNumber: event.data.line_number,
+        lineText: typeof event.data?.lines?.text === "string" ? event.data.lines.text : undefined,
+        submatches: parseRipgrepSubmatches(event.data?.submatches),
+      });
+    });
+    child.on("error", (error) => {
+      cleanup();
+      if (!settled) {
+        settled = true;
+        reject(new Error(`Failed to run ripgrep: ${error.message}`));
+      }
+    });
+    child.on("close", (code) => {
+      cleanup();
+      if (settled) return;
+      settled = true;
+      if (signal?.aborted) {
+        reject(new Error("Operation aborted"));
+        return;
+      }
+      if (code !== 0 && code !== 1) {
+        reject(new Error(stderr.trim() || `ripgrep exited with code ${code}`));
+        return;
+      }
+      resolve(matches);
+    });
+    // Normalized text keeps line numbers equal to read's, which splits on every line ending.
+    child.stdin.end(normalizeToLF(text));
+  });
+}
+
+
+interface FileSearchResult {
+  matches: GrepMatch[];
+  limitReached: boolean;
+}
+
+/** Runs ripgrep over the search path and returns matches in discovery order. */
+async function searchFiles(rgPath: string, options: GrepSearchOptions, signal?: AbortSignal): Promise<FileSearchResult> {
   return new Promise((resolve, reject) => {
     const args = ["--no-config", "--json", "--line-number", "--color=never", "--hidden"];
+    if (options.multiline) args.push("--multiline");
     if (options.caseInsensitive) args.push("--ignore-case");
     if (options.literal) args.push("--fixed-strings");
     // rg roots --glob at its own cwd, so a directory search runs inside searchPath.
@@ -194,59 +350,26 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     const terminator = createGracefulTerminator(child);
     const rl = createInterface({ input: child.stdout });
     let stderr = "";
-    let matchCount = 0;
     let matchLimitReached = false;
-    let linesTruncated = false;
-    let aborted = false;
     let killedDueToLimit = false;
     let settled = false;
-    const matches: Array<{ filePath: string; lineNumber: number; lineText?: string; submatches?: RipgrepSubmatch[] }> = [];
-    const outputLines: string[] = [];
-    const fileCache = new Map<string, Promise<string[]>>();
+    const matches: GrepMatch[] = [];
 
-    const formatPath = (filePath: string) => formatGrepMatchPath(
-      resolveRgEventPath(filePath, options), options.absolutePath, options.searchPathIsDirectory,
-    );
-    const getFileLines = async (filePath: string) => {
-      const absoluteFilePath = resolveRgEventPath(filePath, options);
-      let linesPromise = fileCache.get(absoluteFilePath);
-      if (!linesPromise) {
-        linesPromise = readFile(absoluteFilePath)
-          .then((buffer) => decodeTextFile(buffer)?.text ?? "")
-          .then((content) => content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n"))
-          .catch(() => [] as string[]);
-        fileCache.set(absoluteFilePath, linesPromise);
-      }
-      return linesPromise;
-    };
-    const formatSingleLineFromFile = async (filePath: string, lineNumber: number) => {
-      const relativePath = formatPath(filePath);
-      const lines = await getFileLines(filePath);
-      if (!lines.length) return `${relativePath}:${lineNumber}: (unable to read file)`;
-      const lineText = (lines[lineNumber - 1] ?? "").replace(/\r/g, "");
-      const { text, wasTruncated } = truncateGrepLine(lineText);
-      if (wasTruncated) linesTruncated = true;
-      return `${relativePath}:${lineNumber}: ${text}`;
-    };
     const cleanup = () => {
       rl.close();
       signal?.removeEventListener("abort", onAbort);
       terminator.cleanup();
     };
     const settle = (fn: () => void) => {
-      if (!settled) {
-        settled = true;
-        fn();
-      }
+      if (settled) return;
+      settled = true;
+      fn();
     };
     const stopChild = (dueToLimit = false) => {
       killedDueToLimit = dueToLimit;
       terminator.terminate();
     };
-    const onAbort = () => {
-      aborted = true;
-      stopChild();
-    };
+    const onAbort = () => stopChild();
 
     signal?.addEventListener("abort", onAbort, { once: true });
     child.stderr?.on("data", (chunk) => {
@@ -257,28 +380,23 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
     // rendered, so exact-limit results carry no misleading truncation warning.
     rl.on("line", (line) => {
       if (!line.trim() || matchLimitReached) return;
-      const match = parseRipgrepMatchEvent(line);
-      if (!match) return;
-      if (matchCount >= options.limit) {
+      const match = parseRipgrepMatchEvent(line, options);
+      if (!match || match.lineNumber === undefined) return;
+      if (matches.length >= options.limit) {
         matchLimitReached = true;
         stopChild(true);
         return;
       }
-      matchCount++;
-      if (match.filePath && match.lineNumber !== undefined) matches.push({
-        filePath: match.filePath,
-        lineNumber: match.lineNumber,
-        lineText: match.lineText,
-        submatches: match.submatches,
-      });
+      matches.push({ ...match, lineNumber: match.lineNumber });
     });
     child.on("error", (error) => {
       cleanup();
       settle(() => reject(new Error(`Failed to run ripgrep: ${error.message}`)));
     });
-    child.on("close", async (code) => {
+    child.on("close", (code) => {
       cleanup();
-      if (aborted) {
+      if (settled) return;
+      if (signal?.aborted) {
         settle(() => reject(new Error("Operation aborted")));
         return;
       }
@@ -287,40 +405,7 @@ async function executeStandardGrep(options: MultilineGrepOptions, signal?: Abort
         settle(() => reject(new Error(errorMsg)));
         return;
       }
-      if (matchCount === 0) {
-        settle(() => resolve({ content: [{ type: "text" as const, text: "No matches found" }], details: undefined }));
-        return;
-      }
-      for (const match of matches) {
-        if (match.lineText !== undefined) {
-          const relativePath = formatPath(match.filePath);
-          const formatted = formatMatchBlockLines(match.lineText, match.submatches);
-          if (formatted.linesTruncated) linesTruncated = true;
-          formatted.texts.forEach((text, index) => {
-            outputLines.push(`${relativePath}:${match.lineNumber + index}: ${text}`);
-          });
-        } else {
-          outputLines.push(await formatSingleLineFromFile(match.filePath, match.lineNumber));
-        }
-      }
-
-      let output = outputLines.join("\n");
-      const details: Record<string, unknown> = {};
-      const notices: string[] = [];
-      if (matchLimitReached) {
-        notices.push(`${options.limit} matches limit reached. Use limit=${options.limit * 2} for more, or refine pattern`);
-        details.matchLimitReached = options.limit;
-      }
-      if (linesTruncated) {
-        notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`);
-        details.linesTruncated = true;
-      }
-      if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
-
-      settle(() => resolve({
-        content: [{ type: "text" as const, text: output }],
-        details: Object.keys(details).length > 0 ? details : undefined,
-      }));
+      settle(() => resolve({ matches, limitReached: matchLimitReached }));
     });
   });
 }
@@ -483,140 +568,143 @@ function formatGrepMatchPath(filePath: string, absolutePath: string, searchPathI
   return path.basename(filePath);
 }
 
-// Directory searches run rg inside the search root, so its JSON paths may be
-// relative ("./src/example.ts"); resolve them against the search root, not the
-// process cwd. Absolute rg output (single-file searches, fake rg binaries)
-// passes through unchanged.
-function resolveRgEventPath(filePath: string, options: MultilineGrepOptions): string {
-  const base = options.searchPathIsDirectory ? options.absolutePath : process.cwd();
-  return path.resolve(base, filePath);
+/** The not-searched notice lists a bounded number of absolute paths, then a count. */
+function formatNotSearchedPaths(paths: readonly string[]): string {
+  const shown = paths.slice(0, NOT_SEARCHED_NOTICE_LIMIT);
+  const remaining = paths.length - shown.length;
+  return [...shown, ...(remaining > 0 ? [`and ${remaining} more`] : [])].join(", ");
 }
 
-function formatMultilineMatchLines(rawFilePath: string, lineNumber: number, lineText: string, submatches: RipgrepSubmatch[] | undefined, options: MultilineGrepOptions): { lines: string[]; linesTruncated: boolean } {
-  const filePath = resolveRgEventPath(rawFilePath, options);
-  const relativePath = formatGrepMatchPath(filePath, options.absolutePath, options.searchPathIsDirectory);
-  const formatted = formatMatchBlockLines(lineText, submatches);
-  const lines = formatted.texts.map((text, index) => `${relativePath}:${lineNumber + index}: ${text}`);
-  return { lines, linesTruncated: formatted.linesTruncated };
+/** Replaces raw-byte results with decoded-text results, and drops files the codec rejects. */
+function mergeDecodedMatches(matches: readonly GrepMatch[], decoded: DecodedCandidates): GrepMatch[] {
+  const byFile = new Map<string, GrepMatch[]>();
+  const fileOrder: string[] = [];
+  for (const match of matches) {
+    const existing = byFile.get(match.fileKey);
+    if (existing) {
+      existing.push(match);
+    } else {
+      byFile.set(match.fileKey, [match]);
+      fileOrder.push(match.fileKey);
+    }
+  }
+  const merged: GrepMatch[] = [];
+  for (const fileKey of fileOrder) {
+    const decodedMatches = decoded.replacements.get(fileKey);
+    if (decodedMatches) merged.push(...decodedMatches);
+    else if (!decoded.skipped.has(fileKey)) merged.push(...byFile.get(fileKey)!);
+  }
+  // A declared file matches only after decoding, so it has no raw-search position.
+  for (const fileKey of [...decoded.replacements.keys()].filter((key) => !byFile.has(key)).sort()) {
+    merged.push(...decoded.replacements.get(fileKey)!);
+  }
+  return merged;
 }
 
-async function executeMultilineGrep(options: MultilineGrepOptions, signal?: AbortSignal): Promise<any> {
-  if (signal?.aborted) throw new Error("Operation aborted");
-  const rgPath = await ensureTool("rg", true, signal);
-  if (!rgPath) throw new Error("ripgrep (rg) is not available and could not be downloaded");
-  if (signal?.aborted) throw new Error("Operation aborted");
+async function formatGrepResult(
+  options: GrepSearchOptions,
+  matches: readonly GrepMatch[],
+  limitReached: boolean,
+  skippedPaths: readonly string[],
+): Promise<any> {
+  const outputLines: string[] = [];
+  const fileCache = new Map<string, Promise<string[]>>();
+  let linesTruncated = false;
+  const displayPathOf = (match: GrepMatch) => formatGrepMatchPath(match.absolutePath, options.absolutePath, options.searchPathIsDirectory);
+  const readFileLines = async (match: GrepMatch) => {
+    let linesPromise = fileCache.get(match.fileKey);
+    if (!linesPromise) {
+      linesPromise = readFile(match.filePathBytes)
+        .then((buffer) => decodeTextFile(buffer, match.absolutePath).text)
+        .then((content) => content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n"))
+        .catch(() => [] as string[]);
+      fileCache.set(match.fileKey, linesPromise);
+    }
+    return linesPromise;
+  };
 
-  return new Promise((resolve, reject) => {
-    const args = ["--no-config", "--json", "--line-number", "--color=never", "--hidden", "--multiline"];
-    if (options.caseInsensitive) args.push("--ignore-case");
-    if (options.literal) args.push("--fixed-strings");
-    // rg roots --glob at its own cwd, so a directory search runs inside searchPath.
-    // It searches "." because rg canonicalizes its cwd: with an absolute path, a symlinked
-    // searchPath (macOS /tmp) would no longer lie under the glob root.
-    if (options.include) args.push("--glob", normalizeIncludeGlob(options.include));
-    args.push("--", options.pattern, options.searchPathIsDirectory ? "." : options.absolutePath);
+  for (const match of matches) {
+    const displayPath = displayPathOf(match);
+    if (match.lineText !== undefined) {
+      const formatted = formatMatchBlockLines(match.lineText, match.submatches);
+      if (formatted.linesTruncated) linesTruncated = true;
+      formatted.texts.forEach((text, index) => {
+        outputLines.push(`${displayPath}:${match.lineNumber + index}: ${text}`);
+      });
+      continue;
+    }
+    // Multiline matches need rg's block text; only standard matches fall back to disk.
+    if (options.multiline) continue;
+    const lines = await readFileLines(match);
+    if (!lines.length) {
+      outputLines.push(`${displayPath}:${match.lineNumber}: (unable to read file)`);
+      continue;
+    }
+    const { text, wasTruncated } = truncateGrepLine((lines[match.lineNumber - 1] ?? "").replace(/\r/g, ""));
+    if (wasTruncated) linesTruncated = true;
+    outputLines.push(`${displayPath}:${match.lineNumber}: ${text}`);
+  }
 
-    const child = spawn(rgPath, args, {
-      cwd: options.searchPathIsDirectory ? options.absolutePath : undefined,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const terminator = createGracefulTerminator(child);
-    const rl = createInterface({ input: child.stdout });
-    let stderr = "";
-    let matchCount = 0;
-    let matchLimitReached = false;
-    let linesTruncated = false;
-    let aborted = false;
-    let killedDueToLimit = false;
-    let settled = false;
-    const outputLines: string[] = [];
+  let output = outputLines.length > 0 ? outputLines.join("\n") : "No matches found";
+  const details: Record<string, unknown> = {};
+  const notices: string[] = [];
+  if (limitReached) {
+    notices.push(`${options.limit} matches limit reached. Use limit=${options.limit * 2} for more, or refine pattern`);
+    details.matchLimitReached = options.limit;
+  }
+  if (linesTruncated) {
+    notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`);
+    details.linesTruncated = true;
+  }
+  if (skippedPaths.length > 0) {
+    notices.push(`Not searched because the text encoding could not be determined: ${formatNotSearchedPaths(skippedPaths)}`);
+  }
+  if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
 
-    const cleanup = () => {
-      rl.close();
-      signal?.removeEventListener("abort", onAbort);
-      terminator.cleanup();
-    };
-    const settle = (fn: () => void) => {
-      if (!settled) {
-        settled = true;
-        fn();
-      }
-    };
-    const stopChild = (dueToLimit = false) => {
-      killedDueToLimit = dueToLimit;
-      terminator.terminate();
-    };
-    const onAbort = () => {
-      aborted = true;
-      stopChild();
-    };
+  return {
+    content: [{ type: "text" as const, text: output }],
+    details: Object.keys(details).length > 0 ? details : undefined,
+  };
+}
 
-    signal?.addEventListener("abort", onAbort, { once: true });
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
+/** A single file is searched exactly on the text read shows when its encoding is not UTF-8. */
+async function executeSingleFileSearch(rgPath: string, options: GrepSearchOptions, signal?: AbortSignal): Promise<any> {
+  if (options.existingFile) {
+    let decoded: DecodedTextFile;
+    try {
+      decoded = decodeTextFile(await readFile(options.absolutePath), options.absolutePath);
+    } catch (error) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${formatTextFileError(error, options.displayPath, "searched")} grep only supports searching text files or directories.` }],
+        isError: true,
+      };
+    }
+    if (decoded.encoding.name !== "UTF-8") {
+      const resolved = resolvedGrepPath(Buffer.from(options.absolutePath, "utf8"));
+      const matches = await searchDecodedText(rgPath, decoded.text, resolved, options, signal);
+      return formatGrepResult(options, matches.slice(0, options.limit), matches.length > options.limit, []);
+    }
+  }
+  const result = await searchFiles(rgPath, options, signal);
+  return formatGrepResult(options, result.matches, result.limitReached, []);
+}
 
-    // Same lookahead contract as the standard path: only a match event beyond the
-    // limit proves truncation, and that lookahead match is never rendered.
-    rl.on("line", (line) => {
-      if (!line.trim() || matchLimitReached) return;
-      const match = parseRipgrepMatchEvent(line);
-      if (!match) return;
+async function executeGrepSearch(rgPath: string, options: GrepSearchOptions, signal?: AbortSignal): Promise<any> {
+  if (!options.searchPathIsDirectory) return executeSingleFileSearch(rgPath, options, signal);
 
-      if (matchCount >= options.limit) {
-        matchLimitReached = true;
-        stopChild(true);
-        return;
-      }
-
-      matchCount++;
-      if (match.filePath && match.lineNumber !== undefined && match.lineText !== undefined) {
-        const formatted = formatMultilineMatchLines(match.filePath, match.lineNumber, match.lineText, match.submatches, options);
-        outputLines.push(...formatted.lines);
-        if (formatted.linesTruncated) linesTruncated = true;
-      }
-    });
-
-    child.on("error", (error) => {
-      cleanup();
-      settle(() => reject(new Error(`Failed to run ripgrep: ${error.message}`)));
-    });
-
-    child.on("close", (code) => {
-      cleanup();
-      if (aborted) {
-        settle(() => reject(new Error("Operation aborted")));
-        return;
-      }
-      if (!killedDueToLimit && code !== 0 && code !== 1) {
-        const errorMsg = stderr.trim() || `ripgrep exited with code ${code}`;
-        settle(() => reject(new Error(errorMsg)));
-        return;
-      }
-      if (matchCount === 0) {
-        settle(() => resolve({ content: [{ type: "text" as const, text: "No matches found" }], details: undefined }));
-        return;
-      }
-
-      let output = outputLines.join("\n");
-      const details: any = {};
-      const notices: string[] = [];
-      if (matchLimitReached) {
-        notices.push(`${options.limit} matches limit reached. Use limit=${options.limit * 2} for more, or refine pattern`);
-        details.matchLimitReached = options.limit;
-      }
-      if (linesTruncated) {
-        notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`);
-        details.linesTruncated = true;
-      }
-      if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
-
-      settle(() => resolve({
-        content: [{ type: "text" as const, text: output }],
-        details: Object.keys(details).length > 0 ? details : undefined,
-      }));
-    });
-  });
+  const scan = scanDecodeCandidates(rgPath, options, signal);
+  let result: FileSearchResult;
+  let candidates: Map<string, Buffer>;
+  try {
+    result = await searchFiles(rgPath, options, signal);
+    candidates = await scan.candidates;
+  } finally {
+    scan.stop();
+  }
+  const decoded = await decodeCandidates(rgPath, candidates, options, signal);
+  const matches = mergeDecodedMatches(result.matches, decoded);
+  const limitReached = result.limitReached || matches.length > options.limit;
+  return formatGrepResult(options, matches.slice(0, options.limit), limitReached, [...decoded.skipped.values()].sort());
 }
 
 export async function executeGrep(toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx: any = {}, createBuiltInGrepTool?: GrepFactory): Promise<any> {
@@ -634,10 +722,12 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
     const timeout = createTimeoutSignal(signal, timeoutSeconds);
     try {
       let searchPathIsDirectory = false;
+      let existingFile = false;
       try {
         const searchPathStat = await stat(absolutePath);
         searchPathIsDirectory = searchPathStat.isDirectory();
-        if (!searchPathIsDirectory && !searchPathStat.isFile()) {
+        existingFile = searchPathStat.isFile();
+        if (!searchPathIsDirectory && !existingFile) {
           return {
             content: [{ type: "text" as const, text: `Error: ${rawPath} is not a regular file or directory. grep only supports searching text files or directories.` }],
             isError: true,
@@ -646,43 +736,32 @@ export async function executeGrep(toolCallId: string, params: any, signal?: Abor
       } catch {
         searchPathIsDirectory = false;
       }
-      if (!searchPathIsDirectory) {
-        try {
-          const buffer = await readBinaryProbeBuffer(absolutePath, timeout.signal);
-          if (decodeTextFile(buffer) === null) {
-            return {
-              content: [{ type: "text" as const, text: `Error: ${rawPath} appears to be a binary file. grep only supports searching text files or directories.` }],
-              isError: true,
-            };
-          }
-        } catch (error) {
-          const message = (error as Error).message;
-          if (message === "Operation aborted" || message.endsWith(" is not a regular file.")) throw error;
-        }
-      }
-
-      if (multiline && !createBuiltInGrepTool) {
-        return await executeMultilineGrep({
-          pattern,
-          absolutePath,
-          searchPathIsDirectory,
-          include: params.include,
-          caseInsensitive: params.ignore_case === true,
-          literal: params.literal === true,
-          limit,
-        }, timeout.signal);
-      }
 
       if (!createBuiltInGrepTool) {
-        return await executeStandardGrep({
+        // Never start a search after the deadline has passed.
+        if (timeout.signal.aborted) throw new Error("Operation aborted");
+        const rgPath = await ensureTool("rg", true, timeout.signal);
+        if (!rgPath) throw new Error("ripgrep (rg) is not available and could not be downloaded");
+        if (timeout.signal.aborted) throw new Error("Operation aborted");
+        return await executeGrepSearch(rgPath, {
           pattern,
+          displayPath: rawPath,
           absolutePath,
           searchPathIsDirectory,
+          existingFile,
           include: params.include,
           caseInsensitive: params.ignore_case === true,
           literal: params.literal === true,
+          multiline,
           limit,
         }, timeout.signal);
+      }
+
+      if (existingFile && await hasBinaryPrefix(absolutePath)) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${formatTextFileError(new BinaryFileError(), rawPath, "searched")} grep only supports searching text files or directories.` }],
+          isError: true,
+        };
       }
 
       const builtIn = createBuiltInGrepTool(cwd);

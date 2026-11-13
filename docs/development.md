@@ -130,11 +130,12 @@ Public helpers live in [`src/render.ts`](../src/render.ts). File-modifying tools
 Text tools share the following constraints:
 
 - Only regular files are processed.
-- Binary files must be explicitly rejected.
-- [`src/text-codec.ts`](../src/text-codec.ts) detects BOM, UTF-16, and legacy encodings.
+- Binary files (a NUL byte in the first 8000 bytes) are explicitly rejected.
+- [`src/text-codec.ts`](../src/text-codec.ts) decodes deterministically from a BOM or a standard declaration, accepts valid UTF-8, and never guesses; a file that is not UTF-8 and declares no encoding is refused.
 - `edit` preserves line endings via [`src/line-endings.ts`](../src/line-endings.ts).
-- Writing back legacy encodings must be lossless; fail rather than substituting characters when a value cannot be represented.
+- Encoding must stay lossless: the declared bytes must round-trip, and text the output encoding cannot represent fails instead of being substituted.
 - Read-modify-write cycles for the same path should go through the file change queue.
+- File commits go through [`src/atomic-write.ts`](../src/atomic-write.ts): a temporary file in the target directory is synced and renamed over the target.
 
 ## Child processes
 

@@ -22,7 +22,7 @@ import {
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { readSchema } from "./schemas/read.js";
 import { mapFilePathToPath } from "./tool-arg-aliases.js";
-import { decodeTextFile } from "./text-codec.js";
+import { type DecodedTextFile, decodeTextFile, formatTextFileError } from "./text-codec.js";
 import { TOOL_OUTPUT_MAX_BYTES, TOOL_OUTPUT_MAX_LINES } from "./tool-output-core.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
@@ -199,12 +199,15 @@ function buildDisplayedFileLines(text: string): { lines: string[]; endsWithNewli
 function buildTextReadHeader(args: {
   rawPath: string;
   endsWithNewline: boolean;
+  encoding: string;
   lsp: LspSupportInfo;
   columnOffset: number;
 }): string[] {
   return [
     `path: ${args.rawPath}`,
     `ends_with_newline: ${args.endsWithNewline ? "yes" : "no"}`,
+    // UTF-8 is the default every tool assumes, so only other encodings are announced.
+    ...(args.encoding === "UTF-8" ? [] : [`encoding: ${args.encoding}`]),
     formatLspStatus(args.lsp),
     ...(args.columnOffset > 1
       ? [`column_offset: ${args.columnOffset} (first displayed line starts mid-line; earlier columns omitted)`]
@@ -316,10 +319,12 @@ export function registerReadTool(
           assertTextFileSize(rawPath, currentStat.size);
           return throwIfAbortedAfter(readFile(absolutePath), signal);
         });
-        const decodedFile = decodeTextFile(buffer);
-        if (decodedFile === null) {
+        let decodedFile: DecodedTextFile;
+        try {
+          decodedFile = decodeTextFile(buffer, absolutePath);
+        } catch (error) {
           return {
-            content: [{ type: "text" as const, text: `Error: ${rawPath} appears to be a binary file. read supports text files, directories, and supported images.` }],
+            content: [{ type: "text" as const, text: `Error: ${formatTextFileError(error, rawPath, "read")} read supports text files, directories, and supported images.` }],
             isError: true,
           };
         }
@@ -347,7 +352,7 @@ export function registerReadTool(
           firstLineStartIndex = skipped;
         }
 
-        const headerLines = buildTextReadHeader({ rawPath, endsWithNewline, lsp, columnOffset });
+        const headerLines = buildTextReadHeader({ rawPath, endsWithNewline, encoding: decodedFile.encoding.name, lsp, columnOffset });
         const headerText = headerLines.join("\n");
         const headerBytes = Buffer.byteLength(headerText, "utf8") + 2;
         const maxBodyLines = Math.min(limit, MAX_LIMIT, TOOL_OUTPUT_MAX_LINES - headerText.split("\n").length - 1 - NOTICE_RESERVE_LINES);

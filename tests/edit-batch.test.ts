@@ -148,18 +148,21 @@ describe("edit batches", () => {
     expect(await readFile(file)).toEqual(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("A B\nC\r\nG\n", "utf16le")]));
   });
 
-  it("does not partially write a batch when a legacy encoding cannot represent its output", async () => {
+  it("does not partially write a batch when a declared encoding cannot represent its output", async () => {
     // Intent: encoding round-trip failure remains an all-before-write validation for batches.
     const root = await createTempWorkspace();
-    const file = join(root, "example.txt");
-    const original = Buffer.from("café\nolé\n", "latin1");
+    const file = join(root, "example.py");
+    const original = Buffer.from("# coding: latin-1\ncafé\nolé\n", "latin1");
     await writeFile(file, original);
-    const result = await execute(createEdit(), root, [
-      { old_string: "café", new_string: "coffee" },
-      { old_string: "olé", new_string: "漢字" },
-    ]);
+    const result = await createEdit().execute("batch", {
+      path: "example.py",
+      edits: [
+        { old_string: "café", new_string: "coffee" },
+        { old_string: "olé", new_string: "漢字" },
+      ],
+    }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("cannot be represented");
+    expect(getText(result)).toContain('The new text cannot be encoded in ISO-8859-1: "漢" (U+6F22)');
     expect(await readFile(file)).toEqual(original);
   });
 

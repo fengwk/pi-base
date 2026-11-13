@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import iconv from "iconv-lite";
 import { registerReadTool } from "../src/read.js";
 import { LspDiscoveryResolver } from "../src/lsp/discovery.js";
 import { createTempWorkspace, createToolRegistry, getText, writeWorkspaceFile } from "./helpers.js";
@@ -84,18 +85,19 @@ describe("read tool", () => {
     expect(text).toContain("2|beta");
   });
 
-  it("detects legacy windows-1252 text files", async () => {
+  it("reads a declared windows-1252 file and reports its encoding", async () => {
     const root = await createTempWorkspace();
     await mkdir(join(root, "src"), { recursive: true });
-    const file = join(root, "src", "legacy.txt");
-    await writeFile(file, Buffer.from("café\nolé\n", "latin1"));
+    const file = join(root, "src", "legacy.css");
+    await writeFile(file, iconv.encode('@charset "windows-1252";\ncafé\nolé\n', "windows-1252"));
     const registry = createToolRegistry();
     registerReadTool(registry.pi as any);
-    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/legacy.txt" }, undefined, undefined, { cwd: root });
+    const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src/legacy.css" }, undefined, undefined, { cwd: root });
     const text = getText(result);
     expect(text).toContain("ends_with_newline: yes");
-    expect(text).toContain("1|café");
-    expect(text).toContain("2|olé");
+    expect(text).toContain("encoding: windows-1252");
+    expect(text).toContain("2|café");
+    expect(text).toContain("3|olé");
   });
 
   it("right-aligns read line numbers to the file width", async () => {
@@ -320,7 +322,7 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "data.bin" }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("appears to be a binary file");
+    expect(getText(result)).toContain("is a binary file (it contains NUL bytes)");
   });
 
   it("validates offset and limit before touching the requested filesystem path", async () => {

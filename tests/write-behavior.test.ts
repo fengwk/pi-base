@@ -80,7 +80,7 @@ describe("write behavior", () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("appears to be a binary file");
+    expect(getText(result)).toContain("is a binary file (it contains NUL bytes)");
     expect(await readFile(target)).toEqual(original);
     expect(writes).toEqual([]);
   });

@@ -132,11 +132,12 @@ Pi 1.5 使用 `@earendil-works/pi-schema` 校验工具参数。继续用 TypeBox
 文本工具共享以下约束：
 
 - 只处理普通文件。
-- 二进制文件应明确拒绝。
-- 使用 [`src/text-codec.ts`](../src/text-codec.ts) 检测 BOM、UTF-16 和旧编码。
+- 二进制文件（前 8000 字节内出现 NUL）明确拒绝。
+- [`src/text-codec.ts`](../src/text-codec.ts) 按 BOM 或标准声明确定性解码，只接受合法 UTF-8，从不猜测；不是 UTF-8 且没有声明的文件会被拒绝。
 - `edit` 通过 [`src/line-endings.ts`](../src/line-endings.ts) 保留行尾。
-- legacy encoding 写回必须无损；无法表示时失败而不是替换字符。
+- 编码必须无损：声明的字节必须能往返，输出编码无法表示的文本直接失败而不是替换字符。
 - 同一路径的读改写应进入文件变更队列。
+- 文件提交统一由 [`src/atomic-write.ts`](../src/atomic-write.ts) 完成：目标目录内的临时文件 sync 后 rename 覆盖目标。
 
 ## 子进程
 

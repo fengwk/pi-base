@@ -1,20 +1,58 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
+import { writeFileAtomic } from "./atomic-write.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
-import { assertOriginalBytesRoundTrip, bomKindForEncoding, decodeTextFile, defaultTextEncoding, detectDeclaredTextEncoding, encodeTextFile, textStartsWithBomMarker } from "./text-codec.js";
+import {
+  type DecodedTextFile,
+  type TextBomKind,
+  type TextEncoding,
+  decodeTextFile,
+  encodeTextFile,
+  formatTextFileError,
+  resolveContentEncoding,
+  resolveDeclaredEncoding,
+} from "./text-codec.js";
 
 export function formatWriteSuccess(rawPath: string, existed: boolean): string {
   const action = existed ? "Overwrote" : "Created";
   return `${action} ${rawPath} successfully.`;
 }
 
+/** The encoding the rewritten file must use: an existing BOM wins, then the new content's declaration. */
+function resolveWriteEncoding(
+  absolutePath: string,
+  rawPath: string,
+  content: string,
+  existing: DecodedTextFile | undefined,
+): { encoding: TextEncoding; bom: TextBomKind } {
+  if (!existing || existing.bom === "none") {
+    const target = resolveContentEncoding(content, absolutePath);
+    const contentDeclares = resolveDeclaredEncoding(content, absolutePath, "none");
+    const existingDeclares = existing && resolveDeclaredEncoding(existing.text, absolutePath, "none");
+    if (existingDeclares && !contentDeclares && existingDeclares.name !== "UTF-8") {
+      throw new Error(
+        `The new content removes the ${existingDeclares.name} declaration of ${rawPath}. `
+        + "Keep the declaration, or declare the new encoding explicitly to convert the file.",
+      );
+    }
+    return target;
+  }
+  const declared = resolveDeclaredEncoding(content, absolutePath, existing.bom);
+  if (declared && declared.name !== existing.encoding.name) {
+    throw new Error(
+      `The new content declares ${declared.name}, but ${rawPath} is ${existing.encoding.name} with a ${existing.bom} byte order mark. `
+      + "Keep the existing declaration, or delete the file first to convert it.",
+    );
+  }
+  return { encoding: existing.encoding, bom: existing.bom };
+}
+
 function isFileNotFoundError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
-
 // Number of content lines shown in the collapsed call preview once the tool has finished
 // applying. Aligned with the streaming rolling window's body-line tail (see
 // STREAMING_CALL_PREVIEW_LINES in render.ts: 10 total, with 3 reserved for the title
@@ -94,30 +132,26 @@ export async function executeWrite(
     const absolutePath = resolveToCwd(rawPath, cwd);
     const { existed } = await withFileMutationQueue(absolutePath, async () => {
       throwIfAborted(signal);
-      let existed = true;
-      const declaredEncoding = detectDeclaredTextEncoding(content);
-      let outputEncoding = declaredEncoding ?? defaultTextEncoding();
-      let outputBom = textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none";
+      let existing: DecodedTextFile | undefined;
       try {
         const currentStat = await throwIfAbortedAfter(stat(absolutePath), signal);
         if (!currentStat.isFile()) throw new Error(`${rawPath} is not a regular file. write supports regular text files only.`);
         const currentBytes = await throwIfAbortedAfter(readFile(absolutePath), signal);
-        const decoded = decodeTextFile(currentBytes);
-        if (decoded === null) throw new Error(`${rawPath} appears to be a binary file. write supports text files only.`);
-        assertOriginalBytesRoundTrip(currentBytes, decoded);
-        // A whole-file rewrite may declare a new encoding. A retained BOM remains authoritative.
-        outputEncoding = decoded.bom === "none" ? (declaredEncoding ?? decoded.encoding) : decoded.encoding;
-        outputBom = decoded.bom !== "none" ? decoded.bom : (textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none");
+        try {
+          existing = decodeTextFile(currentBytes, absolutePath);
+        } catch (error) {
+          throw new Error(`${formatTextFileError(error, rawPath, "written")} write supports text files only.`);
+        }
       } catch (error) {
         if (!isFileNotFoundError(error)) throw error;
-        existed = false;
       }
-      const output = encodeTextFile(content, outputEncoding, outputBom);
+      const { encoding, bom } = resolveWriteEncoding(absolutePath, rawPath, content, existing);
+      const output = encodeTextFile(content, encoding, bom);
       await throwIfAbortedAfter(mkdir(dirname(absolutePath), { recursive: true }), signal);
       // Once the write starts, let it settle and report the committed result. A post-write abort
       // cannot roll the file back and must not hide the mutation from downstream bookkeeping.
-      await writeFile(absolutePath, output);
-      return { existed };
+      await writeFileAtomic(absolutePath, output);
+      return { existed: existing !== undefined };
     });
     try {
       options.onSuccessfulWrite?.(absolutePath);
