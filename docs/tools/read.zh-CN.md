@@ -47,6 +47,8 @@
 解码由 [`src/text-codec.ts`](../../src/text-codec.ts) 完成，覆盖：
 
 - UTF BOM
+- 标准文件头声明：XML `encoding`、Python 前两行编码注释、HTML head 的 `meta charset` / `http-equiv`、CSS `@charset`（扫描前 4096 字节）
+- 先验证 UTF-8，再做统计推断
 - UTF-16 无 BOM 启发式
 - 旧编码检测
 - 二进制判断

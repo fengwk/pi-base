@@ -68,7 +68,7 @@ edit({ path: "a.ts", edits: [
 ] });
 ```
 
-Every entry is matched against the same original file snapshot, not the output of the preceding entry. All matches must be non-overlapping, including matches expanded by an entry's `replace_all`. Missing, ambiguous, overlapping, invalid, or unencodable replacements fail before any write. A successful batch writes once, reports the total number of replaced occurrences, and returns one combined diff. This is validation-before-write, not filesystem crash-atomicity or a transaction across separate tool calls. Replacements that depend on earlier edits need separate calls.
+Every entry is matched against the same original file snapshot, not the output of the preceding entry. All matches must be non-overlapping, including matches expanded by an entry's `replace_all`. Missing, ambiguous, overlapping, invalid, or unencodable replacements fail before any write. A successful batch writes once, reports the total number of replaced occurrences, and returns one combined diff. This is validation-before-write, not filesystem crash-atomicity or a transaction across separate tool calls. Replacements that depend on earlier edits need separate calls, waiting for the earlier call to return before issuing the next.
 
 ## Encoding and line endings
 
@@ -83,9 +83,11 @@ The replacement text is applied in an LF view and written back via `serializeLin
 
 Legacy encodings use round-trip validation on write-back; writing fails when the new text cannot be represented losslessly.
 
+Encoding selection prefers a BOM, then a standard file-header declaration (XML, Python coding cookie, HTML head meta, or CSS charset), then validated UTF-8, and otherwise retains automatic UTF-16/legacy detection. Before modifying an existing file, its decoded text must re-encode to the exact original bytes; otherwise the tool refuses to rewrite it. This prevents demonstrable decoding loss without rejecting inferred encodings as a class. A byte round-trip does not prove that an ambiguous encoding guess is semantically correct. No extra tool arguments or confirmation steps are required. An edit that changes a header to an incompatible encoding is rejected rather than relabeling the existing bytes; use a complete-file `write` for conversion.
+
 ## Concurrency
 
-The full read-match-write flow sits in the file change queue. Concurrent modifications to the same path are serialized; a later edit re-reads the file after the previous one commits.
+The full read-match-write flow sits in the process-local file change queue. Concurrent modifications to the same file are serialized; a later edit re-reads and matches the file after the previous operation completes, rejecting stale old text instead of blindly overwriting it. Separate calls are not one transaction: a later failure does not roll back earlier successful calls or automatically cancel other independent calls. The queue is not a cross-process lock or a filesystem crash-atomicity guarantee.
 
 ## Diff
 

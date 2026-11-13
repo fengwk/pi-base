@@ -44,7 +44,7 @@ validate parameters
 ## New files
 
 - The parent directory is created via recursive `mkdir`.
-- The default encoding is UTF-8.
+- A standard file-header declaration selects the encoding; otherwise the default is UTF-8.
 - A BOM is produced when `content` starts with a BOM marker.
 - Line breaks in `content` are written as-is from the caller.
 
@@ -53,11 +53,13 @@ validate parameters
 An existing target must be judged a regular file via `stat`. Before writing, the original bytes are decoded as text:
 
 - Reject binary files without modifying them.
-- Preserve the existing encoding.
+- Preserve the existing encoding unless the complete replacement text declares a new one and the file has no BOM.
 - Preserve the existing BOM.
 - The existing line-ending style is not automatically preserved; `content` is the final text of the complete file.
 
-Fails when a legacy encoding cannot represent the new content.
+Fails when a legacy encoding cannot represent the new content. It also refuses to rewrite an existing file if its decoded text cannot re-encode to the exact original bytes.
+
+Existing-file encoding selection prefers a BOM, then a standard file-header declaration (XML, Python coding cookie, HTML head meta, or CSS charset), then validated UTF-8, otherwise automatic UTF-16/legacy detection. Inferred encodings remain usable without extra arguments or confirmation. Byte round-trip validation prevents demonstrable decoding loss; it cannot prove that an ambiguous encoding guess is semantically correct.
 
 `write` uses `stat` to determine the target type, so symlinks are judged as regular files by their target and followed by `writeFile`; see the shared safety boundary in [architecture](../architecture.md#paths-and-file-writes).
 

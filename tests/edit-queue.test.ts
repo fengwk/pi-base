@@ -9,11 +9,16 @@ afterEach(() => {
 
 describe("edit queue", () => {
   // Intent: one-entry and two-entry `edits` arrays must share the same queue path.
-  it.each([1, 2])("serializes same-file edits through one critical section (edits=%i)", async (entryCount) => {
+  it.each([
+    { entryCount: 1, stale: true },
+    { entryCount: 2, stale: true },
+    { entryCount: 1, stale: false },
+    { entryCount: 2, stale: false },
+  ])("serializes same-file edits (edits=$entryCount, stale=$stale)", async ({ entryCount, stale }) => {
     // Intent: block the first write after its read. If the second edit can still
     // read old bytes, the final file is clobbered. Keeping the whole cycle inside
     // the queue makes the second edit observe the first write instead.
-    let fileBytes = Buffer.from("alpha\ntail\n", "utf8");
+    let fileBytes = Buffer.from("alpha\ntail\nstable\n", "utf8");
     let releaseFirstWrite = () => {};
     let resolveFirstWriteStarted = () => {};
     const firstWriteStarted = new Promise<void>((resolve) => {
@@ -54,7 +59,9 @@ describe("edit queue", () => {
     );
     const secondEdit = registry.getTool("edit").execute(
       "2",
-      { workdir: ".", path: "src/example.ts", edits: [{ old_string: "alpha", new_string: "beta" }] },
+      { workdir: ".", path: "src/example.ts", edits: [stale
+        ? { old_string: "alpha", new_string: "beta" }
+        : { old_string: "stable", new_string: "final" }] },
       undefined,
       undefined,
       { cwd: "/tmp/pi-base-edit-queue" },
@@ -66,9 +73,13 @@ describe("edit queue", () => {
 
     const [firstResult, secondResult] = await Promise.all([firstEdit, secondEdit]);
     expect(firstResult.isError).not.toBe(true);
-    expect(secondResult.isError).toBe(true);
-    expect(getText(secondResult)).toContain("Could not find old_string");
-    expect(fileBytes.toString("utf8")).toBe(entryCount === 2 ? "gamma\nend\n" : "gamma\ntail\n");
-    expect(writeCount).toBe(1);
+    if (stale) {
+      expect(secondResult.isError).toBe(true);
+      expect(getText(secondResult)).toContain("Could not find old_string");
+    } else {
+      expect(secondResult.isError).not.toBe(true);
+    }
+    expect(fileBytes.toString("utf8")).toBe(`gamma\n${entryCount === 2 ? "end" : "tail"}\n${stale ? "stable" : "final"}\n`);
+    expect(writeCount).toBe(stale ? 1 : 2);
   });
 });

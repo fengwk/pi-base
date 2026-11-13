@@ -106,6 +106,21 @@ describe("edit batches", () => {
     expect(await readFile(join(root, "example.txt"), "utf8")).toBe(original);
   });
 
+  it.each([false, true])("rejects overlapping replace_all entries regardless of input order (reversed=%s)", async (reverse) => {
+    // Intent: both rules can have multiple valid matches, but expanded cross-rule overlaps must reject the whole batch.
+    const root = await createTempWorkspace();
+    const original = "alpha beta\nalpha beta\n";
+    await writeWorkspaceFile(root, "example.txt", original);
+    const edits = [
+      { old_string: "alpha", new_string: "A", replace_all: true },
+      { old_string: "alpha beta", new_string: "pair", replace_all: true },
+    ];
+    const result = await execute(createEdit(), root, reverse ? edits.reverse() : edits);
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("overlap");
+    expect(await readFile(join(root, "example.txt"), "utf8")).toBe(original);
+  });
+
   it("rejects a batch that depends on text introduced by an earlier entry", async () => {
     // Intent: batches are independent snapshot edits, not sequential transformations.
     const root = await createTempWorkspace();

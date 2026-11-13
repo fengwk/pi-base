@@ -32,7 +32,7 @@ import {
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { editSchema } from "./schemas/edit.js";
 import { mapFilePathToPath } from "./tool-arg-aliases.js";
-import { decodeTextFile, encodeTextFile } from "./text-codec.js";
+import { assertOriginalBytesRoundTrip, decodeTextFile, detectDeclaredTextEncoding, encodeTextFile } from "./text-codec.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
@@ -535,6 +535,7 @@ export function registerEditTool(
             return { kind: "error", text: `Error: ${rawPath} appears to be a binary file. edit supports text files only.` };
           }
 
+          assertOriginalBytesRoundTrip(rawBytes, decodedFile);
           const endingStyle = detectLineEnding(decodedFile.text);
           const originalDocument = parseLineEndingDocument(decodedFile.text);
           const fileText = serializeNormalizedDocument(originalDocument);
@@ -584,6 +585,13 @@ export function registerEditTool(
           const replacedText = serializeNormalizedDocument(nextDocument);
           const serializedOutput = serializeLineEndingDocument(nextDocument);
           const outputBytes = encodeTextFile(serializedOutput, decodedFile.encoding, decodedFile.bom);
+          if (decodedFile.bom === "none") {
+            const declared = detectDeclaredTextEncoding(serializedOutput);
+            if (declared && declared !== detectDeclaredTextEncoding(decodedFile.text)
+              && !encodeTextFile(serializedOutput, declared, "none").equals(outputBytes)) {
+              throw new Error("Changing the encoding declaration requires converting the file. Use write with the complete content instead.");
+            }
+          }
           if (outputBytes.equals(rawBytes)) {
             return { kind: "error", text: "No changes to apply: edit would not change the file." };
           }

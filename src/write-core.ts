@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
-import { bomKindForEncoding, decodeTextFile, defaultTextEncoding, encodeTextFile, textStartsWithBomMarker } from "./text-codec.js";
+import { assertOriginalBytesRoundTrip, bomKindForEncoding, decodeTextFile, defaultTextEncoding, detectDeclaredTextEncoding, encodeTextFile, textStartsWithBomMarker } from "./text-codec.js";
 
 export function formatWriteSuccess(rawPath: string, existed: boolean): string {
   const action = existed ? "Overwrote" : "Created";
@@ -95,7 +95,8 @@ export async function executeWrite(
     const { existed } = await withFileMutationQueue(absolutePath, async () => {
       throwIfAborted(signal);
       let existed = true;
-      let outputEncoding = defaultTextEncoding();
+      const declaredEncoding = detectDeclaredTextEncoding(content);
+      let outputEncoding = declaredEncoding ?? defaultTextEncoding();
       let outputBom = textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none";
       try {
         const currentStat = await throwIfAbortedAfter(stat(absolutePath), signal);
@@ -103,7 +104,9 @@ export async function executeWrite(
         const currentBytes = await throwIfAbortedAfter(readFile(absolutePath), signal);
         const decoded = decodeTextFile(currentBytes);
         if (decoded === null) throw new Error(`${rawPath} appears to be a binary file. write supports text files only.`);
-        outputEncoding = decoded.encoding;
+        assertOriginalBytesRoundTrip(currentBytes, decoded);
+        // A whole-file rewrite may declare a new encoding. A retained BOM remains authoritative.
+        outputEncoding = decoded.bom === "none" ? (declaredEncoding ?? decoded.encoding) : decoded.encoding;
         outputBom = decoded.bom !== "none" ? decoded.bom : (textStartsWithBomMarker(content) ? bomKindForEncoding(outputEncoding) : "none");
       } catch (error) {
         if (!isFileNotFoundError(error)) throw error;

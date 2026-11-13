@@ -47,6 +47,8 @@ The text branch re-runs `stat` and the read in the file-change queue to avoid in
 Decoding is done by [`src/text-codec.ts`](../../src/text-codec.ts), covering:
 
 - UTF BOM
+- Standard file-header declarations: XML `encoding`, Python coding cookies on the first two lines, HTML head `meta charset` / `http-equiv`, and CSS `@charset` (within the first 4096 bytes)
+- Validated UTF-8 before statistical guessing
 - UTF-16 heuristic without BOM
 - Legacy encoding detection
 - Binary detection

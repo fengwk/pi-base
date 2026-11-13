@@ -62,15 +62,15 @@ describe("text codec", () => {
     expect(decodeTextFile(Buffer.from([0x41, 0x00, 0x42, 0x00]))?.text).toBe("AB");
   });
 
-  it("falls back to UTF-8 for suspicious decoded text that is not binary bytes", () => {
-    // Intent: if the detector cannot identify an encoding and the bytes are
-    // still valid text, callers should get a conservative UTF-8 view.
+  it("recognizes valid UTF-8 control-character text without a detector fallback", () => {
+    // Intent: valid UTF-8 terminal text should not depend on a statistical guess,
+    // even when it contains control characters.
     const bytes = Buffer.from([0x1b, 0x1b, 0x1b, 0x1b, 0x1b, 0x41]);
     const decoded = decodeTextFile(bytes);
     expect(decoded).toEqual({
       encoding: "utf-8",
       bom: "none",
-      source: "default",
+      source: "utf8",
       text: "\u001b\u001b\u001b\u001b\u001bA",
     });
   });
