@@ -73,6 +73,16 @@ describe("tool prompt loading", () => {
     expect(descriptionOf(taskSchema.properties.session_id)).toContain("<task id=");
   });
 
+  it("explains snapshot edits and ordering without introducing another calling convention", () => {
+    // Intent: the approved prompt must reach the model with batching, snapshot matching and cross-call boundaries intact.
+    const description = loadToolDescription("edit");
+    expect(description).toContain("prefer one `edit` call for independent changes to the same file");
+    expect(description).toContain("original file, not earlier entries' output");
+    expect(description).toContain("any validation failure reject the entire call before writing");
+    expect(description).toContain("a later failure does not roll back earlier successful calls");
+    expect(description).toContain("Wait for the preceding call to finish before issuing a dependent one");
+  });
+
   it("keeps structured parameters out of ordinary tool prose", () => {
     // Intent: schemas own structured parameter documentation for every registered tool.
     const schemaOwnedTools = [
