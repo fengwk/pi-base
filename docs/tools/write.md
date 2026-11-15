@@ -44,7 +44,7 @@ validate parameters
 ## New files
 
 - The parent directory is created via recursive `mkdir`.
-- A standard declaration in `content` selects the encoding (XML, CSS, HTML, Python/Ruby cookie, JSP); otherwise the default is UTF-8. Decoding rules are shared with [read](read.md#reading-text).
+- A standard declaration in `content` selects the encoding (XML, CSS, HTML, Python/Ruby cookie, JSP); otherwise the default is UTF-8. Decoding rules are shared with [read](read.md#reading-text). A declaration whose label is not ASCII-compatible (for example UTF-7) is refused.
 - A BOM is produced when `content` starts with U+FEFF and the encoding has one, including the UTF-16/32 byte-order forms.
 - Line breaks in `content` are written as-is from the caller.
 
@@ -56,7 +56,7 @@ An existing target must be judged a regular file via `stat`. Before writing, the
 - Invalid byte sequences in the existing file decode to U+FFFD (�) for validation and encoding decisions; the overwrite writes the full caller-supplied `content`, not the decoded original. If `content` came from a lossy `read`, the original invalid bytes cannot be recovered.
 - A BOM stays authoritative: the existing encoding and BOM are kept, and a declaration in `content` must select that same encoding.
 - Without a BOM, a declaration in `content` selects the new encoding and may convert the file. Dropping a non-UTF-8 declaration is refused: `The new content removes the {name} declaration of {path}.`
-- Text the output encoding cannot represent fails with the character, its code point and the line.
+- Text the output encoding cannot represent fails with the character, its code point and the line. When the character is U+FFFD, the error explains that it marks bytes that could not be decoded.
 - The existing line-ending style is not automatically preserved; `content` is the final text of the complete file.
 
 `write` uses `stat` to determine the target type, so symlinks are judged as regular files by their target and followed by `writeFile`; see the shared safety boundary in [architecture](../architecture.md#paths-and-file-writes). The queued operation writes the output bytes directly to the target path. A symlink is followed and the resolved file keeps its inode, so hard links, owner/group, and ordinary file permissions follow normal in-place semantics. Validation failures do not write, but an in-place write is not crash-atomic: a crash or full disk during the write can leave partial content.

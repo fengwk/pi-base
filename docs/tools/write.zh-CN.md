@@ -44,7 +44,7 @@
 ## 新文件
 
 - 父目录通过 recursive `mkdir` 创建。
-- `content` 中的标准声明可指定编码（XML、CSS、HTML、Python/Ruby 注释、JSP）；否则默认使用 UTF-8。解码规则与 [read](read.zh-CN.md#文本读取) 共用。
+- `content` 中的标准声明可指定编码（XML、CSS、HTML、Python/Ruby 注释、JSP）；否则默认使用 UTF-8。解码规则与 [read](read.zh-CN.md#文本读取) 共用。与 ASCII 不兼容的声明标签（例如 UTF-7）会被拒绝。
 - `content` 以 U+FEFF 开头且编码支持 BOM 时会生成相应 BOM，包括 UTF-16/32 的字节序形式。
 - `content` 中的换行按调用方原样写入。
 
@@ -56,7 +56,7 @@
 - 现有文件中的非法字节会解码为 U+FFFD (�) 用于校验与编码判断；覆盖写入的是调用方提供的完整 `content`，不是解码后的原文本。若 `content` 来自有损的 `read`，原非法字节无法恢复。
 - BOM 优先：保留已有 encoding 与 BOM，`content` 中的声明必须解析为同一编码。
 - 无 BOM 时，`content` 中的声明决定新编码，可以转换文件；去掉非 UTF-8 声明会被拒绝：`The new content removes the {name} declaration of {path}.`。
-- 输出编码无法表示的文本会报出字符、码点与行号。
+- 输出编码无法表示的文本会报出字符、码点与行号。字符为 U+FFFD 时，错误会说明它标记无法解码的字节。
 - 不自动保留已有换行风格；`content` 是完整文件的最终文本。
 
 `write` 使用 `stat` 判断目标类型，因此符号链接按其目标进行普通文件判断，并由 `writeFile` 跟随；公共安全边界见[架构说明](../architecture.zh-CN.md#路径与文件写入)。队列内的操作直接把输出字节写入目标路径。符号链接会被跟随，解析后的文件保留原 inode，因此 hardlink、owner/group 与普通文件权限符合原地写入语义。校验失败不会写入，但原地写入不具备崩溃原子性：写入期间崩溃或磁盘写满可能留下部分内容。
