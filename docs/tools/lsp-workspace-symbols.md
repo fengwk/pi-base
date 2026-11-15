@@ -60,6 +60,7 @@ No results return `No symbols found`.
 ## Usage boundaries
 
 - `lsp_workspace_symbols` queries workspace symbols by symbol name.
+- The client sends only the query; workspace files that were never opened by the client are indexed by the language server under its own configuration, so the shared client decoder does not control their disk reads.
 - Text content search is provided by `grep`.
 - File name lookup is provided by `find`.
 - `path` must belong to the target workspace, otherwise the wrong server/root may be selected.

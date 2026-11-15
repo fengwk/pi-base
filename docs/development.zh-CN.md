@@ -133,11 +133,11 @@ Pi 1.5 使用 `@earendil-works/pi-schema` 校验工具参数。继续用 TypeBox
 
 - 只处理普通文件。
 - 二进制文件（前 8000 字节内出现 NUL）明确拒绝。
-- [`src/text-codec.ts`](../src/text-codec.ts) 按 BOM 或标准声明确定性解码，只接受合法 UTF-8，从不猜测；不是 UTF-8 且没有声明的文件会被拒绝。
+- [`src/text-codec.ts`](../src/text-codec.ts) 按 BOM 或标准声明解码，否则默认 UTF-8，从不做统计猜测；非法字节替换为 U+FFFD (�)，`read`、`edit`、`grep` 共用同一解码文本。
 - `edit` 通过 [`src/line-endings.ts`](../src/line-endings.ts) 保留行尾。
-- 编码必须无损：声明的字节必须能往返，输出编码无法表示的文本直接失败而不是替换字符。
+- 输出可表示性仍会检查：输出编码无法表示的文本直接失败而不是替换字符。重新编码解码文本时，未选中的非法字节可能被替换为 U+FFFD (�)。
 - 同一路径的读改写应进入文件变更队列。
-- 文件提交统一由 [`src/atomic-write.ts`](../src/atomic-write.ts) 完成：目标目录内的临时文件 sync 后 rename 覆盖目标。
+- 文件提交在校验通过后原地写入目标路径。符号链接会被跟随并保留解析后的 inode；校验失败不会写入，但写入期间崩溃或磁盘写满可能留下部分内容。
 
 ## 子进程
 

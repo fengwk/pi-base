@@ -32,11 +32,11 @@
   -> 解析 path
   -> 文件变更队列
      -> stat/read existing target
-     -> 按文本解码，拒绝二进制或无法解码的文件
+     -> 按共享替换式解码读取文本
      -> 确定输出 encoding/BOM
      -> encode content
      -> mkdir parent
-     -> 原子写入（临时文件 + rename）
+     -> 原地写入同一路径
   -> LSP sync observer
   -> Created/Overwrote result
 ```
@@ -45,20 +45,21 @@
 
 - 父目录通过 recursive `mkdir` 创建。
 - `content` 中的标准声明可指定编码（XML、CSS、HTML、Python/Ruby 注释、JSP）；否则默认使用 UTF-8。解码规则与 [read](read.zh-CN.md#文本读取) 共用。
-- `content` 以 U+FEFF 开头且编码支持 BOM 时会生成相应 BOM。
+- `content` 以 U+FEFF 开头且编码支持 BOM 时会生成相应 BOM，包括 UTF-16/32 的字节序形式。
 - `content` 中的换行按调用方原样写入。
 
 ## 覆盖已有文件
 
-已有目标必须经 `stat` 判断为普通文件。写入前读取原始字节并用确定性 codec 按文本解码：
+已有目标必须经 `stat` 判断为普通文件。写入前读取原始字节并用共享替换式 decoder 按文本解码：
 
-- 拒绝二进制或无法解码的文件，且不修改原文件。
+- 拒绝二进制文件，且不修改原文件。声明标签不受支持时仍会失败。
+- 现有文件中的非法字节会解码为 U+FFFD (�) 用于校验与编码判断；覆盖写入的是调用方提供的完整 `content`，不是解码后的原文本。若 `content` 来自有损的 `read`，原非法字节无法恢复。
 - BOM 优先：保留已有 encoding 与 BOM，`content` 中的声明必须解析为同一编码。
 - 无 BOM 时，`content` 中的声明决定新编码，可以转换文件；去掉非 UTF-8 声明会被拒绝：`The new content removes the {name} declaration of {path}.`。
 - 输出编码无法表示的文本会报出字符、码点与行号。
 - 不自动保留已有换行风格；`content` 是完整文件的最终文本。
 
-`write` 使用 `stat` 判断目标类型，因此符号链接按其目标进行普通文件判断，并由 `writeFile` 跟随；公共安全边界见[架构说明](../architecture.zh-CN.md#路径与文件写入)。提交时在目标目录写入临时文件，沿用原文件权限，fsync 后 rename 覆盖目标；符号链接保留，替换其指向的文件。
+`write` 使用 `stat` 判断目标类型，因此符号链接按其目标进行普通文件判断，并由 `writeFile` 跟随；公共安全边界见[架构说明](../architecture.zh-CN.md#路径与文件写入)。队列内的操作直接把输出字节写入目标路径。符号链接会被跟随，解析后的文件保留原 inode，因此 hardlink、owner/group 与普通文件权限符合原地写入语义。校验失败不会写入，但原地写入不具备崩溃原子性：写入期间崩溃或磁盘写满可能留下部分内容。
 
 ## 并发与 abort
 
@@ -87,7 +88,7 @@ Write 调用有独立内容预览：
 
 - 缺少 `path` 或 `content`。
 - 目标存在但不是普通文件。
-- 目标存在但是二进制文件，或无法确定其编码。
+- 目标存在但是二进制文件，或声明了不受支持的编码标签。
 - 新内容与已有编码冲突。
 - 读取或编码失败。
 - 父目录创建失败。

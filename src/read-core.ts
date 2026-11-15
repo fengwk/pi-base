@@ -197,14 +197,12 @@ function buildDisplayedFileLines(text: string): { lines: string[]; endsWithNewli
 }
 
 function buildTextReadHeader(args: {
-  rawPath: string;
   endsWithNewline: boolean;
   encoding: string;
   lsp: LspSupportInfo;
   columnOffset: number;
 }): string[] {
   return [
-    `path: ${args.rawPath}`,
     `ends_with_newline: ${args.endsWithNewline ? "yes" : "no"}`,
     // UTF-8 is the default every tool assumes, so only other encodings are announced.
     ...(args.encoding === "UTF-8" ? [] : [`encoding: ${args.encoding}`]),
@@ -269,7 +267,7 @@ export function registerReadTool(
           rejectExplicitColumnOffset(params);
           const entries = await throwIfAbortedAfter(readdir(absolutePath, { withFileTypes: true }), signal);
           const names = entries.map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`).sort((a, b) => a.localeCompare(b));
-          return { content: [{ type: "text" as const, text: [`path: ${rawPath}`, "kind: directory", "", ...names].join("\n") }] };
+          return { content: [{ type: "text" as const, text: ["kind: directory", "", ...names].join("\n") }] };
         }
         assertRegularReadFile(rawPath, st);
 
@@ -300,7 +298,6 @@ export function registerReadTool(
               {
                 type: "text" as const,
                 text: [
-                  `path: ${rawPath}`,
                   "kind: file",
                   "mediaType: image",
                   `message: Image returned as attachment.${note ? ` ${note}` : ""}`,
@@ -352,13 +349,13 @@ export function registerReadTool(
           firstLineStartIndex = skipped;
         }
 
-        const headerLines = buildTextReadHeader({ rawPath, endsWithNewline, encoding: decodedFile.encoding.name, lsp, columnOffset });
+        const headerLines = buildTextReadHeader({ endsWithNewline, encoding: decodedFile.encoding.name, lsp, columnOffset });
         const headerText = headerLines.join("\n");
         const headerBytes = Buffer.byteLength(headerText, "utf8") + 2;
         const maxBodyLines = Math.min(limit, MAX_LIMIT, TOOL_OUTPUT_MAX_LINES - headerText.split("\n").length - 1 - NOTICE_RESERVE_LINES);
         const maxBodyBytes = TOOL_OUTPUT_MAX_BYTES - headerBytes - NOTICE_RESERVE_BYTES;
         if (maxBodyLines < 1 || maxBodyBytes < 1) {
-          throw new Error("Read metadata exceeds the output budget. Use a shorter path.");
+          throw new Error("Read metadata exceeds the output budget.");
         }
         const lineNumberWidth = Math.max(1, String(Math.max(totalLines, 1)).length);
         const body: string[] = [];
@@ -386,7 +383,7 @@ export function registerReadTool(
           line += 1;
         }
         if (body.length === 0 && line <= totalLines) {
-          throw new Error("Read output cannot fit the first line fragment. Use a shorter path.");
+          throw new Error("Read output cannot fit the first line fragment.");
         }
         if (next === null && line <= totalLines) next = { line, column: 1 };
         const end = start + body.length - 1;

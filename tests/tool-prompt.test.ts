@@ -83,6 +83,26 @@ describe("tool prompt loading", () => {
     expect(description).toContain("Wait for the preceding call to finish before issuing a dependent one");
   });
 
+  it("describes the shared replacement-decoded text workflow", () => {
+    // Intent: model-visible prompts must match read output without a path header and
+    // the approved shared decoding semantics for read, edit, and grep.
+    const read = loadToolDescription("read");
+    expect(read).toContain("(`ends_with_newline` and `lsp`)");
+    expect(read).not.toContain("(`path`, `ends_with_newline`");
+    expect(read).toContain("Text is decoded using its byte order mark or standard encoding declaration, otherwise as UTF-8.");
+    expect(read).toContain("Invalid byte sequences appear as U+FFFD (�); read and edit use the same decoded text.");
+    expect(read).not.toContain("declares no encoding is refused");
+
+    const edit = loadToolDescription("edit");
+    expect(edit).toContain("(`ends_with_newline` and `lsp`)");
+    expect(edit).not.toContain("(`path`, `ends_with_newline`");
+
+    const grep = loadToolDescription("grep");
+    expect(grep).toContain("Searches use the same decoded text as read, including U+FFFD (�) for invalid byte sequences.");
+    expect(grep).toContain("A final Not searched notice lists files that could not be searched; their contents were not checked.");
+    expect(grep).not.toContain("could not be determined");
+  });
+
   it("keeps structured parameters out of ordinary tool prose", () => {
     // Intent: schemas own structured parameter documentation for every registered tool.
     const schemaOwnedTools = [

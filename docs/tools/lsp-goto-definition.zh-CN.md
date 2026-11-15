@@ -62,6 +62,8 @@ Workspace root 按 `.git` 边界、`rootMarkers` 和 `firstMatchMarkers` 计算�
 - UTF-16
 - UTF-32
 
+Position encoding 决定协议中的列单位，而不是磁盘文件编码。客户端打开或同步的文本使用与 `read` 相同的共享 decoder 从磁盘读取，并通过 `didOpen`/`didChange` 发送；JSON 传输本身固定为 UTF-8。客户端未 `didOpen` 的文件由语言服务器按自身配置读取和索引，不受客户端 decoder 控制。
+
 ## 结果
 
 本地定义格式：
