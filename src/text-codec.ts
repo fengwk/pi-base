@@ -1,4 +1,3 @@
-import { isUtf8 } from "node:buffer";
 import iconv from "iconv-lite";
 
 export type TextBomKind = "none" | "utf-8" | "utf-16le" | "utf-16be" | "utf-32le" | "utf-32be";
@@ -24,14 +23,6 @@ export class BinaryFileError extends Error {
   }
 }
 
-/** No declaration and the bytes are not valid UTF-8. */
-export class UnknownTextEncodingError extends Error {
-  constructor() {
-    super("The content is not valid UTF-8 and declares no text encoding.");
-    this.name = "UnknownTextEncodingError";
-  }
-}
-
 /** A declaration names a label that does not resolve. */
 export class UnsupportedEncodingLabelError extends Error {
   readonly label: string;
@@ -50,14 +41,6 @@ export class EncodingDeclarationConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "EncodingDeclarationConflictError";
-  }
-}
-
-/** The bytes do not decode exactly with the chosen encoding. */
-export class UndecodableTextError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "UndecodableTextError";
   }
 }
 
@@ -328,57 +311,39 @@ function declarationProbe(buffer: Buffer): string {
   return buffer.subarray(0, LONG_DECLARATION_BYTES).toString("latin1");
 }
 
-function findFirstDifference(original: Buffer, reencoded: Buffer): number {
-  const limit = Math.min(original.length, reencoded.length);
-  let offset = 0;
-  while (offset < limit && original[offset] === reencoded[offset]) offset++;
-  return offset;
-}
+const UTF16_DECODERS: Readonly<Record<string, TextDecoder>> = {
+  "UTF-16LE": new TextDecoder("utf-16le", { fatal: false, ignoreBOM: true }),
+  "UTF-16BE": new TextDecoder("utf-16be", { fatal: false, ignoreBOM: true }),
+};
 
-function decodeExact(buffer: Buffer, encoding: TextEncoding): string {
-  if (encoding.name === "UTF-8") {
-    if (!isUtf8(buffer)) throw new UndecodableTextError("The content is not valid UTF-8.");
-    return buffer.toString("utf8");
-  }
-  if (encoding.name === "US-ASCII") {
-    const invalid = buffer.findIndex((byte) => byte >= 0x80);
-    if (invalid >= 0) {
-      throw new UndecodableTextError(
-        `The content is not valid US-ASCII (byte 0x${buffer[invalid]!.toString(16)} at offset ${invalid}).`,
-      );
-    }
-    return buffer.toString("latin1");
-  }
-  const text = iconv.decode(buffer, encoding.codec, { stripBOM: false });
-  const reencoded = iconv.encode(text, encoding.codec, { addBOM: false });
-  if (!reencoded.equals(buffer)) {
-    throw new UndecodableTextError(
-      `The content does not decode losslessly as ${encoding.name} (first difference at offset ${findFirstDifference(buffer, reencoded)}).`,
+/** UTF-32 is not a WHATWG encoding, so decode its units here and keep every output scalar valid. */
+function decodeUtf32(buffer: Buffer, bigEndian: boolean): string {
+  const characters: string[] = [];
+  const completeLength = buffer.length - (buffer.length % 4);
+  for (let offset = 0; offset < completeLength; offset += 4) {
+    const codePoint = bigEndian ? buffer.readUInt32BE(offset) : buffer.readUInt32LE(offset);
+    characters.push(
+      codePoint <= 0x10ffff && (codePoint < 0xd800 || codePoint > 0xdfff)
+        ? String.fromCodePoint(codePoint)
+        : "\uFFFD",
     );
   }
-  return text;
+  if (completeLength < buffer.length) characters.push("\uFFFD");
+  return characters.join("");
+}
+
+/** Decodes with replacement characters instead of rejecting malformed or truncated input. */
+function decodeWithReplacement(buffer: Buffer, encoding: TextEncoding): string {
+  if (encoding.name === "UTF-8") return buffer.toString("utf8");
+  const utf16Decoder = UTF16_DECODERS[encoding.name];
+  if (utf16Decoder) return utf16Decoder.decode(buffer);
+  if (encoding.name === "UTF-32LE") return decodeUtf32(buffer, false);
+  if (encoding.name === "UTF-32BE") return decodeUtf32(buffer, true);
+  return iconv.decode(buffer, encoding.codec, { stripBOM: false });
 }
 
 function hasNulByte(buffer: Buffer): boolean {
   return buffer.subarray(0, BINARY_PROBE_BYTES).includes(0);
-}
-
-function hasNonAsciiByte(buffer: Buffer): boolean {
-  for (let index = 0; index < buffer.length; index++) {
-    if (buffer[index]! >= 0x80) return true;
-  }
-  return false;
-}
-
-function assertDeclarationMatchesBytes(buffer: Buffer, encoding: TextEncoding, declared: DeclaredLabel): void {
-  // UTF-8 and ASCII declarations describe exactly what the decoder verifies.
-  if (encoding.name === "UTF-8" || encoding.name === "US-ASCII") return;
-  if (!isUtf8(buffer)) return;
-  // The whole file decides: a declaration over later non-ASCII UTF-8 is still a conflict.
-  if (!hasNonAsciiByte(buffer)) return;
-  throw new EncodingDeclarationConflictError(
-    `Declared text encoding ${encoding.name} ${declared.where}, but the content is valid UTF-8 with non-ASCII characters.`,
-  );
 }
 
 /**
@@ -386,13 +351,13 @@ function assertDeclarationMatchesBytes(buffer: Buffer, encoding: TextEncoding, d
  * first 8000 body bytes; the decoded text itself may legitimately contain NUL later.
  */
 function decodeBinaryProbe(body: Buffer, bom: BomSpec): string {
-  return iconv.decode(body.subarray(0, Math.min(body.length, BINARY_PROBE_BYTES)), bom.encoding.codec, { stripBOM: false });
+  return decodeWithReplacement(body.subarray(0, Math.min(body.length, BINARY_PROBE_BYTES)), bom.encoding);
 }
 
 /**
  * Decodes text with the deterministic codec: BOM, then a standard declaration,
- * then validated UTF-8. It never guesses. `filePath` selects the file-extension
- * declaration forms (HTML, JSP, Python, Ruby).
+ * then replacement-decoded UTF-8. It never guesses. `filePath` selects the
+ * file-extension declaration forms (HTML, JSP, Python, Ruby).
  */
 export function decodeTextFile(buffer: Buffer, filePath = ""): DecodedTextFile {
   const bom = detectBom(buffer);
@@ -400,16 +365,14 @@ export function decodeTextFile(buffer: Buffer, filePath = ""): DecodedTextFile {
     const body = buffer.subarray(bom.bytes.length);
     // A BOM-marked UTF-16/32 file always contains NUL bytes, so judge its characters.
     if (decodeBinaryProbe(body, bom).includes("\u0000")) throw new BinaryFileError();
-    return { text: decodeExact(body, bom.encoding), encoding: bom.encoding, bom: bom.bom };
+    return { text: decodeWithReplacement(body, bom.encoding), encoding: bom.encoding, bom: bom.bom };
   }
   if (hasNulByte(buffer)) throw new BinaryFileError();
   const declared = detectDeclaredLabel(declarationProbe(buffer), filePath);
   if (declared) {
     const encoding = resolveDeclaredLabel(declared, "none");
-    assertDeclarationMatchesBytes(buffer, encoding, declared);
-    return { text: decodeExact(buffer, encoding), encoding, bom: "none" };
+    return { text: decodeWithReplacement(buffer, encoding), encoding, bom: "none" };
   }
-  if (!isUtf8(buffer)) throw new UnknownTextEncodingError();
   return { text: buffer.toString("utf8"), encoding: UTF8, bom: "none" };
 }
 
@@ -430,8 +393,9 @@ export function resolveDeclaredEncoding(text: string, filePath: string, bom: Tex
  */
 export function resolveContentEncoding(text: string, filePath: string): { encoding: TextEncoding; bom: TextBomKind } {
   const declared = detectDeclaredLabel(text.slice(0, LONG_DECLARATION_BYTES), filePath);
-  const encoding = declared ? resolveContentLabel(declared) : UTF8;
-  if (!text.startsWith(LEADING_BOM_CHAR)) return { encoding, bom: "none" };
+  const requestsBom = text.startsWith(LEADING_BOM_CHAR);
+  const encoding = declared ? resolveContentLabel(declared, requestsBom) : UTF8;
+  if (!requestsBom) return { encoding, bom: "none" };
   const bom = bomKindForEncoding(encoding);
   if (bom === "none") {
     throw new EncodingDeclarationConflictError(
@@ -441,15 +405,23 @@ export function resolveContentEncoding(text: string, filePath: string): { encodi
   return { encoding, bom };
 }
 
-/** A generic UTF-16/32 label names the byte order mark family; the output uses the LE member. */
-function resolveContentLabel(declared: DeclaredLabel): TextEncoding {
+/**
+ * A generic UTF-16/32 label names the byte order mark family and uses the LE
+ * member; an explicit byte-order label is only usable when U+FEFF requests it.
+ */
+function resolveContentLabel(declared: DeclaredLabel, requestsBom: boolean): TextEncoding {
   const label = declared.label.trim();
   if (/^utf[-_]?16$/i.test(label)) return UTF16LE;
   if (/^utf[-_]?32$/i.test(label)) return UTF32LE;
   if (/^utf[-_]?(16|32)(le|be)$/i.test(label)) {
-    throw new EncodingDeclarationConflictError(
-      `Declared text encoding ${label.toUpperCase()} ${declared.where}, but the content has no byte order mark. Start the content with U+FEFF to write it with a byte order mark.`,
-    );
+    if (!requestsBom) {
+      throw new EncodingDeclarationConflictError(
+        `Declared text encoding ${label.toUpperCase()} ${declared.where}, but the content has no byte order mark. Start the content with U+FEFF to write it with a byte order mark.`,
+      );
+    }
+    const encoding = resolveLabel(label, declared.source);
+    if (!encoding) throw new UnsupportedEncodingLabelError(label, declared.where);
+    return encoding;
   }
   const encoding = resolveLabel(label, declared.source);
   if (!encoding) throw new UnsupportedEncodingLabelError(label, declared.where);
@@ -466,13 +438,8 @@ export function looksLikeBinary(buffer: Buffer): boolean {
 }
 
 /** The user-facing reason a tool could not use a text file, with the path it affects. */
-export function formatTextFileError(error: unknown, displayPath: string, action: string): string {
+export function formatTextFileError(error: unknown, displayPath: string, _action: string): string {
   if (error instanceof BinaryFileError) return `${displayPath} is a binary file (it contains NUL bytes).`;
-  if (error instanceof UnknownTextEncodingError) {
-    return `${displayPath} is not UTF-8 text and declares no encoding, so it was not ${action}. `
-      + `If you know its encoding, view it with bash, for example iconv -f GBK -t UTF-8 '${displayPath}'. `
-      + "To use read, edit or write on it, convert it to UTF-8 or add a standard encoding declaration.";
-  }
   return `${displayPath}: ${(error as Error).message}`;
 }
 
@@ -512,10 +479,10 @@ function encodeExact(text: string, encoding: TextEncoding): Buffer {
     return Buffer.from(text, "ascii");
   }
   const bytes = iconv.encode(text, encoding.codec, { addBOM: false });
-  if (iconv.decode(bytes, encoding.codec, { stripBOM: false }) === text) return bytes;
+  if (decodeWithReplacement(bytes, encoding) === text) return bytes;
   for (let offset = 0; offset < text.length; ) {
     const character = String.fromCodePoint(text.codePointAt(offset)!);
-    if (iconv.decode(iconv.encode(character, encoding.codec), encoding.codec, { stripBOM: false }) !== character) {
+    if (decodeWithReplacement(iconv.encode(character, encoding.codec), encoding) !== character) {
       throw describeUnrepresentable(encoding, character, text, offset);
     }
     offset += character.length;

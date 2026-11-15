@@ -128,13 +128,38 @@ describe("executeGrep native ripgrep path", () => {
     }
   });
 
-  it("lists every undecodable file up to ten paths and counts the rest", async () => {
-    // Intent: skipped files must stay visible even without matches, and the
-    // notice has to stay bounded when a whole tree is undecodable.
+  it("searches replacement-decoded invalid UTF-8 in single-file and directory paths", async () => {
+    // Intent: grep must search the same U+FFFD text read shows, including ASCII
+    // keys, instead of taking the raw-byte path because the chosen name is UTF-8.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    await writeFile(
+      join(root, "invalid.txt"),
+      Buffer.concat([Buffer.from("abc"), Buffer.from([0xff]), Buffer.from("，e\nstate=old\n")]),
+    );
+
+    for (const path of [".", "invalid.txt"]) {
+      const replacement = await executeGrep("grep-replacement", {
+        workdir: ".", path, pattern: "\uFFFD",
+      }, undefined, undefined, { cwd: root });
+      expect(replacement.isError).not.toBe(true);
+      expect(getText(replacement)).toContain("invalid.txt:1: abc\uFFFD，e");
+
+      const ascii = await executeGrep("grep-invalid-ascii", {
+        workdir: ".", path, pattern: "state=old",
+      }, undefined, undefined, { cwd: root });
+      expect(ascii.isError).not.toBe(true);
+      expect(getText(ascii)).toContain("invalid.txt:2: state=old");
+    }
+  });
+
+  it("lists every rejected file up to ten paths and counts the rest", async () => {
+    // Intent: files with an unusable declaration must stay visible even without
+    // matches, and the incomplete-search notice has to stay bounded.
     const root = await createTempWorkspace();
     fakeToolState.rgPath = "rg";
     for (let index = 0; index < 12; index++) {
-      await writeFile(join(root, `legacy-${String(index).padStart(2, "0")}.txt`), iconv.encode("中文\n", "gbk"));
+      await writeFile(join(root, `legacy-${String(index).padStart(2, "0")}.py`), "# coding: x-unknown\n中文\n", "utf8");
     }
 
     const result = await executeGrep("grep-not-searched", {
@@ -145,9 +170,9 @@ describe("executeGrep native ripgrep path", () => {
 
     const text = getText(result);
     expect(text).toContain("No matches found");
-    expect(text).toContain("Not searched because the text encoding could not be determined:");
+    expect(text).toContain("Search incomplete; not searched:");
     expect(text).toContain("and 2 more");
-    expect((text.match(/\/legacy-\d\d\.txt/g) ?? []).length).toBe(10);
+    expect((text.match(/\/legacy-\d\d\.py/g) ?? []).length).toBe(10);
   });
 
   it("runs the encoding pre-pass concurrently with the main search in one extra process", async () => {

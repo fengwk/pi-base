@@ -1,7 +1,7 @@
 import { withFileMutationQueue, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import * as Diff from "diff";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import {
   detectLineEnding,
   normalizeToLF,
@@ -34,7 +34,6 @@ import { editSchema } from "./schemas/edit.js";
 import { mapFilePathToPath } from "./tool-arg-aliases.js";
 import { type DecodedTextFile, decodeTextFile, encodingForBom, encodeTextFile, formatTextFileError, resolveDeclaredEncoding } from "./text-codec.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
-import { writeFileAtomic } from "./atomic-write.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
 const EDIT_ARGUMENT_VALIDATION_HINT = "Hint: Adjust the input parameters and re-run the `edit` command.";
@@ -616,7 +615,7 @@ export function registerEditTool(
             return { kind: "error", text: "No changes to apply: edit would not change the file." };
           }
 
-          await writeFileAtomic(absolutePath, outputBytes);
+          await writeFile(absolutePath, outputBytes);
           return {
             kind: "success",
             oldDocument: originalDocument,

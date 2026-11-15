@@ -75,91 +75,101 @@ describe("text encoding safety", () => {
     expect(await readFile(file)).toEqual(iconv.encode(content.replace("state=old", "state=done"), encoding));
   });
 
-  it("refuses a UTF-8 HTML page that declares a legacy encoding", async () => {
-    // Intent: defect 2 — the declaration used to win over valid UTF-8, so read
-    // showed mojibake and an edit wrote GBK bytes into the UTF-8 file.
+  it("honors a GBK declaration over bytes that are also valid UTF-8", async () => {
+    // Intent: a declaration is authoritative even when the bytes are valid UTF-8;
+    // read, edit and write stay on the decoded GBK view instead of rejecting the file.
     const root = await createTempWorkspace();
     const registry = tools();
-    const file = join(root, "page.html");
-    const bytes = Buffer.from('<!doctype html>\n<html><head><meta charset="gb2312"></head>\n<p>中文</p>\n', "utf8");
-    await writeFile(file, bytes);
+    const file = join(root, "sample.py");
+    await writeFile(file, Buffer.from("# coding: gbk\nabc茅xyz\n", "utf8"));
 
-    const read = await run(registry, "read", root, { path: "page.html" });
-    expect(read.isError).toBe(true);
-    expect(getText(read)).toContain("Declared text encoding GBK");
+    const read = await run(registry, "read", root, { path: "sample.py" });
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain("encoding: GBK");
+    expect(getText(read)).toContain("abc鑼厁yz");
+    expect(getText(read)).not.toContain("茅");
 
-    const edit = await run(registry, "edit", root, { path: "page.html", edits: [{ old_string: "<p>", new_string: "<p>你好" }] });
-    expect(edit.isError).toBe(true);
-    expect(await readFile(file)).toEqual(bytes);
+    const edit = await run(registry, "edit", root, { path: "sample.py", edits: [{ old_string: "鑼厁", new_string: "c" }] });
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(file)).toEqual(iconv.encode("# coding: gbk\nabccyz\n", "gbk"));
+
+    const write = await run(registry, "write", root, { path: "sample.py", content: "# coding: gbk\nabcdyz\n" });
+    expect(write.isError).not.toBe(true);
+    expect(await readFile(file)).toEqual(iconv.encode("# coding: gbk\nabcdyz\n", "gbk"));
   });
 
-  it("refuses a legacy declaration on UTF-8 content whose non-ASCII text is past the probe", async () => {
-    // Intent: ASCII-only early bytes must not let a gb2312 declaration decode later
-    // Chinese as GBK; the conflict rule has to scan the whole file.
+  it("reads invalid UTF-8 as U+FFFD and edits the displayed text back to valid UTF-8", async () => {
+    // Intent: read and edit share one replacement-decoded view, so the exact text
+    // read shows, including U+FFFD, is what edit matches and writes.
     const root = await createTempWorkspace();
     const registry = tools();
-    const file = join(root, "page.html");
-    const body = `<html><head><meta charset="gb2312"></head>\n<p>${"a".repeat(8100)}你好</p>\n`;
-    const bytes = Buffer.from(body, "utf8");
-    await writeFile(file, bytes);
-
-    const read = await run(registry, "read", root, { path: "page.html" });
-    expect(read.isError).toBe(true);
-    expect(getText(read)).toContain("Declared text encoding GBK");
-
-    const edit = await run(registry, "edit", root, { path: "page.html", edits: [{ old_string: "<p>", new_string: "<p>ok " }] });
-    expect(edit.isError).toBe(true);
-
-    const write = await run(registry, "write", root, { path: "page.html", content: "<html><body>你好</body></html>\n" });
-    expect(write.isError).toBe(true);
-
-    expect(await readFile(file)).toEqual(bytes);
-  });
-
-  it.each([
-    { encoding: "gbk", text: "中文测试" },
-    { encoding: "big5", text: "繁體中文" },
-    { encoding: "euc-kr", text: "한국어" },
-    { encoding: "shift_jis", text: "テスト" },
-    { encoding: "windows-1252", text: "caf\u00e9" },
-  ])("rejects undeclared $encoding bytes instead of guessing", async ({ encoding, text }) => {
-    // Intent: defect 3 — short legacy samples were statistically misdetected
-    // (KOI8-R, windows-1255, windows-1252) or even classified as binary.
-    const root = await createTempWorkspace();
-    const registry = tools();
-    const bytes = iconv.encode(`${text}\n`, encoding);
-    await writeFile(join(root, "sample.txt"), bytes);
+    const file = join(root, "sample.txt");
+    await writeFile(file, Buffer.from([0x61, 0x62, 0x63, 0xff, 0xef, 0xbc, 0x8c, 0x65, 0x0a]));
 
     const read = await run(registry, "read", root, { path: "sample.txt" });
-    expect(read.isError).toBe(true);
-    expect(getText(read)).toContain("is not UTF-8 text and declares no encoding, so it was not read.");
-    expect(await readFile(join(root, "sample.txt"))).toEqual(bytes);
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain("abc\uFFFD，e");
+
+    const edit = await run(registry, "edit", root, { path: "sample.txt", edits: [{ old_string: "\uFFFD，", new_string: "c" }] });
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(file)).toEqual(Buffer.from("abcce\n", "utf8"));
   });
 
-  it("rejects an undeclared legacy file in read, edit and write", async () => {
-    // Intent: without a declaration there is no deterministic encoding, so no
-    // tool may rewrite the bytes.
+  it("uses replacement-decoded UTF-8 for read, edit and write on undeclared legacy bytes", async () => {
+    // Intent: without a declaration the tools share the UTF-8 replacement view
+    // instead of refusing the file; writes then normalize the bytes to valid UTF-8.
     const root = await createTempWorkspace();
     const registry = tools();
     const bytes = iconv.encode("state=old 名称\n", "gbk");
+    const decoded = bytes.toString("utf8");
     const file = join(root, "sample.txt");
     await writeFile(file, bytes);
 
     const read = await run(registry, "read", root, { path: "sample.txt" });
-    expect(read.isError).toBe(true);
-    expect(getText(read)).toContain("so it was not read.");
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain("state=old");
+    expect(getText(read)).toContain("\uFFFD");
+    expect(getText(read)).not.toContain("encoding:");
+
     const edit = await run(registry, "edit", root, { path: "sample.txt", edits: [{ old_string: "state=old", new_string: "state=new" }] });
-    expect(edit.isError).toBe(true);
-    expect(getText(edit)).toContain("so it was not edited.");
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(file)).toEqual(Buffer.from(decoded.replace("state=old", "state=new"), "utf8"));
+
     const write = await run(registry, "write", root, { path: "sample.txt", content: "state=done\n" });
-    expect(write.isError).toBe(true);
-    expect(getText(write)).toContain("so it was not written.");
-    expect(await readFile(file)).toEqual(bytes);
+    expect(write.isError).not.toBe(true);
+    expect(await readFile(file)).toEqual(Buffer.from("state=done\n", "utf8"));
   });
 
-  it("searches declared legacy text by its decoded text and lists files it cannot decode", async () => {
-    // Intent: defect 5 — grep searched raw bytes, so decoded Chinese text never
-    // matched, and matched lines were re-guessed per line into mojibake.
+  it("refuses to leave U+FFFD in a declared GBK file until it is removed", async () => {
+    // Intent: replacement decoding is readable, but output must stay representable;
+    // an edit that still contains U+FFFD fails without touching the file.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const file = join(root, "sample.py");
+    const bytes = Buffer.concat([iconv.encode("# coding: gbk\n", "gbk"), Buffer.from([0xff]), Buffer.from("\n")]);
+    await writeFile(file, bytes);
+
+    const read = await run(registry, "read", root, { path: "sample.py" });
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain("encoding: GBK");
+    expect(getText(read)).toContain("\uFFFD");
+
+    const rejected = await run(registry, "edit", root, {
+      path: "sample.py",
+      edits: [{ old_string: "# coding: gbk", new_string: "# coding: gbk " }],
+    });
+    expect(rejected.isError).toBe(true);
+    expect(getText(rejected)).toContain("cannot be encoded in GBK");
+    expect(await readFile(file)).toEqual(bytes);
+
+    const accepted = await run(registry, "edit", root, { path: "sample.py", edits: [{ old_string: "\uFFFD", new_string: "ok" }] });
+    expect(accepted.isError).not.toBe(true);
+    expect(await readFile(file)).toEqual(iconv.encode("# coding: gbk\nok\n", "gbk"));
+  });
+
+  it("searches declared and undeclared legacy text on their shared decoded view", async () => {
+    // Intent: grep searches the same text read shows; declarations select their
+    // decoding, and undeclared bytes use UTF-8 replacement decoding instead of a skip.
     const root = await createTempWorkspace();
     const registry = tools();
     await writeFile(join(root, "legacy.py"), iconv.encode("# coding: gbk\nstate=old 名称\n", "gbk"));
@@ -168,25 +178,51 @@ describe("text encoding safety", () => {
     const declared = await run(registry, "grep", root, { path: ".", pattern: "名称" });
     expect(declared.isError).not.toBe(true);
     expect(getText(declared)).toContain("legacy.py:2: state=old 名称");
+    expect(getText(declared)).not.toContain("unknown.txt");
     expect(getText(declared)).not.toContain("ĂűłĆ");
+
+    const replacement = await run(registry, "grep", root, { path: ".", pattern: "\uFFFD" });
+    expect(replacement.isError).not.toBe(true);
+    expect(getText(replacement)).toContain("unknown.txt:1: state=old");
 
     const mixed = await run(registry, "grep", root, { path: ".", pattern: "state=old" });
     expect(getText(mixed)).toContain("legacy.py:2: state=old 名称");
-    expect(getText(mixed)).not.toContain("unknown.txt:1:");
-    expect(getText(mixed)).toContain("Not searched because the text encoding could not be determined:");
-    expect(getText(mixed)).toContain(join(root, "unknown.txt"));
+    expect(getText(mixed)).toContain("unknown.txt:1: state=old");
+    expect(getText(mixed)).not.toContain("Search incomplete");
   });
 
-  it("reports a single undecodable file with the read wording", async () => {
-    // Intent: a file named directly must be an error, not a silent skip.
+  it("lists files that cannot be decoded and marks the search incomplete", async () => {
+    // Intent: truly unusable declarations stay visible instead of being hidden
+    // behind a bare No matches found.
     const root = await createTempWorkspace();
     const registry = tools();
-    await writeFile(join(root, "sample.txt"), iconv.encode("中文\n", "gbk"));
+    await writeFile(join(root, "unsupported.py"), "# coding: x-unknown\nstate=old\n", "utf8");
+    await writeFile(join(root, "valid.txt"), "state=old\n", "utf8");
 
-    const result = await run(registry, "grep", root, { path: "sample.txt", pattern: "中文" });
+    const result = await run(registry, "grep", root, { path: ".", pattern: "state=old" });
 
-    expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("is not UTF-8 text and declares no encoding, so it was not searched.");
+    expect(result.isError).not.toBe(true);
+    const text = getText(result);
+    expect(text).toContain("valid.txt:1: state=old");
+    expect(text).toContain("Search incomplete; not searched:");
+    expect(text).toContain(join(root, "unsupported.py"));
+    expect(text).not.toContain("unsupported.py:1:");
+  });
+
+  it("searches a single file on replacement-decoded text for U+FFFD and ASCII", async () => {
+    // Intent: the single-file path must not take a raw-byte shortcut for invalid
+    // UTF-8, so both a replacement character and an ASCII key match read's view.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    await writeFile(join(root, "sample.txt"), iconv.encode("中文\nstate=old\n", "gbk"));
+
+    const replacement = await run(registry, "grep", root, { path: "sample.txt", pattern: "\uFFFD" });
+    expect(replacement.isError).not.toBe(true);
+    expect(getText(replacement)).toContain("sample.txt:1: \uFFFD");
+
+    const ascii = await run(registry, "grep", root, { path: "sample.txt", pattern: "state=old" });
+    expect(ascii.isError).not.toBe(true);
+    expect(getText(ascii)).toContain("sample.txt:2: state=old");
   });
 
   it("refuses to drop a declared non-UTF-8 encoding on a whole-file write", async () => {

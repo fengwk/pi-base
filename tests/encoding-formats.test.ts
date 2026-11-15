@@ -65,6 +65,46 @@ describe("common text encoding formats", () => {
   });
 
   it.each([
+    { label: "UTF-16", codec: "utf-16le", bom: [0xff, 0xfe], header: "UTF-16LE" },
+    { label: "UTF-16LE", codec: "utf-16le", bom: [0xff, 0xfe], header: "UTF-16LE" },
+    { label: "UTF-16BE", codec: "utf-16be", bom: [0xfe, 0xff], header: "UTF-16BE" },
+    { label: "UTF-32", codec: "utf-32le", bom: [0xff, 0xfe, 0x00, 0x00], header: "UTF-32LE" },
+    { label: "UTF-32LE", codec: "utf-32le", bom: [0xff, 0xfe, 0x00, 0x00], header: "UTF-32LE" },
+    { label: "UTF-32BE", codec: "utf-32be", bom: [0x00, 0x00, 0xfe, 0xff], header: "UTF-32BE" },
+  ])("creates a $label file from a U+FEFF declaration request and reads it back", async ({ label, codec, bom, header }) => {
+    // Intent: write must resolve the declaration against the computed target BOM,
+    // so explicit byte-order labels generate real BOM bytes and read them back.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const body = `<?xml version="1.0" encoding="${label}"?>\n<body>中文</body>\n`;
+
+    const write = await run(registry, "write", root, { path: "sample.xml", content: `\uFEFF${body}` });
+
+    expect(write.isError).not.toBe(true);
+    expect(await readFile(join(root, "sample.xml"))).toEqual(Buffer.concat([Buffer.from(bom), iconv.encode(body, codec)]));
+    const read = await run(registry, "read", root, { path: "sample.xml" });
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain(`encoding: ${header}`);
+    expect(getText(read)).toContain("中文");
+    expect(getText(read)).not.toContain("\uFEFF");
+  });
+
+  it("still refuses a BOM-less generic UTF-16 declaration on a new file", async () => {
+    // Intent: accepting explicit labels with U+FEFF must not add a default BOM
+    // generation policy for BOM-less wide-character declarations.
+    const root = await createTempWorkspace();
+    const registry = tools();
+
+    const write = await run(registry, "write", root, {
+      path: "sample.xml",
+      content: '<?xml version="1.0" encoding="UTF-16"?>\n<body>中文</body>\n',
+    });
+
+    expect(write.isError).toBe(true);
+    expect(getText(write)).toContain("no byte order mark");
+  });
+
+  it.each([
     { filePath: "sample.xml", prefix: '<?xml version="1.0" encoding="GBK"?>\n', encoding: "gbk", name: "GBK", text: "中文" },
     { filePath: "sample.css", prefix: '@charset "windows-1252";\n', encoding: "windows-1252", name: "windows-1252", text: "café €" },
     { filePath: "sample.html", prefix: '<!doctype html><html><head><meta charset="big5"></head>\n', encoding: "big5", name: "Big5", text: "中文" },

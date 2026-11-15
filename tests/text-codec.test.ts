@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   BinaryFileError,
   EncodingDeclarationConflictError,
-  UndecodableTextError,
-  UnknownTextEncodingError,
   UnrepresentableTextError,
   UnsupportedEncodingLabelError,
   type TextEncoding,
@@ -51,11 +49,16 @@ describe("text codec", () => {
     expect(decodeTextFile(Buffer.from([0x1b, 0x1b, 0x41])).text).toBe("\u001b\u001bA");
   });
 
-  it("rejects undeclared legacy bytes instead of guessing an encoding", () => {
-    // Intent: a wrong guess rewrites the file in the wrong encoding, so only a
-    // declaration may select a non-UTF-8 codec.
-    expect(() => decodeTextFile(encoded("这是一个中文文件。\n", "gbk"), "sample.txt")).toThrow(UnknownTextEncodingError);
-    expect(() => decodeTextFile(encoded("中文\n", "big5"), "sample.txt")).toThrow(UnknownTextEncodingError);
+  it("replacement-decodes undeclared legacy bytes as UTF-8", () => {
+    // Intent: no declaration means UTF-8, and invalid sequences become U+FFFD so
+    // read can display a file that edit and grep then operate on.
+    for (const [encoding, text] of [["gbk", "这是一个中文文件。\n"], ["big5", "中文\n"]] as const) {
+      const bytes = encoded(text, encoding);
+      const decoded = decodeTextFile(bytes, "sample.txt");
+      expect(decoded.encoding.name).toBe("UTF-8");
+      expect(decoded.text).toBe(bytes.toString("utf8"));
+      expect(decoded.text).toContain("\uFFFD");
+    }
   });
 
   it.each([
@@ -114,11 +117,16 @@ describe("text codec", () => {
     expect(declaredEncoding('@charset "gb2312";\n', "a.css").name).toBe("GBK");
   });
 
-  it("detects a legacy declaration on UTF-8 content whose non-ASCII text starts after the binary probe", () => {
-    // Intent: the conflict rule scans the whole file, so ASCII-only early bytes must
-    // not let a GBK declaration mojibake Chinese text later in the same file.
-    const text = `<?xml version="1.0" encoding="GBK"?>\n${"a".repeat(8100)}你好\n`;
-    expect(() => decodeTextFile(Buffer.from(text, "utf8"), "sample.xml")).toThrow(EncodingDeclarationConflictError);
+  it("lets a legacy declaration win over bytes that are also valid UTF-8", () => {
+    // Intent: a declaration is authoritative even when the bytes are valid UTF-8;
+    // decoding must not reject or reinterpret the file based on byte validity.
+    const content = '<?xml version="1.0" encoding="GBK"?>\nabc茅xyz\n';
+    const bytes = Buffer.from(content, "utf8");
+    const decoded = decodeTextFile(bytes, "sample.xml");
+    expect(decoded.encoding.name).toBe("GBK");
+    expect(decoded.text).toBe(iconv.decode(bytes, "gbk"));
+    expect(decoded.text).toContain("鑼厁");
+    expect(decoded.text).not.toBe(content);
   });
 
   it("judges a BOM-marked file's binary rule inside the first 8000 decoded body bytes", () => {
@@ -133,24 +141,56 @@ describe("text codec", () => {
     expect(() => decodeTextFile(earlyNul, "sample.txt")).toThrow(BinaryFileError);
   });
 
-  it("reports unsupported labels, conflicts and undecodable bytes distinctly", () => {
-    // Intent: an explicit but unusable declaration must fail loudly instead of
-    // falling back to UTF-8, and a declaration must agree with the bytes.
+  it("keeps unsupported labels and BOM conflicts explicit while replacement-decoding malformed bytes", () => {
+    // Intent: only declarations that cannot be used fail; malformed bytes inside a
+    // usable encoding become U+FFFD so read and edit share one text view.
     expect(() => declaredEncoding("# coding: x-unknown\n", "a.py")).toThrow(UnsupportedEncodingLabelError);
     expect(() => decodeTextFile(Buffer.from('# coding: x-unknown\n', "utf8"), "a.py")).toThrow(/Unsupported declared text encoding "x-unknown"/);
-    // Valid UTF-8 Chinese under a legacy declaration can only be a misinterpretation.
-    expect(() => decodeTextFile(Buffer.from('<html><head><meta charset="gb2312"></head>\n中文\n', "utf8"), "a.html"))
+    // A byte order mark remains authoritative when a rewrite declaration is resolved.
+    expect(() => resolveDeclaredEncoding('<?xml version="1.0" encoding="UTF-8"?>\n', "a.xml", "utf-16le"))
       .toThrow(EncodingDeclarationConflictError);
-    // ASCII declarations restrict the bytes they describe.
-    expect(() => decodeTextFile(Buffer.from("# coding: ascii\ncaf\u00e9\n", "utf8"), "a.py")).toThrow(UndecodableTextError);
-    // Bytes that do not round-trip through the declared codec are refused.
-    expect(() => decodeTextFile(Buffer.concat([Buffer.from("# coding: gbk\n", "ascii"), Buffer.from([0xff])]), "a.py"))
-      .toThrow(UndecodableTextError);
-    // A UTF-8 declaration on invalid UTF-8 is undecodable, not a legacy file.
-    expect(() => decodeTextFile(Buffer.concat([Buffer.from('<?xml version="1.0" encoding="UTF-8"?>\n'), Buffer.from([0xff])]), "a.xml"))
-      .toThrow(UndecodableTextError);
     // A generic UTF-16 label needs a byte order mark to resolve the byte order.
     expect(() => decodeTextFile(Buffer.from('# coding: utf-16\n', "utf8"), "a.py")).toThrow(EncodingDeclarationConflictError);
+    // ASCII declarations replace their invalid high bytes rather than rejecting the file.
+    expect(decodeTextFile(Buffer.from("# coding: ascii\ncaf\u00e9\n", "utf8"), "a.py")).toMatchObject({
+      encoding: { name: "US-ASCII" },
+      text: "# coding: ascii\ncaf\uFFFD\uFFFD\n",
+    });
+    // Invalid bytes under a declared legacy or UTF-8 encoding are replacement-decoded.
+    const declaredGbk = Buffer.concat([Buffer.from("# coding: gbk\n", "ascii"), Buffer.from([0xff])]);
+    expect(decodeTextFile(declaredGbk, "a.py").text).toBe("# coding: gbk\n\uFFFD");
+    const declaredUtf8 = Buffer.concat([Buffer.from('<?xml version="1.0" encoding="UTF-8"?>\n'), Buffer.from([0xff])]);
+    expect(decodeTextFile(declaredUtf8, "a.xml").text).toBe('<?xml version="1.0" encoding="UTF-8"?>\n\uFFFD');
+  });
+
+  it("replacement-decodes malformed UTF-8 so read text can be edited", () => {
+    // Intent: the invalid byte that read shows as U+FFFD must re-encode as U+FFFD,
+    // never as the original byte or a silently dropped character.
+    const bytes = Buffer.from([0x61, 0x62, 0x63, 0xff, 0xef, 0xbc, 0x8c, 0x65, 0x0a]);
+    const decoded = decodeTextFile(bytes, "sample.txt");
+    expect(decoded.text).toBe("abc\uFFFD，e\n");
+    expect(encodeTextFile(decoded.text, decoded.encoding, decoded.bom)).toEqual(Buffer.from(decoded.text, "utf8"));
+  });
+
+  it("replaces incomplete UTF-16 and invalid or truncated UTF-32 units", () => {
+    // Intent: malformed wide-character tails must not be dropped and UTF-32 output
+    // must contain only valid Unicode scalars, even when the input names a surrogate.
+    const utf16le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from([0x61, 0x00, 0xff])]);
+    expect(decodeTextFile(utf16le, "a.txt").text).toBe("a\uFFFD");
+    const utf16be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from([0x00, 0x61, 0xff])]);
+    expect(decodeTextFile(utf16be, "a.txt").text).toBe("a\uFFFD");
+    const utf32le = Buffer.concat([
+      Buffer.from([0xff, 0xfe, 0x00, 0x00]),
+      Buffer.from([0x61, 0, 0, 0, 0x00, 0xd8, 0x00, 0x00, 0x00, 0x00, 0x11, 0x00, 0x61]),
+    ]);
+    const leText = decodeTextFile(utf32le, "a.txt").text;
+    expect(leText).toBe("a\uFFFD\uFFFD\uFFFD");
+    expect(leText).not.toMatch(/[\uD800-\uDFFF]/);
+    const utf32be = Buffer.concat([
+      Buffer.from([0x00, 0x00, 0xfe, 0xff]),
+      Buffer.from([0x00, 0x00, 0x00, 0x61, 0x00, 0x00, 0xd8, 0x00]),
+    ]);
+    expect(decodeTextFile(utf32be, "a.txt").text).toBe("a\uFFFD");
   });
 
   it("encodes with the canonical name and refuses unrepresentable text", () => {
@@ -172,26 +212,40 @@ describe("text codec", () => {
   });
 
   it("resolves whole-file rewrite encodings from the content itself", () => {
-    // Intent: write keeps a BOM the content asks for and refuses a BOM request
-    // that the declared encoding cannot represent.
+    // Intent: write keeps a BOM the content asks for and accepts explicit UTF-16/32
+    // byte-order labels only when U+FEFF requests their mark.
     expect(resolveContentEncoding("plain\n", "a.txt")).toMatchObject({ encoding: { name: "UTF-8" }, bom: "none" });
     expect(resolveContentEncoding("\uFEFFplain\n", "a.txt")).toMatchObject({ encoding: { name: "UTF-8" }, bom: "utf-8" });
     expect(resolveContentEncoding('\uFEFF<?xml version="1.0" encoding="UTF-16"?>\n', "a.xml")).toMatchObject({
       encoding: { name: "UTF-16LE" },
       bom: "utf-16le",
     });
+    expect(resolveContentEncoding('\uFEFF<?xml version="1.0" encoding="UTF-16LE"?>\n', "a.xml")).toMatchObject({
+      encoding: { name: "UTF-16LE" },
+      bom: "utf-16le",
+    });
+    expect(resolveContentEncoding('\uFEFF<?xml version="1.0" encoding="UTF-16BE"?>\n', "a.xml")).toMatchObject({
+      encoding: { name: "UTF-16BE" },
+      bom: "utf-16be",
+    });
+    expect(resolveContentEncoding('\uFEFF<?xml version="1.0" encoding="UTF-32LE"?>\n', "a.xml")).toMatchObject({
+      encoding: { name: "UTF-32LE" },
+      bom: "utf-32le",
+    });
+    expect(resolveContentEncoding('\uFEFF<?xml version="1.0" encoding="UTF-32BE"?>\n', "a.xml")).toMatchObject({
+      encoding: { name: "UTF-32BE" },
+      bom: "utf-32be",
+    });
     expect(() => resolveContentEncoding('<?xml version="1.0" encoding="UTF-16LE"?>\n', "a.xml")).toThrow(EncodingDeclarationConflictError);
     expect(() => resolveContentEncoding("\uFEFF# coding: gbk\n", "a.py")).toThrow(/byte order mark/);
   });
 
-  it("describes undecodable files for the tools that reject them", () => {
+  it("describes binary files and declaration failures for the tools", () => {
     // Intent: the same codec failure reads as one actionable sentence per tool.
-    const unknown = new UnknownTextEncodingError();
-    expect(formatTextFileError(unknown, "src/data.txt", "read"))
-      .toContain("src/data.txt is not UTF-8 text and declares no encoding, so it was not read.");
-    expect(formatTextFileError(unknown, "src/data.txt", "searched"))
-      .toContain("so it was not searched.");
     expect(formatTextFileError(new BinaryFileError(), "bin.dat", "read"))
       .toBe("bin.dat is a binary file (it contains NUL bytes).");
+    const unsupported = new UnsupportedEncodingLabelError("x-unknown", "on line 1 of the Python source");
+    expect(formatTextFileError(unsupported, "src/data.py", "read"))
+      .toContain('src/data.py: Unsupported declared text encoding "x-unknown"');
   });
 });
