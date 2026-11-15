@@ -334,6 +334,23 @@ describe("LspClient internals", () => {
       expect((client as any).fileContents.get(filePath)).toBe("export const value = '新';\r\n");
     });
 
+    it("replacement-decodes invalid UTF-8 before didOpen", async () => {
+      // Intent: LSP synchronization uses the shared text codec, so malformed bytes
+      // become U+FFFD in the document rather than rejecting the file.
+      const root = await createTempWorkspace();
+      const filePath = join(root, "src", "invalid.ts");
+      await mkdir(join(root, "src"), { recursive: true });
+      await writeFile(filePath, Buffer.concat([Buffer.from("export const value = '"), Buffer.from([0xff]), Buffer.from("';\n")]));
+      const client = new LspClient(root, { id: "mock", command: ["mock"], extensions: [".ts"] } as any);
+      const notifySpy = vi.spyOn(client as any, "notify").mockImplementation(() => undefined);
+
+      await client.openFile(filePath);
+
+      expect(notifySpy).toHaveBeenCalledWith("textDocument/didOpen", {
+        textDocument: expect.objectContaining({ text: "export const value = '\uFFFD';\n" }),
+      });
+    });
+
     it("rejects binary files without opening an LSP document", async () => {
       const root = await createTempWorkspace();
       const filePath = join(root, "binary.ts");

@@ -128,13 +128,83 @@ describe("executeGrep native ripgrep path", () => {
     }
   });
 
-  it("lists every undecodable file up to ten paths and counts the rest", async () => {
-    // Intent: skipped files must stay visible even without matches, and the
-    // notice has to stay bounded when a whole tree is undecodable.
+  it("searches replacement-decoded invalid UTF-8 in single-file and directory paths", async () => {
+    // Intent: grep must search the same U+FFFD text read shows, including ASCII
+    // keys, instead of taking the raw-byte path because the chosen name is UTF-8.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    await writeFile(
+      join(root, "invalid.txt"),
+      Buffer.concat([Buffer.from("abc"), Buffer.from([0xff]), Buffer.from("，e\nstate=old\n")]),
+    );
+
+    for (const path of [".", "invalid.txt"]) {
+      const replacement = await executeGrep("grep-replacement", {
+        workdir: ".", path, pattern: "\uFFFD",
+      }, undefined, undefined, { cwd: root });
+      expect(replacement.isError).not.toBe(true);
+      expect(getText(replacement)).toContain("invalid.txt:1: abc\uFFFD，e");
+
+      const ascii = await executeGrep("grep-invalid-ascii", {
+        workdir: ".", path, pattern: "state=old",
+      }, undefined, undefined, { cwd: root });
+      expect(ascii.isError).not.toBe(true);
+      expect(getText(ascii)).toContain("invalid.txt:2: state=old");
+    }
+  });
+
+  it("keeps the UTF-8 fast path for candidates that only mention declaration-like text", async () => {
+    // Intent: a valid UTF-8 source containing "charset" is a pre-pass candidate,
+    // but it must not spawn a second decoded-text search after the main search.
+    const root = await createTempWorkspace();
+    const logPath = join(root, "rg.log");
+    const rgPath = join(root, "bin", "rg");
+    await mkdir(join(root, "bin"), { recursive: true });
+    await writeFile(rgPath, `#!/usr/bin/env node
+const fs = require("fs");
+const log = (entry) => fs.appendFileSync(${JSON.stringify(logPath)}, entry + "\\n");
+const args = process.argv.slice(2);
+if (args.includes("--files-with-matches")) {
+  log("prepass");
+  process.stdout.write("./mention.ts" + String.fromCharCode(0));
+  process.exit(0);
+}
+if (args.includes("--json")) {
+  if (args[args.length - 1] === ".") {
+    log("main");
+    console.log(JSON.stringify({ type: "match", data: { path: { text: "./mention.ts" }, lines: { text: "const charset = 'utf-8';\\n" }, line_number: 1 } }));
+    process.exit(0);
+  }
+  log("decoded");
+  process.exit(1);
+}
+log("other");
+process.exit(2);
+`, { mode: 0o755 });
+    fakeToolState.rgPath = rgPath;
+    await writeFile(join(root, "mention.ts"), "const charset = 'utf-8';\n", "utf8");
+
+    const result = await executeGrep("grep-utf8-fast-path", {
+      workdir: ".",
+      path: ".",
+      pattern: "charset",
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    expect(getText(result)).toContain("mention.ts:1: const charset = 'utf-8';");
+    const events = (await readFile(logPath, "utf8")).trim().split("\n");
+    expect(events.filter((event) => event === "prepass")).toHaveLength(1);
+    expect(events.filter((event) => event === "main")).toHaveLength(1);
+    expect(events).not.toContain("decoded");
+  });
+
+  it("lists every rejected file up to ten paths and counts the rest", async () => {
+    // Intent: files with an unusable declaration must stay visible even without
+    // matches, and the incomplete-search notice has to stay bounded.
     const root = await createTempWorkspace();
     fakeToolState.rgPath = "rg";
     for (let index = 0; index < 12; index++) {
-      await writeFile(join(root, `legacy-${String(index).padStart(2, "0")}.txt`), iconv.encode("中文\n", "gbk"));
+      await writeFile(join(root, `legacy-${String(index).padStart(2, "0")}.py`), "# coding: x-unknown\n中文\n", "utf8");
     }
 
     const result = await executeGrep("grep-not-searched", {
@@ -144,10 +214,10 @@ describe("executeGrep native ripgrep path", () => {
     }, undefined, undefined, { cwd: root });
 
     const text = getText(result);
-    expect(text).toContain("No matches found");
-    expect(text).toContain("Not searched because the text encoding could not be determined:");
+    expect(text).toContain("No matches found in searched files");
+    expect(text).toContain("Search incomplete; Not searched:");
     expect(text).toContain("and 2 more");
-    expect((text.match(/\/legacy-\d\d\.txt/g) ?? []).length).toBe(10);
+    expect((text.match(/\/legacy-\d\d\.py/g) ?? []).length).toBe(10);
   });
 
   it("runs the encoding pre-pass concurrently with the main search in one extra process", async () => {

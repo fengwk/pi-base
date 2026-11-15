@@ -65,6 +65,46 @@ describe("common text encoding formats", () => {
   });
 
   it.each([
+    { label: "UTF-16", codec: "utf-16le", bom: [0xff, 0xfe], header: "UTF-16LE" },
+    { label: "UTF-16LE", codec: "utf-16le", bom: [0xff, 0xfe], header: "UTF-16LE" },
+    { label: "UTF-16BE", codec: "utf-16be", bom: [0xfe, 0xff], header: "UTF-16BE" },
+    { label: "UTF-32", codec: "utf-32le", bom: [0xff, 0xfe, 0x00, 0x00], header: "UTF-32LE" },
+    { label: "UTF-32LE", codec: "utf-32le", bom: [0xff, 0xfe, 0x00, 0x00], header: "UTF-32LE" },
+    { label: "UTF-32BE", codec: "utf-32be", bom: [0x00, 0x00, 0xfe, 0xff], header: "UTF-32BE" },
+  ])("creates a $label file from a U+FEFF declaration request and reads it back", async ({ label, codec, bom, header }) => {
+    // Intent: write must resolve the declaration against the computed target BOM,
+    // so explicit byte-order labels generate real BOM bytes and read them back.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const body = `<?xml version="1.0" encoding="${label}"?>\n<body>中文</body>\n`;
+
+    const write = await run(registry, "write", root, { path: "sample.xml", content: `\uFEFF${body}` });
+
+    expect(write.isError).not.toBe(true);
+    expect(await readFile(join(root, "sample.xml"))).toEqual(Buffer.concat([Buffer.from(bom), iconv.encode(body, codec)]));
+    const read = await run(registry, "read", root, { path: "sample.xml" });
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain(`encoding: ${header}`);
+    expect(getText(read)).toContain("中文");
+    expect(getText(read)).not.toContain("\uFEFF");
+  });
+
+  it("still refuses a BOM-less generic UTF-16 declaration on a new file", async () => {
+    // Intent: accepting explicit labels with U+FEFF must not add a default BOM
+    // generation policy for BOM-less wide-character declarations.
+    const root = await createTempWorkspace();
+    const registry = tools();
+
+    const write = await run(registry, "write", root, {
+      path: "sample.xml",
+      content: '<?xml version="1.0" encoding="UTF-16"?>\n<body>中文</body>\n',
+    });
+
+    expect(write.isError).toBe(true);
+    expect(getText(write)).toContain("no byte order mark");
+  });
+
+  it.each([
     { filePath: "sample.xml", prefix: '<?xml version="1.0" encoding="GBK"?>\n', encoding: "gbk", name: "GBK", text: "中文" },
     { filePath: "sample.css", prefix: '@charset "windows-1252";\n', encoding: "windows-1252", name: "windows-1252", text: "café €" },
     { filePath: "sample.html", prefix: '<!doctype html><html><head><meta charset="big5"></head>\n', encoding: "big5", name: "Big5", text: "中文" },
@@ -97,6 +137,34 @@ describe("common text encoding formats", () => {
     const write = await run(registry, "write", root, { path: filePath, content: rewritten });
     expect(write.isError).not.toBe(true);
     expect(await readFile(join(root, filePath))).toEqual(iconv.encode(rewritten, encoding));
+  });
+
+  it("honors an XML GBK declaration when 茅 encodes to bytes that are also valid UTF-8", async () => {
+    // Intent: reproduce the false-positive conflict — GBK 茅 is C3 A9, which is
+    // valid UTF-8 for é. The declaration must win across write, read and edit.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const content = '<?xml version="1.0" encoding="GBK"?>\n<name>茅</name>\n';
+    const nameBytes = iconv.encode("茅", "gbk");
+    expect(nameBytes).toEqual(Buffer.from([0xc3, 0xa9]));
+    expect(nameBytes.toString("utf8")).toBe("é");
+
+    const write = await run(registry, "write", root, { path: "sample.xml", content });
+    expect(write.isError).not.toBe(true);
+    expect(await readFile(join(root, "sample.xml"))).toEqual(iconv.encode(content, "gbk"));
+
+    const read = await run(registry, "read", root, { path: "sample.xml" });
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain("encoding: GBK");
+    expect(getText(read)).toContain("<name>茅</name>");
+    expect(getText(read)).not.toContain("é");
+
+    const edit = await run(registry, "edit", root, {
+      path: "sample.xml",
+      edits: [{ old_string: "<name>茅</name>", new_string: "<name>ok</name>" }],
+    });
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(join(root, "sample.xml"))).toEqual(iconv.encode(content.replace("茅", "ok"), "gbk"));
   });
 
   it("refuses a declaration that names an unsupported encoding", async () => {

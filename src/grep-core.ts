@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { spawn } from "node:child_process";
 import { open, readFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -236,13 +237,16 @@ async function decodeCandidates(
   const decodeOne = async ([fileKey, filePathBytes]: [string, Buffer]): Promise<void> => {
     let decoded: DecodedTextFile;
     try {
-      decoded = decodeTextFile(await readFile(filePathBytes), filePathBytes.toString("utf8"));
+      const bytes = await readFile(filePathBytes);
+      decoded = decodeTextFile(bytes, filePathBytes.toString("utf8"));
+      // A valid UTF-8 candidate already produced the same text in the main search;
+      // only malformed bytes or a non-UTF-8 declaration need a decoded re-search.
+      if (decoded.encoding.name === "UTF-8" && isUtf8(bytes)) return;
     } catch (error) {
-      // Binary files are not text at all; other rejections mean the encoding is undetermined.
+      // Binary files are not text at all; other rejections mean the file cannot be searched as text.
       if (!(error instanceof BinaryFileError)) skipped.set(fileKey, filePathBytes.toString("utf8"));
       return;
     }
-    if (decoded.encoding.name === "UTF-8") return;
     const resolved = resolvedGrepPath(filePathBytes);
     replacements.set(fileKey, await searchDecodedText(rgPath, decoded.text, resolved, options, signal));
   };
@@ -645,7 +649,9 @@ async function formatGrepResult(
     outputLines.push(`${displayPath}:${match.lineNumber}: ${text}`);
   }
 
-  let output = outputLines.length > 0 ? outputLines.join("\n") : "No matches found";
+  let output = outputLines.length > 0
+    ? outputLines.join("\n")
+    : skippedPaths.length > 0 ? "No matches found in searched files" : "No matches found";
   const details: Record<string, unknown> = {};
   const notices: string[] = [];
   if (limitReached) {
@@ -657,7 +663,7 @@ async function formatGrepResult(
     details.linesTruncated = true;
   }
   if (skippedPaths.length > 0) {
-    notices.push(`Not searched because the text encoding could not be determined: ${formatNotSearchedPaths(skippedPaths)}`);
+    notices.push(`Search incomplete; Not searched: ${formatNotSearchedPaths(skippedPaths)}`);
   }
   if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
 
@@ -667,19 +673,22 @@ async function formatGrepResult(
   };
 }
 
-/** A single file is searched exactly on the text read shows when its encoding is not UTF-8. */
+/** A single file is searched exactly on the text read shows when decoding changes its bytes. */
 async function executeSingleFileSearch(rgPath: string, options: GrepSearchOptions, signal?: AbortSignal): Promise<any> {
   if (options.existingFile) {
-    let decoded: DecodedTextFile;
+    let decoded: DecodedTextFile | null = null;
+    let searchDecoded = false;
     try {
-      decoded = decodeTextFile(await readFile(options.absolutePath), options.absolutePath);
+      const bytes = await readFile(options.absolutePath);
+      decoded = decodeTextFile(bytes, options.absolutePath);
+      searchDecoded = decoded.encoding.name !== "UTF-8" || !isUtf8(bytes);
     } catch (error) {
       return {
         content: [{ type: "text" as const, text: `Error: ${formatTextFileError(error, options.displayPath, "searched")} grep only supports searching text files or directories.` }],
         isError: true,
       };
     }
-    if (decoded.encoding.name !== "UTF-8") {
+    if (searchDecoded && decoded) {
       const resolved = resolvedGrepPath(Buffer.from(options.absolutePath, "utf8"));
       const matches = await searchDecodedText(rgPath, decoded.text, resolved, options, signal);
       return formatGrepResult(options, matches.slice(0, options.limit), matches.length > options.limit, []);

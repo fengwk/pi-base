@@ -1,7 +1,6 @@
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { writeFileAtomic } from "./atomic-write.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
@@ -30,8 +29,8 @@ function resolveWriteEncoding(
 ): { encoding: TextEncoding; bom: TextBomKind } {
   if (!existing || existing.bom === "none") {
     const target = resolveContentEncoding(content, absolutePath);
-    const contentDeclares = resolveDeclaredEncoding(content, absolutePath, "none");
-    const existingDeclares = existing && resolveDeclaredEncoding(existing.text, absolutePath, "none");
+    const contentDeclares = resolveDeclaredEncoding(content, absolutePath, target.bom);
+    const existingDeclares = existing && resolveDeclaredEncoding(existing.text, absolutePath, existing.bom);
     if (existingDeclares && !contentDeclares && existingDeclares.name !== "UTF-8") {
       throw new Error(
         `The new content removes the ${existingDeclares.name} declaration of ${rawPath}. `
@@ -150,7 +149,7 @@ export async function executeWrite(
       await throwIfAbortedAfter(mkdir(dirname(absolutePath), { recursive: true }), signal);
       // Once the write starts, let it settle and report the committed result. A post-write abort
       // cannot roll the file back and must not hide the mutation from downstream bookkeeping.
-      await writeFileAtomic(absolutePath, output);
+      await writeFile(absolutePath, output);
       return { existed: existing !== undefined };
     });
     try {
