@@ -48,7 +48,7 @@
 
 - UTF BOM 优先决定编码（UTF-32 先于 UTF-16 判断）；带 BOM 的文件按解码后的字符判断二进制。
 - 否则由标准声明决定：字节 0 处的 XML `encoding`、字节 0 处的 CSS `@charset "X";` 规则（精确形式，一个空格且不换行）、HTML head 的 `meta charset` / `http-equiv`（前 1024 字节）、第 1 或第 2 行的 Python/Ruby 编码注释（`coding[:=]`、`fileencoding=`、`encoding:`），以及 JSP page 指令中的 `pageEncoding` 或 `contentType` 内的 `charset`（前 1024 字节）。其他位置的相似文本不是声明。
-- HTML/CSS 标签按 Encoding Standard 解析，其他来源按 IANA 名称解析，Python/Ruby 注释先经过 CPython 的 `get_normal_name`；每个标签只对应一个规范名称（`GBK`、`Big5`、`Shift_JIS`、`ISO-8859-1` 等）。
+- HTML/CSS 标签按 Encoding Standard 解析，其他来源按 IANA 名称解析，Python/Ruby 注释先经过 CPython 的 `get_normal_name`；每个标签只对应一个规范名称（`GBK`、`Big5`、`Shift_JIS`、`ISO-8859-1` 等）。声明本身以 ASCII 字节书写：会改写这些字节的标签（例如 UTF-7）不受支持，没有 BOM 的显式 UTF-16/32 字节序声明视为冲突。
 - 无 BOM 也无声明时默认使用 UTF-8；不会根据字节做统计猜测。
 - 所选编码中的非法字节解码为 U+FFFD (�)，因此 `read`、`edit`、`grep` 共享同一文本视图，而不是拒绝文件。
 - 二进制判定为前 8000 字节内出现 NUL（Git 规则）；带 BOM 的 UTF-16/32 文件按同一窗口解码后的字符判断。其他控制字符仍视为文本。
@@ -70,7 +70,7 @@ lsp: supported|unsupported
 
 `encoding:` 行给出解码使用的编码，编号正文因此不含歧义；仅有 UTF-8 BOM 时不出现该行。
 
-二进制文件按二进制拒绝。声明标签不受支持时，会说明文件、标签与声明位置；非法字节会显示为 U+FFFD (�)，而不是拒绝文件。
+二进制文件按二进制拒绝。声明标签不受支持时（包括 UTF-7 这类与 ASCII 不兼容的标签），会说明文件、标签与声明位置；没有 BOM 的显式 UTF-16/32 字节序声明则报告为冲突。非法字节会显示为 U+FFFD (�)，而不是拒绝文件。
 
 编号列宽按文件总行数计算。文件末尾换行不会额外生成一个编号空行。续读提示放在编号正文之外，不会把截断说明追加进文件内容片段。
 

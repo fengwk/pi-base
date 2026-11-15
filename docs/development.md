@@ -133,7 +133,7 @@ Text tools share the following constraints:
 - Binary files (a NUL byte in the first 8000 bytes) are explicitly rejected.
 - [`src/text-codec.ts`](../src/text-codec.ts) decodes from a BOM or a standard declaration, otherwise defaults to UTF-8 without statistical guessing; invalid byte sequences are replaced with U+FFFD (�) and shared by `read`, `edit`, and `grep`.
 - `edit` preserves line endings via [`src/line-endings.ts`](../src/line-endings.ts).
-- Output representability is still checked: text the output encoding cannot represent fails instead of being substituted. Re-encoding a decoded file may replace unselected invalid byte sequences with U+FFFD (�).
+- Output representability is still checked: text the output encoding cannot represent fails instead of being substituted. Re-encoding a decoded file may replace unselected invalid byte sequences with U+FFFD (�) and can rewrite valid bytes that have several encodings for the same character into the canonical form (for example Shift_JIS `ED40` becomes `FA5C`, both 纊).
 - Read-modify-write cycles for the same path should go through the file change queue.
 - File commits write in place to the target path after validation. Symlinks are followed and the resolved inode is kept; validation failures do not write, but a crash or full disk during the write can leave partial content.
 

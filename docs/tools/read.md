@@ -48,7 +48,7 @@ Decoding is deterministic and done by [`src/text-codec.ts`](../../src/text-codec
 
 - A UTF byte order mark decides the encoding (UTF-32 is checked before UTF-16); a BOM-marked file is judged by its decoded characters.
 - Otherwise a standard declaration decides: an XML `encoding` at byte 0, a CSS `@charset "X";` rule at byte 0 (the exact form, one space and no line break), an HTML head `meta charset` / `http-equiv` (first 1024 bytes), a Python or Ruby coding cookie (`coding[:=]`, `fileencoding=`, `encoding:`) on line 1 or line 2, or a JSP page directive (`pageEncoding`, or `charset` inside `contentType`, first 1024 bytes). Similar text elsewhere is not a declaration.
-- Labels resolve through the Encoding Standard for HTML/CSS and through IANA names otherwise, with CPython's `get_normal_name` for Python/Ruby cookies; every label maps to one canonical name (`GBK`, `Big5`, `Shift_JIS`, `ISO-8859-1`, …).
+- Labels resolve through the Encoding Standard for HTML/CSS and through IANA names otherwise, with CPython's `get_normal_name` for Python/Ruby cookies; every label maps to one canonical name (`GBK`, `Big5`, `Shift_JIS`, `ISO-8859-1`, …). A declaration is written in ASCII bytes, so a label that would rewrite them (for example UTF-7) is unsupported, and an explicit UTF-16/32 byte order without a byte order mark is a declaration conflict.
 - Without a byte order mark or declaration, UTF-8 is the default; the bytes are not statistically guessed.
 - Bytes that are invalid in the selected encoding decode to U+FFFD (�), so `read`, `edit`, and `grep` share the same text view instead of rejecting the file.
 - Binary means a NUL byte in the first 8000 bytes (Git's rule); a BOM-marked UTF-16/32 file is judged on the characters decoded from that same window. Other control characters are text.
@@ -70,7 +70,7 @@ The result does not repeat the requested `path`; the tool call already shows it.
 
 The `encoding:` line names the decoded encoding, so the numbered body is never ambiguous. A UTF-8 byte order mark does not add it.
 
-A binary file is refused as binary. A declaration with an unsupported label fails with the file, the label, and where it was declared; invalid byte sequences are displayed as U+FFFD (�) instead of rejecting the file.
+A binary file is refused as binary. A declaration with an unsupported label—including an ASCII-incompatible label such as UTF-7—fails with the file, the label, and where it was declared; a BOM-less declaration of an explicit UTF-16/32 byte order is reported as a conflict instead. Invalid byte sequences are displayed as U+FFFD (�) instead of rejecting the file.
 
 The number column width is computed from the file's total line count. A trailing newline at the end of the file does not generate an extra numbered blank line. Continuation notices are outside the numbered body; truncation annotations are never appended to the file-content fragments.
 
