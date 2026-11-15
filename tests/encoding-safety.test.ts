@@ -191,6 +191,22 @@ describe("text encoding safety", () => {
     expect(getText(mixed)).not.toContain("Search incomplete");
   });
 
+  it("finds declared GBK text behind an uppercase HTML charset in directory searches", async () => {
+    // Intent: HTML charset names are case-insensitive, so candidate discovery must
+    // not miss a declaration merely because its GBK bytes are also valid UTF-8.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const content = '<HTML><HEAD><META CHARSET="GBK"></HEAD>\n<name>茅</name>\n';
+    await writeFile(join(root, "uppercase.html"), iconv.encode(content, "gbk"));
+
+    const read = await run(registry, "read", root, { path: "uppercase.html" });
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain("<name>茅</name>");
+    const found = await run(registry, "grep", root, { path: ".", pattern: "茅", literal: true });
+    expect(found.isError).not.toBe(true);
+    expect(getText(found)).toContain("uppercase.html:2: <name>茅</name>");
+  });
+
   it("lists files that cannot be decoded and marks the search incomplete", async () => {
     // Intent: truly unusable declarations stay visible instead of being hidden
     // behind a bare No matches found.

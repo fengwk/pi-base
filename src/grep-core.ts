@@ -186,7 +186,9 @@ function parseRipgrepMatchEvent(line: string, options: GrepSearchOptions): Ripgr
  * not valid UTF-8 (decoded lossily, so invalid bytes show up as U+FFFD).
  */
 function scanDecodeCandidates(rgPath: string, options: GrepSearchOptions, signal?: AbortSignal): { candidates: Promise<Map<string, Buffer>>; stop: () => void } {
-  const args = ["--no-config", "--files-with-matches", "--encoding", "utf-8", "--hidden", "--null"];
+  // Declaration names such as HTML CHARSET are case-insensitive; this pre-pass
+  // selects files only and must not change the user's actual search case policy.
+  const args = ["--no-config", "--files-with-matches", "--ignore-case", "--encoding", "utf-8", "--hidden", "--null"];
   if (options.include) args.push("--glob", normalizeIncludeGlob(options.include));
   args.push("--", DECODE_CANDIDATE_PATTERN, ".");
   const child = spawn(rgPath, args, {
