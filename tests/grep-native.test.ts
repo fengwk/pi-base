@@ -210,6 +210,152 @@ process.exit(2);
     expect(events).not.toContain("decoded");
   });
 
+  it("keeps the other files' matches when a batch exits 2", async () => {
+    // Intent: ripgrep exits 2 when one listed file disappeared, but it still prints
+    // the rest; the batch must fall back per file instead of failing the search.
+    const root = await createTempWorkspace();
+    const logPath = join(root, "rg.log");
+    const rgPath = join(root, "bin", "rg");
+    const files = ["gone.txt", "kept.txt"];
+    await mkdir(join(root, "bin"), { recursive: true });
+    await writeFile(rgPath, `#!/usr/bin/env node
+const fs = require("fs");
+const log = (entry) => fs.appendFileSync(${JSON.stringify(logPath)}, entry + "\\n");
+const args = process.argv.slice(2);
+if (args.includes("--files-with-matches")) {
+  log("prepass");
+  for (const file of ${JSON.stringify(files)}) process.stdout.write("./" + file + String.fromCharCode(0));
+  process.exit(0);
+}
+if (args.includes("--json")) {
+  if (args.includes("--encoding")) {
+    log("batch");
+    console.error("rg: gone.txt: No such file or directory (os error 2)");
+    process.exit(2);
+  }
+  if (args[args.length - 1] === ".") {
+    log("main");
+    process.exit(1);
+  }
+  log("decoded");
+  const text = fs.readFileSync(0, "utf8");
+  if (text.includes("kept")) {
+    console.log(JSON.stringify({ type: "match", data: { lines: { text: "kept\\uFFFD\\n" }, line_number: 1 } }));
+    process.exit(0);
+  }
+  console.error("unreadable");
+  process.exit(2);
+}
+log("other");
+process.exit(2);
+`, { mode: 0o755 });
+    fakeToolState.rgPath = rgPath;
+    // The pre-scan sees both files; only one survives until the batch runs.
+    await writeFile(join(root, "gone.txt"), Buffer.concat([Buffer.from("gone"), Buffer.from([0xff]), Buffer.from("\n")]));
+    await writeFile(join(root, "kept.txt"), Buffer.concat([Buffer.from("kept"), Buffer.from([0xff]), Buffer.from("\n")]));
+
+    const result = await executeGrep("grep-batch-exit-2", {
+      workdir: ".",
+      path: ".",
+      pattern: "\uFFFD",
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const text = getText(result);
+    expect(text).toContain("kept.txt:1: kept\uFFFD");
+    expect(text).toContain("Search incomplete; Not searched:");
+    expect(text).toContain(join(root, "gone.txt"));
+    const events = (await readFile(logPath, "utf8")).trim().split("\n");
+    expect(events.filter((event) => event === "batch")).toHaveLength(1);
+    expect(events.filter((event) => event === "decoded")).toHaveLength(2);
+  });
+
+  it("starts no batch when the signal is already aborted", async () => {
+    // Intent: an aborted search must not spawn a batch that nothing will terminate,
+    // because an already-aborted signal never fires its abort listener.
+    const root = await createTempWorkspace();
+    const logPath = join(root, "rg.log");
+    const rgPath = join(root, "bin", "rg");
+    await mkdir(join(root, "bin"), { recursive: true });
+    await writeFile(rgPath, `#!/usr/bin/env node
+const fs = require("fs");
+const log = (entry) => fs.appendFileSync(${JSON.stringify(logPath)}, entry + "\\n");
+const args = process.argv.slice(2);
+if (args.includes("--files-with-matches")) {
+  log("prepass");
+  process.stdout.write("./bad.txt" + String.fromCharCode(0));
+  process.exit(0);
+}
+if (args.includes("--json") && args[args.length - 1] === ".") {
+  log("main");
+  process.exit(1);
+}
+log("batch-or-decoded");
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+    fakeToolState.rgPath = rgPath;
+    await writeFile(join(root, "bad.txt"), Buffer.concat([Buffer.from("abc"), Buffer.from([0xff]), Buffer.from("\n")]));
+    const signal = AbortSignal.abort();
+
+    const result = await executeGrep("grep-batch-already-aborted", {
+      workdir: ".",
+      path: ".",
+      pattern: "abc",
+    }, signal, undefined, { cwd: root });
+
+    expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("Operation aborted");
+    const events = await readFile(logPath, "utf8").then((text) => text.trim().split("\n").filter(Boolean)).catch(() => [] as string[]);
+    expect(events).not.toContain("batch-or-decoded");
+  });
+
+  it("agrees between single-file and directory mode for CRLF invalid UTF-8", async () => {
+    // Intent: a directory batch searches the raw CRLF bytes, so the single-file path
+    // must use the same file search; both modes then answer multiline and `$` alike.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    await writeFile(join(root, "bad-crlf.txt"), Buffer.concat([
+      Buffer.from("alpha\r\n"),
+      Buffer.from([0xff]),
+      Buffer.from("beta\r\n"),
+    ]));
+
+    for (const params of [
+      { pattern: "alpha\\n", multiline: true },
+      { pattern: "alpha$", multiline: false },
+    ]) {
+      const directory = await executeGrep("grep-crlf-directory", {
+        workdir: ".", path: ".", ...params,
+      }, undefined, undefined, { cwd: root });
+      const single = await executeGrep("grep-crlf-single", {
+        workdir: ".", path: "bad-crlf.txt", ...params,
+      }, undefined, undefined, { cwd: root });
+
+      expect(directory.isError).not.toBe(true);
+      expect(getText(single)).toBe(getText(directory));
+    }
+  });
+
+  it("keeps a fractional limit as an integer per-file bound", async () => {
+    // Intent: ripgrep rejects a fractional --max-count, so 1.5 must still search
+    // instead of failing the whole call.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    await writeFile(join(root, "bad.txt"), Buffer.concat([Buffer.from("alpha\nalpha\n"), Buffer.from([0xff]), Buffer.from("\n")]));
+
+    const result = await executeGrep("grep-fractional-limit", {
+      workdir: ".",
+      path: ".",
+      pattern: "alpha",
+      limit: 1.5,
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const lines = getText(result).split("\n").filter((line) => line.includes("alpha"));
+    expect(lines).toHaveLength(1);
+    expect(getText(result)).toContain("matches limit reached");
+  });
+
   it("renders read's replacement decoding for every invalid UTF-8 edge case", async () => {
     // Intent: ripgrep's raw search can split invalid sequences differently from
     // Node's decoder; the batched --encoding utf-8 search must agree with read.

@@ -252,15 +252,45 @@ function utf8BatchChunks(candidates: readonly ResolvedGrepPath[]): ResolvedGrepP
   return chunks;
 }
 
+/**
+ * Outcome of one batch. Exit code 2 means one listed file disappeared or became
+ * unreadable; ripgrep still prints the other files' matches, so the caller falls
+ * back to the per-file search instead of losing the whole batch.
+ */
+interface Utf8BatchResult {
+  matches: GrepMatch[];
+  /** True when ripgrep exited 2 for a missing or unreadable listed file. */
+  partial: boolean;
+}
+
+/**
+ * `--max-count` only accepts an integer, while `limit` may be fractional. The
+ * bound stays at least the effective limit so truncation detection is unchanged.
+ */
+function perFileMatchBound(limit: number): string {
+  const bound = Math.max(1, Math.ceil(limit + 1));
+  return String(Number.isFinite(bound) ? bound : Math.trunc(Number.MAX_SAFE_INTEGER));
+}
+
+/** True when ripgrep's file search would not count lines the way read does. */
+function needsNormalizedLineSearch(text: string): boolean {
+  return text.replace(/\r\n/g, "").includes("\r");
+}
+
 /** Runs one argument-bounded batch over explicit files, decoding them like read. */
 async function searchUtf8Batch(
   rgPath: string,
   args: readonly string[],
   options: GrepSearchOptions,
   signal?: AbortSignal,
-): Promise<GrepMatch[]> {
+): Promise<Utf8BatchResult> {
+  if (signal?.aborted) throw new Error("Operation aborted");
   return new Promise((resolve, reject) => {
-    const child = spawn(rgPath, args, { cwd: options.absolutePath, stdio: ["ignore", "pipe", "pipe"] });
+    // A directory search runs inside the search root; a single file is an absolute path.
+    const child = spawn(rgPath, args, {
+      cwd: options.searchPathIsDirectory ? options.absolutePath : undefined,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const terminator = createGracefulTerminator(child);
     const rl = createInterface({ input: child.stdout });
     const matches: GrepMatch[] = [];
@@ -272,7 +302,9 @@ async function searchUtf8Batch(
       terminator.cleanup();
     };
     const onAbort = () => terminator.terminate();
-    signal?.addEventListener("abort", onAbort, { once: true });
+    // An already-aborted signal never fires its listener, so check both ways.
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
@@ -295,11 +327,15 @@ async function searchUtf8Batch(
         reject(new Error("Operation aborted"));
         return;
       }
+      if (code === 2) {
+        resolve({ matches, partial: true });
+        return;
+      }
       if (code !== 0 && code !== 1) {
         reject(new Error(stderr.trim() || `ripgrep exited with code ${code}`));
         return;
       }
-      resolve(matches);
+      resolve({ matches, partial: false });
     });
   });
 }
@@ -308,13 +344,15 @@ async function searchUtf8Batch(
  * Re-searches undeclared invalid UTF-8 candidates with `--encoding utf-8`, which
  * reproduces read's replacement decoding, in batches instead of one process per
  * file. Every batch path keeps a match list, so raw results are replaced even
- * when the decoded search finds nothing.
+ * when the decoded search finds nothing. A batch that exits 2 is searched again
+ * per file, where an unreadable file becomes a not-searched entry.
  */
 async function searchInvalidUtf8Files(
   rgPath: string,
   candidates: readonly ResolvedGrepPath[],
   options: GrepSearchOptions,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  skipped: Map<string, string>,
 ): Promise<Map<string, GrepMatch[]>> {
   const grouped = new Map<string, GrepMatch[]>();
   for (const candidate of candidates) grouped.set(candidate.fileKey, []);
@@ -323,12 +361,43 @@ async function searchInvalidUtf8Files(
   if (options.caseInsensitive) fixedArgs.push("--ignore-case");
   if (options.literal) fixedArgs.push("--fixed-strings");
   // The per-file bound matches the decoded stdin search's --max-count.
-  fixedArgs.push("--max-count", String(options.limit + 1), "--", options.pattern);
+  fixedArgs.push("--max-count", perFileMatchBound(options.limit), "--", options.pattern);
   for (const chunk of utf8BatchChunks(candidates)) {
-    const matches = await searchUtf8Batch(rgPath, [...fixedArgs, ...chunk.map((candidate) => candidate.absolutePath)], options, signal);
-    for (const match of matches) grouped.get(match.fileKey)?.push(match);
+    const batch = await searchUtf8Batch(rgPath, [...fixedArgs, ...chunk.map((candidate) => candidate.absolutePath)], options, signal);
+    if (!batch.partial) {
+      for (const match of batch.matches) grouped.get(match.fileKey)?.push(match);
+      continue;
+    }
+    for (const candidate of chunk) {
+      grouped.set(candidate.fileKey, await searchDecodedFile(rgPath, candidate, options, signal, skipped));
+    }
   }
   return grouped;
+}
+
+/** Searches one decoded file, recording it as not searched when it cannot be read. */
+async function searchDecodedFile(
+  rgPath: string,
+  resolved: ResolvedGrepPath,
+  options: GrepSearchOptions,
+  signal: AbortSignal | undefined,
+  skipped: Map<string, string>,
+): Promise<GrepMatch[]> {
+  let decoded: DecodedTextFile;
+  try {
+    decoded = decodeTextFile(await readFile(resolved.filePathBytes), resolved.absolutePath);
+  } catch (error) {
+    if (!(error instanceof BinaryFileError)) skipped.set(resolved.fileKey, resolved.absolutePath);
+    return [];
+  }
+  try {
+    return await searchDecodedText(rgPath, decoded.text, resolved, options, signal);
+  } catch (error) {
+    // The fallback exists because the file may have vanished; it must not sink the batch.
+    if (signal?.aborted) throw error;
+    skipped.set(resolved.fileKey, resolved.absolutePath);
+    return [];
+  }
 }
 
 async function decodeCandidates(
@@ -362,7 +431,7 @@ async function decodeCandidates(
     if (isUtf8(bytes)) return;
     // A file search counts only LF as a line break while read also splits on lone
     // CR, so such text keeps the normalized stdin search to preserve line numbers.
-    if (decoded.text.replace(/\r\n/g, "").includes("\r")) {
+    if (needsNormalizedLineSearch(decoded.text)) {
       replacements.set(fileKey, await searchDecodedText(rgPath, decoded.text, resolved, options, signal));
       return;
     }
@@ -379,7 +448,7 @@ async function decodeCandidates(
   }
   if (invalidUtf8.length > 0) {
     invalidUtf8.sort((left, right) => left.fileKey < right.fileKey ? -1 : left.fileKey > right.fileKey ? 1 : 0);
-    for (const [fileKey, matches] of await searchInvalidUtf8Files(rgPath, invalidUtf8, options, signal)) {
+    for (const [fileKey, matches] of await searchInvalidUtf8Files(rgPath, invalidUtf8, options, signal, skipped)) {
       replacements.set(fileKey, matches);
     }
   }
@@ -399,7 +468,7 @@ async function searchDecodedText(
   if (options.multiline) args.push("--multiline");
   if (options.caseInsensitive) args.push("--ignore-case");
   if (options.literal) args.push("--fixed-strings");
-  args.push("--max-count", String(options.limit + 1), "--", options.pattern);
+  args.push("--max-count", perFileMatchBound(options.limit), "--", options.pattern);
   return new Promise((resolve, reject) => {
     const child = spawn(rgPath, args, { stdio: ["pipe", "pipe", "pipe"] });
     const terminator = createGracefulTerminator(child);
@@ -413,7 +482,9 @@ async function searchDecodedText(
       terminator.cleanup();
     };
     const onAbort = () => terminator.terminate();
-    signal?.addEventListener("abort", onAbort, { once: true });
+    // An already-aborted signal never fires its listener, so check both ways.
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
@@ -803,7 +874,11 @@ async function formatGrepResult(
   };
 }
 
-/** A single file is searched exactly on the text read shows when decoding changes its bytes. */
+/**
+ * A single file is searched exactly on the text read shows when decoding changes
+ * its bytes. Undeclared invalid UTF-8 uses the same `--encoding utf-8` file search
+ * as a directory batch, so CRLF handling matches valid UTF-8 in both modes.
+ */
 async function executeSingleFileSearch(rgPath: string, options: GrepSearchOptions, signal?: AbortSignal): Promise<any> {
   if (options.existingFile) {
     let decoded: DecodedTextFile | null = null;
@@ -820,6 +895,13 @@ async function executeSingleFileSearch(rgPath: string, options: GrepSearchOption
     }
     if (searchDecoded && decoded) {
       const resolved = resolvedGrepPath(Buffer.from(options.absolutePath, "utf8"));
+      // Lone CR and a non-UTF-8 file name cannot use the file search; everything
+      // else undeclared searches the file itself, exactly like the directory batch.
+      if (decoded.encoding.name === "UTF-8" && isUtf8(resolved.filePathBytes) && !needsNormalizedLineSearch(decoded.text)) {
+        const skipped = new Map<string, string>();
+        const matches = [...(await searchInvalidUtf8Files(rgPath, [resolved], options, signal, skipped)).values()].flat();
+        return formatGrepResult(options, matches.slice(0, options.limit), matches.length > options.limit, [...skipped.values()]);
+      }
       const matches = await searchDecodedText(rgPath, decoded.text, resolved, options, signal);
       return formatGrepResult(options, matches.slice(0, options.limit), matches.length > options.limit, []);
     }
