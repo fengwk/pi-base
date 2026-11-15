@@ -204,7 +204,7 @@ describe("text encoding safety", () => {
     expect(result.isError).not.toBe(true);
     const text = getText(result);
     expect(text).toContain("valid.txt:1: state=old");
-    expect(text).toContain("Search incomplete; not searched:");
+    expect(text).toContain("Search incomplete; Not searched:");
     expect(text).toContain(join(root, "unsupported.py"));
     expect(text).not.toContain("unsupported.py:1:");
   });

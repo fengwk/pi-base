@@ -237,7 +237,11 @@ async function decodeCandidates(
   const decodeOne = async ([fileKey, filePathBytes]: [string, Buffer]): Promise<void> => {
     let decoded: DecodedTextFile;
     try {
-      decoded = decodeTextFile(await readFile(filePathBytes), filePathBytes.toString("utf8"));
+      const bytes = await readFile(filePathBytes);
+      decoded = decodeTextFile(bytes, filePathBytes.toString("utf8"));
+      // A valid UTF-8 candidate already produced the same text in the main search;
+      // only malformed bytes or a non-UTF-8 declaration need a decoded re-search.
+      if (decoded.encoding.name === "UTF-8" && isUtf8(bytes)) return;
     } catch (error) {
       // Binary files are not text at all; other rejections mean the file cannot be searched as text.
       if (!(error instanceof BinaryFileError)) skipped.set(fileKey, filePathBytes.toString("utf8"));
@@ -645,7 +649,9 @@ async function formatGrepResult(
     outputLines.push(`${displayPath}:${match.lineNumber}: ${text}`);
   }
 
-  let output = outputLines.length > 0 ? outputLines.join("\n") : "No matches found";
+  let output = outputLines.length > 0
+    ? outputLines.join("\n")
+    : skippedPaths.length > 0 ? "No matches found in searched files" : "No matches found";
   const details: Record<string, unknown> = {};
   const notices: string[] = [];
   if (limitReached) {
@@ -657,7 +663,7 @@ async function formatGrepResult(
     details.linesTruncated = true;
   }
   if (skippedPaths.length > 0) {
-    notices.push(`Search incomplete; not searched: ${formatNotSearchedPaths(skippedPaths)}`);
+    notices.push(`Search incomplete; Not searched: ${formatNotSearchedPaths(skippedPaths)}`);
   }
   if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
 

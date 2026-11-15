@@ -139,6 +139,34 @@ describe("common text encoding formats", () => {
     expect(await readFile(join(root, filePath))).toEqual(iconv.encode(rewritten, encoding));
   });
 
+  it("honors an XML GBK declaration when 茅 encodes to bytes that are also valid UTF-8", async () => {
+    // Intent: reproduce the false-positive conflict — GBK 茅 is C3 A9, which is
+    // valid UTF-8 for é. The declaration must win across write, read and edit.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const content = '<?xml version="1.0" encoding="GBK"?>\n<name>茅</name>\n';
+    const nameBytes = iconv.encode("茅", "gbk");
+    expect(nameBytes).toEqual(Buffer.from([0xc3, 0xa9]));
+    expect(nameBytes.toString("utf8")).toBe("é");
+
+    const write = await run(registry, "write", root, { path: "sample.xml", content });
+    expect(write.isError).not.toBe(true);
+    expect(await readFile(join(root, "sample.xml"))).toEqual(iconv.encode(content, "gbk"));
+
+    const read = await run(registry, "read", root, { path: "sample.xml" });
+    expect(read.isError).not.toBe(true);
+    expect(getText(read)).toContain("encoding: GBK");
+    expect(getText(read)).toContain("<name>茅</name>");
+    expect(getText(read)).not.toContain("é");
+
+    const edit = await run(registry, "edit", root, {
+      path: "sample.xml",
+      edits: [{ old_string: "<name>茅</name>", new_string: "<name>ok</name>" }],
+    });
+    expect(edit.isError).not.toBe(true);
+    expect(await readFile(join(root, "sample.xml"))).toEqual(iconv.encode(content.replace("茅", "ok"), "gbk"));
+  });
+
   it("refuses a declaration that names an unsupported encoding", async () => {
     // Intent: an explicit but unusable declaration is an error, never a silent fallback.
     const root = await createTempWorkspace();
