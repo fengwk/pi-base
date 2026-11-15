@@ -91,7 +91,7 @@ ripgrep JSON 中的 base64 `bytes` 字段只用于路径显示；行文本按 UT
 
 结果必须与 `read` 一致，因此目录搜索会在主搜索之前启动第二个并发 `rg` 进程：使用相同过滤条件执行 `rg --files-with-matches --encoding utf-8`，模式为 `coding[:=]|charset|<\?xml|pageEncoding|\x{FFFD}`。它列出解码文本可能与纯 UTF-8 不同的文件：带声明样式的文件，以及不是合法 UTF-8 的文件。两次扫描并行运行，只在格式化结果时等待预扫描完成。
 
-每个候选文件用 [`src/text-codec.ts`](../../src/text-codec.ts) 解码。字节为合法 UTF-8 且声明未选择其他编码的文件保留 ripgrep 的原始结果；带 BOM、声明了其他编码或含非法 UTF-8 的文件，由 ripgrep 从 stdin 读取规范化后的替换式解码文本重新搜索，因此使用同一正则引擎，行号与 `read` 一致。搜索 U+FFFD (�) 会命中 `read` 展示的同一文本。codec 无法使用的候选会被跳过并丢弃其匹配。
+每个候选文件用 [`src/text-codec.ts`](../../src/text-codec.ts) 解码。字节为合法 UTF-8 且声明未选择其他编码的文件保留 ripgrep 的原始结果；带非 UTF-8 BOM、声明了其他编码或含非法 UTF-8 的文件，由 ripgrep 从 stdin 读取规范化后的替换式解码文本重新搜索，因此使用同一正则引擎，行号与 `read` 一致。搜索 U+FFFD (�) 会命中 `read` 展示的同一文本。codec 无法使用的候选会被跳过并丢弃其匹配。
 
 最终 `Not searched` 提示会列出无法搜索的候选文件，例如声明编码不受支持或读取失败。最多列出 10 个绝对路径并附带剩余数量；无论是否有匹配都会出现；所有候选都成功搜索时不出现。该提示表示搜索不完整：这些文件的内容没有被检查。
 

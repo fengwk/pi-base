@@ -53,7 +53,7 @@ validate parameters
 An existing target must be judged a regular file via `stat`. Before writing, the original bytes are decoded as text with the shared replacement decoder:
 
 - Reject binary files without modifying them. A declaration with an unsupported label still fails.
-- Invalid byte sequences decode to U+FFFD (�); overwriting re-encodes the whole decoded text, so unselected damaged bytes are not preserved.
+- Invalid byte sequences in the existing file decode to U+FFFD (�) for validation and encoding decisions; the overwrite writes the full caller-supplied `content`, not the decoded original. If `content` came from a lossy `read`, the original invalid bytes cannot be recovered.
 - A BOM stays authoritative: the existing encoding and BOM are kept, and a declaration in `content` must select that same encoding.
 - Without a BOM, a declaration in `content` selects the new encoding and may convert the file. Dropping a non-UTF-8 declaration is refused: `The new content removes the {name} declaration of {path}.`
 - Text the output encoding cannot represent fails with the character, its code point and the line.

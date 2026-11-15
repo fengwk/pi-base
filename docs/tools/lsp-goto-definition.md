@@ -62,7 +62,7 @@ The caller uses character offsets of the visible text. The client converts betwe
 - UTF-16
 - UTF-32
 
-These units apply to client messages. Text the client opens or syncs is read from disk with the same shared decoder as `read` and sent as `didOpen`/`didChange`; the JSON transport itself is always UTF-8. Files the server indexes without a client `didOpen` are read by the server under its own configuration and are not controlled by the client decoder.
+Position encoding chooses protocol column units, not the on-disk encoding. Text the client opens or syncs is read from disk with the same shared decoder as `read` and sent as `didOpen`/`didChange`; the JSON transport itself is always UTF-8. Files the server indexes without a client `didOpen` are read by the server under its own configuration and are not controlled by the client decoder.
 
 ## Result
 
