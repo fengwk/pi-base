@@ -153,6 +153,130 @@ describe("executeGrep native ripgrep path", () => {
     }
   });
 
+  it("re-searches undeclared invalid UTF-8 candidates in one batched process", async () => {
+    // Intent: a directory of undeclared invalid UTF-8 files must not spawn one
+    // decoded process per file; one `--encoding utf-8` batch supplies read's text.
+    const root = await createTempWorkspace();
+    const logPath = join(root, "rg.log");
+    const rgPath = join(root, "bin", "rg");
+    const files = ["bad-0.txt", "bad-1.txt", "bad-2.txt"];
+    await mkdir(join(root, "bin"), { recursive: true });
+    await writeFile(rgPath, `#!/usr/bin/env node
+const fs = require("fs");
+const log = (entry) => fs.appendFileSync(${JSON.stringify(logPath)}, entry + "\\n");
+const args = process.argv.slice(2);
+const emit = (path, text) => console.log(JSON.stringify({ type: "match", data: { path: { text: path }, lines: { text }, line_number: 1 } }));
+if (args.includes("--files-with-matches")) {
+  log("prepass");
+  for (const file of ${JSON.stringify(files)}) process.stdout.write("./" + file + String.fromCharCode(0));
+  process.exit(0);
+}
+if (args.includes("--json")) {
+  if (args.includes("--encoding")) {
+    log("batch");
+    for (const file of ${JSON.stringify(files)}) emit(${JSON.stringify(root)} + "/" + file, "abc\\uFFFD");
+    process.exit(0);
+  }
+  if (args[args.length - 1] === ".") {
+    log("main");
+    for (const file of ${JSON.stringify(files)}) emit(${JSON.stringify(root)} + "/" + file, "raw-only");
+    process.exit(0);
+  }
+  log("decoded");
+  process.exit(1);
+}
+log("other");
+process.exit(2);
+`, { mode: 0o755 });
+    fakeToolState.rgPath = rgPath;
+    for (const file of files) {
+      await writeFile(join(root, file), Buffer.concat([Buffer.from("abc"), Buffer.from([0xff]), Buffer.from("\n")]));
+    }
+
+    const result = await executeGrep("grep-invalid-batch", {
+      workdir: ".",
+      path: ".",
+      pattern: "\uFFFD",
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const text = getText(result);
+    for (const file of files) expect(text).toContain(`${file}:1: abc\uFFFD`);
+    expect(text).not.toContain("raw-only");
+    const events = (await readFile(logPath, "utf8")).trim().split("\n");
+    expect(events.filter((event) => event === "prepass")).toHaveLength(1);
+    expect(events.filter((event) => event === "main")).toHaveLength(1);
+    expect(events.filter((event) => event === "batch")).toHaveLength(1);
+    expect(events).not.toContain("decoded");
+  });
+
+  it("renders read's replacement decoding for every invalid UTF-8 edge case", async () => {
+    // Intent: ripgrep's raw search can split invalid sequences differently from
+    // Node's decoder; the batched --encoding utf-8 search must agree with read.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    const cases = ["e4b841", "f09f9841", "eda08041", "c0af41", "f580808041", "e08041", "fffe41"];
+    for (const hex of cases) {
+      await writeFile(join(root, `bad-${hex}.txt`), Buffer.concat([Buffer.from("A"), Buffer.from(hex, "hex"), Buffer.from("B\n")]));
+    }
+
+    const result = await executeGrep("grep-invalid-edge-cases", {
+      workdir: ".",
+      path: ".",
+      pattern: "\uFFFD",
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const text = getText(result);
+    for (const hex of cases) {
+      const expected = Buffer.concat([Buffer.from("A"), Buffer.from(hex, "hex"), Buffer.from("B\n")]).toString("utf8");
+      expect(text).toContain(`bad-${hex}.txt:1: ${expected.replace("\n", "")}`);
+    }
+    expect(text).not.toContain("Search incomplete");
+  });
+
+  it("keeps read's line numbers for invalid UTF-8 with lone carriage returns", async () => {
+    // Intent: ripgrep's file search only counts LF, while read also splits on lone
+    // CR; this candidate must keep the normalized stdin search so both paths agree.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    await writeFile(join(root, "bad-cr.txt"), Buffer.concat([Buffer.from("first"), Buffer.from([0xff]), Buffer.from("\rsecond\n")]));
+
+    const directory = await executeGrep("grep-cr-directory", {
+      workdir: ".",
+      path: ".",
+      pattern: "second",
+    }, undefined, undefined, { cwd: root });
+    const single = await executeGrep("grep-cr-single", {
+      workdir: ".",
+      path: "bad-cr.txt",
+      pattern: "second",
+    }, undefined, undefined, { cwd: root });
+
+    expect(getText(directory)).toContain("bad-cr.txt:2: second");
+    expect(getText(single)).toContain("bad-cr.txt:2: second");
+  });
+
+  it("matches UTF-8 and UTF-16 byte order mark files with read's line numbers", async () => {
+    // Intent: the raw main search keeps ripgrep's own BOM sniffing, so BOM-marked
+    // files stay searchable even though only invalid UTF-8 is re-searched.
+    const root = await createTempWorkspace();
+    fakeToolState.rgPath = "rg";
+    await writeFile(join(root, "bom-utf8.txt"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("alpha\nbeta\ngamma\n")]));
+    await writeFile(join(root, "bom-utf16.txt"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("alpha\nbeta\ngamma\n", "utf16le")]));
+
+    const result = await executeGrep("grep-bom-files", {
+      workdir: ".",
+      path: ".",
+      pattern: "beta",
+    }, undefined, undefined, { cwd: root });
+
+    expect(result.isError).not.toBe(true);
+    const text = getText(result);
+    expect(text).toContain("bom-utf8.txt:2: beta");
+    expect(text).toContain("bom-utf16.txt:2: beta");
+  });
+
   it("keeps the UTF-8 fast path for candidates that only mention declaration-like text", async () => {
     // Intent: a valid UTF-8 source containing "charset" is a pre-pass candidate,
     // but it must not spawn a second decoded-text search after the main search.

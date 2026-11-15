@@ -227,6 +227,110 @@ interface DecodedCandidates {
   skipped: Map<string, string>;
 }
 
+/**
+ * Windows limits a command line to 32767 characters, so batched file paths stay
+ * well below that; POSIX argument limits are far larger.
+ */
+const UTF8_BATCH_ARGUMENT_BUDGET = 16 * 1024;
+
+/** Splits candidates into stable, argument-length-bounded batches. */
+function utf8BatchChunks(candidates: readonly ResolvedGrepPath[]): ResolvedGrepPath[][] {
+  const chunks: ResolvedGrepPath[][] = [];
+  let chunk: ResolvedGrepPath[] = [];
+  let used = 0;
+  for (const candidate of candidates) {
+    const size = Buffer.byteLength(candidate.absolutePath, "utf8") + 1;
+    if (chunk.length > 0 && used + size > UTF8_BATCH_ARGUMENT_BUDGET) {
+      chunks.push(chunk);
+      chunk = [];
+      used = 0;
+    }
+    chunk.push(candidate);
+    used += size;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  return chunks;
+}
+
+/** Runs one argument-bounded batch over explicit files, decoding them like read. */
+async function searchUtf8Batch(
+  rgPath: string,
+  args: readonly string[],
+  options: GrepSearchOptions,
+  signal?: AbortSignal,
+): Promise<GrepMatch[]> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(rgPath, args, { cwd: options.absolutePath, stdio: ["ignore", "pipe", "pipe"] });
+    const terminator = createGracefulTerminator(child);
+    const rl = createInterface({ input: child.stdout });
+    const matches: GrepMatch[] = [];
+    let stderr = "";
+    let settled = false;
+    const cleanup = () => {
+      rl.close();
+      signal?.removeEventListener("abort", onAbort);
+      terminator.cleanup();
+    };
+    const onAbort = () => terminator.terminate();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    rl.on("line", (line) => {
+      const match = parseRipgrepMatchEvent(line, options);
+      if (match && match.lineNumber !== undefined) matches.push({ ...match, lineNumber: match.lineNumber });
+    });
+    child.on("error", (error) => {
+      cleanup();
+      if (!settled) {
+        settled = true;
+        reject(new Error(`Failed to run ripgrep: ${error.message}`));
+      }
+    });
+    child.on("close", (code) => {
+      cleanup();
+      if (settled) return;
+      settled = true;
+      if (signal?.aborted) {
+        reject(new Error("Operation aborted"));
+        return;
+      }
+      if (code !== 0 && code !== 1) {
+        reject(new Error(stderr.trim() || `ripgrep exited with code ${code}`));
+        return;
+      }
+      resolve(matches);
+    });
+  });
+}
+
+/**
+ * Re-searches undeclared invalid UTF-8 candidates with `--encoding utf-8`, which
+ * reproduces read's replacement decoding, in batches instead of one process per
+ * file. Every batch path keeps a match list, so raw results are replaced even
+ * when the decoded search finds nothing.
+ */
+async function searchInvalidUtf8Files(
+  rgPath: string,
+  candidates: readonly ResolvedGrepPath[],
+  options: GrepSearchOptions,
+  signal?: AbortSignal,
+): Promise<Map<string, GrepMatch[]>> {
+  const grouped = new Map<string, GrepMatch[]>();
+  for (const candidate of candidates) grouped.set(candidate.fileKey, []);
+  const fixedArgs = ["--no-config", "--json", "--line-number", "--color=never", "--encoding", "utf-8"];
+  if (options.multiline) fixedArgs.push("--multiline");
+  if (options.caseInsensitive) fixedArgs.push("--ignore-case");
+  if (options.literal) fixedArgs.push("--fixed-strings");
+  // The per-file bound matches the decoded stdin search's --max-count.
+  fixedArgs.push("--max-count", String(options.limit + 1), "--", options.pattern);
+  for (const chunk of utf8BatchChunks(candidates)) {
+    const matches = await searchUtf8Batch(rgPath, [...fixedArgs, ...chunk.map((candidate) => candidate.absolutePath)], options, signal);
+    for (const match of matches) grouped.get(match.fileKey)?.push(match);
+  }
+  return grouped;
+}
+
 async function decodeCandidates(
   rgPath: string,
   paths: Map<string, Buffer>,
@@ -235,25 +339,49 @@ async function decodeCandidates(
 ): Promise<DecodedCandidates> {
   const replacements = new Map<string, GrepMatch[]>();
   const skipped = new Map<string, string>();
+  const invalidUtf8: ResolvedGrepPath[] = [];
   const entries = [...paths.entries()];
   const decodeOne = async ([fileKey, filePathBytes]: [string, Buffer]): Promise<void> => {
     let decoded: DecodedTextFile;
+    let bytes: Buffer;
     try {
-      const bytes = await readFile(filePathBytes);
+      bytes = await readFile(filePathBytes);
       decoded = decodeTextFile(bytes, filePathBytes.toString("utf8"));
-      // A valid UTF-8 candidate already produced the same text in the main search;
-      // only malformed bytes or a non-UTF-8 declaration need a decoded re-search.
-      if (decoded.encoding.name === "UTF-8" && isUtf8(bytes)) return;
     } catch (error) {
       // Binary files are not text at all; other rejections mean the file cannot be searched as text.
       if (!(error instanceof BinaryFileError)) skipped.set(fileKey, filePathBytes.toString("utf8"));
       return;
     }
     const resolved = resolvedGrepPath(filePathBytes);
-    replacements.set(fileKey, await searchDecodedText(rgPath, decoded.text, resolved, options, signal));
+    // A declared or BOM-marked non-UTF-8 encoding is decoded and searched per file.
+    if (decoded.encoding.name !== "UTF-8") {
+      replacements.set(fileKey, await searchDecodedText(rgPath, decoded.text, resolved, options, signal));
+      return;
+    }
+    // Valid UTF-8 already produced the same text in the main search.
+    if (isUtf8(bytes)) return;
+    // A file search counts only LF as a line break while read also splits on lone
+    // CR, so such text keeps the normalized stdin search to preserve line numbers.
+    if (decoded.text.replace(/\r\n/g, "").includes("\r")) {
+      replacements.set(fileKey, await searchDecodedText(rgPath, decoded.text, resolved, options, signal));
+      return;
+    }
+    // Node arguments cannot carry a file name that is not valid UTF-8, so such a
+    // path keeps the per-file decoded search.
+    if (!isUtf8(filePathBytes)) {
+      replacements.set(fileKey, await searchDecodedText(rgPath, decoded.text, resolved, options, signal));
+      return;
+    }
+    invalidUtf8.push(resolved);
   };
   for (let offset = 0; offset < entries.length; offset += DECODED_SEARCH_CONCURRENCY) {
     await Promise.all(entries.slice(offset, offset + DECODED_SEARCH_CONCURRENCY).map((entry) => decodeOne(entry)));
+  }
+  if (invalidUtf8.length > 0) {
+    invalidUtf8.sort((left, right) => left.fileKey < right.fileKey ? -1 : left.fileKey > right.fileKey ? 1 : 0);
+    for (const [fileKey, matches] of await searchInvalidUtf8Files(rgPath, invalidUtf8, options, signal)) {
+      replacements.set(fileKey, matches);
+    }
   }
   return { replacements, skipped };
 }
