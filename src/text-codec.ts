@@ -205,12 +205,35 @@ function resolveWhatwgLabel(label: string): TextEncoding | undefined {
   return iconv.encodingExists(whatwgName) ? { name: whatwgName, codec: whatwgName } : undefined;
 }
 
+function isWideEncoding(encoding: TextEncoding): boolean {
+  return encoding.name.startsWith("UTF-16") || encoding.name.startsWith("UTF-32");
+}
+
+/**
+ * A declaration is written in ASCII bytes, so a codec it selects must encode
+ * these characters unchanged. Nationally remapped punctuation such as `\`, `~`
+ * or `$` stays out of the probe, as do the UTF-16/32 families that require a
+ * byte order mark.
+ */
+const DECLARATION_PROBE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \t\r\n!\"#%'*,-./:;<=>?@_";
+const declarationProbeResults = new Map<string, boolean>();
+
+function encodesDeclarationProbe(encoding: TextEncoding): boolean {
+  const cached = declarationProbeResults.get(encoding.codec);
+  if (cached !== undefined) return cached;
+  const compatible = iconv.encode(DECLARATION_PROBE, encoding.codec).equals(Buffer.from(DECLARATION_PROBE, "ascii"));
+  declarationProbeResults.set(encoding.codec, compatible);
+  return compatible;
+}
+
 function resolveLabel(label: string, source: DeclarationSource): TextEncoding | undefined {
   const prepared = source === "python" || source === "ruby" ? pythonNormalizedName(label) : label.trim();
-  if (/^utf[-_]?8$/i.test(prepared)) return UTF8;
-  if (/^(?:us[-_]?)?ascii$/i.test(prepared)) return ASCII;
-  if (source === "html" || source === "css") return resolveWhatwgLabel(prepared);
-  return resolveIanaLabel(prepared) ?? resolveWhatwgLabel(prepared);
+  let encoding: TextEncoding | undefined;
+  if (/^utf[-_]?8$/i.test(prepared)) encoding = UTF8;
+  else if (/^(?:us[-_]?)?ascii$/i.test(prepared)) encoding = ASCII;
+  else if (source === "html" || source === "css") encoding = resolveWhatwgLabel(prepared);
+  else encoding = resolveIanaLabel(prepared) ?? resolveWhatwgLabel(prepared);
+  return encoding && (isWideEncoding(encoding) || encodesDeclarationProbe(encoding)) ? encoding : undefined;
 }
 
 function resolveDeclaredLabel(declared: DeclaredLabel, bom: TextBomKind): TextEncoding {
@@ -225,6 +248,13 @@ function resolveDeclaredLabel(declared: DeclaredLabel, bom: TextBomKind): TextEn
   }
   const encoding = resolveLabel(label, declared.source);
   if (!encoding) throw new UnsupportedEncodingLabelError(label, declared.where);
+  // A declaration itself is ASCII, so an explicit wide label can only be right
+  // when a byte order mark supplies the byte order.
+  if (bom === "none" && isWideEncoding(encoding)) {
+    throw new EncodingDeclarationConflictError(
+      `Declared text encoding ${label.toUpperCase()} ${declared.where}, but the file has no byte order mark.`,
+    );
+  }
   // A byte order mark is authoritative, so a declaration beside it must agree.
   const bomSpec = BOM_SPECS.find((spec) => spec.bom === bom);
   if (bomSpec && bomSpec.encoding.name !== encoding.name) {
@@ -463,8 +493,11 @@ function lineOfOffset(text: string, offset: number): number {
 
 function describeUnrepresentable(encoding: TextEncoding, character: string, text: string, offset: number): UnrepresentableTextError {
   const hex = (character.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0");
+  const explanation = character === "\uFFFD"
+    ? ` U+FFFD (\uFFFD) marks bytes that could not be decoded; replace it with text that ${encoding.name} can encode.`
+    : "";
   return new UnrepresentableTextError(
-    `The new text cannot be encoded in ${encoding.name}: "${character}" (U+${hex}) on line ${lineOfOffset(text, offset)}.`,
+    `The resulting text cannot be encoded in ${encoding.name}: "${character}" (U+${hex}) on line ${lineOfOffset(text, offset)}.${explanation}`,
   );
 }
 
@@ -487,7 +520,7 @@ function encodeExact(text: string, encoding: TextEncoding): Buffer {
     }
     offset += character.length;
   }
-  throw new UnrepresentableTextError(`The new text cannot be encoded in ${encoding.name}.`);
+  throw new UnrepresentableTextError(`The resulting text cannot be encoded in ${encoding.name}.`);
 }
 
 export function encodeTextFile(text: string, encoding: TextEncoding, bom: TextBomKind): Buffer {

@@ -206,7 +206,7 @@ describe("text codec", () => {
       }
     })();
     expect(error).toBeInstanceOf(UnrepresentableTextError);
-    expect(error?.message).toBe('The new text cannot be encoded in ISO-8859-1: "中" (U+4E2D) on line 2.');
+    expect(error?.message).toBe('The resulting text cannot be encoded in ISO-8859-1: "中" (U+4E2D) on line 2.');
     // A leading U+FEFF asks for a byte order mark; it is never encoded as content.
     expect(encodeTextFile("\uFEFFhello", latin1, "none")).toEqual(Buffer.from("hello", "latin1"));
   });
@@ -238,6 +238,44 @@ describe("text codec", () => {
     });
     expect(() => resolveContentEncoding('<?xml version="1.0" encoding="UTF-16LE"?>\n', "a.xml")).toThrow(EncodingDeclarationConflictError);
     expect(() => resolveContentEncoding("\uFEFF# coding: gbk\n", "a.py")).toThrow(/byte order mark/);
+  });
+
+  it("refuses BOM-less wide declarations and ASCII-incompatible labels", () => {
+    // Intent: a declaration is ASCII bytes, so it cannot establish a wide
+    // encoding's byte order, and it must select a codec that keeps ASCII intact.
+    for (const label of ["UTF-16LE", "UTF-16BE", "UTF-32LE", "UTF-32BE"]) {
+      const bytes = Buffer.from(`<?xml version="1.0" encoding="${label}"?>\n<a/>\n`, "ascii");
+      expect(() => decodeTextFile(bytes, "sample.xml"))
+        .toThrow(new RegExp(`Declared text encoding ${label} in the XML declaration, but the file has no byte order mark\\.`));
+    }
+    for (const label of ["UTF-7", "base64", "hex"]) {
+      const content = `<?xml version="1.0" encoding="${label}"?>\n<a/>\n`;
+      expect(() => decodeTextFile(Buffer.from(content, "ascii"), "sample.xml")).toThrow(UnsupportedEncodingLabelError);
+      expect(() => resolveContentEncoding(content, "sample.xml")).toThrow(UnsupportedEncodingLabelError);
+    }
+    // ASCII-compatible legacy declarations keep resolving.
+    for (const label of ["GBK", "Big5", "Shift_JIS", "EUC-KR", "windows-1252", "ISO-8859-2"]) {
+      expect(declaredEncoding(`<?xml version="1.0" encoding="${label}"?>\n`, "sample.xml").name).not.toBe("");
+    }
+  });
+
+  it("explains that unrepresentable U+FFFD came from undecodable bytes", () => {
+    // Intent: the error must describe the resulting text instead of calling file
+    // content new, and U+FFFD needs a hint that it came from decoding.
+    const gbk = declaredEncoding("# coding: gbk\n", "a.py");
+    const error = (() => {
+      try {
+        encodeTextFile("ok\n\uFFFD\n", gbk, "none");
+        return undefined;
+      } catch (caught) {
+        return caught as Error;
+      }
+    })();
+    expect(error).toBeInstanceOf(UnrepresentableTextError);
+    expect(error?.message).toBe(
+      'The resulting text cannot be encoded in GBK: "\uFFFD" (U+FFFD) on line 2. '
+      + "U+FFFD (\uFFFD) marks bytes that could not be decoded; replace it with text that GBK can encode.",
+    );
   });
 
   it("describes binary files and declaration failures for the tools", () => {

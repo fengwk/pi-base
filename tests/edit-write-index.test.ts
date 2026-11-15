@@ -117,7 +117,7 @@ describe("edit/write flow", () => {
       { cwd: root },
     );
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain('The new text cannot be encoded in ISO-8859-1: "漢" (U+6F22)');
+    expect(getText(result)).toContain('The resulting text cannot be encoded in ISO-8859-1: "漢" (U+6F22)');
     expect(await readFile(file)).toEqual(originalBytes);
   });
 
@@ -512,7 +512,7 @@ describe("edit/write flow", () => {
       { cwd: root },
     );
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain('The new text cannot be encoded in ISO-8859-1: "漢" (U+6F22)');
+    expect(getText(result)).toContain('The resulting text cannot be encoded in ISO-8859-1: "漢" (U+6F22)');
     expect(await readFile(file)).toEqual(originalBytes);
   });
 

@@ -178,6 +178,51 @@ describe("common text encoding formats", () => {
     expect(getText(write)).toContain('Unsupported declared text encoding "x-unknown"');
   });
 
+  it.each(["UTF-16LE", "UTF-32BE"])("refuses a BOM-less %s declaration on read, edit and grep", async (label) => {
+    // Intent: the ASCII declaration cannot supply a byte order, so the same
+    // conflict must stop every tool instead of decoding mojibake.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const content = `<?xml version="1.0" encoding="${label}"?>\n<body>state=old</body>\n`;
+    await writeFile(join(root, "sample.xml"), content, "ascii");
+
+    const read = await run(registry, "read", root, { path: "sample.xml" });
+    expect(read.isError).toBe(true);
+    expect(getText(read)).toContain("but the file has no byte order mark");
+
+    const edit = await run(registry, "edit", root, {
+      path: "sample.xml",
+      edits: [{ old_string: "state=old", new_string: "state=new" }],
+    });
+    expect(edit.isError).toBe(true);
+    expect(getText(edit)).toContain("but the file has no byte order mark");
+    expect(await readFile(join(root, "sample.xml"))).toEqual(Buffer.from(content, "ascii"));
+
+    const grep = await run(registry, "grep", root, { path: ".", pattern: "state=old" });
+    expect(grep.isError).not.toBe(true);
+    const grepText = getText(grep);
+    expect(grepText).toContain("Search incomplete; Not searched:");
+    expect(grepText).toContain(join(root, "sample.xml"));
+  });
+
+  it.each(["UTF-7", "base64"])("refuses the ASCII-incompatible %s declaration on read and write", async (label) => {
+    // Intent: these codecs rewrite ASCII punctuation, so a declaration written in
+    // ASCII cannot round-trip through them.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const content = `<?xml version="1.0" encoding="${label}"?>\n<body>state=old</body>\n`;
+    await writeFile(join(root, "sample.xml"), content, "ascii");
+
+    const read = await run(registry, "read", root, { path: "sample.xml" });
+    expect(read.isError).toBe(true);
+    expect(getText(read)).toContain(`Unsupported declared text encoding "${label}"`);
+
+    const write = await run(registry, "write", root, { path: "new.xml", content });
+    expect(write.isError).toBe(true);
+    expect(getText(write)).toContain(`Unsupported declared text encoding "${label}"`);
+    await expect(readFile(join(root, "new.xml"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("keeps declaration-like source strings as ordinary UTF-8", async () => {
     // Intent: only standard declaration positions choose the codec, so source
     // code that mentions a declaration stays UTF-8.

@@ -160,6 +160,7 @@ describe("text encoding safety", () => {
     });
     expect(rejected.isError).toBe(true);
     expect(getText(rejected)).toContain("cannot be encoded in GBK");
+    expect(getText(rejected)).toContain("U+FFFD (�) marks bytes that could not be decoded");
     expect(await readFile(file)).toEqual(bytes);
 
     const accepted = await run(registry, "edit", root, { path: "sample.py", edits: [{ old_string: "\uFFFD", new_string: "ok" }] });
