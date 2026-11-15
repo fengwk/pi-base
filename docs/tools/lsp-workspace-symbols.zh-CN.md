@@ -60,6 +60,7 @@ Symbol kind 数字会映射为 LSP 标准名称；未知值显示为 `kind N`。
 ## 使用边界
 
 - `lsp_workspace_symbols` 按符号名称查询工作区符号。
+- 客户端只发送 query；从未被客户端打开的工作区文件由语言服务器按自身配置索引，共享客户端 decoder 不控制这些磁盘读取。
 - 文本内容搜索由 `grep` 提供。
 - 文件名查找由 `find` 提供。
 - `path` 必须属于目标工作区，否则可能选择错误 server/root。

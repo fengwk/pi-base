@@ -166,7 +166,6 @@ schema
 - Runtime abort：[`src/runtime.ts`](../src/runtime.ts)
 - Timeout：[`src/timeout.ts`](../src/timeout.ts)
 - 文本编码：[`src/text-codec.ts`](../src/text-codec.ts)
-- 原子写入：[`src/atomic-write.ts`](../src/atomic-write.ts)
 - 行尾：[`src/line-endings.ts`](../src/line-endings.ts)
 
 ## 路径与文件写入
@@ -178,7 +177,7 @@ schema
 - `~/`、`$HOME/`、`${HOME}/`。
 - `filePath` 到 `path` 的兼容别名映射。
 
-`edit` 和 `write` 使用文件变更队列串行化同一目标的读改写过程。已有目标统一按文本解码，并拒绝二进制或无法解码的文件。`edit` 不改变文件编码（会改变编码的修改直接拒绝），并保留 BOM 和行尾；`write` 保留已有的 BOM 与编码，`content` 中的声明可以转换没有 BOM 的文件。两者都通过目标目录内的临时文件 sync 后 rename 提交。删除或移动文件请使用 Bash。
+`edit` 和 `write` 使用文件变更队列串行化同一目标的读改写过程。已有目标使用共享替换式 decoder 解码：非法字节变为 U+FFFD (�)，二进制文件与不受支持的声明编码会被拒绝。`edit` 不改变文件编码（会改变编码的修改直接拒绝），并保留 BOM 和行尾；`write` 保留已有的 BOM 与编码，`content` 中的声明可以转换没有 BOM 的文件。两者在校验通过后原地写入目标路径。符号链接会被跟随，解析后的文件保留原 inode，因此 hardlink、owner/group 与普通文件权限符合原地写入语义。校验失败不会写入；写入期间崩溃或磁盘写满可能留下部分内容。删除或移动文件请使用 Bash。
 
 `permission` 是词法防误操作机制，不是文件系统沙箱。需要安全隔离时必须使用容器、受限账户或操作系统级边界。
 

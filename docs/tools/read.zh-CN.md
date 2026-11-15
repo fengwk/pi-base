@@ -49,15 +49,15 @@
 - UTF BOM 优先决定编码（UTF-32 先于 UTF-16 判断）；带 BOM 的文件按解码后的字符判断二进制。
 - 否则由标准声明决定：字节 0 处的 XML `encoding`、字节 0 处的 CSS `@charset "X";` 规则（精确形式，一个空格且不换行）、HTML head 的 `meta charset` / `http-equiv`（前 1024 字节）、第 1 或第 2 行的 Python/Ruby 编码注释（`coding[:=]`、`fileencoding=`、`encoding:`），以及 JSP page 指令中的 `pageEncoding` 或 `contentType` 内的 `charset`（前 1024 字节）。其他位置的相似文本不是声明。
 - HTML/CSS 标签按 Encoding Standard 解析，其他来源按 IANA 名称解析，Python/Ruby 注释先经过 CPython 的 `get_normal_name`；每个标签只对应一个规范名称（`GBK`、`Big5`、`Shift_JIS`、`ISO-8859-1` 等）。
-- 无 BOM 也无声明时，只接受合法 UTF-8。
+- 无 BOM 也无声明时默认使用 UTF-8；不会根据字节做统计猜测。
+- 所选编码中的非法字节解码为 U+FFFD (�)，因此 `read`、`edit`、`grep` 共享同一文本视图，而不是拒绝文件。
 - 二进制判定为前 8000 字节内出现 NUL（Git 规则）；带 BOM 的 UTF-16/32 文件按同一窗口解码后的字符判断。其他控制字符仍视为文本。
 
-声明必须与内容一致：非 UTF-8 声明遇上包含非 ASCII 字符的合法 UTF-8 时视为冲突；字节必须能无损解码并重编码。
+声明标签能解析时即为权威；字节同时是合法 UTF-8 也不会推翻声明。替换式解码把非法字节替换为 U+FFFD (�)，不要求原始字节能无损往返。
 
 文本结果格式：
 
 ```text
-path: ...
 ends_with_newline: yes|no
 encoding: GBK            (仅当编码不是 UTF-8)
 lsp: supported|unsupported
@@ -66,9 +66,11 @@ lsp: supported|unsupported
 2|second line
 ```
 
+结果不会重复回显请求的 `path`；工具调用已展示该路径。
+
 `encoding:` 行给出解码使用的编码，编号正文因此不含歧义；仅有 UTF-8 BOM 时不出现该行。
 
-不是 UTF-8 且没有声明的文件会被拒绝，并给出转换示例；二进制文件按二进制拒绝。不支持的标签、声明冲突与无法无损解码的字节会同时说明文件、编码与声明位置。
+二进制文件按二进制拒绝。声明标签不受支持时，会说明文件、标签与声明位置；非法字节会显示为 U+FFFD (�)，而不是拒绝文件。
 
 编号列宽按文件总行数计算。文件末尾换行不会额外生成一个编号空行。续读提示放在编号正文之外，不会把截断说明追加进文件内容片段。
 
@@ -78,7 +80,7 @@ lsp: supported|unsupported
 - 文本候选文件超过 64 MiB 时在完整读取前拒绝。
 - 单行最多展示 2000 个 Unicode 码点。
 - 非普通文件和二进制文件拒绝。
-- 不是 UTF-8 且没有声明的文件拒绝而不是猜测；请转换为 UTF-8 或添加标准声明。
+- 非法字节显示为 U+FFFD (�)；`read` 使用共享的替换式解码，不猜测其他编码。
 - 显示层会转义回车和 NUL。
 - `column_offset` 只作用于返回窗口的第一行；列超出该行内容时拒绝，列 1 对任意行都合法。
 - `column_offset` 大于 1 时，header 会多出一行 `column_offset:`，说明首个展示行从行中开始，避免被误认为完整源行。
@@ -114,6 +116,8 @@ lsp: supported|unsupported
 - 已配置但 server 未安装。
 
 它不会因为读取文件而自动打开 LSP document。
+
+客户端打开或同步的 document 使用与 `read` 相同的 decoder 读取。LSP 的 JSON 传输固定为 UTF-8，协商的 position encoding 只决定列单位，两者都不决定磁盘文件编码。客户端未 `didOpen` 的文件由语言服务器按自身配置读取和索引，这里不控制。
 
 ## Error 与截断
 

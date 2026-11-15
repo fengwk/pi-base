@@ -131,11 +131,11 @@ Text tools share the following constraints:
 
 - Only regular files are processed.
 - Binary files (a NUL byte in the first 8000 bytes) are explicitly rejected.
-- [`src/text-codec.ts`](../src/text-codec.ts) decodes deterministically from a BOM or a standard declaration, accepts valid UTF-8, and never guesses; a file that is not UTF-8 and declares no encoding is refused.
+- [`src/text-codec.ts`](../src/text-codec.ts) decodes from a BOM or a standard declaration, otherwise defaults to UTF-8 without statistical guessing; invalid byte sequences are replaced with U+FFFD (�) and shared by `read`, `edit`, and `grep`.
 - `edit` preserves line endings via [`src/line-endings.ts`](../src/line-endings.ts).
-- Encoding must stay lossless: the declared bytes must round-trip, and text the output encoding cannot represent fails instead of being substituted.
+- Output representability is still checked: text the output encoding cannot represent fails instead of being substituted. Re-encoding a decoded file may replace unselected invalid byte sequences with U+FFFD (�).
 - Read-modify-write cycles for the same path should go through the file change queue.
-- File commits go through [`src/atomic-write.ts`](../src/atomic-write.ts): a temporary file in the target directory is synced and renamed over the target.
+- File commits write in place to the target path after validation. Symlinks are followed and the resolved inode is kept; validation failures do not write, but a crash or full disk during the write can leave partial content.
 
 ## Child processes
 

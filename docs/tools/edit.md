@@ -41,7 +41,7 @@ validate parameters
      -> locate all matches in one pass
      -> build replacement result
      -> preserve encoding/BOM/EOL
-     -> atomic write (temp file + rename)
+     -> in-place write to the same path
   -> LSP sync observer
   -> numbered diff from the changed ranges
 ```
@@ -68,24 +68,24 @@ edit({ path: "a.ts", edits: [
 ] });
 ```
 
-Every entry is matched against the same original file snapshot, not the output of the preceding entry. All matches must be non-overlapping, including matches expanded by an entry's `replace_all`. Missing, ambiguous, overlapping, invalid, or unencodable replacements fail before any write. A successful batch writes once, reports the total number of replaced occurrences, and returns one combined diff. A single edit commits atomically, but separate tool calls are not one transaction. Replacements that depend on earlier edits need separate calls, waiting for the earlier call to return before issuing the next.
+Every entry is matched against the same original file snapshot, not the output of the preceding entry. All matches must be non-overlapping, including matches expanded by an entry's `replace_all`. Missing, ambiguous, overlapping, invalid, or unencodable replacements fail before any write. A successful batch writes once, reports the total number of replaced occurrences, and returns one combined diff. A single edit writes once, but separate tool calls are not one transaction. Replacements that depend on earlier edits need separate calls, waiting for the earlier call to return before issuing the next.
 
 ## Encoding and line endings
 
-Existing files are read via `decodeTextFile` with the deterministic rules of [read](read.md#reading-text), preserving:
+Existing files are read via `decodeTextFile` with the shared replacement-decoder rules of [read](read.md#reading-text), so `read` and `edit` operate on the same decoded text. `edit` preserves:
 
 - Original encoding
 - BOM
 - Per-line line endings
 - Whether a final newline exists
 
-The replacement text is applied in an LF view over the original snapshot and written back via `serializeLineEndingDocument`. Untouched lines keep their own endings; a mixed-ending file reuses the endings of the replaced region.
+The replacement text is applied in an LF view over the original snapshot and written back via `serializeLineEndingDocument`. Untouched lines keep their own endings; a mixed-ending file reuses the endings of the replaced region. A U+FFFD (�) produced by replacement decoding can be matched and replaced like any other character.
 
 Every match is located in one pass over the original text, the spans are sorted once, and the output is built in one pass from slices, so `replace_all` stays linear in the file size. The numbered diff is built from the changed line ranges with context instead of diffing the whole file.
 
-An edit never converts the file: a BOM stays authoritative, the declaration in the result must select the original encoding, and an undeclared UTF-8 file stays UTF-8. A change that would switch encodings is rejected with `This change would change the encoding of …`; use a complete-file `write` to convert. Text the encoding cannot represent fails with the character, its code point and the line.
+An edit never converts the file: a BOM stays authoritative, the declaration in the result must select the original encoding, and an undeclared UTF-8 file stays UTF-8. A change that would switch encodings is rejected with `This change would change the encoding of …`; use a complete-file `write` to convert. Text the encoding cannot represent fails with the character, its code point and the line. Because the whole file is re-encoded, an edit can also replace other invalid byte sequences with U+FFFD (�); reading before editing informs the change but does not preserve those original bytes.
 
-The commit writes a temporary file in the target's directory, applies the original file mode, fsyncs, and renames it over the target, so a crash or a full disk cannot leave a truncated file. When the target is a symlink, the link is kept and the file it resolves to is replaced.
+After all matches, overlap checks, and encoding validation pass, the queued operation writes the output bytes directly to the target path. Symlinks are followed and the resolved file keeps its inode, so hard links, owner/group, and ordinary file permissions follow normal in-place semantics. Validation failures do not write. In-place writes are not crash-atomic: a crash or full disk during the write can leave partial content.
 
 No extra tool arguments or confirmation steps are required.
 

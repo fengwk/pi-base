@@ -174,14 +174,36 @@ describe("read window contract", () => {
     expect(getText(invalid)).not.toContain("ENOENT");
   });
 
-  it("rejects metadata-heavy windows instead of returning a non-advancing cursor", async () => {
-    // A normalized path may be short on disk but arbitrarily verbose in the
-    // header. Returning no body with the same cursor would make continuation loop.
+  it("does not let a verbose requested path inflate the read header", async () => {
+    // Intent: the header no longer echoes the requested path, so a long normalized
+    // path must not consume the output budget or make read fail.
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "large.txt", `${"x".repeat(1000)}\n`);
     const result = await executeRead(root, { path: `${"./".repeat(25000)}large.txt`, column_offset: 2 });
+    expect(result.isError).not.toBe(true);
+    expect(firstLineContent(getText(result))).toBe("x".repeat(999));
+  });
+
+  it("rejects windows whose header metadata consumes the output budget", async () => {
+    // Intent: a header that cannot leave room for one body line must fail instead of
+    // returning a non-advancing cursor that would make continuation loop.
+    const root = await createTempWorkspace();
+    await writeWorkspaceFile(root, "large.txt", `${"x".repeat(1000)}\n`);
+    const registry = createToolRegistry();
+    registerReadTool(registry.pi as any, {
+      createResolver: () => ({
+        supportsLsp: () => ({ supported: true, language: "x".repeat(60_000), available: false, reason: "not-installed" }),
+      }) as any,
+    });
+    const result = await registry.getTool("read").execute(
+      "1",
+      { workdir: ".", path: "large.txt", column_offset: 2 },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("Use a shorter path");
+    expect(getText(result)).toContain("Read metadata exceeds the output budget");
     expect(getText(result)).not.toContain("Re-run read");
     expect(result.details?.next).toBeUndefined();
   });
@@ -235,7 +257,7 @@ describe("read window contract", () => {
     const notice = firstText.match(/\[Showing lines 1-(\d+) of 3000\. Re-run read with offset=(\d+) to continue\.\]/);
     expect(notice).not.toBeNull();
     const shownThrough = Number(notice![1]!);
-    expect(shownThrough).toBeLessThanOrEqual(TOOL_OUTPUT_MAX_LINES - 7);
+    expect(shownThrough).toBeLessThanOrEqual(TOOL_OUTPUT_MAX_LINES - 6);
     expect(firstText).toContain(`\n${shownThrough}|line-${shownThrough}`);
     expect(firstText).not.toContain(`\n${shownThrough + 1}|`);
 

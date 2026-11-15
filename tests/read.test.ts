@@ -33,8 +33,8 @@ describe("read tool", () => {
     );
     const text = getText(result);
     expect(text).not.toMatch(/\[src\/example\.ts#/);
-    expect(text).toContain("path: src/example.ts");
-    expect(text).toContain("ends_with_newline: yes");
+    expect(text.startsWith("ends_with_newline: yes\nlsp: ")).toBe(true);
+    expect(text).not.toContain("path: src/example.ts");
     expect(text).toContain("2|two");
     expect(text).toContain("3|three");
     expect(text).toContain("3|three\n\n[Showing lines 2-3 of 4. Re-run read with offset=4 to continue.]");
@@ -227,7 +227,8 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "src" }, undefined, undefined, { cwd: root });
     const text = getText(result);
-    expect(text).toContain("kind: directory");
+    expect(text.startsWith("kind: directory\n\n")).toBe(true);
+    expect(text).not.toContain("path:");
     expect(text).toContain("a.ts");
     expect(text).toContain("utils/");
   });
@@ -288,8 +289,8 @@ describe("read tool", () => {
     // explicitly advertises image input support.
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: `@${imagePath}` }, undefined, undefined, { cwd: root, model: { input: ["text", "image"] } });
     const text = getText(result);
-    expect(text).toContain(`path: ${imagePath}`);
-    expect(text).toContain("mediaType: image");
+    expect(text).not.toContain(`path: ${imagePath}`);
+    expect(text.startsWith("kind: file\nmediaType: image\n")).toBe(true);
     expect(text).toContain("image delegated");
     expect(seenPath).toBe(imagePath);
   });
@@ -322,6 +323,7 @@ describe("read tool", () => {
     registerReadTool(registry.pi as any);
     const result = await registry.getTool("read").execute("1", { workdir: ".", path: "data.bin" }, undefined, undefined, { cwd: root });
     expect(result.isError).toBe(true);
+    expect(getText(result)).toContain("data.bin");
     expect(getText(result)).toContain("is a binary file (it contains NUL bytes)");
   });
 

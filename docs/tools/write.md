@@ -32,11 +32,11 @@ validate parameters
   -> resolve path
   -> file change queue
      -> stat/read existing target
-     -> decode text and reject binary or undecodable files
+     -> decode text with the shared replacement decoder
      -> resolve output encoding/BOM
      -> encode content
      -> mkdir parent
-     -> atomic write (temp file + rename)
+     -> in-place write to the same path
   -> LSP sync observer
   -> Created/Overwrote result
 ```
@@ -45,20 +45,21 @@ validate parameters
 
 - The parent directory is created via recursive `mkdir`.
 - A standard declaration in `content` selects the encoding (XML, CSS, HTML, Python/Ruby cookie, JSP); otherwise the default is UTF-8. Decoding rules are shared with [read](read.md#reading-text).
-- A BOM is produced when `content` starts with U+FEFF and the encoding has one.
+- A BOM is produced when `content` starts with U+FEFF and the encoding has one, including the UTF-16/32 byte-order forms.
 - Line breaks in `content` are written as-is from the caller.
 
 ## Overwriting existing files
 
-An existing target must be judged a regular file via `stat`. Before writing, the original bytes are decoded as text with the deterministic codec:
+An existing target must be judged a regular file via `stat`. Before writing, the original bytes are decoded as text with the shared replacement decoder:
 
-- Reject binary or undecodable files without modifying them.
+- Reject binary files without modifying them. A declaration with an unsupported label still fails.
+- Invalid byte sequences decode to U+FFFD (�); overwriting re-encodes the whole decoded text, so unselected damaged bytes are not preserved.
 - A BOM stays authoritative: the existing encoding and BOM are kept, and a declaration in `content` must select that same encoding.
 - Without a BOM, a declaration in `content` selects the new encoding and may convert the file. Dropping a non-UTF-8 declaration is refused: `The new content removes the {name} declaration of {path}.`
 - Text the output encoding cannot represent fails with the character, its code point and the line.
 - The existing line-ending style is not automatically preserved; `content` is the final text of the complete file.
 
-`write` uses `stat` to determine the target type, so symlinks are judged as regular files by their target and followed by `writeFile`; see the shared safety boundary in [architecture](../architecture.md#paths-and-file-writes). The commit itself writes a temporary file in the target directory, applies the original mode, fsyncs, and renames it over the target, keeping a symlink and replacing the file it resolves to.
+`write` uses `stat` to determine the target type, so symlinks are judged as regular files by their target and followed by `writeFile`; see the shared safety boundary in [architecture](../architecture.md#paths-and-file-writes). The queued operation writes the output bytes directly to the target path. A symlink is followed and the resolved file keeps its inode, so hard links, owner/group, and ordinary file permissions follow normal in-place semantics. Validation failures do not write, but an in-place write is not crash-atomic: a crash or full disk during the write can leave partial content.
 
 ## Concurrency and abort
 
@@ -87,7 +88,7 @@ The result body contains only `Created ...` or `Overwrote ...`.
 
 - Missing `path` or `content`.
 - Target exists but is not a regular file.
-- Target exists but is a binary file or its encoding cannot be determined.
+- Target exists but is a binary file or declares an unsupported encoding label.
 - The new content conflicts with the existing encoding.
 - Read or encoding failure.
 - Parent-directory creation failure.

@@ -40,7 +40,7 @@ Validate pattern/path
   -> ensureTool("rg")
   -> Directory search: start the encoding-candidate pre-pass, then the main search (concurrent)
   -> Parse match events
-  -> Decode candidate files; re-search declared ones on their decoded text
+  -> Decode candidate files; re-search candidates whose decoded text can differ
   -> Format paths/line numbers
   -> Handle limit, long lines, timeout, and the not-searched notice
 ```
@@ -73,7 +73,7 @@ When the system has no `rg`, the internal tool manager tries to download the off
 ## Target prechecks
 
 - Directories can be searched directly; binary filtering inside them is left to ripgrep.
-- A single file must be regular and decodable text. Its decoded text is searched when it declares a non-UTF-8 encoding, and a binary or undecodable file returns an error with the `read` wording instead of a silent skip.
+- A single file must be regular text readable by the shared decoder. The search runs on its decoded text, including U+FFFD (�) for invalid byte sequences; binary files and files with an unsupported declared encoding return an error with the `read` wording instead of a silent skip.
 
 ## Result format
 
@@ -87,17 +87,11 @@ Directory searches use paths relative to the search root; single-file searches u
 
 ### Text encoding
 
-Results must agree with `read`, so a directory search starts a second, concurrent `rg` process before the main search: `rg --files-with-matches --encoding utf-8` over the same filters with the pattern `coding[:=]|charset|<\?xml|pageEncoding|\x{FFFD}`. It lists the only files whose decoded text can differ from plain UTF-8: files with declaration-like text and files that are not valid UTF-8. Both scans run in parallel; the search waits for the pre-pass only when it formats the result.
+Results must agree with `read`, so a directory search starts a second, concurrent `rg` process before the main search: `rg --files-with-matches --encoding utf-8` over the same filters with the pattern `coding[:=]|charset|<\?xml|pageEncoding|\x{FFFD}`. It lists files whose decoded text can differ from plain UTF-8: files with declaration-like text and files that are not valid UTF-8. Both scans run in parallel; the search waits for the pre-pass only when it formats the result.
 
-Each candidate file is decoded with [`src/text-codec.ts`](../../src/text-codec.ts). A UTF-8 file keeps ripgrep's raw results. A file with a byte order mark or a declaration that selects another encoding is searched again by ripgrep reading its normalized decoded text from stdin, so the regex engine is the same and line numbers equal `read`'s. A file the codec rejects is skipped, and its matches are dropped.
+Each candidate file is decoded with [`src/text-codec.ts`](../../src/text-codec.ts). A file whose bytes are valid UTF-8 and whose declaration does not select another encoding keeps ripgrep's raw results. A file with a byte order mark, a declaration that selects another encoding, or invalid UTF-8 is searched again by ripgrep reading its normalized replacement-decoded text from stdin, so the regex engine is the same and line numbers equal `read`'s. Searching for U+FFFD (�) therefore matches the same text `read` displays. A candidate the codec cannot use is skipped, and its matches are dropped.
 
-A final notice names skipped files:
-
-```text
-[Not searched because the text encoding could not be determined: /abs/a.txt, /abs/b.txt, … and 3 more]
-```
-
-It lists at most ten absolute paths and a remaining count, appears with or without matches (after `No matches found` when nothing matched), and is absent when every candidate decoded.
+A final `Not searched` notice names candidate files that could not be searched, for example because of an unsupported declared encoding or a read failure. It lists at most ten absolute paths and a remaining count, appears with or without matches, and is absent when every candidate was searched. The notice means the search is incomplete: those file contents were not checked.
 
 Line excerpts use ripgrep's UTF-8 byte offsets on the reported text. If an event lacks line text, plain mode re-reads the file and decodes it once.
 
@@ -123,7 +117,7 @@ The child process tree is terminated via [`src/process-termination.ts`](../../sr
 - ripgrep exit code `0`: there are matches.
 - Exit code `1`: no matches, returns `No matches found`.
 - Other exit codes: returns the stderr error.
-- Non-regular files, binary files, undecodable single files, invalid regexes, and download failures all return `isError: true`.
+- Non-regular files, binary files, single files with unsupported declared encodings, invalid regexes, and download failures all return `isError: true`.
 
 ## Related tests
 

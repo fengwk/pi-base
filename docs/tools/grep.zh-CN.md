@@ -40,7 +40,7 @@
   -> ensureTool("rg")
   -> 目录搜索：先启动编码候选预扫描，再启动主搜索（并发）
   -> 解析 match events
-  -> 解码候选文件；对声明编码的文件改用解码文本重新搜索
+  -> 解码候选文件；对解码文本可能不同的候选重新搜索
   -> 路径/行号格式化
   -> limit、长行、timeout 与未搜索提示处理
 ```
@@ -73,7 +73,7 @@
 ## 目标预检查
 
 - 目录可以直接搜索；目录内的二进制过滤交给 ripgrep。
-- 单文件必须是可解码文本。声明了非 UTF-8 编码时按解码文本搜索；二进制或无法解码的文件直接报错并使用 `read` 的措辞，不会静默跳过。
+- 单文件必须是共享 decoder 能读取的普通文本。搜索基于解码文本，非法字节显示为 U+FFFD (�)；二进制文件或声明了不受支持编码的文件直接报错并使用 `read` 的措辞，不会静默跳过。
 
 ## 结果格式
 
@@ -89,17 +89,11 @@ ripgrep JSON 中的 base64 `bytes` 字段只用于路径显示；行文本按 UT
 
 ### 文本编码
 
-结果必须与 `read` 一致，因此目录搜索会在主搜索之前启动第二个并发 `rg` 进程：使用相同过滤条件执行 `rg --files-with-matches --encoding utf-8`，模式为 `coding[:=]|charset|<\?xml|pageEncoding|\x{FFFD}`。它列出唯一可能与纯 UTF-8 解码结果不同的文件：带声明样式的文件，以及不是合法 UTF-8 的文件。两次扫描并行运行，只在格式化结果时等待预扫描完成。
+结果必须与 `read` 一致，因此目录搜索会在主搜索之前启动第二个并发 `rg` 进程：使用相同过滤条件执行 `rg --files-with-matches --encoding utf-8`，模式为 `coding[:=]|charset|<\?xml|pageEncoding|\x{FFFD}`。它列出解码文本可能与纯 UTF-8 不同的文件：带声明样式的文件，以及不是合法 UTF-8 的文件。两次扫描并行运行，只在格式化结果时等待预扫描完成。
 
-每个候选文件用 [`src/text-codec.ts`](../../src/text-codec.ts) 解码。UTF-8 文件保留 ripgrep 的原始结果；带 BOM 或声明了其他编码的文件，由 ripgrep 从 stdin 读取规范化后的解码文本重新搜索，因此使用同一正则引擎，行号与 `read` 一致。codec 拒绝的文件会被跳过并丢弃其匹配。
+每个候选文件用 [`src/text-codec.ts`](../../src/text-codec.ts) 解码。字节为合法 UTF-8 且声明未选择其他编码的文件保留 ripgrep 的原始结果；带 BOM、声明了其他编码或含非法 UTF-8 的文件，由 ripgrep 从 stdin 读取规范化后的替换式解码文本重新搜索，因此使用同一正则引擎，行号与 `read` 一致。搜索 U+FFFD (�) 会命中 `read` 展示的同一文本。codec 无法使用的候选会被跳过并丢弃其匹配。
 
-最终提示会列出被跳过的文件：
-
-```text
-[Not searched because the text encoding could not be determined: /abs/a.txt, /abs/b.txt, … and 3 more]
-```
-
-最多列出 10 个绝对路径并附带剩余数量；无论是否有匹配都会出现（无匹配时跟在 `No matches found` 之后）；所有候选都成功解码时不出现。
+最终 `Not searched` 提示会列出无法搜索的候选文件，例如声明编码不受支持或读取失败。最多列出 10 个绝对路径并附带剩余数量；无论是否有匹配都会出现；所有候选都成功搜索时不出现。该提示表示搜索不完整：这些文件的内容没有被检查。
 
 超过展示预算的行会以该行首个 ripgrep submatch 为中心的片段展示：submatch 的 UTF-8 字节偏移会映射回报告文本，因此长行深处的命中仍可见并保留两侧上下文。片段最多 500 码点，被裁掉的一端用 `…` 标记；裁切落在码点边界上，多字节字符和代理对不会被切开。多行 event 的每一行只按覆盖该行的匹配部分取片段。若事件没有 submatch 偏移，则沿用行首前缀截断。
 
@@ -123,7 +117,7 @@ ripgrep JSON 中的 base64 `bytes` 字段只用于路径显示；行文本按 UT
 - ripgrep exit code `0`：有匹配。
 - exit code `1`：无匹配，返回 `No matches found`。
 - 其他 exit code：返回 stderr 错误。
-- 非普通文件、二进制文件、无效正则和下载失败均返回 `isError: true`。
+- 非普通文件、二进制文件、声明编码不受支持的单文件、无效正则和下载失败均返回 `isError: true`。
 
 ## 相关测试
 
