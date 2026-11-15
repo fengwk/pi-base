@@ -16,9 +16,8 @@ export function modelSupportsImages(model: { input?: readonly string[] } | undef
 }
 
 /** Text-only read result for non-vision models: paths + pointer to the skill doc (no inlined SKILL.md). */
-export function buildImageReadDowngradeMessage(rawPath: string, absolutePath: string): string {
+export function buildImageReadDowngradeMessage(absolutePath: string): string {
   return [
-    `path: ${rawPath}`,
     "kind: file",
     "mediaType: image",
     "message: The current model does not support image attachments, so this image was not sent inline.",

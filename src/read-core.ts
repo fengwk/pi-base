@@ -274,7 +274,7 @@ export function registerReadTool(
         if (IMAGE_EXTENSIONS.has(extname(rawPath).toLowerCase())) {
           rejectExplicitColumnOffset(params);
           if (!modelSupportsImages(ctx?.model)) {
-            return { content: [{ type: "text" as const, text: buildImageReadDowngradeMessage(rawPath, absolutePath) }] };
+            return { content: [{ type: "text" as const, text: buildImageReadDowngradeMessage(absolutePath) }] };
           }
           const builtIn = (options.createBuiltInReadTool ?? createReadTool)(cwd) as {
             execute: (toolCallId: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) => Promise<any>;

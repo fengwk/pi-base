@@ -58,12 +58,13 @@ describe("read image downgrade", () => {
     expect(text).toContain("read the image-understanding skill");
     expect(text).not.toContain("Parameter Reference");
     expect(text).not.toContain("should not run");
+    expect(text).not.toMatch(/^path: /m);
     expect((result.content ?? []).some((item: any) => item.type === "image")).toBe(false);
   });
 
   it("buildImageReadDowngradeMessage includes absolute path, skill name, and skillDoc", () => {
-    const msg = buildImageReadDowngradeMessage("a/b.png", "/tmp/a/b.png");
-    expect(msg).toContain("path: a/b.png");
+    const msg = buildImageReadDowngradeMessage("/tmp/a/b.png");
+    expect(msg).not.toMatch(/^path: /m);
     expect(msg).toContain("absolutePath: /tmp/a/b.png");
     expect(msg).toContain("skillDir:");
     expect(msg).toContain("skill: image-understanding");
