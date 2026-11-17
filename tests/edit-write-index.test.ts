@@ -259,7 +259,8 @@ describe("edit/write flow", () => {
     expect(await readFile(join(root, "src/example.ts"), "utf8")).toBe("aaa\n");
   });
 
-  it("rejects identical old_string and new_string", async () => {
+  it("rejects a single replacement that leaves the file unchanged", async () => {
+    // Intent: identical text is allowed per entry, but a wholly unchanged result still fails.
     const root = await createTempWorkspace();
     await writeWorkspaceFile(root, "src/example.ts", "alpha\n");
     const registry = createToolRegistry();
@@ -272,7 +273,8 @@ describe("edit/write flow", () => {
       { cwd: root },
     );
     expect(result.isError).toBe(true);
-    expect(getText(result)).toContain("identical");
+    expect(getText(result)).toContain("No changes to apply: edit would not change the file.");
+    expect(await readFile(join(root, "src/example.ts"), "utf8")).toBe("alpha\n");
   });
 
   it("rejects no-op edits that differ only by line-ending spelling", async () => {

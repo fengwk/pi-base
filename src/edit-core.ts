@@ -521,17 +521,11 @@ export function registerEditTool(
         const requestedReplacements = readEditReplacements(params);
         const normalizedReplacements = requestedReplacements.map((replacement, index) => {
           const prefix = `Edit ${index + 1}: `;
-          if (replacement.old_string === replacement.new_string) {
-            throw new Error(`${prefix}No changes to apply: old_string and new_string are identical.`);
-          }
           if (replacement.old_string === "") {
             throw new Error(`${prefix}old_string must not be empty. Use write to create or overwrite a file.`);
           }
           const oldText = normalizeToLF(replacement.old_string);
           const newText = normalizeToLF(replacement.new_string);
-          if (oldText === newText) {
-            throw new Error(`${prefix}No changes to apply: old_string and new_string are identical after line-ending normalization.`);
-          }
           return { oldText, newText, replaceAll: replacement.replace_all === true, prefix };
         });
 
@@ -593,8 +587,14 @@ export function registerEditTool(
             }
           }
 
-          const nextDocument = buildEditedDocument(originalDocument, planned, endingStyle);
+          // No-op entries still participate in every match/overlap check and the
+          // replacement count, but must not create diff regions or rewrite text.
+          const changed = planned.filter((edit) => normalizedReplacements[edit.span.editIndex]!.oldText !== edit.newText);
+          const nextDocument = buildEditedDocument(originalDocument, changed, endingStyle);
           const serializedOutput = serializeLineEndingDocument(nextDocument);
+          if (serializedOutput === decodedFile.text) {
+            return { kind: "error", text: "No changes to apply: edit would not change the file." };
+          }
           const outputBytes = encodeTextFile(serializedOutput, decodedFile.encoding, decodedFile.bom);
           // Edits may move text around but must not silently convert the file.
           let resultEncoding: string;
@@ -620,7 +620,7 @@ export function registerEditTool(
             kind: "success",
             oldDocument: originalDocument,
             newDocument: nextDocument,
-            changes: buildChangeRegions(planned),
+            changes: buildChangeRegions(changed),
             replacements: planned.length,
           };
         });

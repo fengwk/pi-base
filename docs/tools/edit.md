@@ -49,7 +49,8 @@ validate parameters
 ## Matching semantics
 
 - `old_string` must not be empty.
-- `old_string` and `new_string` must differ.
+- `old_string` and `new_string` may be identical, including after LF normalization. Unchanged entries still undergo all match and overlap checks.
+- The complete batch must change the file's decoded content; an unchanged result fails without writing.
 - By default, `old_string` must be unique in the file.
 - Fails when there is no match.
 - Fails when there are multiple matches and `replace_all=false`.
@@ -68,7 +69,7 @@ edit({ path: "a.ts", edits: [
 ] });
 ```
 
-Every entry is matched against the same original file snapshot, not the output of the preceding entry. All matches must be non-overlapping, including matches expanded by an entry's `replace_all`. Missing, ambiguous, overlapping, invalid, or unencodable replacements fail before any write. A successful batch writes once, reports the total number of replaced occurrences, and returns one combined diff. A single edit writes once, but separate tool calls are not one transaction. Replacements that depend on earlier edits need separate calls, waiting for the earlier call to return before issuing the next.
+Every entry is matched against the same original file snapshot, not the output of the preceding entry. All matches must be non-overlapping, including matches expanded by an entry's `replace_all`. Missing, ambiguous, overlapping, invalid, or unencodable replacements fail before any write. A successful batch writes once, reports the total number of matched occurrences (including unchanged entries), and returns one combined diff for the actual changes. A single edit writes once, but separate tool calls are not one transaction. Replacements that depend on earlier edits need separate calls, waiting for the earlier call to return before issuing the next.
 
 ## Encoding and line endings
 
@@ -117,13 +118,12 @@ The following cases return `isError: true`:
 - Missing parameters.
 - Target is not a regular file.
 - Binary file.
-- old/new are identical.
 - Old string not found.
 - Match is not unique.
 - Replace-all matches overlap.
 - The result would change the file's encoding.
 - The resulting text cannot be encoded in the file's encoding.
-- Output bytes are unchanged.
+- The complete result leaves the decoded content or output bytes unchanged.
 
 ## Related tests
 

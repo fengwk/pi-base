@@ -4,7 +4,7 @@ export const editSchema = Type.Object({
   path: Type.String({ description: "Path to the file to edit (relative or absolute)." }),
   edits: Type.Array(Type.Object({
     old_string: Type.String({ description: "Exact non-empty text to replace in the original file. Must match exactly once unless replace_all is true." }),
-    new_string: Type.String({ description: "Replacement text. Must differ from old_string; may be empty to delete it." }),
+    new_string: Type.String({ description: "Replacement text; may be empty to delete it or identical to old_string. The complete batch must change the file." }),
     replace_all: Type.Optional(Type.Boolean({ description: "Replace all exact occurrences. Defaults to false." })),
   }, { additionalProperties: false }), {
     minItems: 1,

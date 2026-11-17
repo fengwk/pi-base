@@ -7,6 +7,7 @@ Usage:
 - If `read` reports `ends_with_newline: yes`, remember that the file ends with a newline, even though `read` does not add an extra numbered blank line to represent it.
 - Prefer `edit` for existing text files. Use `write` for new files or intentional whole-file replacement.
 - Use one `edits` entry per change; prefer one `edit` call for independent changes to the same file. All entries match the original file, not earlier entries' output; overlaps or any validation failure reject the entire call before writing.
+- Entries may leave matched text unchanged, but still undergo all match and overlap checks. The call fails without writing if the complete batch leaves the file unchanged.
 - Batch independent calls in one response. Same-file calls are serialized and re-read current content; a later failure does not roll back earlier successful calls. Wait for the preceding call to finish before issuing a dependent one.
 - The edit fails if `old_string` is not found in the file with an error "Could not find old_string".
 - The edit fails if `old_string` is found more than once, reporting the match count as "Found N exact matches". Either provide a larger string with more surrounding context to make the match unique or use `replace_all` to change every instance of `old_string`.
