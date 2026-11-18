@@ -102,7 +102,7 @@ Successful results produce a numbered diff:
 - Whether hunks are merged is decided by their distance.
 - `details` includes the diff, first changed line, absolute path, and replacement count.
 
-When the renderer streams parameters, it also builds a preview diff, but the preview does not participate in the real write.
+The terminal shows a preview diff as arguments stream in, without writing to the file. After a successful write, the call area shows the applied diff, and the result area shows only the success status and replacement count. The tool result sent to the agent still includes the applied diff.
 
 ## Permission and LSP
 

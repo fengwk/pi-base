@@ -102,7 +102,7 @@ edit 不会改变文件编码：BOM 优先，结果中的声明必须解析为�
 - 多个 hunk 之间按距离决定是否合并。
 - `details` 包含 diff、first changed line、绝对路径和替换数量。
 
-调用 renderer 在参数流式生成时也会构造预览 diff，但预览不参与真实写入。
+终端在参数流式生成时显示预览 diff，预览不会写入文件。写入成功后，调用区显示实际 diff，结果区只显示成功状态和替换次数。发给 Agent 的工具结果仍包含实际 diff。
 
 ## Permission 与 LSP
 

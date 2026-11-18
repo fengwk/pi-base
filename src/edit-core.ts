@@ -175,13 +175,6 @@ function formatCompletedEditCall(header: string, diff: string | undefined, theme
   return `${header}\n\n${colorizeCompletedEditDiff(diff, theme)}`;
 }
 
-function formatSuccessfulEditResult(context: any, replacements: number, diff: string): string {
-  const rawPath = String(context?.args?.path ?? "<unknown-path>");
-  return diff.trim()
-    ? `Edited ${rawPath} successfully.\nReplacements: ${replacements}\n\ndiff:\n${diff}`
-    : `Edited ${rawPath} successfully.\nReplacements: ${replacements}`;
-}
-
 function formatDiffLine(prefix: " " | "+" | "-", lineNumber: number, lineNumberWidth: number, line: string): string {
   return `${prefix}${String(lineNumber).padStart(lineNumberWidth, " ")}|${line}`;
 }
@@ -523,8 +516,12 @@ export function registerEditTool(
           state.completedDiff = diff;
           queueMicrotask(() => context?.invalidate?.());
         }
-        if (typeof replacements === "number") {
-          result = { ...result, content: [{ type: "text" as const, text: formatSuccessfulEditResult(context, replacements, diff ?? "") }] };
+        if (diff !== undefined && replacements !== undefined) {
+          // The call renderer already displays the diff. Summarize a UI-only copy,
+          // leaving the tool result content (including the diff) for the agent.
+          const path = String(context?.args?.path ?? "<unknown-path>");
+          const text = `Edited ${path} successfully.\nReplacements: ${replacements}`;
+          result = { ...result, content: [{ type: "text" as const, text }] };
         }
       } else {
         state.completedKey = undefined;
