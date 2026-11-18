@@ -116,6 +116,7 @@ When the renderer streams parameters, it also builds a preview diff, but the pre
 The following cases return `isError: true`:
 
 - Missing parameters.
+- Invalid JSON arguments. When Pi provides a parse error, the tool preserves it instead of reporting missing fields; no file is edited.
 - Target is not a regular file.
 - Binary file.
 - Old string not found.

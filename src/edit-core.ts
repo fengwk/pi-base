@@ -28,6 +28,7 @@ import {
   styleDiffRemoved,
   styleMuted,
   styleToolTitle,
+  styleWarning,
 } from "./render.js";
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { editSchema } from "./schemas/edit.js";
@@ -36,11 +37,14 @@ import { type DecodedTextFile, decodeTextFile, encodingForBom, encodeTextFile, f
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
+const EDIT_ARGUMENT_PARSE_ERROR_PREFIX = 'Invalid arguments for tool "edit":';
+const EDIT_ARGUMENT_VALIDATION_ERROR_PREFIX = 'Validation failed for tool "edit":';
 const EDIT_ARGUMENT_VALIDATION_HINT = "Hint: Adjust the input parameters and re-run the `edit` command.";
 
 interface EditRenderState {
   completedDiff: string | undefined;
   completedKey: string | undefined;
+  argumentError: "json" | "schema" | undefined;
 }
 
 interface EditReplacement {
@@ -70,6 +74,10 @@ function readEditReplacements(params: any): EditReplacement[] {
 }
 
 function prepareEditArguments(args: unknown, validationTool: any): any {
+  // Pi represents malformed JSON as {} with argumentsError on the tool call. This
+  // hook receives only arguments, so defer {} to the host's metadata-aware check.
+  // A genuinely empty call still fails the host schema validation before execute.
+  if (args !== null && typeof args === "object" && !Array.isArray(args) && Object.keys(args).length === 0) return args;
   try {
     const prepared = validateToolArguments(validationTool, {
       type: "toolCall",
@@ -81,18 +89,18 @@ function prepareEditArguments(args: unknown, validationTool: any): any {
     return prepared;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const prefix = message.startsWith("Validation failed for tool") ? "" : 'Validation failed for tool "edit": ';
+    const prefix = message.startsWith(EDIT_ARGUMENT_VALIDATION_ERROR_PREFIX) ? "" : `${EDIT_ARGUMENT_VALIDATION_ERROR_PREFIX} `;
     throw new Error(`${prefix}${message}\n\n${EDIT_ARGUMENT_VALIDATION_HINT}`);
   }
 }
 
 function formatEditCall(args: any, theme: any, cwd?: string): string {
-  const path = shortenHomePath(String(args?.path ?? "<missing-path>"));
+  const path = shortenHomePath(String(args?.path ?? ""));
   const { rawWorkdir, usedDefault } = describeToolWorkdirForDisplay(args?.workdir, cwd);
   const workdir = usedDefault ? "" : `${styleMuted(theme, " in ")}${styleAccent(theme, shortenHomePath(rawWorkdir))}`;
   const allMatchesTag = args?.replace_all === true ? " [replace_all]" : "";
   const batchTag = Array.isArray(args?.edits) ? ` [${args.edits.length} edit${args.edits.length === 1 ? "" : "s"}]` : "";
-  return `${styleToolTitle(theme, "edit")} ${styleAccent(theme, path)}${workdir}${allMatchesTag}${batchTag}`;
+  return `${styleToolTitle(theme, "edit")}${path ? ` ${styleAccent(theme, path)}` : ""}${workdir}${allMatchesTag}${batchTag}`;
 }
 
 function formatEditCallPreview(args: any, theme: any): string {
@@ -144,6 +152,7 @@ function getEditRenderState(context: any): EditRenderState {
   const nextState: EditRenderState = {
     completedDiff: undefined,
     completedKey: undefined,
+    argumentError: undefined,
   };
   sharedState.__piBaseEditRenderState = nextState;
   return nextState;
@@ -482,8 +491,12 @@ export function registerEditTool(
     renderShell: "default" as const,
     renderCall(args: any, theme: any, context: any) {
       const mappedArgs = mapFilePathToPath(args);
-      const header = formatEditCall(mappedArgs, theme, context?.cwd);
       const state = getEditRenderState(context);
+      const argumentStatus = state.argumentError === "json" ? "[invalid JSON arguments]"
+        : state.argumentError === "schema" && !mappedArgs?.path ? "[invalid arguments]" : undefined;
+      const header = argumentStatus
+        ? `${styleToolTitle(theme, "edit")} ${styleWarning(theme, argumentStatus)}`
+        : formatEditCall(mappedArgs, theme, context?.cwd);
       if (state.completedKey !== undefined) {
         return renderCallText(formatCompletedEditCall(header, state.completedDiff, theme), context?.lastComponent);
       }
@@ -492,6 +505,15 @@ export function registerEditTool(
     },
     renderResult(result: any, renderOptions: any, theme: any, context: any) {
       const state = getEditRenderState(context);
+      // Pi exposes pre-execution errors as text, without structured argument diagnostics.
+      const block = result?.content?.[0];
+      const errorText = context?.isError && block?.type === "text" && typeof block.text === "string" ? block.text : "";
+      const argumentError = errorText.startsWith(EDIT_ARGUMENT_PARSE_ERROR_PREFIX) ? "json"
+        : errorText.startsWith(EDIT_ARGUMENT_VALIDATION_ERROR_PREFIX) ? "schema" : undefined;
+      if (state.argumentError !== argumentError) {
+        state.argumentError = argumentError;
+        queueMicrotask(() => context?.invalidate?.());
+      }
       if (!context?.isError) {
         const diff = typeof result?.details?.diff === "string" ? result.details.diff : undefined;
         const replacements = typeof result?.details?.replacements === "number" ? result.details.replacements : undefined;
