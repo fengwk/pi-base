@@ -3,6 +3,7 @@ import { access, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { createFindToolDefinition as createUpstreamFindToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Minimatch } from "minimatch";
 import { ensureFdNoRequireGit, ensureTool } from "./internal/pi-coding-agent-utils.js";
 import { resolveToCwd } from "./path-utils.js";
 import { createGracefulTerminator } from "./process-termination.js";
@@ -70,6 +71,18 @@ export function createFindToolDefinition(cwd: string): any {
         (async () => {
           try {
             const searchPath = resolveToCwd(searchDir || ".", cwd);
+            const isWindows = process.platform === "win32";
+            const glob = (isWindows && !path.isAbsolute(pattern) ? pattern.replaceAll("\\", "/") : pattern)
+              .replace(/^(?:\.\/)+/, "");
+            if (pattern && !glob) throw new Error("find pattern must contain a glob after './'. Specify the search directory in path.");
+            const isPathGlob = glob.includes("/");
+            const isRelativePathGlob = isPathGlob && !path.isAbsolute(glob);
+            const ignoreCase = glob === glob.toLowerCase();
+            // Older Windows fd releases do not match --full-path globs reliably. Keep
+            // fd's traversal/ignore handling, and filter relative path globs as paths are emitted.
+            const windowsMatcher = isWindows && isRelativePathGlob
+              ? new Minimatch(glob.replace(/\/\*\*$/, "/**/*"), { dot: true, noext: true, nocase: ignoreCase, nonegate: true, nocomment: true })
+              : undefined;
             // fd treats `--max-results 0` as unlimited and rejects negative or
             // fractional counts, so normalize before spawning: clamp below 1 to 1
             // and floor positive decimals. Ordinary positive integers pass through.
@@ -94,21 +107,29 @@ export function createFindToolDefinition(cwd: string): any {
               return;
             }
 
-            const args = ["--glob", "--color=never", "--hidden", "--max-results", String(effectiveLimit + 1)];
+            const args = ["--color=never", "--hidden"];
             if (!insideGit) args.push("--no-require-git");
-            let effectivePattern = pattern;
-            if (pattern.includes("/")) {
-              args.push("--full-path");
-              if (!pattern.startsWith("/") && !pattern.startsWith("**/") && pattern !== "**") {
-                effectivePattern = `**/${pattern}`;
+            if (windowsMatcher) {
+              args.push("--", "", searchPath);
+            } else {
+              args.push("--glob", "--max-results", String(effectiveLimit + 1));
+              if (isPathGlob) args.push("--full-path");
+              let fdPattern = glob;
+              if (isRelativePathGlob) {
+                // fd matches against absolute candidate paths. Escape the literal root and
+                // decide smart case from the caller's glob, not the injected root.
+                const escapedRoot = toPosixPath(searchPath).replace(/\/+$/, "").replace(/[\\*?[\]{}]/g, "\\$&");
+                fdPattern = `${escapedRoot}/${glob}`;
+                if (ignoreCase) args.push("--ignore-case");
               }
+              args.push("--", fdPattern, searchPath);
             }
-            args.push("--", effectivePattern, searchPath);
 
             const child = spawn(fdPath, args, { stdio: ["ignore", "pipe", "pipe"] });
             terminator = createGracefulTerminator(child);
             const rl = createInterface({ input: child.stdout });
-            const lines: string[] = [];
+            const relativized: string[] = [];
+            let stoppedAfterLookahead = false;
             let stderr = "";
 
             cleanup = (keepTermination = false) => {
@@ -120,33 +141,32 @@ export function createFindToolDefinition(cwd: string): any {
             child.stderr?.on("data", (chunk) => {
               stderr += chunk.toString();
             });
-            rl.on("line", (line) => {
-              lines.push(line);
+            rl.on("line", (rawLine) => {
+              if (stoppedAfterLookahead) return;
+              const line = rawLine.replace(/\r$/, "");
+              if (!line) return;
+              // A textual prefix check fails at filesystem roots and for similar sibling names.
+              let relativePath = toPosixPath(path.relative(searchPath, line));
+              if (windowsMatcher && (!relativePath || path.isAbsolute(relativePath)
+                || relativePath === ".." || relativePath.startsWith("../") || !windowsMatcher.match(relativePath))) return;
+              if ((line.endsWith("/") || line.endsWith("\\")) && !relativePath.endsWith("/")) relativePath += "/";
+              relativized.push(relativePath);
+              if (windowsMatcher && relativized.length > effectiveLimit) {
+                stoppedAfterLookahead = true;
+                terminator?.terminate();
+              }
             });
             child.on("error", (error) => {
               settle(() => reject(new Error(`Failed to run fd: ${error.message}`)));
             });
-            child.on("close", (code) => {
+            child.on("close", (code, exitSignal) => {
               if (aborted) {
                 terminator?.cleanup();
                 settle(() => reject(new Error("Operation aborted")));
                 return;
               }
-              const output = lines.join("\n");
-              const relativized: string[] = [];
-              for (const rawLine of lines) {
-                const line = rawLine.replace(/\r$/, "");
-                if (!line) continue;
-                const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
-                // Always compute the relative path lexically. A `startsWith(searchPath)`
-                // prefix check is wrong at the filesystem root (off-by-one) and for
-                // sibling paths that merely share a string prefix (e.g. "/a/bc" vs "/a/bcd").
-                let relativePath = path.relative(searchPath, line);
-                if (hadTrailingSlash && !relativePath.endsWith("/")) relativePath += "/";
-                relativized.push(toPosixPath(relativePath));
-              }
-
-              if (code !== 0) {
+              const stoppedByUs = stoppedAfterLookahead && (exitSignal === "SIGTERM" || exitSignal === "SIGKILL");
+              if (code !== 0 && !stoppedByUs) {
                 const exitCode = code ?? "unknown";
                 const diagnostics = [
                   `Error: fd exited with code ${exitCode}.`,
@@ -163,14 +183,13 @@ export function createFindToolDefinition(cwd: string): any {
                 }));
                 return;
               }
-              if (!output) {
+              if (relativized.length === 0) {
                 settle(() => resolve({ content: [{ type: "text" as const, text: "No files found matching pattern" }], details: undefined }));
                 return;
               }
 
-              // fd was asked for effectiveLimit + 1 entries, so a full buffer means
-              // real overflow; exactly N matches stay hint-free. Output is capped
-              // at effectiveLimit either way.
+              // Only the additional matching entry proves overflow. On Windows
+              // the relative-glob fallback counts matches after filtering.
               const resultLimitReached = relativized.length > effectiveLimit;
               const outputLines = relativized.slice(0, effectiveLimit);
               let resultOutput = outputLines.join("\n");

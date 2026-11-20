@@ -160,7 +160,7 @@ interface StreamingCallWindowState {
   text: string;
   theme: any;
   cachedWidth: number | undefined;
-  cachedFull: string[] | undefined;
+  cachedFull: ReturnType<Text["render"]> | undefined;
   cachedTitle: string | undefined;
   cachedTail: string[] | undefined;
   cachedSkipped: number | undefined;
@@ -199,7 +199,7 @@ class StreamingCallWindowComponent {
     this.state.theme = theme;
   }
 
-  render(width: number): string[] {
+  render(width: number) {
     const s = this.state;
     if (s.cachedSkipped === undefined || s.cachedWidth !== width) {
       const allLines = new Text(s.text, 0, 0).render(width);

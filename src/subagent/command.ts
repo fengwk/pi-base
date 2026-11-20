@@ -338,7 +338,7 @@ class SubagentCommandOverlay implements Component {
     this.current.invalidate();
   }
 
-  render(width: number): string[] {
+  render(width: number) {
     return this.current.render(width);
   }
 

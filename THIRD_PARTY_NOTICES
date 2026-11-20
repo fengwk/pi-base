@@ -12,3 +12,13 @@ https://github.com/earendil-works/pi/tree/107d79f11072bbc8a3a757ed7fd69596bee7d6
 License: MIT (`LICENSES/pi-coding-agent-MIT.txt`)
 
 Copyright (c) 2025 Mario Zechner
+
+## Pi 1.6 find path glob handling
+
+The search-root prefix escaping and Windows relative-path filtering in
+`src/find-tool.ts` follow the approach in `@earendil-works/pi-coding-agent@1.6.0`
+(`dist/core/tools/find.js`).
+
+Source: https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/1.6.0
+
+License: MIT (`LICENSES/pi-coding-agent-MIT.txt`)

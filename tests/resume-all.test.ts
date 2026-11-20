@@ -82,7 +82,7 @@ describe("resume-all command", () => {
       const sessionB = appendConversation(SessionManager.create(rootB), "Other project", "work on beta");
 
       let selectCalled = false;
-      let renderedLines: string[] = [];
+      let renderedLines: readonly string[] = [];
       const switched: string[] = [];
       const registry = createToolRegistry({ hasUI: true, cwd: rootA });
       registry.setUI({

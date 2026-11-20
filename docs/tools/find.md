@@ -29,6 +29,15 @@ Finds files and directories with `fd` by glob.
 
 `path` has no implicit default. Searching the current directory requires passing `"."` explicitly.
 
+## Glob scope
+
+- Without `/`, a glob matches names at any depth below `path`: `*.ts` searches recursively.
+- A relative glob containing `/` matches paths **relative to `path`**. `src/*.ts` only matches direct entries in the root's `src`; `src/**/*.ts` also matches descendants of that `src`. Use `**/src/*.ts` for direct entries in `src` directories at any depth below the root.
+- Leading `./` is removed before deciding how to match: `./*.ts` is still recursive. A bare `./` is not a glob; use it in `path` and provide a pattern.
+- Absolute globs still match absolute paths within the requested search tree. A glob never expands the traversal beyond `path`.
+
+**Migration:** Previously `src/*.ts` could also find `pkg/src/file.ts`. Use `**/src/*.ts` if that was intentional. A root named `src` is no longer considered part of the relative path; use `path: "src", pattern: "*.ts"` to search inside that root.
+
 ## Execution chain
 
 ```text
@@ -44,16 +53,9 @@ Registration wrapper validates path
 
 ## fd arguments
 
-Fixed arguments:
+Normally `fd` uses `--glob --color=never --hidden --max-results <limit + 1>`. A path glob uses `--full-path`; for a relative glob the tool prepends the escaped search root. Smart case comes from the original glob, not from the added root.
 
-```text
---glob
---color=never
---hidden
---max-results <limit + 1>
-```
-
-`--full-path` is used when the pattern contains `/`. Plain relative full-path patterns get a `**/` prefix so they can match at any depth below the search root.
+On Windows, relative path globs are matched against `fd` output after relativizing each path, because older Windows `fd` versions do not reliably match full-path globs. `fd` still applies the same traversal and ignore rules.
 
 Inside a Git repository (including worktrees), `find` uses fd's native Git-aware ignore handling so rules above the repository do not hide its files. Outside a repository, it adds `--no-require-git` so `.gitignore` remains effective. That option requires fd 8.7.0 or a compatible build: pi-base checks the available binaries and, if necessary, downloads a separate compatible fd without replacing the existing one. If none is available and the download is disabled or fails, `find` reports an error rather than silently ignoring `.gitignore`.
 
@@ -72,11 +74,10 @@ When the system has no `fd`, the internal tool manager tries to download the off
 treats as unlimited) are clamped to `1`, and positive decimals are rounded down.
 Ordinary positive integers pass through unchanged.
 
-The process is asked for `limit + 1` entries so exactly-`limit` searches are
-distinguished from real overflow: only a real overflow appends the hint, sets
-`details.resultLimitReached` and caps the output at `limit` entries.
+The tool looks ahead by one matching entry to distinguish exactly `limit` matches from overflow.
+Only real overflow appends the hint, sets `details.resultLimitReached`, and caps the output at `limit` entries.
 
-fd's `--max-results` limits the process output; the local layer supplements metadata based on the actual result count.
+fd's `--max-results` normally limits the process output. The Windows relative-path filter instead stops fd after the first additional matching path.
 
 ## Timeout and abort
 

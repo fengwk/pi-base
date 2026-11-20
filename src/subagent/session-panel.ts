@@ -397,8 +397,10 @@ export class SubagentSessionPanel implements Component {
     const innerWidth = Math.max(1, safeWidth - 2);
     const maxHeight = Math.max(4, this.tui.terminal.rows - PANEL_MARGIN_ROWS);
     const viewportHeight = Math.max(1, maxHeight - 2);
-    const contentLines = this.transcript.render(innerWidth);
-    if (contentLines.length === 0) contentLines.push(this.theme.fg("muted", "Waiting for subagent output..."));
+    const transcriptLines = this.transcript.render(innerWidth);
+    const contentLines = transcriptLines.length > 0
+      ? transcriptLines
+      : [this.theme.fg("muted", "Waiting for subagent output...")];
     const maxScroll = Math.max(0, contentLines.length - viewportHeight);
     if (this.followTail) this.scrollTop = maxScroll;
     else this.scrollTop = Math.min(this.scrollTop, maxScroll);

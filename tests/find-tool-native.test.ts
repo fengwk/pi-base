@@ -58,6 +58,9 @@ if (mode === "wait") {
   process.on("SIGTERM", () => {});
   fs.writeFileSync(process.env.PI_BASE_FAKE_FD_PID_FILE, String(process.pid));
   setInterval(() => {}, 1000);
+} else if (mode === "output-then-wait") {
+  process.stdout.write(process.env.PI_BASE_FAKE_FD_OUTPUT || "");
+  setInterval(() => {}, 1000);
 } else if (mode === "error") {
   const output = process.env.PI_BASE_FAKE_FD_OUTPUT || "";
   if (output) process.stdout.write(output);
@@ -169,13 +172,43 @@ describe("createFindToolDefinition native fd path", () => {
     // A lexical parent walk misses the repo when the search root points into it.
     const root = await createTempWorkspace();
     await mkdir(join(root, "repo", ".git"), { recursive: true });
-    await mkdir(join(root, "repo", "nested"));
+    await mkdir(join(root, "repo", "nested", "src"), { recursive: true });
     await writeFile(join(root, ".gitignore"), "*.keepme\n");
-    await writeFile(join(root, "repo", "nested", "visible.keepme"), "");
+    await writeFile(join(root, "repo", "nested", "src", "visible.keepme"), "");
     await symlink(join(root, "repo", "nested"), join(root, "link"));
     fakeToolState.fdPath = realFdPath ?? "";
-    const result = await createFindToolDefinition(root).execute("find-symlink", { path: "link", pattern: "*.keepme" });
-    expect(getText(result)).toContain("visible.keepme");
+    const result = await createFindToolDefinition(root).execute("find-symlink", { path: "link", pattern: "src/*.keepme" });
+    expect(getText(result)).toBe("src/visible.keepme");
+  });
+
+  it.skipIf(!realFdPath)("matches path globs from the requested root rather than an arbitrary src ancestor", async () => {
+    // Real fd must keep smart case even when the search root contains uppercase letters and glob metacharacters.
+    const root = await createTempWorkspace();
+    const repo = join(root, "Project [QA] {build}");
+    await mkdir(join(repo, "src", "deep"), { recursive: true });
+    await mkdir(join(repo, "pkg", "src"), { recursive: true });
+    await mkdir(join(repo, ".git"));
+    for (const file of ["root.ts", "src/a.ts", "src/UPPER.TS", "src/deep/c.ts", "pkg/src/b.ts"]) {
+      await writeFile(join(repo, file), "");
+    }
+    fakeToolState.fdPath = realFdPath ?? "";
+    const tool = createFindToolDefinition(root);
+    for (const [pattern, files] of [
+      ["./*.ts", ["pkg/src/b.ts", "root.ts", "src/UPPER.TS", "src/a.ts", "src/deep/c.ts"]],
+      ["src/*.ts", ["src/UPPER.TS", "src/a.ts"]],
+      ["./src/*.ts", ["src/UPPER.TS", "src/a.ts"]],
+      ["src/*.TS", ["src/UPPER.TS"]],
+      ["src/**/*.ts", ["src/UPPER.TS", "src/a.ts", "src/deep/c.ts"]],
+      ["**/src/*.ts", ["pkg/src/b.ts", "src/UPPER.TS", "src/a.ts"]],
+    ] as const) {
+      const result = await tool.execute("find-scope", { path: repo, pattern });
+      expect(result.isError, pattern).not.toBe(true);
+      expect(getText(result).split("\n").sort(), pattern).toEqual([...files].sort());
+    }
+
+    // The name of the search root itself must not be used to match the pattern.
+    const inSrc = await tool.execute("find-ancestor", { path: join(repo, "src"), pattern: "**/src/*.ts" });
+    expect(getText(inSrc)).toBe("No files found matching pattern");
   });
 
   it("uses full-path matching for slash patterns and relativizes fd output", async () => {
@@ -200,12 +233,54 @@ describe("createFindToolDefinition native fd path", () => {
     expect((result as any).details?.resultLimitReached).toBeUndefined();
     const args = JSON.parse(await readFile(argsFile, "utf8"));
     expect(args).toContain("--full-path");
-    expect(args).toContain("**/src/*.ts");
+    expect(args.slice(-3)).toEqual(["--", `${join(root, "pkg")}/src/*.ts`, join(root, "pkg")]);
     // fd must never receive 0 (treated as unlimited) and must be asked for one
     // result beyond the limit so "exactly N" is distinguishable from "more than N".
     expect(args).not.toContain("0");
     expect(args.indexOf("--max-results")).toBeGreaterThanOrEqual(0);
     expect(args[args.indexOf("--max-results") + 1]).toBe("3");
+
+    // Absolute globs remain absolute and are not rewritten or re-anchored.
+    const absolute = `${join(root, "pkg")}/src/*.ts`;
+    await tool.execute("find-absolute", { path: "pkg", pattern: absolute });
+    expect(JSON.parse(await readFile(argsFile, "utf8")).slice(-3)).toEqual(["--", absolute, join(root, "pkg")]);
+  });
+
+  it.skipIf(process.platform === "win32")("caps the Windows fallback by matching paths, not by directory entries", async () => {
+    // Simulate the Windows dispatch branch with a POSIX fake fd, including termination after a filtered lookahead.
+    const root = await createTempWorkspace();
+    await installFakeFd(root);
+    const argsFile = join(root, "fd-args.json");
+    process.env.PI_BASE_FAKE_FD_ARGS_FILE = argsFile;
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const tool = createFindToolDefinition(root);
+    const emitPaths = (paths: string[]) => paths.map((item) => `${join(root, item)}\n`).join("");
+    Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+    try {
+      process.env.PI_BASE_FAKE_FD_OUTPUT = emitPaths(["pkg/src/false.ts", "src/true.TS"]);
+      const exact = await tool.execute("find-exact", { path: ".", pattern: "src\\*.ts", limit: 1 });
+      expect(getText(exact)).toBe("src/true.TS");
+      expect(exact.details?.resultLimitReached).toBeUndefined();
+      const args = JSON.parse(await readFile(argsFile, "utf8"));
+      expect(args).not.toContain("--full-path");
+      expect(args).not.toContain("--max-results");
+      expect(args.slice(-3)).toEqual(["--", "", root]);
+
+      process.env.PI_BASE_FAKE_FD_MODE = "output-then-wait";
+      process.env.PI_BASE_FAKE_FD_OUTPUT = emitPaths(["pkg/src/false.ts", "src/true.TS", "src/extra.ts"]);
+      const overflow = await tool.execute("find-overflow", { path: ".", pattern: "src/*.ts", limit: 1 }, AbortSignal.timeout(2000));
+      expect(overflow.isError).not.toBe(true);
+      expect(getText(overflow).split("\n\n")[0]).toBe("src/true.TS");
+      expect(overflow.details?.resultLimitReached).toBe(1);
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  });
+
+  it("does not expand a bare './' pattern into an unfiltered search", async () => {
+    // A bare directory marker is not a file glob; fd treats an empty pattern as match-all.
+    await expect(createFindToolDefinition(process.cwd()).execute("find-dot-only", { path: ".", pattern: "./" }))
+      .rejects.toThrow("Specify the search directory in path");
   });
 
   it("never passes 0 to fd and floors positive decimal limits", async () => {

@@ -16,7 +16,7 @@ import { Type } from "typebox";
  */
 export const findSchema = Type.Object({
   pattern: Type.String({
-    description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'.",
+    description: "File or directory glob. '*.ts' matches names at any depth. Relative path globs start at path: 'src/*.ts' matches direct entries in its src, while '**/src/*.ts' includes nested src directories. A leading './' is ignored and does not limit depth.",
   }),
   path: Type.String({
     description: "Directory to search in. Required. Use '.' for the current working directory. There is no implicit default — the model must always state the search root.",

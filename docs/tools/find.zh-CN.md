@@ -29,6 +29,15 @@
 
 `path` 没有隐式默认值。搜索当前目录必须显式传 `"."`。
 
+## Glob 匹配范围
+
+- 不带 `/` 的模式按名称匹配 `path` 下任意层级的文件或目录；`*.ts` 仍然递归。
+- 带 `/` 的相对模式匹配**相对于 `path` 的路径**。`src/*.ts` 只查根下 `src` 的直属项；`src/**/*.ts` 也查这个 `src` 的子目录。要查任意层级的 `src` 的直属项，用 `**/src/*.ts`。
+- 先去掉前导 `./` 再决定匹配方式，`./*.ts` 仍然递归。单独的 `./` 不是 glob，应写在 `path` 并另传模式。
+- 绝对模式仍按绝对路径匹配，搜索范围不会超出 `path`。
+
+**迁移说明：**旧版 `src/*.ts` 可能也返回 `pkg/src/file.ts`。如果确实需要跨层，请改用 `**/src/*.ts`。搜索根自身叫 `src` 时，它的名字不再参与相对路径匹配；要在该根下递归找文件，传 `path: "src", pattern: "*.ts"`。
+
 ## 执行链
 
 ```text
@@ -44,16 +53,9 @@
 
 ## fd 参数
 
-固定参数：
+通常使用 `--glob --color=never --hidden --max-results <limit + 1>`。路径 glob 使用 `--full-path`，相对模式会拼接转义后的搜索根。Smart case 按调用者传入的 glob 判断，不受拼接后搜索根的大小写影响。
 
-```text
---glob
---color=never
---hidden
---max-results <limit + 1>
-```
-
-Pattern 中包含 `/` 时使用 `--full-path`。普通相对 full-path pattern 会前置 `**/`，使其能在搜索根的任意深度匹配。
+旧版 Windows fd 的 full-path glob 匹配不可靠，因此 Windows 相对路径 glob 在读取 fd 输出时按相对路径筛选。遍历和忽略规则仍由 fd 处理。
 
 Git 仓库内（包括 worktree）使用 fd 原生的 Git ignore 语义，避免仓库上级规则隐藏仓库内文件。仓库外增加 `--no-require-git`，确保 `.gitignore` 仍然生效。该参数需要 fd 8.7.0 或兼容版本：pi-base 会检查可用二进制，必要时下载单独的兼容版本，不覆盖原有 fd。若没有兼容版本且下载被禁用或失败，`find` 会明确报错，不会静默忽略 `.gitignore`。
 
@@ -71,10 +73,10 @@ Git 仓库内（包括 worktree）使用 fd 原生的 Git ignore 语义，避免
 `limit` 在生成 `fd` 进程前会先归一化：小于 1 的值（包括 `0`，fd 会视为无限制）钳制为 `1`，
 正小数向下取整。普通正整数保持不变。
 
-进程会以 `limit + 1` 探测结果数，从而区分“恰好 limit 条”与真正溢出：只有真正溢出才追加
-提示、设置 `details.resultLimitReached`，并把输出裁剪到 `limit` 条。
+工具额外探测一条匹配，用来区分「恰好 `limit` 条」与真正溢出。只有确实溢出才追加提示、设置
+`details.resultLimitReached`，并把输出裁剪到 `limit` 条。
 
-fd 的 `--max-results` 负责限制进程输出；本地层根据实际结果数量补充 metadata。
+通常由 fd 的 `--max-results` 限制进程输出。Windows 相对路径模式在筛选出第 `limit + 1` 个匹配后停止 fd。
 
 ## Timeout 与 abort
 

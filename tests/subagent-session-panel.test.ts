@@ -1,5 +1,5 @@
 import { initTheme, ToolExecutionComponent, type AgentSessionEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { SubagentViewMessage, SubagentViewSource } from "../src/subagent/runner.js";
@@ -78,6 +78,20 @@ function createHarness(
 }
 
 describe("SubagentSessionPanel", () => {
+  it("renders the waiting hint without modifying the transcript render buffer", () => {
+    // Pi may reuse an empty Container's render buffer between frames.
+    const { panel } = createHarness();
+    const renderTranscript = vi.spyOn(Container.prototype, "render");
+    try {
+      expect(panel.render(120).join("\n")).toContain("Waiting for subagent output...");
+      expect(panel.render(120).join("\n")).toContain("Waiting for subagent output...");
+      expect(renderTranscript.mock.results.map((result) => result.value)).toEqual([[], []]);
+    } finally {
+      renderTranscript.mockRestore();
+      panel.dispose();
+    }
+  });
+
   it.each([false, true])("expands missing historical definitions with SDK defaults (error=%s)", (isError) => {
     // Real SDK components prove that an unknown historical tool no longer uses the
     // fixed generic truncation path, including arguments, errors and image content.
