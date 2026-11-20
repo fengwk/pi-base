@@ -5,6 +5,7 @@ import { getAgentDir, parseFrontmatter, type ExtensionAPI, type ExtensionContext
 import { reportRuntimeError, reportRuntimeWarning } from "./runtime-diagnostics.js";
 import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
 import { escapeXml } from "./xml.js";
+import type { StartupCliOverrides } from "./cli-options.js";
 
 const DEFAULT_AGENT_NAME = "default";
 const TASK_SYSTEM_PROMPT = readFileSync(new URL("../prompts/task-system.md", import.meta.url), "utf8").trim();
@@ -58,6 +59,12 @@ export interface AgentRuntimeConfig {
   thinkingLevel?: AgentThinkingLevel;
 }
 
+interface AgentApplyPolicy {
+  applyModel: boolean;
+  applyThinking: boolean;
+  cliThinkingLevel?: AgentThinkingLevel;
+}
+
 interface AgentDefinition {
   name: string;
   description?: string;
@@ -104,6 +111,7 @@ export function registerAgentSupport(
     subagentControls?: SubagentControls;
     getStartupAgentName?: () => string | undefined;
     getConfiguredDefaultAgentName?: (cwd: string) => string | undefined;
+    getStartupCliOverrides?: (ctx: ExtensionContext) => StartupCliOverrides;
     /** Filters registered tool definitions that should not be offered to agents right now. */
     isToolActivatable?: (tool: RegisteredToolInfo) => boolean;
     /** Tools whose activation is controlled exclusively by getInjectedToolNames. */
@@ -251,7 +259,7 @@ export function registerAgentSupport(
   const applyAgent = async (
     requestedName: string,
     ctx: ExtensionContext,
-    options: { persist: boolean; notify: boolean; applyModelThinking: boolean },
+    options: { persist: boolean; notify: boolean; policy: AgentApplyPolicy },
   ): Promise<boolean> => {
     const agent = resolveAgent(requestedName);
     if (!agent) {
@@ -268,8 +276,8 @@ export function registerAgentSupport(
     let thinkingAttempted = false;
     let appliedModel: AgentModelRef | undefined;
     let appliedThinkingLevel: AgentThinkingLevel | undefined;
-    let canApplyThinkingLevel = options.applyModelThinking;
-    if (options.applyModelThinking && agent.model) {
+    let canApplyThinkingLevel = options.policy.applyThinking;
+    if (options.policy.applyModel && agent.model) {
       const model = findModel(ctx, agent.model);
       if (!model) {
         reportRuntimeWarning(
@@ -306,17 +314,22 @@ export function registerAgentSupport(
       }
     }
 
-    if (canApplyThinkingLevel && agent.thinkingLevel) {
+    const { cliThinkingLevel } = options.policy;
+    const requestedThinkingLevel = cliThinkingLevel ?? agent.thinkingLevel;
+    // Pi already applied CLI thinking. Reapply the requested level only after setModel,
+    // which resets thinking and can switch away from a model that had clamped it.
+    if (canApplyThinkingLevel && requestedThinkingLevel !== undefined &&
+      (cliThinkingLevel === undefined || appliedModel !== undefined)) {
       try {
         thinkingAttempted = true;
-        pi.setThinkingLevel(agent.thinkingLevel);
+        pi.setThinkingLevel(requestedThinkingLevel);
         const effectiveThinkingLevel = pi.getThinkingLevel();
-        if (effectiveThinkingLevel === agent.thinkingLevel) {
+        if (effectiveThinkingLevel === requestedThinkingLevel) {
           appliedThinkingLevel = effectiveThinkingLevel;
         } else {
           reportRuntimeWarning(
             ctx,
-            `Agent "${agent.name}": requested thinking level ${agent.thinkingLevel}, but the session kept ${effectiveThinkingLevel}.`,
+            `Agent "${agent.name}": requested thinking level ${requestedThinkingLevel}, but the session kept ${effectiveThinkingLevel}.`,
           );
         }
       } catch (error) {
@@ -417,7 +430,7 @@ export function registerAgentSupport(
   const safeApplyAgent = async (
     agentName: string,
     ctx: ExtensionContext,
-    applyOptions: { persist: boolean; notify: boolean; applyModelThinking: boolean },
+    applyOptions: { persist: boolean; notify: boolean; policy: AgentApplyPolicy },
   ): Promise<boolean> => {
     try {
       return await applyAgent(agentName, ctx, applyOptions);
@@ -460,7 +473,11 @@ export function registerAgentSupport(
         return;
       }
 
-      const applied = await safeApplyAgent(agentName, ctx, { persist: true, notify: true, applyModelThinking: true });
+      const applied = await safeApplyAgent(agentName, ctx, {
+        persist: true,
+        notify: true,
+        policy: { applyModel: true, applyThinking: true },
+      });
       if (applied) {
         const agent = resolveActiveAgent();
         if (agent) warnUnknownAllowlistEntries(ctx, agent, "tools", allRegisteredToolNames());
@@ -473,28 +490,21 @@ export function registerAgentSupport(
     warnDiagnostics(ctx, nextCatalog.diagnostics);
     const requested = pickAgentFromEntries(ctx);
     if (!requested.persisted) {
-      // No agent persisted in this session: honor a startup source when present.
-      // Precedence stays simple and explicit: persisted session agent -> --agent ->
-      // pi-base.json defaultAgent -> built-in default. Subagent children never reach here
-      // (they always carry a persisted agent-state entry and start with empty flag values),
-      // so this only affects the root session.
       const startupName = options.getStartupAgentName?.()?.trim();
-      if (startupName) {
-        if (nextCatalog.byName.has(startupName)) {
-          const applied = await safeApplyAgent(startupName, ctx, { persist: true, notify: false, applyModelThinking: true });
+      const agentName = startupName || options.getConfiguredDefaultAgentName?.(ctx.cwd)?.trim();
+      if (agentName) {
+        if (nextCatalog.byName.has(agentName)) {
+          // Restored agents, including subagents with seeded state, never reapply model/thinking.
+          const cli = options.getStartupCliOverrides?.(ctx);
+          const applied = await safeApplyAgent(agentName, ctx, {
+            persist: true,
+            notify: false,
+            policy: { applyModel: !cli?.hasModel, applyThinking: true, cliThinkingLevel: cli?.thinkingLevel },
+          });
           if (applied) return;
         } else {
-          warnStartupAgentFallback(ctx, `Agent "${startupName}" (from --agent) not found; using the default agent.`);
-        }
-      } else {
-        const configuredDefaultAgentName = options.getConfiguredDefaultAgentName?.(ctx.cwd)?.trim();
-        if (configuredDefaultAgentName) {
-          if (nextCatalog.byName.has(configuredDefaultAgentName)) {
-            const applied = await safeApplyAgent(configuredDefaultAgentName, ctx, { persist: true, notify: false, applyModelThinking: true });
-            if (applied) return;
-          } else {
-            warnStartupAgentFallback(ctx, `Agent "${configuredDefaultAgentName}" (from pi-base.json defaultAgent) not found; using the default agent.`);
-          }
+          const source = startupName ? "--agent" : "pi-base.json defaultAgent";
+          warnStartupAgentFallback(ctx, `Agent "${agentName}" (from ${source}) not found; using the default agent.`);
         }
       }
       activeAgentName = DEFAULT_AGENT_NAME;
@@ -504,9 +514,10 @@ export function registerAgentSupport(
     if (requested.missingRequestedName) {
       warnStartupAgentFallback(ctx, `Agent "${requested.missingRequestedName}" (from session entry) not found; using the default agent.`);
     }
-    const applied = await safeApplyAgent(requested.name, ctx, { persist: false, notify: false, applyModelThinking: false });
+    const resumePolicy: AgentApplyPolicy = { applyModel: false, applyThinking: false };
+    const applied = await safeApplyAgent(requested.name, ctx, { persist: false, notify: false, policy: resumePolicy });
     if (!applied && requested.name !== DEFAULT_AGENT_NAME) {
-      await safeApplyAgent(DEFAULT_AGENT_NAME, ctx, { persist: false, notify: false, applyModelThinking: false });
+      await safeApplyAgent(DEFAULT_AGENT_NAME, ctx, { persist: false, notify: false, policy: resumePolicy });
     }
   });
 

@@ -111,7 +111,15 @@ pi --agent reviewer
 /agent
 ```
 
-无参数 `/agent` 在交互式 UI 中打开选择器。恢复已有 session 时，持久化的 Agent 优先于 `--agent`；恢复过程保留该 session 当前的模型和 thinking level。
+无参数 `/agent` 在交互式 UI 中打开选择器。恢复已有 session 时，持久化的 Agent 优先于 `--agent`；恢复 Agent 不会改变 Pi 选定的模型和 thinking level。
+
+## 模型与思考强度的优先级
+
+启动时选择 Agent，显式命令行参数优先于 Agent 的 frontmatter。两者都未指定时，沿用 Pi 的默认值。
+
+- `--model <pattern>` 优先于 Agent 的 `model`。
+- `--thinking <level>`（或 Pi 在 `--model` 中解析出的 `:<level>` 后缀）优先于 `thinkingLevel`。实际生效的级别仍受所选模型限制。
+- 启动后用 `/agent` 切换时，应用新 Agent 声明的模型与 thinking level。启动参数不会锁定整个 session 的设置。
 
 ## 诊断
 

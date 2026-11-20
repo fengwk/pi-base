@@ -111,7 +111,15 @@ pi --agent reviewer
 /agent
 ```
 
-`/agent` without arguments opens the selector in the interactive UI. When resuming an existing session, the persisted Agent takes precedence over `--agent`; the resumption preserves the session's current model and thinking level.
+`/agent` without arguments opens the selector in the interactive UI. When resuming an existing session, the persisted Agent takes precedence over `--agent`; restoring the Agent does not change the model or thinking level selected by Pi.
+
+## Model and thinking precedence
+
+When selecting a startup Agent, explicit CLI values take precedence over the Agent's frontmatter. Fields absent from both are left to Pi's defaults.
+
+- `--model <pattern>` takes precedence over the Agent's `model`.
+- `--thinking <level>` (or an explicit `:<level>` suffix resolved by Pi in `--model`) takes precedence over `thinkingLevel`. Pi still limits thinking to levels the selected model supports.
+- Switching with `/agent` later applies the new Agent's declared model and thinking level. The startup flags do not lock those settings for the whole session.
 
 ## Diagnostics
 

@@ -486,6 +486,39 @@ You are the planner.
     }
   });
 
+  it("applies agent defaults on a manual /agent switch after a CLI override", async () => {
+    // Startup flags must not lock the model and thinking level for the whole session.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousArgv = process.argv;
+    const cliModel = { provider: "provider-a", id: "model-a" };
+    const plannerModel = { provider: "provider-b", id: "model-b" };
+
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    process.argv = ["node", "pi", "--agent", "planner", "--model", "provider-a/model-a", "--thinking", "low"];
+    try {
+      await writeAgentFile(agentDir, "planner.md",
+        "---\nname: planner\nmodel: provider-b/model-b\nthinkingLevel: high\n---\nPlanner prompt.\n");
+      const registry = createToolRegistry({ model: cliModel, models: [cliModel, plannerModel] });
+      registry.setFlag("agent", "planner");
+      registry.setThinkingLevel("low");
+      piBaseExtension(registry.pi as any);
+
+      await registry.emit("session_start", { reason: "startup" }, { cwd: root });
+      expect(registry.getCurrentModel()).toEqual(cliModel);
+      expect(registry.pi.getThinkingLevel()).toBe("low");
+
+      await registry.runCommand("agent", "planner", { cwd: root });
+      expect(registry.getCurrentModel()).toEqual(plannerModel);
+      expect(registry.pi.getThinkingLevel()).toBe("high");
+    } finally {
+      process.argv = previousArgv;
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
   it("activates configured defaultAgent on fresh sessions and falls back cleanly", async () => {
     // Intent: pi-base.json should be able to pick the startup agent for fresh root sessions
     // without touching resumed sessions. Explicit --agent still wins, and unknown configured

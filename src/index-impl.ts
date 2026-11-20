@@ -29,6 +29,7 @@ import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { describeToolWorkdirForDisplay, resolveToCwd, resolveToolWorkdir } from "./path-utils.js";
 import { registerNotifySupport, type RegisterNotifySupportOptions } from "./notify.js";
 import { registerAgentSupport } from "./agent-support.js";
+import { getStartupCliOverrides } from "./cli-options.js";
 import { TASK_TOOL_NAME } from "./subagent/constants.js";
 import { resolveSubagentConfig } from "./subagent/config.js";
 import { isRootSession, readDepth, readRootSessionId, ROOT_DEPTH } from "./subagent/depth.js";
@@ -314,6 +315,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
     getConfiguredDefaultAgentName: (cwd: string) => loadSettings(cwd).settings.defaultAgent,
+    getStartupCliOverrides,
     isToolActivatable: (tool) => !isReplacedBuiltinTool(tool),
     runtimeOwnedToolNames: GOAL_TOOL_NAMES,
     getInjectedToolNames: (hasExplicitToolPolicy) =>
