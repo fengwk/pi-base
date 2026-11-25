@@ -25,6 +25,7 @@ Configuration must be a JSON object. Only the following top-level keys are allow
 
 - `lsp`
 - `permission`
+- `toolModels`
 - `render`
 - `notify`
 - `yolo`
@@ -44,6 +45,7 @@ Project configuration and global configuration are merged field by field:
 |-------|------|
 | `lsp.servers` | When the project declares `servers`, the global server map is replaced entirely |
 | `permission` | Rule arrays are merged per tool, with project rules appended after global rules |
+| `toolModels` | For each tool named in the project config, the project allowlist replaces the global allowlist |
 | `render` | Defaults and per-tool mappings are merged |
 | `notify` | Shallow merge; project fields override global fields |
 | `yolo` | Project value overrides |
@@ -54,6 +56,23 @@ Project configuration and global configuration are merged field by field:
 | `defaultAgent` | Project value overrides |
 
 > **Note**: MCP is no longer configured in `pi-base.json`. Pi native MCP uses `~/.pi/agent/mcp.json` or `.pi/mcp.json` with standard `mcpServers` format. See the [MCP Migration Guide](mcp-migration.md) for migrating existing configs.
+
+## `toolModels`
+
+```json
+{
+  "toolModels": {
+    "web_search": ["xai/grok-4.7", "google/gemini-4-*"],
+    "url_context": []
+  }
+}
+```
+
+Keys are exact names of tools registered with Pi. An omitted tool keeps its normal behavior. An empty list disables that tool for every model. Patterns match the active model's full `provider/model` identifier, case-sensitively; `*` matches zero or more characters.
+
+Pi-base adds matching registered `direct` and `model-only` tools without requiring them in Agent `tools:` lists. It hides them and blocks calls on nonmatching models even if an Agent lists them or YOLO mode is on. The policy also applies after `/model` and in subagent sessions.
+
+This does not install a tool, check provider capability, activate unloaded `codemode`/`deferred` tools, or bypass permission rules. Runtime-owned tools such as `task` and Goal tools can be restricted by the model rules, but still require their normal activation conditions.
 
 ## `lsp`
 

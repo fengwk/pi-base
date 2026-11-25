@@ -6,6 +6,7 @@ import { reportRuntimeError, reportRuntimeWarning } from "./runtime-diagnostics.
 import { PI_BASE_AGENT_STATUS_KEY } from "./yolo-footer.js";
 import { escapeXml } from "./xml.js";
 import type { StartupCliOverrides } from "./cli-options.js";
+import type { ToolModelsConfig } from "./config.js";
 
 const DEFAULT_AGENT_NAME = "default";
 const TASK_SYSTEM_PROMPT = readFileSync(new URL("../prompts/task-system.md", import.meta.url), "utf8").trim();
@@ -111,6 +112,7 @@ export function registerAgentSupport(
     subagentControls?: SubagentControls;
     getStartupAgentName?: () => string | undefined;
     getConfiguredDefaultAgentName?: (cwd: string) => string | undefined;
+    getToolModels?: (cwd: string) => ToolModelsConfig | undefined;
     getStartupCliOverrides?: (ctx: ExtensionContext) => StartupCliOverrides;
     /** Filters registered tool definitions that should not be offered to agents right now. */
     isToolActivatable?: (tool: RegisteredToolInfo) => boolean;
@@ -196,7 +198,7 @@ export function registerAgentSupport(
     if (configuredNames === undefined) return;
     const known = new Set(knownNames);
     const unknown = configuredNames.filter((name) => field === "skills"
-      ? !knownNames.some((knownName) => matchesSkillPattern(name, knownName))
+      ? !knownNames.some((knownName) => matchesNamePattern(name, knownName))
       : !known.has(name));
     if (unknown.length === 0) return;
     const warningKey = `${agent.filePath}:${field}:${unknown.join("\u0000")}`;
@@ -241,7 +243,7 @@ export function registerAgentSupport(
     return catalog.byName.get(name);
   };
   const resolveActiveAgent = (): AgentDefinition | undefined => resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
-  const projectAgentTools = (agent: AgentDefinition): string[] => {
+  const projectAgentTools = (agent: AgentDefinition, rules: ToolModelsConfig | undefined): string[] => {
     const allToolNames = allRegisteredToolNames();
     const runtimeOwnedToolNames = new Set(options.runtimeOwnedToolNames ?? []);
     // Implicit agents inherit normal tools and receive runtime-owned tools through the dedicated
@@ -250,20 +252,53 @@ export function registerAgentSupport(
       ? allToolNames.filter((name) => !runtimeOwnedToolNames.has(name))
       : allToolNames;
     const validTools = filterKnownTools(agent.tools, eligibleToolNames);
+    // A model rule can add a registered ordinary tool without repeating it in the Agent list.
+    // Runtime-owned tools still require their own activation rules.
+    const managed = rules && agent.tools !== undefined
+      ? allToolNames.filter((name) => Object.hasOwn(rules, name) && !runtimeOwnedToolNames.has(name))
+      : [];
     const injected = filterKnownTools(
       [...(options.getInjectedToolNames?.(agent.tools !== undefined) ?? [])],
       allToolNames,
     );
-    return Array.from(new Set([...validTools, ...injected]));
+    return Array.from(new Set([...validTools, ...managed, ...injected]));
   };
+  const resolveToolLoadout = (
+    agent: AgentDefinition,
+    ctx: ExtensionContext,
+    rules: ToolModelsConfig | undefined,
+    model = ctx.model,
+  ): string[] => declarableToolNames(applyTaskInjection(projectAgentTools(agent, rules), agent, ctx))
+    .filter((name) => isToolAllowedForModel(rules, name, model));
+
+  const synchronizeToolLoadout = (
+    ctx: ExtensionContext,
+    rules: ToolModelsConfig | undefined,
+    { modelOnly = false, model = ctx.model } = {},
+  ): void => {
+    const agent = resolveActiveAgent();
+    if (!agent) return;
+    // Switching models and implicit Agents only change the tools managed by toolModels.
+    const preserveUnmanaged = modelOnly || agent.tools === undefined;
+    if (preserveUnmanaged && !rules) return;
+    const allowed = resolveToolLoadout(agent, ctx, rules, model);
+    const active = pi.getActiveTools();
+    const next = preserveUnmanaged && rules ? mergeModelToolSelection(active, allowed, rules) : allowed;
+    // Pi preserves the order of tools that remain active; policy synchronizes membership only.
+    const activeSet = new Set(active);
+    if (next.length !== active.length || next.some((name) => !activeSet.has(name))) {
+      pi.setActiveTools(next);
+    }
+  };
+
   const applyAgent = async (
     requestedName: string,
     ctx: ExtensionContext,
-    options: { persist: boolean; notify: boolean; policy: AgentApplyPolicy },
+    applyOptions: { persist: boolean; notify: boolean; policy: AgentApplyPolicy },
   ): Promise<boolean> => {
     const agent = resolveAgent(requestedName);
     if (!agent) {
-      if (options.notify && ctx.hasUI) {
+      if (applyOptions.notify && ctx.hasUI) {
         ctx.ui.notify(buildUnknownAgentMessage(requestedName, catalog.agents.map((item) => item.name)), "error");
       }
       return false;
@@ -274,10 +309,10 @@ export function registerAgentSupport(
     const previousTools = [...pi.getActiveTools()];
     let modelRollbackNeeded = false;
     let thinkingAttempted = false;
-    let appliedModel: AgentModelRef | undefined;
+    let appliedModel: Model<Api> | undefined;
     let appliedThinkingLevel: AgentThinkingLevel | undefined;
-    let canApplyThinkingLevel = options.policy.applyThinking;
-    if (options.policy.applyModel && agent.model) {
+    let canApplyThinkingLevel = applyOptions.policy.applyThinking;
+    if (applyOptions.policy.applyModel && agent.model) {
       const model = findModel(ctx, agent.model);
       if (!model) {
         reportRuntimeWarning(
@@ -291,7 +326,7 @@ export function registerAgentSupport(
           modelRollbackNeeded = true;
           const success = await pi.setModel(model);
           if (success) {
-            appliedModel = { provider: model.provider, modelId: model.id };
+            appliedModel = model;
           }
           if (!success) {
             modelRollbackNeeded = false;
@@ -314,7 +349,7 @@ export function registerAgentSupport(
       }
     }
 
-    const { cliThinkingLevel } = options.policy;
+    const { cliThinkingLevel } = applyOptions.policy;
     const requestedThinkingLevel = cliThinkingLevel ?? agent.thinkingLevel;
     // Pi already applied CLI thinking. Reapply the requested level only after setModel,
     // which resets thinking and can switch away from a model that had clamped it.
@@ -343,7 +378,7 @@ export function registerAgentSupport(
     }
 
     try {
-      pi.setActiveTools(declarableToolNames(applyTaskInjection(projectAgentTools(agent), agent, ctx)));
+      pi.setActiveTools(resolveToolLoadout(agent, ctx, options.getToolModels?.(ctx.cwd), appliedModel ?? ctx.model));
     } catch (error) {
       const activationMessage = error instanceof Error ? error.message : String(error);
       const rollbackFailures: string[] = [];
@@ -377,7 +412,7 @@ export function registerAgentSupport(
 
     activeAgentName = agent.name;
     updateStatus(ctx, agent.name);
-    if (options.persist) {
+    if (applyOptions.persist) {
       try {
         persistActiveAgent(agent.name);
       } catch (error) {
@@ -385,8 +420,8 @@ export function registerAgentSupport(
         reportRuntimeWarning(ctx, `Agent "${agent.name}" activated, but its session state could not be saved: ${message}`);
       }
     }
-    if (options.notify && ctx.hasUI) {
-      const selectedModel = appliedModel ? ` model:${appliedModel.provider}/${appliedModel.modelId}` : "";
+    if (applyOptions.notify && ctx.hasUI) {
+      const selectedModel = appliedModel ? ` model:${appliedModel.provider}/${appliedModel.id}` : "";
       const selectedThinking = appliedThinkingLevel ? ` thinking:${appliedThinkingLevel}` : "";
       const suffix = selectedModel || selectedThinking ? `${selectedModel}${selectedThinking}` : "";
       ctx.ui.notify(`Agent "${agent.name}" activated.${suffix}`, "info");
@@ -508,6 +543,7 @@ export function registerAgentSupport(
         }
       }
       activeAgentName = DEFAULT_AGENT_NAME;
+      synchronizeToolLoadout(ctx, options.getToolModels?.(ctx.cwd), { modelOnly: true });
       updateStatus(ctx, DEFAULT_AGENT_NAME);
       return;
     }
@@ -521,40 +557,39 @@ export function registerAgentSupport(
     }
   });
 
+  pi.on("model_select", (event, ctx) => {
+    synchronizeToolLoadout(ctx, options.getToolModels?.(ctx.cwd), { modelOnly: true, model: event.model });
+  });
+
   // MCP's native startup waiter runs before this extension's before_agent_start. Re-read the
   // registry there and each turn, including discoveries that finished after the startup timeout.
-  // Never rebuild implicit agents: their direct loadout belongs to the user/runtime.
-  const synchronizeExplicitTools = (ctx: ExtensionContext): void => {
-    const agent = resolveActiveAgent();
-    if (!agent || agent.tools === undefined) return;
-    const tools = declarableToolNames(applyTaskInjection(projectAgentTools(agent), agent, ctx));
-    const active = pi.getActiveTools();
-    // Pi preserves the order of tools that remain active; policy synchronizes membership only.
-    const activeSet = new Set(active);
-    if (tools.length !== active.length || tools.some((name) => !activeSet.has(name))) {
-      pi.setActiveTools(tools);
-    }
-  };
-  pi.on("turn_start", (_event, ctx) => synchronizeExplicitTools(ctx));
+  pi.on("turn_start", (_event, ctx) => synchronizeToolLoadout(ctx, options.getToolModels?.(ctx.cwd)));
 
   pi.on("tool_call", (event, ctx) => {
+    // These policies run independently of permission checks, even in YOLO mode or nested calls.
+    const rules = options.getToolModels?.(ctx.cwd);
+    if (!isToolAllowedForModel(rules, event.toolName, ctx.model)) {
+      const model = ctx.model ? `model "${ctx.model.provider}/${ctx.model.id}"` : "a session without a selected model";
+      return { block: true, reason: `Tool "${event.toolName}" is not allowed for ${model} by toolModels.` };
+    }
     const agent = resolveActiveAgent();
     const tool = pi.getAllTools().find((item) => item.name === event.toolName);
-    // This is agent policy, not a permission prompt: YOLO and parentToolCallId cannot bypass it.
     if (agent && tool && !(event.parentToolCallId && tool.exposure === "model-only")
-      && applyTaskInjection(projectAgentTools(agent), agent, ctx).includes(event.toolName)) {
+      && applyTaskInjection(projectAgentTools(agent, rules), agent, ctx).includes(event.toolName)) {
       return;
     }
     return { block: true, reason: `Agent "${activeAgentName}" is not allowed to call tool "${event.toolName}".` };
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    synchronizeExplicitTools(ctx);
-    const activeAgent = resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
+    const rules = options.getToolModels?.(ctx.cwd);
+    synchronizeToolLoadout(ctx, rules);
+    const activeAgent = resolveActiveAgent();
     const promptOptions = event.systemPromptOptions;
     const activeTools = pi.getActiveTools();
     if (activeAgent) {
       if (activeAgent.tools !== undefined) promptOptions.selectedTools = [...activeTools];
+      else if (rules) promptOptions.selectedTools = mergeModelToolSelection(promptOptions.selectedTools, activeTools, rules);
       warnUnknownAllowlistEntries(ctx, activeAgent, "skills", promptOptions.skills.map((skill) => skill.name));
       promptOptions.skills = skillsRenderableInPrompt(filterVisibleSkills(promptOptions.skills, activeAgent.skills));
       promptOptions.customPrompt = activeAgent.prompt ?? promptOptions.customPrompt;
@@ -698,19 +733,29 @@ function filterKnownTools(toolNames: string[] | undefined, allToolNames: string[
   return toolNames.filter((toolName) => known.has(toolName));
 }
 
+function isToolAllowedForModel(rules: ToolModelsConfig | undefined, name: string, model: Model<Api> | undefined): boolean {
+  if (!rules || !Object.hasOwn(rules, name)) return true;
+  if (!model) return false;
+  const modelName = `${model.provider}/${model.id}`;
+  return rules[name].some((pattern) => matchesNamePattern(pattern, modelName));
+}
+
+/** Replace only model-managed tools, preserving the user's selection of everything else. */
+function mergeModelToolSelection(selection: readonly string[], allowed: readonly string[], rules: ToolModelsConfig): string[] {
+  const pending = new Set(allowed.filter((name) => Object.hasOwn(rules, name)));
+  return [...selection.filter((name) => !Object.hasOwn(rules, name) || pending.delete(name)), ...pending];
+}
+
 function filterVisibleSkills(skills: Skill[], allowedSkillNames: string[] | undefined): Skill[] {
   if (allowedSkillNames === undefined) return skills;
-  return skills.filter((skill) => allowedSkillNames.some((pattern) => matchesSkillPattern(pattern, skill.name)));
+  return skills.filter((skill) => allowedSkillNames.some((pattern) => matchesNamePattern(pattern, skill.name)));
 }
 
 /** `*` matches zero or more characters; all other pattern characters are literal. */
-function matchesSkillPattern(pattern: string, skillName: string): boolean {
-  if (!pattern.includes("*")) return pattern === skillName;
-  return new RegExp(`^${escapeSkillPatternRegex(pattern)}$`).test(skillName);
-}
-
-function escapeSkillPatternRegex(pattern: string): string {
-  return pattern.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*");
+function matchesNamePattern(pattern: string, name: string): boolean {
+  if (!pattern.includes("*")) return pattern === name;
+  const regex = pattern.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${regex}$`).test(name);
 }
 
 /** Matches Pi `formatSkillsForPrompt`: skills marked disable-model-invocation stay CLI-only. */

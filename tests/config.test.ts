@@ -277,6 +277,10 @@ describe("pi-base config", () => {
     ["invalid workspaceData baseDir", { lsp: { servers: { ts: { command: ["ts"], extensions: [".ts"], workspaceData: { baseDir: "" } } } } }, /workspaceData\.baseDir/],
     ["invalid permission shape", { permission: [] }, /permission must be/],
     ["invalid permission rule", { permission: { bash: { "*": "maybe" } } }, /permission\.bash\.\*/],
+    ["invalid toolModels shape", { toolModels: [] }, /toolModels must be an object/],
+    ["toolModels wildcard tool name", { toolModels: { "web_*": ["xai/*"] } }, /must be an exact, non-empty tool name/],
+    ["toolModels non-array rule", { toolModels: { web_search: "xai/*" } }, /toolModels\.web_search must be an array of strings/],
+    ["toolModels unqualified model", { toolModels: { web_search: ["grok-4.7"] } }, /toolModels\.web_search\[0\] must use "provider\/model" format/],
     ["invalid render shape", { render: [] }, /render must be an object/],
     ["invalid render lines", { render: { collapsedToolResultLines: -1 } }, /collapsedToolResultLines/],
     ["invalid render line map", { render: { collapsedToolResultLines: { read: 1.5 } } }, /collapsedToolResultLines\.read/],
@@ -354,6 +358,26 @@ describe("pi-base config", () => {
       expect(settings.permission?.["mcp__custom__tool"]).toEqual([{ pattern: "repo/*", action: "allow" }]);
       expect(settings.render?.collapsedToolResultLines).toEqual({ "mcp__custom__tool": 4 });
       expect(settings.lsp?.servers?.["custom-language"]).toBeDefined();
+    });
+  });
+
+  it("merges toolModels by tool name and allows a project to disable a tool", async () => {
+    // Intent: the project replaces one allowlist, not the whole map or just part of a list.
+    const root = await createTempWorkspace();
+    const projectDir = join(root, ".pi");
+    await mkdir(projectDir, { recursive: true });
+    await withTempGlobalSettings(async (globalPath) => {
+      await writeFile(globalPath, JSON.stringify({
+        toolModels: { web_search: ["xai/grok-4.7"], url_context: ["google/*"] },
+      }), "utf8");
+      await writeFile(join(projectDir, "pi-base.json"), JSON.stringify({
+        toolModels: { web_search: [], another_tool: [" openai/gpt-* ", "openai/gpt-*"] },
+      }), "utf8");
+      expect(loadPiBaseSettings(root).settings.toolModels).toEqual({
+        web_search: [],
+        url_context: ["google/*"],
+        another_tool: ["openai/gpt-*"],
+      });
     });
   });
 

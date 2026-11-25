@@ -25,6 +25,7 @@
 
 - `lsp`
 - `permission`
+- `toolModels`
 - `render`
 - `notify`
 - `yolo`
@@ -44,6 +45,7 @@
 |------|------|
 | `lsp.servers` | 项目声明 `servers` 时整体替换全局 server map |
 | `permission` | 按 tool 合并规则数组，项目规则追加在全局规则之后 |
+| `toolModels` | 对项目配置中列出的每个工具，项目白名单整体替换全局白名单 |
 | `render` | 合并默认值和逐工具映射 |
 | `notify` | 浅合并，项目字段覆盖全局字段 |
 | `yolo` | 项目值覆盖 |
@@ -54,6 +56,23 @@
 | `defaultAgent` | 项目值覆盖 |
 
 > **注意**：MCP 已不再在 `pi-base.json` 中配置。Pi 原生 MCP 使用 `~/.pi/agent/mcp.json` 或 `.pi/mcp.json`（标准 `mcpServers` 格式）。已有配置迁移见 [MCP 迁移指南](mcp-migration.zh-CN.md)。
+
+## `toolModels`
+
+```json
+{
+  "toolModels": {
+    "web_search": ["xai/grok-4.7", "google/gemini-4-*"],
+    "url_context": []
+  }
+}
+```
+
+键是 Pi 中注册的工具名，必须精确匹配。未列出的工具不受影响，空数组对所有模型禁用该工具。数组中的模式按大小写匹配当前模型的完整 `provider/model` 标识；`*` 匹配零个或多个字符。
+
+模型匹配时，pi-base 会直接添加已注册的 `direct` 和 `model-only` 工具，无需在 Agent 的 `tools:` 里重复填写。不匹配时，工具不会显示，且即使已列在 `tools:` 或开启 YOLO 模式也不能调用。切换模型和 Subagent 会话同样适用。
+
+这项配置不会安装工具、探测服务商是否支持、自动加载 `codemode` 或 `deferred` 工具，也不绕过权限规则。`task` 和 Goal 等由 runtime 管理的工具仍有自己的启用条件，模型规则只能进一步限制它们。
 
 ## `lsp`
 

@@ -49,7 +49,7 @@ import {
   type GoalSupportHandle,
 } from "./goal/index.js";
 export { LspDiscoveryResolver, type LspDiscoveryConfig, type LspSupportInfo, type LspServerConfig, type LspServerEntry, type LspWorkspaceDataConfig, type LspWorkspaceDataMode } from "./lsp/discovery.js";
-export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type CompactionModelConfig, type CompactionThinkingLevel, type ContextCompressionConfig, type SubagentConfig } from "./config.js";
+export { loadPiBaseSettings, type PermissionAction, type PermissionConfig, type PermissionRuleEntry, type PiBaseSettings, type RenderConfig, type CollapsedToolResultLinesConfig, type CollapsedToolResultMaxCharsConfig, type NotifyConfig, type YoloMode, type CompactionModelConfig, type CompactionThinkingLevel, type ContextCompressionConfig, type SubagentConfig, type ToolModelsConfig } from "./config.js";
 export type { PiBaseNotifyKind, PiBaseNotifyPayload } from "./notify.js";
 export { type GoalState, type GoalStatus } from "./goal/index.js";
 
@@ -313,6 +313,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
       return typeof value === "string" && value.length > 0 ? value : undefined;
     },
     getConfiguredDefaultAgentName: (cwd: string) => loadSettings(cwd).settings.defaultAgent,
+    getToolModels: (cwd) => loadSettings(cwd).settings.toolModels,
     getStartupCliOverrides,
     isToolActivatable: (tool) => !isReplacedBuiltinTool(tool),
     runtimeOwnedToolNames: GOAL_TOOL_NAMES,

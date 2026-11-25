@@ -13,6 +13,9 @@ export interface PermissionRuleEntry {
 
 export type PermissionConfig = Record<string, PermissionRuleEntry[]>;
 
+/** Exact tool names mapped to the provider/model patterns that allow them. */
+export type ToolModelsConfig = Record<string, string[]>;
+
 export type CollapsedToolResultLinesConfig = number | Record<string, number>;
 export type CollapsedToolResultMaxCharsConfig = number | Record<string, number>;
 
@@ -70,6 +73,7 @@ export interface SubagentConfig {
 export interface PiBaseSettings {
   lsp?: LspDiscoveryConfig;
   permission?: PermissionConfig;
+  toolModels?: ToolModelsConfig;
   render?: RenderConfig;
   notify?: NotifyConfig;
   yolo?: YoloMode;
@@ -475,6 +479,27 @@ function sanitizeContextCompressionConfig(value: unknown): ContextCompressionCon
   }
   return output;
 }
+
+function sanitizeToolModelsConfig(value: unknown): ToolModelsConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("toolModels must be an object keyed by exact tool name.");
+  }
+  return Object.fromEntries(Object.entries(value).map(([toolName, patterns]) => {
+    if (!/^[^\s*]+$/.test(toolName)) {
+      throw new Error(`toolModels key ${JSON.stringify(toolName)} must be an exact, non-empty tool name.`);
+    }
+    const path = `toolModels.${toolName}`;
+    const normalized = requireStringArray(patterns, path).map((entry, index) => {
+      const pattern = entry.trim();
+      if (!/^[^/\s]+\/\S+$/.test(pattern)) {
+        throw new Error(`${path}[${index}] must use "provider/model" format ("*" is allowed).`);
+      }
+      return pattern;
+    });
+    return [toolName, [...new Set(normalized)]];
+  }));
+}
+
 function sanitizeSettings(value: unknown): PiBaseSettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("settings must be a JSON object.");
   const input = value as Record<string, unknown>;
@@ -487,6 +512,7 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
     [
       "lsp",
       "permission",
+      "toolModels",
       "render",
       "notify",
       "yolo",
@@ -501,6 +527,7 @@ function sanitizeSettings(value: unknown): PiBaseSettings {
   return {
     lsp: input.lsp === undefined ? undefined : sanitizeLspDiscoveryConfig(input.lsp),
     permission: input.permission === undefined ? undefined : sanitizePermissionConfig(input.permission),
+    toolModels: input.toolModels === undefined ? undefined : sanitizeToolModelsConfig(input.toolModels),
     render: input.render === undefined ? undefined : sanitizeRenderConfig(input.render),
     notify: input.notify === undefined ? undefined : sanitizeNotifyConfig(input.notify),
     yolo: input.yolo === undefined ? undefined : sanitizeYoloMode(input.yolo),
@@ -555,6 +582,7 @@ function normalizeSettingsPaths(settings: PiBaseSettings): PiBaseSettings {
   return {
     ...(settings.lsp ? { lsp: normalizeLspConfigPaths(settings.lsp) } : {}),
     ...(settings.permission ? { permission: settings.permission } : {}),
+    ...(settings.toolModels ? { toolModels: settings.toolModels } : {}),
     ...(settings.render ? { render: settings.render } : {}),
     ...(settings.notify ? { notify: settings.notify } : {}),
     ...(settings.yolo !== undefined ? { yolo: settings.yolo } : {}),
@@ -692,12 +720,14 @@ export function loadPiBaseSettings(cwd: string = process.cwd()): LoadedPiBaseSet
   const projectPath = defaultProjectSettingsPath(cwd);
   const globalSettings = readSettingsFile(globalPath);
   const projectSettings = readSettingsFile(projectPath);
+  const toolModels = { ...globalSettings.toolModels, ...projectSettings.toolModels };
   return {
     globalPath,
     projectPath,
     settings: {
       lsp: mergeLsp(globalSettings.lsp, projectSettings.lsp),
       permission: mergePermission(globalSettings.permission, projectSettings.permission),
+      toolModels: Object.keys(toolModels).length > 0 ? toolModels : undefined,
       render: mergeRender(globalSettings.render, projectSettings.render),
       notify: mergeNotify(globalSettings.notify, projectSettings.notify),
       yolo: mergeYolo(globalSettings.yolo, projectSettings.yolo),

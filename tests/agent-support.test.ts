@@ -357,10 +357,8 @@ Planner prompt.
     }
   });
 
-  it("keeps active tools unchanged across model switches for implicit and explicit agents", async () => {
-    // Intent: file tools no longer depend on the model id. Neither Pi nor pi-base may
-    // rebuild the loadout when the model changes, so a user's manual tool choices on an
-    // implicit agent and an explicit allowlist both survive the switch verbatim.
+  it("keeps active tools unchanged across model switches without toolModels rules", async () => {
+    // Intent: a model change alone must not rebuild a manual loadout or explicit allowlist.
     const root = await createTempWorkspace();
     const agentDir = await createTempWorkspace();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -406,6 +404,96 @@ Editor prompt.
       } else {
         process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       }
+    }
+  });
+
+  it("limits the implicit tool loadout and execution to the current model", async () => {
+    // Intent: switching models must affect only the configured tool names, and re-adding
+    // a blocked tool at runtime must not let it execute or appear in the prompt.
+    const root = await createTempWorkspace();
+    const allowed = { provider: "xai", id: "grok-4.7" };
+    const blocked = { provider: "another-provider", id: "grok-4.7" };
+    await writePiBaseConfig(root, { toolModels: { web_search: ["xai/grok-4.7"], url_context: [] }, yolo: true });
+    const registry = createToolRegistry({ cwd: root, model: blocked, models: [allowed, blocked] });
+    const execute = vi.fn(async () => ({ content: [{ type: "text", text: "search result" }] }));
+    registry.pi.registerTool({ name: "web_search", execute });
+    registry.pi.registerTool({ name: "url_context", execute });
+    piBaseExtension(registry.pi as any);
+    registry.pi.setActiveTools(["read", "web_search", "url_context"]);
+
+    await registry.emit("session_start", { reason: "startup" });
+    expect(registry.getActiveTools()).toEqual(["read"]);
+    registry.pi.setActiveTools(["grep"]);
+    await registry.pi.setModel(allowed);
+    await registry.emit("model_select", { model: allowed, previousModel: blocked, source: "set" });
+    expect(registry.getActiveTools()).toEqual(["grep", "web_search"]);
+    await registry.getTool("web_search").execute("search-ok", { query: "test" });
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    await registry.pi.setModel(blocked);
+    await registry.emit("model_select", { model: blocked, previousModel: allowed, source: "set" });
+    expect(registry.getActiveTools()).toEqual(["grep"]);
+    registry.pi.setActiveTools(["grep", "web_search"]);
+    const result = await registry.getTool("web_search").execute("search-blocked", { query: "test" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('model "another-provider/grok-4.7" by toolModels');
+    expect(execute).toHaveBeenCalledTimes(1);
+    await registry.emit("turn_start", { turnIndex: 1 });
+    expect(registry.getActiveTools()).toEqual(["grep"]);
+    const prompt = await registry.emit("before_agent_start", {
+      systemPromptOptions: { selectedTools: ["grep", "web_search"] },
+    });
+    expect(prompt.systemPromptOptions.selectedTools).toEqual(["grep"]);
+  });
+
+  it("adds model-managed tools without repeating them in an explicit Agent allowlist", async () => {
+    // Intent: the selected model controls these tools in both the loadout and the execution
+    // guard, without granting unrelated tools or changing the runtime conditions for task/Goal.
+    const root = await createTempWorkspace();
+    const agentDir = await createTempWorkspace();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const allowed = { provider: "xai", id: "grok-4.7" };
+    const blocked = { provider: "xai", id: "grok-4.6" };
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await writeAgentFile(agentDir, "searcher.md", "---\nname: searcher\nmodel: xai/grok-4.7\ntools: [read, url_context]\n---\n");
+      await writePiBaseConfig(root, {
+        toolModels: {
+          web_search: ["xai/grok-4.7*"],
+          url_context: [],
+          task: ["xai/*"],
+          get_goal: ["xai/*"],
+        },
+        yolo: true,
+      });
+      const registry = createToolRegistry({ cwd: root, model: blocked, models: [allowed, blocked] });
+      const execute = vi.fn(async () => ({ content: [{ type: "text", text: "search result" }] }));
+      for (const name of ["web_search", "url_context", "unmanaged_tool"]) {
+        registry.pi.registerTool({ name, execute });
+      }
+      piBaseExtension(registry.pi as any);
+      registry.pi.appendEntry(AGENT_STATE_ENTRY, { name: "searcher" });
+      await registry.emit("session_start", { reason: "resume" });
+      expect(registry.getActiveTools()).toEqual(["read"]);
+
+      await registry.runCommand("agent", "searcher");
+      expect(registry.getCurrentModel()).toEqual(allowed);
+      await registry.emit("turn_start", { turnIndex: 0 });
+      expect(registry.getActiveTools()).toEqual(["read", "web_search"]);
+      await registry.getTool("web_search").execute("search-ok", { query: "test" });
+      expect(execute).toHaveBeenCalledTimes(1);
+      const unmanaged = await registry.getTool("unmanaged_tool").execute("unmanaged-blocked", {});
+      expect(unmanaged.content[0].text).toContain('Agent "searcher" is not allowed');
+
+      await registry.pi.setModel(blocked);
+      await registry.emit("model_select", { model: blocked, previousModel: allowed, source: "set" });
+      expect(registry.getActiveTools()).toEqual(["read"]);
+      const denied = await registry.getTool("web_search").execute("search-blocked", { query: "test" });
+      expect(denied.content[0].text).toContain('model "xai/grok-4.6" by toolModels');
+      expect(execute).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     }
   });
 
