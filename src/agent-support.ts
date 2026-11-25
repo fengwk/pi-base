@@ -107,7 +107,7 @@ export function registerAgentSupport(
     "appendEntry" | "getActiveTools" | "getAllTools" | "getThinkingLevel" | "on" | "registerCommand" | "setActiveTools" | "setModel" | "setThinkingLevel"
   >,
   options: {
-    baseToolGuide: string;
+    baseToolGuide: (toolNames: readonly string[]) => string;
     subagentControls?: SubagentControls;
     getStartupAgentName?: () => string | undefined;
     getConfiguredDefaultAgentName?: (cwd: string) => string | undefined;
@@ -552,8 +552,9 @@ export function registerAgentSupport(
     synchronizeExplicitTools(ctx);
     const activeAgent = resolveAgent(activeAgentName) ?? catalog.byName.get(DEFAULT_AGENT_NAME);
     const promptOptions = event.systemPromptOptions;
+    const activeTools = pi.getActiveTools();
     if (activeAgent) {
-      if (activeAgent.tools !== undefined) promptOptions.selectedTools = [...pi.getActiveTools()];
+      if (activeAgent.tools !== undefined) promptOptions.selectedTools = [...activeTools];
       warnUnknownAllowlistEntries(ctx, activeAgent, "skills", promptOptions.skills.map((skill) => skill.name));
       promptOptions.skills = skillsRenderableInPrompt(filterVisibleSkills(promptOptions.skills, activeAgent.skills));
       promptOptions.customPrompt = activeAgent.prompt ?? promptOptions.customPrompt;
@@ -561,7 +562,9 @@ export function registerAgentSupport(
 
     // Mutate the shared Pi 1.0 options, not the rendered prompt. Returning systemPrompt would
     // force an opaque replacement and hide sections contributed by other extensions.
-    promptOptions.sections.pi_base_tools = options.baseToolGuide.trim();
+    promptOptions.sections.pi_base_tools = options.baseToolGuide(
+      activeTools.filter((name) => !promptOptions.hiddenTools.includes(name)),
+    ).trim();
     promptOptions.sections.pi_base_subagents = activeAgent
       ? buildSubagentSection(activeAgent, promptOptions.selectedTools, promptOptions.cwd).trim()
       : "";

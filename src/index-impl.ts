@@ -1,6 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createFindToolDefinition } from "./find-tool.js";
-import { readFileSync } from "node:fs";
 import { registerReadTool } from "./read.js";
 import { registerEditTool } from "./edit.js";
 import { registerGrepTool } from "./grep.js";
@@ -17,7 +16,7 @@ import { mapFilePathToPath } from "./tool-arg-aliases.js";
 import { canonicalizeAssistantToolCalls } from "./tool-call-canonicalization.js";
 import { findSchema } from "./schemas/find.js";
 import { inferToolResultIsError } from "./tool-result.js";
-import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
+import { loadToolDescription, loadToolPromptSnippet, renderBaseToolGuide } from "./tool-prompt.js";
 import { formatOptionalArgs, renderStreamingCallText, renderRawResult, resolveCollapsedResultLines, resolveCollapsedResultMaxChars, resolveToolPatternValue, shortenHomePath, styleAccent, styleMuted, styleOutput, styleToolTitle, type CollapsedResultLinesResolver, type CollapsedResultMaxCharsResolver } from "./render.js";
 import { applyContextCompressionToMessages, shouldApplyContextCompression } from "./context-compression.js";
 import { applyAnthropicCompressionBoundaryCacheMarker } from "./anthropic-cache-boundary.js";
@@ -65,7 +64,6 @@ const BASE_TOOL_NAMES = [
   "lsp_workspace_symbols",
   "lsp_java_decompile",
 ] as const;
-const BASE_TOOL_GUIDE = readFileSync(new URL("../prompts/base.md", import.meta.url), "utf8").trim();
 
 type RegisteredToolInfo = ReturnType<ExtensionAPI["getAllTools"]>[number];
 
@@ -308,7 +306,7 @@ export default function piBaseExtension(pi: ExtensionAPI, options: PiBaseExtensi
   });
   let goalHandle: GoalSupportHandle | undefined;
   const agentHandle = registerAgentSupport(pi, {
-    baseToolGuide: BASE_TOOL_GUIDE,
+    baseToolGuide: renderBaseToolGuide,
     subagentControls,
     getStartupAgentName: () => {
       const value = pi.getFlag("agent");

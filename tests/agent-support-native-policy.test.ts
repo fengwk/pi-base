@@ -29,7 +29,7 @@ describe("native agent tool policy", () => {
 
   function harness(options: Omit<Parameters<typeof registerAgentSupport>[1], "baseToolGuide"> = {}) {
     const registry = createToolRegistry({ cwd: agentDir, model: { provider: "openai", id: "gpt-5" } });
-    registerAgentSupport(registry.pi as never, { baseToolGuide: "", ...options });
+    registerAgentSupport(registry.pi as never, { baseToolGuide: () => "", ...options });
     const register = (name: string, exposure: ToolExposure = "direct") => {
       registry.pi.registerTool({ name, exposure, execute: async () => ({ content: [] }) });
       // Pi auto-activates newly registered direct/model-only tools, not codemode/deferred/hidden.

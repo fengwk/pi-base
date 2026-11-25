@@ -7,13 +7,37 @@ import { lspGotoDefinitionSchema, lspJavaDecompileSchema, lspWorkspaceSymbolsSch
 import { readSchema } from "../src/schemas/read.js";
 import { writeSchema } from "../src/schemas/write.js";
 import { createTaskSchema } from "../src/subagent/schema.js";
-import { loadToolDescription } from "../src/tool-prompt.js";
+import { loadToolDescription, renderBaseToolGuide } from "../src/tool-prompt.js";
 
 function descriptionOf(schema: unknown): string | undefined {
   return (schema as { description?: string }).description;
 }
 
 describe("tool prompt loading", () => {
+  it("keeps the original guide when all tools are available", () => {
+    // Intent: filtering unavailable tools must not change the full guide.
+    expect(renderBaseToolGuide(["read", "find", "grep", "edit", "write"])).toBe([
+      "**Your tool usage**",
+      "",
+      "- Use the `read` tool — not `cat`, `head`, `tail`, `sed`, or `ls` — to inspect files and directories.",
+      "- Use the `find` tool — not shell `find` or `fd` — to discover files by path pattern.",
+      "- Use the `grep` tool — not shell `grep` or `rg` — to search file contents; use `read` on matches when context is needed.",
+      "- Use the `edit` or `write` tool — not `cat >`, `tee`, heredocs, or `python`/`node`/`perl` one-liners — to create or modify files; read existing files first.",
+    ].join("\n"));
+  });
+
+  it("names only available tools in a partial toolset", () => {
+    // Intent: compound rules must not keep a missing tool as a fallback or prerequisite.
+    const writeGuide = renderBaseToolGuide(["grep", "write"]);
+    expect(writeGuide).toContain("Use the `grep` tool");
+    expect(writeGuide).toContain("Use the `write` tool");
+    expect(writeGuide).not.toMatch(/`(?:read|edit)`|read existing files first/);
+    const editGuide = renderBaseToolGuide(["read", "edit"]);
+    expect(editGuide).toContain("Use the `edit` tool");
+    expect(editGuide).toContain("to modify files; read existing files first.");
+    expect(editGuide).not.toContain("`write`");
+  });
+
   it("substitutes every bash placeholder in both the description and the snippet", () => {
     // Intent: loadToolDescription wraps each key as `${key}`, so callers must pass bare names.
     // Passing pre-wrapped `${shell}` keys silently leaves raw placeholders in model-visible text.

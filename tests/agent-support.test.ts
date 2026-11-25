@@ -113,7 +113,7 @@ describe("agent support", () => {
         "---\nname: worker\nmodel: deepseek/old-model\nthinkingLevel: high\n---\nOld worker.\n",
       );
       const registry = createToolRegistry();
-      const handle = registerAgentSupport(registry.pi as never, { baseToolGuide: "" });
+      const handle = registerAgentSupport(registry.pi as never, { baseToolGuide: () => "" });
 
       expect(handle.resolveAgentRuntimeConfig("worker")).toEqual({
         model: { provider: "deepseek", modelId: "old-model" },
@@ -224,7 +224,11 @@ You are the planner.
       expect(plannerPrompt.systemPrompt).toContain("Appendix");
       expect(plannerPrompt.systemPrompt).toContain("<name>spec</name>");
       expect(plannerPrompt.systemPrompt).not.toContain("<name>other</name>");
-      expect(plannerPrompt.systemPrompt).toContain("**Your tool usage**");
+      // Intent: a read-only agent sees its own tool guidance, not instructions for unavailable tools.
+      const plannerGuide = plannerPrompt.systemPromptOptions.sections.pi_base_tools;
+      expect(plannerGuide).toContain("Use the `read` tool");
+      expect(plannerGuide).toContain("Use the `grep` tool");
+      expect(plannerGuide).not.toMatch(/`(?:find|edit|write)`/);
 
       await registry.pi.setModel(defaultModel as any);
       registry.setThinkingLevel("off");
@@ -1006,6 +1010,7 @@ Locked prompt.
       expect(rebuiltPrompt.systemPrompt).not.toContain("<name>spec</name>");
       expect(rebuiltPrompt.systemPrompt).not.toContain("<name>other</name>");
       expect(rebuiltPrompt.systemPrompt).not.toContain("The following skills provide specialized instructions for specific tasks.");
+      expect(rebuiltPrompt.systemPrompt).not.toContain("<pi_base_tools>");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.PI_CODING_AGENT_DIR;
@@ -1771,7 +1776,7 @@ skills:
     registry.pi.on("before_agent_start", (event: any) => {
       event.systemPromptOptions.contextFiles.push({ path: "before.md", content: "Before <context>." });
     });
-    registerAgentSupport(registry.pi as never, { baseToolGuide: "" });
+    registerAgentSupport(registry.pi as never, { baseToolGuide: () => "" });
     registry.pi.on("before_agent_start", (event: any) => {
       expect(event.systemPromptOptions.contextFiles[0]).toEqual(initial);
       event.systemPromptOptions.contextFiles[0].content += "\nLater <context>.";
@@ -2156,7 +2161,7 @@ skills:
           expect(event.systemPrompt).toBe(ctx.getSystemPrompt());
           expect(event.systemPrompt).toContain("<before_extension>\nEarlier extension.\n</before_extension>");
         });
-        registerAgentSupport(registry.pi as never, { baseToolGuide: "Pi-base tool guide." });
+        registerAgentSupport(registry.pi as never, { baseToolGuide: () => "Pi-base tool guide." });
         registry.pi.on("before_agent_start", (event: any, ctx: any) => {
           expect(event.systemPromptOptions).toBe(sharedOptions);
           expect(event.systemPromptOptions.forceSystemPrompt).toBeUndefined();
@@ -2252,7 +2257,7 @@ skills:
       const registry = createToolRegistry({ cwd: root });
       const force = () => ({ systemPrompt: forcedPrompt });
       if (source === "before") registry.pi.on("before_agent_start", force);
-      registerAgentSupport(registry.pi as never, { baseToolGuide: "Pi-base tool guide." });
+      registerAgentSupport(registry.pi as never, { baseToolGuide: () => "Pi-base tool guide." });
       if (source === "after") registry.pi.on("before_agent_start", force);
       registry.pi.on("before_agent_start", (event: any, ctx: any) => {
         event.systemPromptOptions.sections.last_extension = "Must not override forced prompt.";
