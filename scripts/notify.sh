@@ -17,6 +17,7 @@ ASSET_DIR="$SCRIPT_DIR/assets"
 ICON_FILE="$ASSET_DIR/logo.png"
 SOUND_FILE="$ASSET_DIR/notify.wav"
 WINDOWS_NOTIFY_SCRIPT="$SCRIPT_DIR/notify_windows.ps1"
+ACTION_NOTIFY_SCRIPT="$SCRIPT_DIR/notify-action.py"
 PULSE_WAKEUP_SLEEP_SEC="${PI_NOTIFY_PULSE_WAKEUP_SLEEP_SEC:-0.12}"
 
 kind="${PI_NOTIFY_KIND:-generic}"
@@ -119,6 +120,7 @@ send_windows_notification() {
   local body="$3"
   local tmux_target="$4"
   local tmux_client_tty="$5"
+  local tmux_context="$6"
   local win_script=""
   local win_icon=""
 
@@ -139,6 +141,7 @@ send_windows_notification() {
     -WslNotifyScriptBase64 "$(encode_base64 "$SCRIPT_PATH")" \
     -TmuxTargetBase64 "$(encode_base64 "$tmux_target")" \
     -TmuxClientTtyBase64 "$(encode_base64 "$tmux_client_tty")" \
+    -TmuxContextBase64 "$(encode_base64 "$tmux_context")" \
     -WtSessionBase64 "$(encode_base64 "$wt_session")" >/dev/null 2>&1
 }
 
@@ -162,86 +165,222 @@ play_linux_sound() {
   return 1
 }
 
-# ------------------------- Jump: Target Resolution -------------------------
+# ------------------------- Jump: tmux -------------------------
 
-resolve_tmux_target() {
-  # 解析当前通知来源对应的 tmux 目标（session:window.pane）
-  local target=""
-
-  if ! command -v tmux >/dev/null 2>&1; then
-    printf '%s' ""
-    return
-  fi
-
-  if [[ -n "$tmux_pane" ]]; then
-    while IFS=' ' read -r pane pane_target; do
-      if [[ "$pane" == "$tmux_pane" ]]; then
-        target="$pane_target"
-        break
-      fi
-    done < <(tmux list-panes -a -F '#{pane_id} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || true)
-  fi
-
-  if [[ -z "$target" && -n "${TMUX:-}" ]]; then
-    target="$(tmux display-message -p '#S:#I.#P' 2>/dev/null || true)"
-  fi
-
-  printf '%s' "$target"
+notify_error() {
+  printf 'Pi notify: %s\n' "$1" >&2
 }
 
-jump_tmux_target() {
-  # 仅实现 tmux 跳转：切会话 -> 切窗口 -> 切 pane
-  local target="$1"
-  local client_tty="$2"
-  local session=""
-  local window=""
+TMUX_JUMP_SOCKET=""
 
-  if [[ -z "$target" ]]; then
+tmux_command() {
+  # The WSL click runs outside the originating tmux server's environment.
+  if [[ -n "$TMUX_JUMP_SOCKET" ]]; then
+    tmux -S "$TMUX_JUMP_SOCKET" "$@"
+  else
+    tmux "$@"
+  fi
+}
+
+tmux_resolve_target() {
+  # Return session|window|pane. Stable targets follow the pane ID, preferring its captured
+  # session if the window is linked. Old Windows notifications carry name:index.index.
+  # 1 = missing/invalid target, 2 = query failure, 3 = ambiguous linked pane.
+  local target="$1" want_pane="" want_session="" legacy_session="" legacy_window="" legacy_pane=""
+  local rows pane session window windex pindex name found="" location ambiguous=0
+
+  if [[ "$target" =~ ^(\$[0-9]+):@[0-9]+\.(%[0-9]+)$ ]]; then
+    want_session="${BASH_REMATCH[1]}" want_pane="${BASH_REMATCH[2]}"
+  elif [[ "$target" =~ ^%[0-9]+$ ]]; then
+    want_pane="$target"
+  elif [[ "$target" =~ ^([^:]+):([0-9]+)\.([0-9]+)$ ]]; then
+    legacy_session="${BASH_REMATCH[1]}" legacy_window="${BASH_REMATCH[2]}" legacy_pane="${BASH_REMATCH[3]}"
+  else
     return 1
   fi
 
-  session="${target%%:*}"
-  window="${target#*:}"
-  window="${window%%.*}"
+  # display-message can fall back to a current pane when its target is gone; list exact IDs.
+  rows="$(tmux_command list-panes -a -F '#{pane_id}|#{session_id}|#{window_id}|#{window_index}|#{pane_index}|#{session_name}')" || return 2
+  while IFS='|' read -r pane session window windex pindex name; do
+    if [[ -n "$want_pane" ]]; then
+      [[ "$pane" == "$want_pane" ]] || continue
+      location="$session|$window|$pane"
+      if [[ "$session" == "$want_session" ]]; then
+        printf '%s' "$location"
+        return
+      fi
+      if [[ -n "$found" && "$found" != "$location" ]]; then
+        ambiguous=1
+      fi
+      found="$location"
+    elif [[ "$name" == "$legacy_session" && "$windex" == "$legacy_window" && "$pindex" == "$legacy_pane" ]]; then
+      printf '%s|%s|%s' "$session" "$window" "$pane"
+      return
+    fi
+  done <<< "$rows"
 
-  if [[ -n "$client_tty" ]]; then
-    tmux switch-client -c "$client_tty" -t "$session" >/dev/null 2>&1 || true
-  else
-    tmux switch-client -t "$session" >/dev/null 2>&1 || true
-  fi
+  [[ -n "$found" ]] || return 1
+  [[ "$ambiguous" -eq 0 ]] || return 3
+  printf '%s' "$found"
+}
 
-  tmux select-window -t "${session}:${window}" >/dev/null 2>&1 || true
+tmux_client_rows() {
+  tmux_command list-clients -F '#{client_tty}|#{client_pid}|#{session_id}|#{pane_id}|#{window_id}|#{pid}|#{client_control_mode}'
+}
 
-  # 以最终 pane 选中是否成功作为跳转成功标准。
-  if tmux select-pane -t "$target" >/dev/null 2>&1; then
-    return 0
-  fi
+tmux_terminal_client() {
+  [[ "$1" == /dev/* && "$2" =~ ^[1-9][0-9]*$ && "$3" != 1 ]]
+}
 
+tmux_choose_client() {
+  # Capture mode considers only clients viewing the source pane. At click time prefer the
+  # captured tty/PID, then a client in the target session, then a sole remaining terminal.
+  # 1 = no safe client, 2 = query failure, 3 = replaced server.
+  local mode="$1" target_session="$2" target_pane="$3" want_server="$4" want_tty="${5:-}" want_pid="${6:-}"
+  local rows tty pid session pane window server control rank count=0 best_tty="" best_pid=0 best_rank=4
+  rows="$(tmux_client_rows)" || return 2
+  while IFS='|' read -r tty pid session pane window server control; do
+    [[ -z "$want_server" || -z "$server" || "$server" == "$want_server" ]] || return 3
+    tmux_terminal_client "$tty" "$pid" "$control" || continue
+    count=$((count + 1))
+    if [[ "$mode" == "capture" ]]; then
+      [[ "$session" == "$target_session" && "$pane" == "$target_pane" ]] || continue
+      rank=0
+    elif [[ "$tty" == "$want_tty" ]]; then
+      # A reused tty is not the original client and must not be picked as a fallback.
+      [[ -z "$want_pid" || "$pid" == "$want_pid" ]] || continue
+      rank=0
+    elif [[ "$session" == "$target_session" && "$pane" == "$target_pane" ]]; then
+      rank=1
+    elif [[ "$session" == "$target_session" ]]; then
+      rank=2
+    else
+      rank=3
+    fi
+    if [[ "$rank" -lt "$best_rank" || ( "$rank" -eq "$best_rank" && "$pid" -lt "$best_pid" ) ]]; then
+      best_rank="$rank" best_pid="$pid" best_tty="$tty"
+    fi
+  done <<< "$rows"
+  [[ -n "$best_tty" && ( "$best_rank" -lt 3 || "$count" -eq 1 ) ]] || return 1
+  printf '%s|%s' "$best_tty" "$best_pid"
+}
+
+tmux_read_client() {
+  # Set the caller's current_session/current_window/current_pane for that exact client.
+  # Unlike initial client selection, this recheck cannot pick a fallback.
+  local want_tty="$1" want_pid="$2" want_server="$3" rows tty pid session pane window server control
+  rows="$(tmux_client_rows)" || return 2
+  while IFS='|' read -r tty pid session pane window server control; do
+    [[ -z "$want_server" || -z "$server" || "$server" == "$want_server" ]] || return 3
+    if [[ "$tty" == "$want_tty" && "$pid" == "$want_pid" ]] && tmux_terminal_client "$tty" "$pid" "$control"; then
+      current_session="$session" current_window="$window" current_pane="$pane"
+      return 0
+    fi
+  done <<< "$rows"
   return 1
 }
 
-resolve_tmux_client_tty() {
-  # 记录通知产生时所在 tmux client tty，用于后续精准跳转。
-  # 优先按 pane 目标反查可见 client，避免 detached 脚本里丢失“当前 client”上下文。
-  local target="$1"
-  local tty=""
+tmux_require_client() {
+  local rc=0
+  tmux_read_client "$@" || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    2) notify_error "tmux jump failed: tmux client query failed" ;;
+    3) notify_error "tmux jump failed: tmux server changed since the notification" ;;
+    *) notify_error "tmux jump failed: the selected client disappeared" ;;
+  esac
+  return 1
+}
 
-  if command -v tmux >/dev/null 2>&1; then
-    if [[ -n "$target" ]]; then
-      while IFS=' ' read -r client_tty client_target; do
-        if [[ "$client_target" == "$target" ]]; then
-          tty="$client_tty"
-          break
-        fi
-      done < <(tmux list-clients -F '#{client_tty} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || true)
+tmux_navigate_client() {
+  local tty="$1" pid="$2" server="$3" session="$4" window="$5" pane="$6"
+  local current_session current_window current_pane
+  tmux_require_client "$tty" "$pid" "$server" || return 1
+
+  if [[ "$current_session" != "$session" ]]; then
+    if ! tmux_command switch-client -c "$tty" -t "$session"; then
+      notify_error "tmux jump failed: tmux switch-client failed"
+      return 1
     fi
-
-    if [[ -z "$tty" && -n "${TMUX:-}" ]]; then
-      tty="$(tmux display-message -p '#{client_tty}' 2>/dev/null || true)"
+    tmux_require_client "$tty" "$pid" "$server" || return 1
+    if [[ "$current_session" != "$session" ]]; then
+      notify_error "tmux jump failed: the client did not switch to the target session"
+      return 1
     fi
   fi
 
-  printf '%s' "$tty"
+  if [[ "$current_window" != "$window" ]]; then
+    if ! tmux_command select-window -t "$session:$window"; then
+      notify_error "tmux jump failed: tmux select-window failed"
+      return 1
+    fi
+    tmux_require_client "$tty" "$pid" "$server" || return 1
+    if [[ "$current_session" != "$session" || "$current_window" != "$window" ]]; then
+      notify_error "tmux jump failed: the client does not display the target window"
+      return 1
+    fi
+  fi
+
+  if [[ "$current_pane" != "$pane" ]]; then
+    if ! tmux_command select-pane -t "$session:$window.$pane"; then
+      notify_error "tmux jump failed: tmux select-pane failed"
+      return 1
+    fi
+    tmux_require_client "$tty" "$pid" "$server" || return 1
+  fi
+
+  if [[ "$current_session" != "$session" || "$current_window" != "$window" || "$current_pane" != "$pane" ]]; then
+    notify_error "tmux jump failed: the client does not display the target pane"
+    return 1
+  fi
+}
+
+jump_tmux_target() {
+  local target="$1" origin_tty="$2" context="$3" TMUX_JUMP_SOCKET=""
+  local server="" origin_pid="" actual_server location session window pane client rc=0
+  if ! command -v tmux >/dev/null 2>&1; then
+    notify_error "tmux jump failed: tmux is not available"
+    return 1
+  fi
+  if [[ -z "$context" ]]; then
+    # Only pre-upgrade, name-based callbacks lack a server identity. Pane IDs alone
+    # could resolve to an unrelated pane on another tmux server.
+    if [[ ! "$target" =~ ^[^:]+:[0-9]+\.[0-9]+$ ]]; then
+      notify_error "tmux jump failed: missing captured server context"
+      return 1
+    fi
+  else
+    IFS='|' read -r server origin_pid TMUX_JUMP_SOCKET <<< "$context"
+    if [[ ! "$server" =~ ^[1-9][0-9]*$ || "$TMUX_JUMP_SOCKET" != /* || ( -n "$origin_pid" && ! "$origin_pid" =~ ^[1-9][0-9]*$ ) ]]; then
+      notify_error "tmux jump failed: invalid captured client/server context"
+      return 1
+    fi
+    if ! actual_server="$(tmux_command display-message -p '#{pid}')"; then
+      notify_error "tmux jump failed: tmux server query failed"
+      return 1
+    fi
+    if [[ "$actual_server" != "$server" ]]; then
+      notify_error "tmux jump failed: tmux server changed since the notification"
+      return 1
+    fi
+  fi
+
+  location="$(tmux_resolve_target "$target")" || rc=$?
+  case "$rc" in
+    0) ;;
+    2) notify_error "tmux jump failed: tmux pane query failed"; return 1 ;;
+    3) notify_error "tmux jump failed: target pane is linked to multiple sessions"; return 1 ;;
+    *) notify_error "tmux jump failed: target pane no longer exists (${target})"; return 1 ;;
+  esac
+  IFS='|' read -r session window pane <<< "$location"
+
+  client="$(tmux_choose_client jump "$session" "$pane" "$server" "$origin_tty" "$origin_pid")" || rc=$?
+  case "$rc" in
+    0) tmux_navigate_client "${client%%|*}" "${client#*|}" "$server" "$session" "$window" "$pane" ;;
+    2) notify_error "tmux jump failed: tmux client query failed"; return 1 ;;
+    3) notify_error "tmux jump failed: tmux server changed since the notification"; return 1 ;;
+    *) notify_error "tmux jump failed: no attached tmux client to switch to the target safely"; return 1 ;;
+  esac
 }
 
 detect_display_backend() {
@@ -291,96 +430,69 @@ is_gnome_wayland() {
   [[ "$session_type" == "wayland" || ( -z "$session_type" && -n "${WAYLAND_DISPLAY:-}" ) ]] && is_gnome_desktop
 }
 
-gnome_resolve_pane() {
-  # Resolve the captured source pane to exactly one session/window. list-panes -a lists a
-  # linked window once per session, so more than one row means an ambiguous target.
-  # Returns 2 when the tmux query itself fails, 1 when the pane is not uniquely present.
-  local rows pane session window
-  local count=0
-  GNOME_PANE_SESSION="" GNOME_PANE_WINDOW=""
-  rows="$(tmux list-panes -a -F '#{pane_id}|#{session_id}|#{window_id}')" || return 2
-  while IFS='|' read -r pane session window; do
-    if [[ "$pane" == "$GNOME_PANE" ]]; then
-      GNOME_PANE_SESSION="$session"
-      GNOME_PANE_WINDOW="$window"
-      ((count += 1))
-    fi
-  done <<< "$rows"
-  [[ "$count" -eq 1 && "$GNOME_PANE_SESSION" == \$* && "$GNOME_PANE_WINDOW" == @* ]]
-}
-
 gnome_client_candidates() {
-  # Ordered click candidates as "tty|pid": clients currently viewing the source pane,
-  # then clients of the source session, then any other client on the same server. Numeric
-  # PID ascending breaks ties so enumeration order never changes the outcome. Malformed
-  # rows are rejected so a bogus tty/PID is never switched or activated.
-  local rows tty pid session pane priority
-  local collected=""
-  rows="$(tmux list-clients -F '#{client_tty}|#{client_pid}|#{session_id}|#{pane_id}')" || return 1
-  while IFS='|' read -r tty pid session pane; do
-    [[ "$tty" == /dev/* && "$pid" =~ ^[0-9]+$ ]] || continue
+  # Freeze source-pane viewers first, then other clients in its session. A client in a
+  # different session is a fallback only if there is exactly one such candidate.
+  local rows tty pid session pane window server control priority collected="" fallback="" others=0
+  rows="$(tmux_client_rows)" || return 1
+  while IFS='|' read -r tty pid session pane window server control; do
+    [[ -z "$server" || "$server" == "$GNOME_SERVER_PID" ]] || return 1
+    tmux_terminal_client "$tty" "$pid" "$control" || continue
     if [[ "$pane" == "$GNOME_PANE" ]]; then
       priority=0
     elif [[ "$session" == "$GNOME_SESSION" ]]; then
       priority=1
     else
-      priority=2
+      others=$((others + 1))
+      fallback="2|${pid}|${tty}"$'\n'
+      continue
     fi
     collected+="${priority}|${pid}|${tty}"$'\n'
   done <<< "$rows"
+  if [[ "$others" -eq 1 ]]; then
+    collected+="$fallback"
+  fi
   [[ -n "$collected" ]] || return 0
-  while IFS='|' read -r _ pid tty; do
+  printf '%s' "$collected" | sort -t'|' -k1,1n -k2,2n | while IFS='|' read -r _ pid tty; do
     printf '%s|%s\n' "$tty" "$pid"
-  done < <(printf '%s' "$collected" | sort -t'|' -k1,1n -k2,2n)
+  done
 }
 
 resolve_gnome_context() {
-  # Creation-time snapshot only: server identity, source pane/session and the frozen,
-  # ordered client candidate list. Nothing is activated and no client is switched here.
-  GNOME_PANE="" GNOME_PANE_SESSION="" GNOME_PANE_WINDOW="" GNOME_SESSION="" GNOME_SERVER_PID="" GNOME_CANDIDATES=""
+  # Capture identities without activating a window or switching a client.
+  local location
   command -v tmux >/dev/null 2>&1 || return 1
-  [[ "$tmux_pane" == %* ]] || return 1
+  [[ "$tmux_pane" =~ ^%[0-9]+$ ]] || return 1
   GNOME_PANE="$tmux_pane"
-  gnome_resolve_pane || return 1
-  GNOME_SESSION="$GNOME_PANE_SESSION"
-  GNOME_SERVER_PID="$(tmux display-message -p '#{pid}')" || return 1
-  [[ "$GNOME_SERVER_PID" =~ ^[0-9]+$ ]] || return 1
+  GNOME_SERVER_PID="$(tmux_command display-message -p '#{pid}')" || return 1
+  [[ "$GNOME_SERVER_PID" =~ ^[1-9][0-9]*$ ]] || return 1
+  location="$(tmux_resolve_target "$GNOME_PANE")" || return 1
+  GNOME_SESSION="${location%%|*}"
   GNOME_CANDIDATES="$(gnome_client_candidates)" || return 1
-  # Without any attached client there is nothing to switch to, so offer no action.
   [[ -n "$GNOME_CANDIDATES" ]]
 }
 
-gnome_fail() {
-  # Emit one stage-specific diagnostic. Callers that already reported a stage must not be
-  # summarized by the notification wrapper as "no local window matched".
-  GNOME_DIAGNOSTIC=1
-  printf 'Pi notify: %s\n' "$1" >&2
-}
-
 gnome_revalidate_source() {
-  # 0 only while the captured server runs and the captured pane is still uniquely part of
-  # the captured session. GNOME_CLICK_WINDOW carries the current window ID so the tmux
-  # switch never targets a stale window. Failure records the stale stage on stderr.
-  local server resolved=0
-  GNOME_CLICK_WINDOW=""
-  if ! server="$(tmux display-message -p '#{pid}' 2>/dev/null)"; then
-    gnome_fail "GNOME focus aborted: tmux server query failed"
+  # The pane must still be unique in the captured session. It can move to another window.
+  local server location session pane rc=0
+  if ! server="$(tmux_command display-message -p '#{pid}')"; then
+    notify_error "GNOME focus aborted: tmux server query failed"
     return 1
   fi
-  if [[ -z "$GNOME_SERVER_PID" || "$server" != "$GNOME_SERVER_PID" ]]; then
-    gnome_fail "GNOME focus aborted: tmux server changed since the notification"
+  if [[ "$server" != "$GNOME_SERVER_PID" ]]; then
+    notify_error "GNOME focus aborted: tmux server changed since the notification"
     return 1
   fi
-  gnome_resolve_pane || resolved=$?
-  if [[ "$resolved" -eq 2 ]]; then
-    gnome_fail "GNOME focus aborted: tmux pane query failed"
+  location="$(tmux_resolve_target "$GNOME_PANE")" || rc=$?
+  if [[ "$rc" -eq 2 ]]; then
+    notify_error "GNOME focus aborted: tmux pane query failed"
     return 1
   fi
-  if [[ "$resolved" -ne 0 || "$GNOME_PANE_SESSION" != "$GNOME_SESSION" ]]; then
-    gnome_fail "GNOME focus aborted: source pane/session changed since the notification"
+  IFS='|' read -r session GNOME_CLICK_WINDOW pane <<< "$location"
+  if [[ "$rc" -ne 0 || "$session" != "$GNOME_SESSION" ]]; then
+    notify_error "GNOME focus aborted: source pane/session changed since the notification"
     return 1
   fi
-  GNOME_CLICK_WINDOW="$GNOME_PANE_WINDOW"
 }
 
 gnome_activate_suffix() {
@@ -415,18 +527,6 @@ gnome_activate_suffix() {
   esac
 }
 
-gnome_client_still_current() {
-  # The caller validates the server. Return 2 for query failure, 1 for a missing client.
-  local want_tty="$1" want_pid="$2" rows tty pid
-  rows="$(tmux list-clients -F '#{client_tty}|#{client_pid}' 2>/dev/null)" || return 2
-  while IFS='|' read -r tty pid; do
-    if [[ "$tty" == "$want_tty" && "$pid" == "$want_pid" ]]; then
-      return 0
-    fi
-  done <<< "$rows"
-  return 1
-}
-
 gnome_choose_candidate() {
   # Walk the frozen candidates in priority order. Every candidate is re-validated just
   # before its activation: a vanished client is skipped (and never retried), while a
@@ -434,23 +534,19 @@ gnome_choose_candidate() {
   # GNOME_CHOSEN="tty|pid" and returns 0 on the first exact title that the extension
   # matches; otherwise reports the stage and returns 1.
   GNOME_CHOSEN=""
-  local pass tty pid rc suffix probed=0
+  local pass tty pid rc suffix probed=0 current_session current_window current_pane
   for pass in 1 2 3; do
     while IFS='|' read -r tty pid; do
       [[ -n "$tty" ]] || continue
-      # The source/server must still be valid before touching the next candidate.
       gnome_revalidate_source || return 1
-      # A candidate that disappeared is skipped, not activated against a stale identity.
-      if gnome_client_still_current "$tty" "$pid"; then
-        :
-      else
-        rc=$?
-        if [[ "$rc" -eq 2 ]]; then
-          gnome_fail "GNOME focus aborted: tmux client query failed"
-          return 1
-        fi
-        continue
-      fi
+      rc=0
+      tmux_read_client "$tty" "$pid" "$GNOME_SERVER_PID" || rc=$?
+      case "$rc" in
+        0) ;;
+        1) continue ;; # The captured client vanished; try the next one.
+        2) notify_error "GNOME focus aborted: tmux client query failed"; return 1 ;;
+        3) notify_error "GNOME focus aborted: tmux server changed since the notification"; return 1 ;;
+      esac
       ((probed += 1))
       suffix="[pi-tmux:${GNOME_SERVER_PID}:${pid}]"
       if gnome_activate_suffix "$suffix"; then
@@ -460,7 +556,7 @@ gnome_choose_candidate() {
         rc=$?
       fi
       if [[ "$rc" -eq 2 ]]; then
-        gnome_fail "GNOME focus aborted: D-Bus activation error: ${GNOME_DBUS_ERROR}"
+        notify_error "GNOME focus aborted: D-Bus activation error: ${GNOME_DBUS_ERROR}"
         return 1
       fi
     done <<< "$GNOME_CANDIDATES"
@@ -468,9 +564,9 @@ gnome_choose_candidate() {
     [[ "$pass" -eq 3 ]] || sleep 0.15
   done
   if [[ "$probed" -eq 0 ]]; then
-    gnome_fail "GNOME focus aborted: all captured tmux clients disappeared before activation"
+    notify_error "GNOME focus aborted: all captured tmux clients disappeared before activation"
   else
-    gnome_fail "GNOME focus failed: no local window matched any captured tmux client title"
+    notify_error "GNOME focus failed: no local window matched any captured tmux client title"
   fi
   return 1
 }
@@ -479,44 +575,21 @@ perform_gnome_jump() {
   # Click path. No tmux side effect happens until the extension matches a local window for
   # one candidate, and only that frozen candidate is switched; unmatched clients are
   # untouched. A successful reply is a requested activation, not observed focus.
-  local tty pid suffix attempt rc
-  GNOME_DIAGNOSTIC=0 GNOME_CHOSEN=""
-  gnome_revalidate_source || return 1
+  local tty pid suffix attempt rc current_session current_window current_pane
   gnome_choose_candidate || return 1
-  tty="${GNOME_CHOSEN%%|*}"
-  pid="${GNOME_CHOSEN##*|}"
-  if [[ "$tty" != /dev/* || ! "$pid" =~ ^[0-9]+$ ]]; then
-    gnome_fail "GNOME focus aborted: invalid selected client"
-    return 1
-  fi
+  IFS='|' read -r tty pid <<< "$GNOME_CHOSEN"
 
-  # Re-check the source and the chosen client after the activation round trip.
+  # The source may have changed during the title activation request.
   gnome_revalidate_source || return 1
-  if ! gnome_client_still_current "$tty" "$pid"; then
-    gnome_fail "GNOME focus aborted: selected client disappeared before switching"
-    return 1
-  fi
+  tmux_navigate_client "$tty" "$pid" "$GNOME_SERVER_PID" "$GNOME_SESSION" "$GNOME_CLICK_WINDOW" "$GNOME_PANE" || return 1
 
-  if ! tmux switch-client -c "$tty" -t "$GNOME_SESSION"; then
-    gnome_fail "GNOME focus failed: tmux switch-client failed"
-    return 1
-  fi
-  if ! tmux select-window -t "${GNOME_SESSION}:${GNOME_CLICK_WINDOW}"; then
-    gnome_fail "GNOME focus failed: tmux select-window failed"
-    return 1
-  fi
-  if ! tmux select-pane -t "${GNOME_SESSION}:${GNOME_CLICK_WINDOW}.${GNOME_PANE}"; then
-    gnome_fail "GNOME focus failed: tmux select-pane failed"
-    return 1
-  fi
-
-  # Ask the extension to activate the window again after the tmux switch. The reply only
-  # confirms a matching window was asked to activate; it is not observed focus.
+  # The second request follows any tmux title update; a match is not proof of focus.
   suffix="[pi-tmux:${GNOME_SERVER_PID}:${pid}]"
   for attempt in 1 2 3; do
     gnome_revalidate_source || return 1
-    if ! gnome_client_still_current "$tty" "$pid"; then
-      gnome_fail "GNOME focus aborted: selected client disappeared before activation"
+    tmux_require_client "$tty" "$pid" "$GNOME_SERVER_PID" || return 1
+    if [[ "$current_session" != "$GNOME_SESSION" || "$current_window" != "$GNOME_CLICK_WINDOW" || "$current_pane" != "$GNOME_PANE" ]]; then
+      notify_error "GNOME focus aborted: the client no longer displays the source pane"
       return 1
     fi
     if gnome_activate_suffix "$suffix"; then
@@ -525,34 +598,40 @@ perform_gnome_jump() {
       rc=$?
     fi
     if [[ "$rc" -eq 2 ]]; then
-      gnome_fail "GNOME focus aborted: D-Bus activation error: ${GNOME_DBUS_ERROR}"
+      notify_error "GNOME focus aborted: D-Bus activation error: ${GNOME_DBUS_ERROR}"
       return 1
     fi
     [[ "$attempt" -eq 3 ]] || sleep 0.15
   done
-  gnome_fail "GNOME focus failed: the selected window stopped matching its title"
+  notify_error "GNOME focus failed: the selected window stopped matching its title"
   return 1
 }
 
+send_plain_notification() {
+  local icon="$1" title="$2" body="$3"
+  notify-send -i "$icon" -t 10000 -- "$title" "$body"
+}
+
 send_gnome_notification() {
-  local icon="$1" title="$2" body="$3" action=""
+  local icon="$1" title="$2" body="$3" rc=0
   if ! resolve_gnome_context; then
-    printf '%s\n' 'Pi notify: no GNOME tmux focus target; notification has no focus action' >&2
-    notify-send -i "$icon" -t 10000 "$title" "$body"
+    notify_error "no GNOME tmux focus target; sending a plain notification"
+    send_plain_notification "$icon" "$title" "$body"
     return
   fi
-  # A local window cannot be proven before the click, so an SSH-only server may offer an
-  # action that fails at click time; that failure is reported instead of a false success.
-  action="$(notify-send -i "$icon" -t 10000 -A "default=切回并聚焦" "$title" "$body")" || return 1
-  if [[ "$action" == "default" ]]; then
-    if ! perform_gnome_jump; then
-      # The failing stage is already on stderr; never restate every error as a title miss.
-      if [[ "${GNOME_DIAGNOSTIC:-0}" -eq 0 ]]; then
-        printf '%s\n' 'Pi notify: GNOME focus failed' >&2
-      fi
-      return 1
-    fi
+  if ! command -v python3 >/dev/null 2>&1 || [[ ! -f "$ACTION_NOTIFY_SCRIPT" ]]; then
+    notify_error "GNOME notification actions require python3 and notify-action.py; sending a plain notification"
+    send_plain_notification "$icon" "$title" "$body"
+    return
   fi
+  # The helper must keep the sending D-Bus connection open to receive GNOME's click.
+  python3 "$ACTION_NOTIFY_SCRIPT" "$icon" "$title" "$body" "${PI_NOTIFY_ACTION_TIMEOUT_SEC:-600}" || rc=$?
+  case "$rc" in
+    0) perform_gnome_jump ;;
+    2) send_plain_notification "$icon" "$title" "$body" ;;
+    3) return 0 ;; # The notification was closed or the action timed out.
+    *) notify_error "GNOME notification action helper exited with status $rc"; return "$rc" ;;
+  esac
 }
 
 jump_x11_window() {
@@ -591,34 +670,37 @@ jump_x11_window() {
 # ------------------------- Jump: Action Dispatch -------------------------
 
 perform_jump_action() {
-  # Legacy Windows/X11 jump; GNOME uses its own strict target path.
-  local tmux_target="$1"
-  local tmux_client_tty="$2"
-  local backend="$3"
-  local x11_window_id="$4"
-  local jumped=1
-
-  if [[ -n "$tmux_target" ]] && command -v tmux >/dev/null 2>&1; then
-    if jump_tmux_target "$tmux_target" "$tmux_client_tty"; then
-      jumped=0
-    fi
+  local tmux_target="$1" tmux_client_tty="$2" tmux_context="$3" backend="$4" x11_window_id="$5" rc=0
+  if [[ -n "$tmux_target" ]]; then
+    jump_tmux_target "$tmux_target" "$tmux_client_tty" "$tmux_context" || rc=1
   fi
-
-  if [[ "$backend" == "x11" ]]; then
-    if jump_x11_window "$x11_window_id"; then
-      jumped=0
-    fi
+  if [[ "$backend" == "x11" && -n "$x11_window_id" ]] && ! jump_x11_window "$x11_window_id"; then
+    notify_error "X11 jump failed: could not activate window ${x11_window_id}"
+    rc=1
   fi
-
-  return "$jumped"
+  return "$rc"
 }
 
 resolve_jump_context() {
-  # 统一收集 Jump 所需上下文
-  JUMP_TMUX_TARGET="$(resolve_tmux_target)"
-  JUMP_TMUX_CLIENT_TTY="$(resolve_tmux_client_tty "$JUMP_TMUX_TARGET")"
+  local identity server socket location session window pane client="" rc=0
   JUMP_BACKEND="$(detect_display_backend)"
   JUMP_X11_WINDOW_ID="$(resolve_x11_window_target)"
+  JUMP_TMUX_TARGET="" JUMP_TMUX_CLIENT_TTY="" JUMP_TMUX_CONTEXT=""
+
+  [[ "$tmux_pane" =~ ^%[0-9]+$ ]] && command -v tmux >/dev/null 2>&1 || return 0
+  identity="$(tmux_command display-message -p '#{pid}|#{socket_path}' 2>/dev/null)" || return 0
+  IFS='|' read -r server socket <<< "$identity"
+  [[ "$server" =~ ^[1-9][0-9]*$ && "$socket" == /* ]] || return 0
+  local TMUX_JUMP_SOCKET="$socket"
+  location="$(tmux_resolve_target "$tmux_pane" 2>/dev/null)" || return 0
+  IFS='|' read -r session window pane <<< "$location"
+  client="$(tmux_choose_client capture "$session" "$pane" "$server" 2>/dev/null)" || rc=$?
+  [[ "$rc" -le 1 ]] || return 0
+
+  JUMP_TMUX_TARGET="$session:$window.$pane"
+  JUMP_TMUX_CLIENT_TTY="${client%%|*}"
+  # The WSL worker carries this as base64. Keep the socket last so it can contain delimiters.
+  JUMP_TMUX_CONTEXT="$server|${client#*|}|$socket"
 }
 
 # ------------------------- Audio -------------------------
@@ -663,23 +745,25 @@ play_with_backend() {
 send_linux_notification() {
   # Linux 通知分两类：
   # - GNOME/Wayland：按候选优先级匹配本地窗口，再切换 tmux 目标
-  # - 其他环境：保留带动作按钮的 Jump 交互
+  # - 其他环境：带 Jump/Cancel 动作的通用跳转
   local icon="$1"
   local title="$2"
   local body="$3"
-  local action=""
+  local action
 
-  if command -v notify-send >/dev/null 2>&1; then
-    if is_gnome_wayland; then
-      send_gnome_notification "$icon" "$title" "$body"
-      return
-    fi
-    resolve_jump_context
+  if is_gnome_wayland; then
+    send_gnome_notification "$icon" "$title" "$body"
+    return
+  fi
 
-    action="$(notify-send -i "$icon" -t 10000 -A "jump=Jump" -A "cancel=Cancel" "$title" "$body" 2>/dev/null || true)"
-    if [[ "$action" == "jump" ]]; then
-      perform_jump_action "$JUMP_TMUX_TARGET" "$JUMP_TMUX_CLIENT_TTY" "$JUMP_BACKEND" "$JUMP_X11_WINDOW_ID"
-    fi
+  resolve_jump_context
+  if [[ -z "$JUMP_TMUX_TARGET" && ( "$JUMP_BACKEND" != "x11" || -z "$JUMP_X11_WINDOW_ID" ) ]]; then
+    send_plain_notification "$icon" "$title" "$body"
+    return
+  fi
+  action="$(notify-send -i "$icon" -t 10000 -A 'jump=Jump' -A 'cancel=Cancel' -- "$title" "$body")" || return 1
+  if [[ "$action" == "jump" ]]; then
+    perform_jump_action "$JUMP_TMUX_TARGET" "$JUMP_TMUX_CLIENT_TTY" "$JUMP_TMUX_CONTEXT" "$JUMP_BACKEND" "$JUMP_X11_WINDOW_ID"
   fi
 }
 
@@ -698,8 +782,7 @@ run_linux_notification() {
   title="$(build_title)"
   build_message
 
-  # notify-send 使用动作按钮时会等待用户选择，因此先播放声音
-  # 可以确保通知弹出时立即有提示音，而不是点击后才播放。
+  # 通知动作会等待用户选择，因此先播放声音。
   play_linux_sound "$SOUND_FILE" || true
   send_linux_notification "$ICON_FILE" "$title" "$message"
 }
@@ -711,23 +794,20 @@ run_windows_notification() {
   title="$(build_title)"
   build_message
   resolve_jump_context
-  send_windows_notification "$ICON_FILE" "$title" "$message" "$JUMP_TMUX_TARGET" "$JUMP_TMUX_CLIENT_TTY" || true
+  send_windows_notification "$ICON_FILE" "$title" "$message" "$JUMP_TMUX_TARGET" "$JUMP_TMUX_CLIENT_TTY" "$JUMP_TMUX_CONTEXT"
 }
 
 run_jump_command() {
-  # Windows helper 回调入口：仅执行无感跳转，不重复发送通知
-  local tmux_target="${PI_NOTIFY_TMUX_TARGET:-}"
-  local tmux_client_tty="${PI_NOTIFY_TMUX_CLIENT_TTY:-}"
-
-  if [[ -z "$tmux_target" ]]; then
-    exit 0
+  # The Windows callback skips notification creation and may carry a pre-upgrade target.
+  local target="${PI_NOTIFY_TMUX_TARGET:-}" context=""
+  [[ -n "$target" ]] || return 0
+  if [[ -n "${PI_NOTIFY_TMUX_CONTEXT_BASE64:-}" ]]; then
+    if ! context="$(printf '%s' "$PI_NOTIFY_TMUX_CONTEXT_BASE64" | base64 -d)" || [[ -z "$context" ]]; then
+      notify_error "tmux jump failed: invalid encoded client/server context"
+      return 1
+    fi
   fi
-
-  if perform_jump_action "$tmux_target" "$tmux_client_tty" "none" ""; then
-    exit 0
-  fi
-
-  exit 1
+  jump_tmux_target "$target" "${PI_NOTIFY_TMUX_CLIENT_TTY:-}" "$context"
 }
 
 main() {

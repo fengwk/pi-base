@@ -16,6 +16,8 @@ param(
 
   [string]$TmuxClientTtyBase64 = '',
 
+  [string]$TmuxContextBase64 = '',
+
   [string]$WtSessionBase64 = ''
 )
 
@@ -307,23 +309,22 @@ function Invoke-WindowActivation([IntPtr]$WindowHandle, [uint32]$TargetPid, [uin
   }
 }
 
-function Invoke-WslJumpCallback([string]$Distro, [string]$NotifyScript, [string]$TmuxTarget, [string]$TmuxClientTty) {
+function Invoke-WslJumpCallback([string]$Distro, [string]$NotifyScript, [string]$TmuxTarget, [string]$TmuxClientTty, [string]$TmuxContextBase64) {
   if ([string]::IsNullOrWhiteSpace($Distro) -or [string]::IsNullOrWhiteSpace($NotifyScript) -or [string]::IsNullOrWhiteSpace($TmuxTarget)) {
     return 0
   }
 
   try {
-    Start-Process -FilePath 'wsl.exe' -ArgumentList @(
-      '-d', $Distro,
-      '--',
-      '/usr/bin/env',
+    # Do not pass stable targets (which contain '$') through a Linux shell.
+    $wslArgs = @(
+      '-d', $Distro, '--exec', '/usr/bin/env',
       ("PI_NOTIFY_TMUX_TARGET={0}" -f $TmuxTarget),
       ("PI_NOTIFY_TMUX_CLIENT_TTY={0}" -f $TmuxClientTty),
-      'bash',
-      $NotifyScript,
-      'jump'
-    ) -WindowStyle Hidden | Out-Null
-    return 0
+      ("PI_NOTIFY_TMUX_CONTEXT_BASE64={0}" -f $TmuxContextBase64),
+      'bash', $NotifyScript, 'jump'
+    )
+    & wsl.exe @wslArgs | Out-Null
+    return $LASTEXITCODE
   } catch {
     return 1
   }
@@ -334,6 +335,7 @@ function Start-JumpWorker(
   [string]$WslNotifyScriptBase64,
   [string]$TmuxTargetBase64,
   [string]$TmuxClientTtyBase64,
+  [string]$TmuxContextBase64,
   [string]$WtSessionBase64
 ) {
   if ([string]::IsNullOrWhiteSpace($PSCommandPath)) {
@@ -341,18 +343,25 @@ function Start-JumpWorker(
   }
 
   try {
-    Start-Process -FilePath 'powershell.exe' -ArgumentList @(
-      '-NoProfile',
-      '-Sta',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', $PSCommandPath,
-      '-Mode', 'jump',
-      '-WslDistroBase64', $WslDistroBase64,
-      '-WslNotifyScriptBase64', $WslNotifyScriptBase64,
-      '-TmuxTargetBase64', $TmuxTargetBase64,
-      '-TmuxClientTtyBase64', $TmuxClientTtyBase64,
-      '-WtSessionBase64', $WtSessionBase64
-    ) -WindowStyle Hidden | Out-Null
+    $workerArgs = @(
+      '-NoProfile', '-Sta', '-ExecutionPolicy', 'Bypass',
+      '-File', ('"{0}"' -f $PSCommandPath), '-Mode', 'jump'
+    )
+    $payload = @{
+      WslDistroBase64 = $WslDistroBase64
+      WslNotifyScriptBase64 = $WslNotifyScriptBase64
+      TmuxTargetBase64 = $TmuxTargetBase64
+      TmuxClientTtyBase64 = $TmuxClientTtyBase64
+      TmuxContextBase64 = $TmuxContextBase64
+      WtSessionBase64 = $WtSessionBase64
+    }
+    foreach ($item in $payload.GetEnumerator()) {
+      # Start-Process flattens the array into a command line; omit empty optional values.
+      if ($item.Value) {
+        $workerArgs += @(('-' + $item.Key), $item.Value)
+      }
+    }
+    Start-Process -FilePath 'powershell.exe' -ArgumentList $workerArgs -WindowStyle Hidden | Out-Null
     return 0
   } catch {
     return 1
@@ -379,7 +388,7 @@ if ($Mode -eq 'jump') {
     Invoke-WindowActivation $restoreWindow $restorePid $restoreThread | Out-Null
   }
 
-  exit (Invoke-WslJumpCallback $wslDistro $wslNotifyScript $tmuxTarget $tmuxClientTty)
+  exit (Invoke-WslJumpCallback $wslDistro $wslNotifyScript $tmuxTarget $tmuxClientTty $TmuxContextBase64)
 }
 
 $title = Limit-Text (Decode-Base64Utf8 $TitleBase64).Trim() 63
@@ -498,7 +507,7 @@ try {
     exit 0
   }
 
-  exit (Start-JumpWorker $WslDistroBase64 $WslNotifyScriptBase64 $TmuxTargetBase64 $TmuxClientTtyBase64 $WtSessionBase64)
+  exit (Start-JumpWorker $WslDistroBase64 $WslNotifyScriptBase64 $TmuxTargetBase64 $TmuxClientTtyBase64 $TmuxContextBase64 $WtSessionBase64)
 } catch {
   exit 1
 } finally {

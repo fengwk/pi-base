@@ -171,24 +171,30 @@ Permission 用于防误操作，不是安全沙箱。
 | `agentEnd` | `false` | Agent run settled 为 completed 或 non-retryable error 时通知；active Goal continuation 不发送 completed 通知 |
 | `suppressCompletedAfterRejectionMs` | `5000` | 拒绝权限后抑制 completed 通知 |
 
-桌面通知支持 Linux desktop 和 WSL；其他平台不启用通知。
+桌面通知支持 Linux 和 WSL。tmux 跳转使用稳定 ID，按 session → window → pane 比较所选 client 的当前状态，只切换不同的层级。失败时停止，成功前核对同一个 client 实际显示的内容。tmux 的窗口和 pane 选择是共享的，同一个 session 或显示同一个链接窗口的其他 client 也可能看到变化，但不会被切换到另一个 session。
 
-GNOME Wayland 下点击通知聚焦 tmux 终端，需要安装并启用上游 [Activate Window By Title](https://extensions.gnome.org/extension/5021/activate-window-by-title/)（UUID：`activate-window-by-title@lucaswerkmeister.de`），确认所安装版本支持当前 GNOME Shell（上游 v15 声明支持 45–51；安装前以扩展页面为准），并确保 `gdbus`、`notify-send` 和 `tmux` 可用。在**宿主 tmux** 设置：
+### GNOME Wayland
+
+安装并启用适合当前 GNOME Shell 版本的 [Activate Window By Title](https://extensions.gnome.org/extension/5021/activate-window-by-title/)（`activate-window-by-title@lucaswerkmeister.de`）。聚焦动作需要 `tmux`、`gdbus` 和带 PyGObject 的 `python3`（Ubuntu 上的 `python3-gi`）；Linux 通知还需要 `notify-send`。在**宿主 tmux** 配置中添加：
 
 ```tmux
 set -g set-titles on
 set -g set-titles-string '#S:#I:#W [pi-tmux:#{pid}:#{client_pid}]'
 ```
 
-终端还须将 tmux 设置的标题原样显示在 GNOME 窗口标题**末尾**。通知从 `TMUX_PANE` 的稳定 pane ID 追踪来源，该 pane 必须唯一属于一个 session（被链接到多个 session 时直接拒绝）。创建通知时脚本只记录快照：tmux server PID、来源 session，以及一份冻结且有序的附着 client 候选列表——先是在查看该 pane 的 client，其次是来源 session 中的 client，最后是同一 server 的其他 client，同优先级按数字 PID 升序打破平局。此阶段不激活、不切换任何对象。
+终端必须把 `[pi-tmux:<server>:<client>]` 后缀保留在 GNOME 窗口标题的**末尾**。点击通知正文即可跳转。脚本用同一个 D-Bus 连接发送通知并等待点击，以接收 GNOME 发回给通知发送方的动作信号。通知关闭或等待超过 `PI_NOTIFY_ACTION_TIMEOUT_SEC` 秒（默认 `600`）后，点击不会再跳转。缺少 PyGObject、通知服务不支持动作，或没有安全的 tmux 目标时，只发送普通通知。
 
-点击后脚本先重新核验 tmux server 与来源 pane/session，再按顺序遍历冻结的候选列表：只考虑仍然存在且 tty、PID 均一致的 client；创建通知之后才附着的 client 永不会加入，已消失的候选则跳过并顺延到下一个捕获的候选。每个候选之前都会重新核验 server 与来源：已消失的候选跳过，而 server/来源变化则直接中止本次点击，绝不基于过期身份激活任何窗口。对每个候选，脚本通过扩展精确查找 `[pi-tmux:<server>:<client>]` 标题后缀，`(true,)` 表示存在携带该精确标题的本地窗口——这是“请求激活”，**不是**已观测到的焦点。SSH client 与本地共用同一 tmux server，但没有对应本地窗口，会返回 `(false,)`，因此被跳过且不会改动它的 session。只有在命中之后，脚本才重新核验来源与所选 client，仅切换该 client，按稳定 ID 选择捕获的 session/window/pane，并在再次核验 server、来源与 client 之后请求激活该窗口一次。由于 tmux session 共享 window/pane 选择，切换所选 client 可能改变同一 session 中其他 client 的显示内容，即使脚本从未对它们执行 `switch-client`。各失败阶段会分别输出简洁的 stderr 诊断——来源/来源 client 过期、无本地窗口匹配、D-Bus/扩展错误（含 gdbus 原始报错）、tmux 切换/选择失败——不会把所有错误都归结为“找不到标题”。D-Bus/扩展报错会立即中止，不会继续遍历剩余候选；标题稍有延迟时最多做 3 轮有界重试；存在多个本地匹配时按优先级与数字 PID 取第一个。
+发通知时，Pi 记录来源 server、pane、session 和候选 client。优先选正在查看来源 pane 的 client，其次选来源 session 的其他 client，同级按数字 PID 排序。如果当时只有一个 client 在来源 session 之外，才把它作为回退。已记录的 client 换了 session 仍可跳回；之后才附着或复用旧 tty 的 client 不参与。来源 pane 必须唯一属于原 session，但可以在该 session 内移动到另一个窗口。
 
-只要 server 至少有一个附着 client（包括仅有 SSH client）就会提供“切回并聚焦”动作：点击前无法枚举本地窗口——扩展只提供激活接口，`org.gnome.Shell.Introspect.GetWindows` 返回 `AccessDenied`，因此没有只读预检。这类点击可能以上述错误失败。非 tmux GNOME 或 server 没有任何 client 时只发送普通通知。`(true,)` 仅表示扩展找到了匹配窗口并调用激活，不保证实际焦点已可观测。终端不更新标题、扩展不可用或调用失败时不会回退到通用类名、X11 或 BEL attention；脚本会向 stderr 报错。
+点击后，扩展必须匹配候选窗口的精确标题后缀，脚本才会切换 tmux。没有本地窗口的 SSH client 会被跳过。跳转后脚本再次请求激活终端；扩展匹配只表示已请求激活，不等于确认了焦点。目标过期、找不到窗口、激活失败或 tmux 切换失败时，脚本会向 stderr 报告失败阶段。
 
-可在 Alacritty 中显式运行 `python3 scripts/test-gnome-focus.py --run` 做桌面冒烟验证：它在独立 tmux server 上打开三个临时窗口，其中两个共享同一 session 以覆盖候选优先级与数字 PID 选择，检查真实终端焦点事件和来源 pane 选中状态，结束后关闭测试窗口。该测试不代替实体通知点击，也不控制显示器布局；仍须将目标终端完全显示在另一屏幕上验证。
+在 Alacritty 中运行 `python3 scripts/test-gnome-focus.py --run` 可以做聚焦冒烟验证。它在独立 tmux server 上打开临时窗口，检查实际焦点和选中的 pane；它不测试桌面通知点击。
 
-回滚时从宿主 tmux 配置移除上述两行，**还须在正在运行的 tmux server 中显式恢复事先保存的 `set-titles` 和 `set-titles-string` 原值**（例如使用 `tmux set -g`）；仅重新加载没有这两行的配置不会清除运行时选项。按需禁用扩展；不影响普通通知。WSL / X11 使用各自原有跳转方式。
+回滚时移除 tmux 配置中的两行，并**在运行中的 tmux server 上恢复原来的 `set-titles` 和 `set-titles-string` 值**。仅重载配置不会清除旧值。禁用扩展后仍可接收普通通知。
+
+### WSL 和其他 Linux 桌面
+
+WSL 使用 Windows 通知；其他 Linux 桌面继续通过 `notify-send` 提供 Jump 动作，不需要 PyGObject。跳转在记录的 tmux server 上按 pane ID 查找来源，窗口重编号或 pane 移动后仍可定位。若 pane 同时链接到多个 session、却已不在原 session 中，脚本会停止而不是猜测。优先使用记录的终端，其次选目标 session 的 client；否则只在剩一个终端 client 时回退，不在多个无关终端中猜测。旧 Windows 通知携带的 `session:window.pane` 仍可使用，前提是名称和序号没有变化。
 
 ## `yolo`
 

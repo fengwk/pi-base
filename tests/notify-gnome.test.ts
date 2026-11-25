@@ -15,7 +15,8 @@ const SOURCE_PANE = "%7";
 const DEFAULT_SERVER = "101";
 const DEFAULT_PANES = "%7|$1|@4\n";
 const DEFAULT_CLIENTS = "/dev/pts/10|201|$1|%8\n/dev/pts/11|202|$2|%9\n";
-const ACTION_LABEL = "default=切回并聚焦";
+const CROSS_SESSION_CLIENTS = "/dev/pts/10|201|$2|%9\n/dev/pts/11|202|$1|%8\n";
+const MOCK_SOCKET = "/tmp/mock-tmux.sock";
 
 // A D-Bus reply is either a plain stdout string or an explicit exit/output pair so tests
 // can tell "(false,)" (no local window) apart from an extension/transport error, which
@@ -24,6 +25,7 @@ type DbusResult = string | { out?: string; exit?: number; err?: string };
 
 type Scenario = {
   action?: string;
+  actionUnavailable?: boolean;
   beforePanes?: string;
   afterPanes?: string;
   latePanes?: string;
@@ -41,9 +43,9 @@ type Scenario = {
 };
 
 function run(scenario: Scenario = {}, env: Record<string, string> = {}) {
-  // Intent: drive the real shell path while every desktop/tmux call goes through a
-  // deterministic mock. The mock flips from the creation phase to the click phase once
-  // notify-send has been invoked, so capture-time and click-time state stay separate.
+  // Intent: drive the real shell path while every desktop signal/tmux call goes through a
+  // deterministic mock. The mock python3 helper publishes the click and flips the phase to
+  // "after", so capture-time and click-time tmux state stay separate.
   const dir = mkdtempSync(join(tmpdir(), "pi-notify-"));
   dirs.push(dir);
   const log = join(dir, "calls");
@@ -59,21 +61,51 @@ const late=fs.existsSync(process.env.MOCK_LATE_STATE);
 const phase=fs.existsSync(process.env.MOCK_STATE)?'after':'before';
 const DEFAULT_PANES=${JSON.stringify(DEFAULT_PANES)};
 const DEFAULT_CLIENTS=${JSON.stringify(DEFAULT_CLIENTS)};
-function project(rows){
-  const fmt=args[1]==='-F'?args[2]:'';
-  const n=fmt.split('#{').length-1;
-  if(!n||!rows) return rows||'';
-  return rows.split('\\n').filter(Boolean).map(r=>r.split('|').slice(0,n).join('|')).join('\\n')+'\\n';
-}
 if(cmd==='notify-send') {
-  if(args.includes('-A')) fs.writeFileSync(process.env.MOCK_STATE,'yes');
-  process.stdout.write(s.action||'');
+  if(args.includes('-A')) {
+    fs.writeFileSync(process.env.MOCK_STATE,'yes');
+    process.stdout.write(s.action||'');
+  }
+} else if(cmd==='python3') {
+  fs.writeFileSync(process.env.MOCK_STATE,'yes');
+  process.exit(s.actionUnavailable?2:s.action==='default'?0:3);
 } else if(cmd==='tmux') {
-  if(s.failCommand===args[0] || (late && s.lateFailCommand===args[0])) process.exit(1);
-  if(args[0]==='list-panes') process.stdout.write(project((late?s.latePanes:undefined)??s[phase+'Panes']??DEFAULT_PANES));
-  if(args[0]==='list-clients') process.stdout.write(project((late?s.lateClients:undefined)??s[phase+'Clients']??DEFAULT_CLIENTS));
-  if(args[0]==='display-message') process.stdout.write(((late?s.lateServer:undefined)??s[phase+'Server']??'101')+'\\n');
-  if(args[0]==='switch-client'&&s.lateOn==='switch-client') fs.writeFileSync(process.env.MOCK_LATE_STATE,'yes');
+  if(args[0]==='-S') args.splice(0,2);
+  const command=args[0];
+  if(s.failCommand===command || (late && s.lateFailCommand===command)) process.exit(1);
+  const server=(late?s.lateServer:undefined)??s[phase+'Server']??${JSON.stringify(DEFAULT_SERVER)};
+  const navPath=process.env.MOCK_NAVIGATION;
+  const nav=fs.existsSync(navPath)?JSON.parse(fs.readFileSync(navPath,'utf8')):{sessions:{},windows:{},panes:{}};
+  const arg=(flag)=>args[args.indexOf(flag)+1];
+  if(command==='list-panes') process.stdout.write((late?s.latePanes:undefined)??s[phase+'Panes']??DEFAULT_PANES);
+  if(command==='list-clients') {
+    const rows=(late?s.lateClients:undefined)??s[phase+'Clients']??DEFAULT_CLIENTS;
+    for(const row of rows.split('\\n').filter(Boolean)) {
+      let [tty,pid,session,pane,window]=row.split('|');
+      if(nav.sessions[tty]) {
+        session=nav.sessions[tty];
+        pane=session==='$1'?'%8':'%9';
+        window=undefined;
+      }
+      window=nav.windows[session]??window??(pane==='%7'?'@4':session==='$1'?'@3':'@5');
+      pane=nav.panes[window]??pane;
+      console.log([tty,pid,session,pane,window,server,'0'].join('|'));
+    }
+  }
+  if(command==='display-message') console.log(args.at(-1).includes('socket_path')?server+'|'+${JSON.stringify(MOCK_SOCKET)}:server);
+  if(command==='switch-client') {
+    nav.sessions[arg('-c')]=arg('-t');
+    if(s.lateOn==='switch-client') fs.writeFileSync(process.env.MOCK_LATE_STATE,'yes');
+  }
+  if(command==='select-window') {
+    const [session,window]=arg('-t').split(':');
+    nav.windows[session]=window;
+  }
+  if(command==='select-pane') {
+    const [,window,pane]=arg('-t').split(/[:.]/);
+    nav.panes[window]=pane;
+  }
+  fs.writeFileSync(navPath,JSON.stringify(nav));
 } else if(cmd==='gdbus') {
   if(s.lateOn==='gdbus') fs.writeFileSync(process.env.MOCK_LATE_STATE,'yes');
   const suffix=args[args.length-1];
@@ -84,7 +116,7 @@ if(cmd==='notify-send') {
   process.stdout.write('C:\\\\pi\\n');
 }
 `;
-  for (const command of ["tmux", "gdbus", "notify-send", "xsetroot", "xdotool", "wmctrl", "powershell.exe", "wslpath"]) {
+  for (const command of ["tmux", "gdbus", "python3", "notify-send", "xsetroot", "xdotool", "wmctrl", "powershell.exe", "wslpath"]) {
     const path = join(dir, command);
     writeFileSync(path, mock);
     chmodSync(path, 0o755);
@@ -99,9 +131,17 @@ if(cmd==='notify-send') {
       MOCK_LOG: log,
       MOCK_STATE: state,
       MOCK_LATE_STATE: join(dir, "late"),
+      MOCK_NAVIGATION: join(dir, "navigation.json"),
+      PI_NOTIFY_WINDOW_ID: "",
+      WINDOWID: "",
+      WINDOW_ID: "",
       PI_NOTIFY_SESSION_TYPE: "wayland",
       PI_NOTIFY_CURRENT_DESKTOP: "GNOME",
       PI_NOTIFY_TMUX_PANE: SOURCE_PANE,
+      PI_NOTIFY_ACTION_TIMEOUT_SEC: "3",
+      PI_NOTIFY_KIND: "",
+      PI_NOTIFY_PROJECT: "",
+      PI_NOTIFY_SESSION_TITLE: "",
       TMUX_PANE: "",
       TMUX: "",
       WAYLAND_DISPLAY: "",
@@ -125,6 +165,12 @@ function of(calls: string[][], command: string) {
 function suffixes(calls: string[][]) {
   return of(calls, "gdbus").map((call) => call.at(-1));
 }
+function actionHelper(calls: string[][]) {
+  return of(calls, "python3").find((call) => call[1]?.endsWith("notify-action.py"));
+}
+function mutations(calls: string[][]) {
+  return of(calls, "tmux").filter((call) => ["switch-client", "select-window", "select-pane"].includes(call[1]!));
+}
 function tmux(calls: string[][], subcommand: string) {
   return calls.filter((call) => call[0] === "tmux" && call[1] === subcommand);
 }
@@ -133,23 +179,34 @@ function suffixFor(pid: number, server = Number(DEFAULT_SERVER)) {
 }
 
 describe("GNOME Wayland notification focus", () => {
-  it("captures candidates without activating, then switches only the first local client", () => {
-    // Creation runs no D-Bus call at all; the click probes the top candidate (session $1
-    // client 201) and only that client is switched, then its window is re-activated.
-    const { result, calls } = run({ action: "default" });
-    expect(result.status).toBe(0);
-    expect(of(calls, "notify-send")[0]).toContain(ACTION_LABEL);
+  it("takes the original client back after it changes session before the click", () => {
+    // By click time another client is on $1. The captured client still wins and all
+    // three mutations happen in order after the first window activation request.
+    const { result, calls } = run({ action: "default", afterClients: CROSS_SESSION_CLIENTS });
+    expect(result.status, result.stderr).toBe(0);
+    const action = actionHelper(calls);
+    expect(action?.slice(3)).toEqual(["Pi - Event", "untitled", "3"]);
+    expect(calls.indexOf(action!)).toBeLessThan(calls.findIndex((call) => call[0] === "gdbus"));
     expect(suffixes(calls)).toEqual([suffixFor(201), suffixFor(201)]);
-    expect(tmux(calls, "switch-client")).toEqual([["tmux", "switch-client", "-c", "/dev/pts/10", "-t", "$1"]]);
-    expect(tmux(calls, "select-window")).toEqual([["tmux", "select-window", "-t", "$1:@4"]]);
-    expect(tmux(calls, "select-pane")).toEqual([["tmux", "select-pane", "-t", "$1:@4.%7"]]);
+    expect(mutations(calls)).toEqual([
+      ["tmux", "switch-client", "-c", "/dev/pts/10", "-t", "$1"],
+      ["tmux", "select-window", "-t", "$1:@4"],
+      ["tmux", "select-pane", "-t", "$1:@4.%7"],
+    ]);
+  });
+
+  it("activates the terminal without tmux mutations when it already displays the source", () => {
+    const { result, calls } = run({ action: "default", afterClients: "/dev/pts/10|201|$1|%7\n" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(suffixes(calls)).toEqual([suffixFor(201), suffixFor(201)]);
+    expect(mutations(calls)).toEqual([]);
   });
 
   it("activates nothing and switches nobody when the notification is dismissed", () => {
     // Dismissal must not run any desktop or tmux side effect, even with valid candidates.
     const { result, calls } = run({ action: "" });
     expect(result.status).toBe(0);
-    expect(of(calls, "gdbus")).toHaveLength(0);
+    expect(suffixes(calls)).toHaveLength(0);
     expect(tmux(calls, "switch-client")).toHaveLength(0);
     expect(tmux(calls, "select-window")).toHaveLength(0);
     expect(tmux(calls, "select-pane")).toHaveLength(0);
@@ -168,8 +225,8 @@ describe("GNOME Wayland notification focus", () => {
     });
     expect(result.status).toBe(0);
     expect(suffixes(calls)).toEqual([suffixFor(150), suffixFor(201), suffixFor(201)]);
-    // Only the local client is switched; the SSH client's session is never touched.
-    expect(tmux(calls, "switch-client")).toEqual([["tmux", "switch-client", "-c", "/dev/pts/10", "-t", "$1"]]);
+    // The local client already belongs to the source session.
+    expect(tmux(calls, "switch-client")).toEqual([]);
   });
 
   it("orders candidates by priority, then numeric PID regardless of enumeration order", () => {
@@ -184,7 +241,7 @@ describe("GNOME Wayland notification focus", () => {
     });
     expect(result.status).toBe(0);
     expect(suffixes(calls)).toEqual([suffixFor(500), suffixFor(111), suffixFor(111)]);
-    expect(tmux(calls, "switch-client")).toEqual([["tmux", "switch-client", "-c", "/dev/pts/13", "-t", "$1"]]);
+    expect(tmux(calls, "switch-client")).toEqual([]);
 
     // Reversing the enumeration must not change the deterministic choice.
     const reversed = "/dev/pts/20|500|$1|%7\n/dev/pts/13|111|$1|%9\n/dev/pts/12|999|$1|%8\n";
@@ -202,7 +259,7 @@ describe("GNOME Wayland notification focus", () => {
     const clients = "/dev/pts/11|202|$2|%9\n";
     const { result, calls } = run({ action: "default", beforeClients: clients, afterClients: clients });
     expect(result.status).toBe(0);
-    expect(of(calls, "notify-send")[0]).toContain(ACTION_LABEL);
+    expect(actionHelper(calls)).toBeDefined();
     expect(suffixes(calls)).toEqual([suffixFor(202), suffixFor(202)]);
     expect(tmux(calls, "switch-client")).toEqual([["tmux", "switch-client", "-c", "/dev/pts/11", "-t", "$1"]]);
     expect(tmux(calls, "select-pane")).toEqual([["tmux", "select-pane", "-t", "$1:@4.%7"]]);
@@ -228,12 +285,17 @@ describe("GNOME Wayland notification focus", () => {
     expect(tmux(calls, "switch-client")).toHaveLength(0);
   });
 
-  it("offers no action when no clients are attached", () => {
-    // An empty server has no candidate even if a source pane still exists.
-    const { result, calls } = run({ action: "default", beforeClients: "" });
+  it.each([
+    ["no clients are attached", ""],
+    ["several clients are attached but none is in the source session", "/dev/pts/11|202|$2|%9\n/dev/pts/12|203|$2|%9\n"],
+  ])("offers no action when %s", (_name, beforeClients) => {
+    // An empty server or an ambiguous fallback must not switch an unrelated terminal.
+    const { result, calls } = run({ action: "default", beforeClients });
     expect(result.status).toBe(0);
-    expect(of(calls, "notify-send")[0]).not.toContain(ACTION_LABEL);
-    expect(of(calls, "gdbus")).toHaveLength(0);
+    expect(actionHelper(calls)).toBeUndefined();
+    expect(of(calls, "notify-send")[0]).not.toContain("-A");
+    expect(suffixes(calls)).toEqual([]);
+    expect(mutations(calls)).toEqual([]);
   });
 
   it("never considers clients attached after the notification was created", () => {
@@ -273,7 +335,7 @@ describe("GNOME Wayland notification focus", () => {
 
     const gone = run({ action: "default", afterClients: "" });
     expect(gone.result.status).not.toBe(0);
-    expect(of(gone.calls, "gdbus")).toHaveLength(0);
+    expect(suffixes(gone.calls)).toHaveLength(0);
     expect(tmux(gone.calls, "switch-client")).toHaveLength(0);
     expect(gone.result.stderr).toContain("disappeared before activation");
   });
@@ -289,7 +351,7 @@ describe("GNOME Wayland notification focus", () => {
       dbus: { [suffixFor(201)]: reply },
     });
     expect(result.status).not.toBe(0);
-    expect(of(calls, "gdbus")).toHaveLength(1);
+    expect(suffixes(calls)).toHaveLength(1);
     expect(tmux(calls, "switch-client")).toHaveLength(0);
     expect(tmux(calls, "select-pane")).toHaveLength(0);
     expect(result.stderr).toContain("D-Bus activation error");
@@ -308,19 +370,16 @@ describe("GNOME Wayland notification focus", () => {
     expect(tmux(calls, "switch-client")).toHaveLength(0);
   });
 
-  it("stops re-activating when the client disappears after the tmux switch", () => {
-    // The switch already happened, but the final activation must not reuse the stale
-    // client record and no further D-Bus lookup may target it.
+  it("stops after the chosen client disappears during the jump", () => {
+    // Another client is now on the source session, but cannot replace the chosen client.
     const { result, calls } = run({
-      action: "default",
-      lateOn: "switch-client",
-      lateClients: "/dev/pts/11|202|$2|%9\n",
+      action: "default", afterClients: CROSS_SESSION_CLIENTS,
+      lateOn: "switch-client", lateClients: "/dev/pts/11|202|$1|%8\n",
     });
     expect(result.status).not.toBe(0);
     expect(suffixes(calls)).toEqual([suffixFor(201)]);
-    expect(tmux(calls, "switch-client")).toHaveLength(1);
-    expect(tmux(calls, "select-pane")).toHaveLength(1);
-    expect(result.stderr).toContain("disappeared before activation");
+    expect(mutations(calls).map((call) => call[1])).toEqual(["switch-client"]);
+    expect(result.stderr).toContain("the selected client disappeared");
   });
 
   it("skips a client that vanished after a false probe and never retries its suffix", () => {
@@ -357,22 +416,14 @@ describe("GNOME Wayland notification focus", () => {
     expect(result.stderr).not.toContain("no local window matched");
   });
 
-  it("does not re-activate a window after the server is replaced following the switch", () => {
-    // The final request must revalidate the server and source, not only the client.
-    const { result, calls } = run({ action: "default", lateOn: "switch-client", lateServer: "999" });
+  it("stops after the server is replaced following the switch", () => {
+    const { result, calls } = run({
+      action: "default", afterClients: CROSS_SESSION_CLIENTS, lateOn: "switch-client", lateServer: "999",
+    });
     expect(result.status).not.toBe(0);
     expect(suffixes(calls)).toEqual([suffixFor(201)]);
-    expect(tmux(calls, "switch-client")).toHaveLength(1);
-    expect(tmux(calls, "select-pane")).toHaveLength(1);
+    expect(mutations(calls).map((call) => call[1])).toEqual(["switch-client"]);
     expect(result.stderr).toContain("tmux server changed since the notification");
-  });
-
-  it("reports the tmux failure stage instead of claiming no window matched", () => {
-    // The wrapper must not collapse a post-match tmux failure into a title miss.
-    const { result } = run({ action: "default", failCommand: "switch-client" });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("tmux switch-client failed");
-    expect(result.stderr).not.toContain("no local window matched");
   });
 
   it("preserves the underlying gdbus error text in its diagnostic", () => {
@@ -403,16 +454,18 @@ describe("GNOME Wayland notification focus", () => {
     // tmux side effect, so stale identities fail without a guess.
     const { result, calls } = run({ action: "default", ...scenario });
     expect(result.status).not.toBe(0);
-    expect(of(calls, "gdbus")).toHaveLength(0);
+    expect(suffixes(calls)).toHaveLength(0);
     expect(tmux(calls, "switch-client")).toHaveLength(0);
   });
 
   it.each([["switch-client"], ["select-window"], ["select-pane"]])(
     "reports failure when tmux %s fails after activation",
     (command) => {
-      const { result, calls } = run({ action: "default", failCommand: command });
+      const { result, calls } = run({ action: "default", afterClients: CROSS_SESSION_CLIENTS, failCommand: command });
       expect(result.status).not.toBe(0);
       expect(suffixes(calls)).toEqual([suffixFor(201)]);
+      expect(result.stderr).toContain(`tmux ${command} failed`);
+      expect(result.stderr).not.toContain("no local window matched");
     },
   );
 
@@ -433,37 +486,50 @@ describe("GNOME Wayland notification focus", () => {
     if (label === "only malformed client rows") scenario.beforeClients = "garbage\n/dev/pts/10|abc|$1|%8\n";
     const { result, calls } = run(scenario, env);
     expect(result.status).toBe(0);
-    expect(of(calls, "notify-send")[0]).not.toContain(ACTION_LABEL);
-    expect(of(calls, "gdbus")).toHaveLength(0);
+    expect(actionHelper(calls)).toBeUndefined();
+    expect(of(calls, "notify-send")[0]).not.toContain("-A");
     expect(tmux(calls, "switch-client")).toHaveLength(0);
   });
 
   it("shows a plain notification for non-tmux GNOME even with a stale Alacritty ID", () => {
     const { result, calls } = run({ action: "default" }, { PI_NOTIFY_TMUX_PANE: "" });
     expect(result.status).toBe(0);
-    expect(of(calls, "notify-send")[0]).not.toContain(ACTION_LABEL);
+    expect(actionHelper(calls)).toBeUndefined();
+    expect(of(calls, "notify-send")).toHaveLength(1);
     expect(of(calls, "tmux")).toHaveLength(0);
     expect(of(calls, "gdbus")).toHaveLength(0);
   });
 
-  it("leaves the X11 notification action and window activation available", () => {
-    // X11 keeps its preexisting Jump action rather than entering the GNOME D-Bus path.
-    const { calls } = run({ action: "jump" }, {
+  it("keeps the X11 Jump action working without the Python helper", () => {
+    const { result, calls } = run({ action: "jump" }, {
       PI_NOTIFY_SESSION_TYPE: "x11", WAYLAND_DISPLAY: "stale", DISPLAY: ":5", PI_NOTIFY_TMUX_PANE: "",
       PI_NOTIFY_WINDOW_ID: "123",
     });
+    expect(result.status, result.stderr).toBe(0);
     expect(of(calls, "notify-send")[0]).toContain("jump=Jump");
     expect(of(calls, "xsetroot")[0]).toEqual(["xsetroot", "-name", "fsignal:switchtoclientwin ul 123"]);
-    expect(of(calls, "gdbus")).toHaveLength(0);
+    expect(actionHelper(calls)).toBeUndefined();
+    expect(suffixes(calls)).toEqual([]);
   });
 
-  it("preserves the WSL PowerShell backend instead of sending GNOME notifications", () => {
-    // WSL backend selection takes precedence when the Windows helper is available.
-    const { result, calls } = run({}, { WSL_DISTRO_NAME: "Ubuntu", PI_NOTIFY_SESSION_TYPE: "wayland" });
+  it("passes the stable tmux target and server/client context to the WSL backend", () => {
+    const { result, calls } = run({ beforeClients: "/dev/pts/10|201|$1|%7\n" }, { WSL_DISTRO_NAME: "Ubuntu" });
+    expect(result.status, result.stderr).toBe(0);
+    const command = of(calls, "powershell.exe")[0]!;
+    const payload = (name: string) => Buffer.from(command[command.indexOf(name) + 1]!, "base64").toString();
+    expect(payload("-TmuxTargetBase64")).toBe("$1:@4.%7");
+    expect(payload("-TmuxClientTtyBase64")).toBe("/dev/pts/10");
+    expect(payload("-TmuxContextBase64")).toBe(`101|201|${MOCK_SOCKET}`);
+    expect(of(calls, "notify-send")).toEqual([]);
+    expect(actionHelper(calls)).toBeUndefined();
+  });
+
+  it("sends a plain notification if the GNOME helper cannot provide an action", () => {
+    const { result, calls } = run({ action: "default", actionUnavailable: true });
     expect(result.status).toBe(0);
-    expect(of(calls, "powershell.exe")[0]).toContain("-TitleBase64");
-    expect(of(calls, "notify-send")).toHaveLength(0);
-    expect(of(calls, "gdbus")).toHaveLength(0);
+    expect(of(calls, "notify-send")[0]).not.toContain("-A");
+    expect(suffixes(calls)).toEqual([]);
+    expect(mutations(calls)).toEqual([]);
   });
 
   it("does nothing when sourced without calling main", () => {
