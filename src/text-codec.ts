@@ -523,6 +523,16 @@ function encodeExact(text: string, encoding: TextEncoding): Buffer {
   throw new UnrepresentableTextError(`The resulting text cannot be encoded in ${encoding.name}.`);
 }
 
+/** Compares the decoded body with the original bytes without treating U+FEFF as a write request. */
+export function decodedBytesRoundTrip(buffer: Buffer, file: DecodedTextFile): boolean {
+  try {
+    return buffer.subarray(bomBytes(file.bom).length).equals(encodeExact(file.text, file.encoding));
+  } catch (error) {
+    if (error instanceof UnrepresentableTextError) return false;
+    throw error;
+  }
+}
+
 export function encodeTextFile(text: string, encoding: TextEncoding, bom: TextBomKind): Buffer {
   // A leading U+FEFF asks for a byte order mark; it is never part of the content.
   const body = text.startsWith(LEADING_BOM_CHAR) ? text.slice(1) : text;

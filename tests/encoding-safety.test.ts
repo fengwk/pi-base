@@ -115,13 +115,12 @@ describe("text encoding safety", () => {
     expect(await readFile(file)).toEqual(Buffer.from("abcce\n", "utf8"));
   });
 
-  it("uses replacement-decoded UTF-8 for read, edit and write on undeclared legacy bytes", async () => {
-    // Intent: without a declaration the tools share the UTF-8 replacement view
-    // instead of refusing the file; writes then normalize the bytes to valid UTF-8.
+  it("rejects a lossy edit of undeclared legacy bytes, but still allows a whole-file write", async () => {
+    // Intent: ASCII matches must not silently turn untouched legacy text into
+    // replacement characters. Read and intentional full replacement still work.
     const root = await createTempWorkspace();
     const registry = tools();
     const bytes = iconv.encode("state=old 名称\n", "gbk");
-    const decoded = bytes.toString("utf8");
     const file = join(root, "sample.txt");
     await writeFile(file, bytes);
 
@@ -132,12 +131,39 @@ describe("text encoding safety", () => {
     expect(getText(read)).not.toContain("encoding:");
 
     const edit = await run(registry, "edit", root, { path: "sample.txt", edits: [{ old_string: "state=old", new_string: "state=new" }] });
-    expect(edit.isError).not.toBe(true);
-    expect(await readFile(file)).toEqual(Buffer.from(decoded.replace("state=old", "state=new"), "utf8"));
+    expect(edit.isError).toBe(true);
+    expect(getText(edit)).toContain("do not round-trip in UTF-8");
+    expect(await readFile(file)).toEqual(bytes);
 
     const write = await run(registry, "write", root, { path: "sample.txt", content: "state=done\n" });
     expect(write.isError).not.toBe(true);
     expect(await readFile(file)).toEqual(Buffer.from("state=done\n", "utf8"));
+  });
+
+  it.each([
+    {
+      encoding: "UTF-16LE",
+      path: "sample.txt",
+      bytes: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("state=old\r\n", "utf16le"), Buffer.from([0xff])]),
+    },
+    {
+      encoding: "GB18030",
+      path: "sample.py",
+      bytes: Buffer.concat([Buffer.from("# coding: gb18030\nstate=old\n"), Buffer.from([0xff])]),
+    },
+  ])("rejects a lossy edit even when $encoding can encode U+FFFD", async ({ encoding, path, bytes }) => {
+    // Intent: neither a BOM nor a declaration makes the original bytes valid;
+    // representability checks alone would let these writes through.
+    const root = await createTempWorkspace();
+    const registry = tools();
+    const file = join(root, path);
+    await writeFile(file, bytes);
+
+    const edit = await run(registry, "edit", root, { path, edits: [{ old_string: "state=old", new_string: "state=new" }] });
+
+    expect(edit.isError).toBe(true);
+    expect(getText(edit)).toContain(`do not round-trip in ${encoding}`);
+    expect(await readFile(file)).toEqual(bytes);
   });
 
   it("refuses to leave U+FFFD in a declared GBK file until it is removed", async () => {

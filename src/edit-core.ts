@@ -33,7 +33,7 @@ import {
 import { throwIfAborted, throwIfAbortedAfter } from "./runtime.js";
 import { editSchema } from "./schemas/edit.js";
 import { mapFilePathToPath } from "./tool-arg-aliases.js";
-import { type DecodedTextFile, decodeTextFile, encodingForBom, encodeTextFile, formatTextFileError, resolveDeclaredEncoding } from "./text-codec.js";
+import { type DecodedTextFile, decodedBytesRoundTrip, decodeTextFile, encodingForBom, encodeTextFile, formatTextFileError, resolveDeclaredEncoding } from "./text-codec.js";
 import { withPiBaseErrorMarker } from "./tool-error-marker.js";
 import { loadToolDescription, loadToolPromptSnippet } from "./tool-prompt.js";
 
@@ -632,6 +632,16 @@ export function registerEditTool(
           }
           if (outputBytes.equals(rawBytes)) {
             return { kind: "error", text: "No changes to apply: edit would not change the file." };
+          }
+          // A literal U+FFFD in a losslessly decoded file is ordinary text. If decoding
+          // lost bytes, a result containing U+FFFD may silently bake that loss into the file.
+          if (serializedOutput.includes("\uFFFD") && decodedFile.text.includes("\uFFFD")
+            && !decodedBytesRoundTrip(rawBytes, decodedFile)) {
+            return {
+              kind: "error",
+              text: `Cannot edit ${rawPath}: the original bytes do not round-trip in ${decodedFile.encoding.name} and U+FFFD (�) remains in the result. `
+                + "Recover the text using the correct encoding, or explicitly replace the undecodable text.",
+            };
           }
 
           await writeFile(absolutePath, outputBytes);
