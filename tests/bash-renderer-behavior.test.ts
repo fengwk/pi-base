@@ -107,6 +107,30 @@ describe("bash renderer behavior", () => {
     expect(expanded).not.toContain("ctrl+o to expand");
   });
 
+  it("shows upstream full-output storage failures even with the Bash preview disabled", () => {
+    // Pi 1.6.1 includes the reason in its footer and details. Show it once, outside the preview.
+    const registry = createToolRegistry();
+    registerBashRendererTool(registry.pi as any, { getCollapsedResultLines: () => 0 });
+    const tool = registry.getTool("bash");
+    const storageError = "ENOSPC: no space left on device";
+    const warning = `Could not save the full output: ${storageError}`;
+    const result = {
+      content: [{ type: "text", text: `command output\n\n[Showing lines 2-2 of 2. ${warning}]` }],
+      details: { fullOutputError: storageError, truncation: { truncated: true, truncatedBy: "lines", outputLines: 1, totalLines: 2 } },
+    };
+    const context = { cwd: process.cwd(), state: {} };
+    const collapsed = render(tool.renderResult(result, { expanded: false }, {}, context));
+    expect(collapsed).toContain(warning);
+    expect(collapsed).not.toContain("command output");
+
+    const failedResult = { ...result, content: [{ type: "text", text: `${result.content[0]!.text}\n\nCommand exited with code 7` }] };
+    const expanded = render(tool.renderResult(failedResult, { expanded: true }, {}, { ...context, isError: true }));
+    expect(expanded).toContain("command output");
+    expect(expanded).toContain("Command exited with code 7");
+    expect(expanded.split(warning)).toHaveLength(2);
+    expect(expanded).not.toContain("[Showing lines");
+  });
+
   it("does not offer expansion when a disabled Bash preview shows the complete error", () => {
     // Intent: retaining a short diagnostic is not truncation and must not imply hidden output.
     const registry = createToolRegistry();

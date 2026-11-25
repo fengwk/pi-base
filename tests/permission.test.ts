@@ -32,14 +32,15 @@ afterEach(() => {
 
 describe("permission guard", () => {
   it("shows a single-line write summary and only offers Yes/No", async () => {
+    // The host must receive the permission status kind without changing the existing prompt.
     const root = await createTempWorkspace();
     await writeProjectSettings(root, { permission: { write: "ask" } });
 
-    const prompts: Array<{ title: string; items: string[] }> = [];
+    const prompts: Array<{ title: string; items: string[]; blockedKind?: string }> = [];
     const registry = createToolRegistry({ hasUI: true });
     registry.setUI({
-      select: async (title, items) => {
-        prompts.push({ title, items });
+      select: async (title, items, options) => {
+        prompts.push({ title, items, blockedKind: options?.blockedKind });
         return "Yes";
       },
     });
@@ -61,6 +62,7 @@ describe("permission guard", () => {
     expect(prompts[0]!.title).not.toContain("\n");
     expect(prompts[0]!.title).not.toContain("allowed = true");
     expect(prompts[0]!.items).toEqual(["Yes", "No"]);
+    expect(prompts[0]!.blockedKind).toBe("permission");
     expect(registry.getStatuses().get("01-pi-base-permission")).toBeUndefined();
     expect(await readFile(join(root, "src/allowed.ts"), "utf8")).toBe("export const allowed = true;\n");
   });

@@ -260,11 +260,9 @@ export async function selectPermissionChoice(
 ): Promise<string | undefined> {
   if (signal?.aborted) throw new Error("Operation aborted");
   try {
-    const choice = await (ctx.ui.select as (
-      title: string,
-      options: string[],
-      opts?: { signal?: AbortSignal },
-    ) => Promise<string | undefined>)(title, options, { signal });
+    // Pi before 1.6.1 still receives the cancellation signal and ignores blockedKind.
+    const dialogOptions = { signal, blockedKind: "permission" } as const;
+    const choice = await ctx.ui.select(title, options, dialogOptions);
     if (signal?.aborted) throw new Error("Operation aborted");
     return choice;
   } catch (error) {

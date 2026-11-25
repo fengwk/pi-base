@@ -44,23 +44,32 @@ export function extractBashText(result: any): string {
     .join("\n\n");
 }
 
+function formatFullOutputStatus(details: any): string | undefined {
+  if (details?.fullOutputPath) return `Full output: ${details.fullOutputPath}`;
+  if (details?.fullOutputError) return `Could not save the full output: ${details.fullOutputError}`;
+  return undefined;
+}
+
 export function stripStructuredTruncationFooter(output: string, result: any, options: any): string {
-  const truncation = result?.details?.truncation;
-  const fullOutputPath = result?.details?.fullOutputPath;
-  if (!options?.isPartial && truncation?.truncated && fullOutputPath && output.endsWith("]")) {
-    const footerStart = output.lastIndexOf("\n\n[");
-    if (footerStart !== -1 && output.slice(footerStart).includes(fullOutputPath)) {
-      return output.slice(0, footerStart).trimEnd();
-    }
+  if (options?.isPartial || !result?.details?.truncation?.truncated) return output;
+  const fullOutputStatus = formatFullOutputStatus(result.details);
+  if (!fullOutputStatus) return output;
+
+  // A non-zero exit appends its own status after the host's truncation footer.
+  const exitStatus = output.match(/\n\nCommand exited with code -?\d+$/)?.[0] ?? "";
+  const body = exitStatus ? output.slice(0, -exitStatus.length) : output;
+  const footerStart = body.lastIndexOf("\n\n[Showing ");
+  if (footerStart !== -1 && body.endsWith(`. ${fullOutputStatus}]`)) {
+    return body.slice(0, footerStart).trimEnd() + exitStatus;
   }
   return output;
 }
 
 export function formatBashWarnings(result: any): string[] {
   const truncation = result?.details?.truncation;
-  const fullOutputPath = result?.details?.fullOutputPath;
+  const fullOutputStatus = formatFullOutputStatus(result?.details);
   const warnings: string[] = [];
-  if (fullOutputPath) warnings.push(`Full output: ${fullOutputPath}`);
+  if (fullOutputStatus) warnings.push(fullOutputStatus);
   if (truncation?.truncated) {
     if (truncation.truncatedBy === "lines") {
       warnings.push(`Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`);

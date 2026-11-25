@@ -36,7 +36,7 @@ See the [tool documentation](docs/tools/README.md) for parameters and usage boun
 
 ## Installation
 
-Requires [Pi](https://github.com/earendil-works/pi) `>=1.2.0` to be installed (the supported baseline). Development dependencies and compatibility tests target Pi `1.6.0`.
+Requires [Pi](https://github.com/earendil-works/pi) `>=1.2.0` to be installed (the supported baseline). Development dependencies and compatibility tests target Pi `1.6.1`.
 
 ```bash
 pi install git:github.com/fengwk/pi-base

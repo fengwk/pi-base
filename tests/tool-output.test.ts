@@ -252,6 +252,24 @@ describe("tool output truncation", () => {
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(50 * 1024);
   });
 
+  it("keeps the Bash storage failure reason when replacing an oversized upstream footer", async () => {
+    // The downstream text is what the model sees after pi-base replaces the host footer.
+    const storageError = "ENOSPC: no space left on device";
+    const preview = `${"x".repeat(50 * 1024)}\n\n[Showing last 50KB of line 1. Could not save the full output: ${storageError}]`;
+    const hook = await applyUnifiedOutputTruncation("bash", {
+      content: [{ type: "text", text: preview }],
+      details: { fullOutputError: storageError, truncation: { truncated: true, truncatedBy: "bytes" } },
+    });
+
+    const text = String((hook.result.content[0] as any)?.text);
+    expect(hook.truncated).toBe(true);
+    expect(text).not.toContain("[Showing last");
+    expect(text).toContain(`Could not save the full output: ${storageError}`);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(50 * 1024);
+    expect(hook.result.details.fullOutputError).toBe(storageError);
+    expect(hook.result.details.truncation.outputPath).toBeUndefined();
+  });
+
   it("counts CR-only output toward the final line limit", async () => {
     // Intent: third-party tools may emit classic-Mac CR line endings; the global 2000-line
     // boundary must not depend on LF being present.

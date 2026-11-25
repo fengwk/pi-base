@@ -1,4 +1,4 @@
-import { getAgentDir, initTheme, type BeforeAgentStartEvent, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, initTheme, type BeforeAgentStartEvent, type BuildSystemPromptOptions, type ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,7 @@ type MockUiOverrides = Partial<{
   select: (
     title: string,
     items: string[],
-    options?: { signal?: AbortSignal },
+    options?: ExtensionUIDialogOptions,
   ) => Promise<string | undefined> | string | undefined;
   confirm: (title: string, message: string) => Promise<boolean> | boolean;
   custom: (factory: any, options?: any) => Promise<any> | any;
@@ -125,7 +125,7 @@ export function createToolRegistry(options: { hasUI?: boolean; cwd?: string; ui?
         }
         uiOverrides.setStatus?.(key, text);
       },
-      async select(title: string, items: string[], options?: { signal?: AbortSignal }) {
+      async select(title: string, items: string[], options?: ExtensionUIDialogOptions) {
         if (uiOverrides.select) return uiOverrides.select(title, items, options);
         return items[0];
       },

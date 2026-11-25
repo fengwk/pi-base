@@ -121,10 +121,16 @@ function buildTruncationHint(totalBytes: number, totalLines: number, outputPath:
     : `The tool call succeeded but the output was truncated. Full output could not be saved to temporary storage (${totalBytes} bytes, ${totalLines} lines).\nRe-run the tool with a narrower scope if you need the omitted content.`;
 }
 
-function buildUpstreamRetruncationHint(outputPath: string | undefined): string {
-  return outputPath
-    ? `The upstream tool had already truncated this output, and the remaining preview exceeded pi-base's final output limit. Full upstream output: ${formatOutputPathForHint(outputPath)}\nUse grep to search the full content or read with offset/limit to inspect specific sections.`
-    : "The upstream tool had already truncated this output, and the remaining preview exceeded pi-base's final output limit.\nRe-run the tool with a narrower scope if you need the omitted content.";
+function buildUpstreamRetruncationHint(outputPath: string | undefined, fullOutputError: unknown): string {
+  const prefix = "The upstream tool had already truncated this output, and the remaining preview exceeded pi-base's final output limit.";
+  if (outputPath) {
+    return `${prefix} Full upstream output: ${formatOutputPathForHint(outputPath)}\nUse grep to search the full content or read with offset/limit to inspect specific sections.`;
+  }
+  // The upstream footer might be discarded to fit the final budget. Carry over a bounded reason.
+  const error = typeof fullOutputError === "string" ? fullOutputError : "";
+  const reason = error.slice(0, 512).replace(/[\r\n]+/g, " ").trim();
+  const failure = reason ? ` Could not save the full output: ${reason}${error.length > 512 ? "…" : ""}.` : "";
+  return `${prefix}${failure}\nRe-run the tool with a narrower scope if you need the omitted content.`;
 }
 
 function buildTruncationFooter(removed: number, unit: "bytes" | "lines", hint: string): string {
@@ -328,7 +334,7 @@ export async function applyUnifiedOutputTruncation<TDetails>(toolName: string, r
   }
 
   const hint = truncated.alreadyTruncated
-    ? buildUpstreamRetruncationHint(truncated.outputPath)
+    ? buildUpstreamRetruncationHint(truncated.outputPath, toolName === "bash" ? details?.fullOutputError : undefined)
     : buildTruncationHint(truncated.totalBytes, truncated.totalLines, truncated.outputPath);
   const unit = truncated.totalBytes > MAX_BYTES ? "bytes" : "lines";
   const maximumRemoved = unit === "bytes" ? truncated.totalBytes : truncated.totalLines;
